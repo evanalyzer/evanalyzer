@@ -1,0 +1,306 @@
+// results_list.slint — flat object table with an image/class filter bar and
+// a grouped column-visibility dropdown, both built on the shared
+// MultiSelectDropdown (components/multi_select_dropdown.slint).
+
+import { ScrollView, CheckBox } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ResultsState } from "results_state.slint";
+import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
+import { AppButton } from "../components/app_button.slint";
+
+export component ResultsListView inherits Rectangle {
+    background: Theme.bg;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // -- Filter bar --
+        Rectangle {
+            height: 54px;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 10px;
+                cross-axis-alignment: center;
+
+                MultiSelectDropdown {
+                    label: "IMAGES";
+                    summary-text: ResultsState.list-image-summary;
+                    items <=> ResultsState.list-image-items;
+                    multi-select: true;
+                    show-select-all: true;
+                    show-search: true;
+                    pill-width: 150px;
+                    item-selected(key, value, selected) => { ResultsState.list-image-selected(key, selected); }
+                    select-all => { ResultsState.list-image-select-all(); }
+                    select-none => { ResultsState.list-image-select-none(); }
+                    filter-changed(text) => { ResultsState.list-image-filter-changed(text); }
+                }
+
+                MultiSelectDropdown {
+                    label: "CLASS";
+                    summary-text: ResultsState.list-class-summary;
+                    items <=> ResultsState.list-class-items;
+                    multi-select: true;
+                    show-select-all: true;
+                    pill-width: 250px;
+                    item-selected(key, value, selected) => { ResultsState.list-class-selected(key, selected); }
+                    select-all => { ResultsState.list-class-select-all(); }
+                    select-none => { ResultsState.list-class-select-none(); }
+                }
+
+                MultiSelectDropdown {
+                    label: "COLUMNS";
+                    summary-text: ResultsState.list-columns-summary;
+                    items <=> ResultsState.list-columns;
+                    groups: ResultsState.list-columns-groups;
+                    multi-select: true;
+                    show-select-all: true;
+                    pill-width: 130px;
+                    item-selected(key, value, selected) => { ResultsState.list-columns-item-selected(key, selected); }
+                    select-all => { ResultsState.list-columns-select-all(); }
+                    select-none => { ResultsState.list-columns-select-none(); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                if ResultsState.list-group-by-summary == "Objects": MultiSelectDropdown {
+                    label: "COLOC DETAILS";
+                    summary-text: ResultsState.list-with-coloc-details-summary;
+                    items <=> ResultsState.list-with-coloc-details-by-items;
+                    multi-select: false;
+                    pill-width: 110px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.list-with-coloc-details-summary = value;
+                        ResultsState.list-with-coloc-details = key == "details";
+                        ResultsState.list-with-coloc-details-changed(ResultsState.list-with-coloc-details);
+                    }
+                    visible: ResultsState.list-group-by-summary == "Objects";
+                }
+
+                if ResultsState.list-group-by-summary == "Images":  MultiSelectDropdown {
+                    label: "AGGREGATE";
+                    summary-text: ResultsState.list-aggregate;
+                    items <=> ResultsState.list-aggregation-items;
+                    multi-select: true;
+                    show-select-all: true;
+                    pill-width: 150px;
+                    item-selected(key, value, selected) => { ResultsState.list-aggregation-item-selected(key, selected); }
+                    select-all => { ResultsState.list-aggregation-select-all(); }
+                    select-none => { ResultsState.list-aggregation-select-none(); }
+                    visible: ResultsState.list-group-by-summary == "Images";
+                }
+
+                MultiSelectDropdown {
+                    label: "VIEW";
+                    summary-text: ResultsState.list-group-by-summary;
+                    items <=> ResultsState.list-group-by-items;
+                    multi-select: false;
+                    pill-width: 110px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.list-group-by-summary = value;
+                        ResultsState.list-group-by-selected(key);
+                    }
+                }
+
+                Text {
+                    text: ResultsState.list-row-count + " objects";
+                    font-size: 11.5px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: parent.height - 1px;
+                width: parent.width;
+                height: 1px;
+                background: Theme.border-soft;
+            }
+        }
+
+        // -- Table --
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.panel;
+
+            VerticalLayout {
+                spacing: 0px;
+
+                header-rect := Rectangle {
+                    height: 28px;
+                    background: Theme.raised;
+                    // Columns have a fixed pixel width, so the row content
+                    // can be wider than the window; clip the header to its
+                    // 28px band and pan it in step with the body's
+                    // horizontal scroll (below) instead of letting it spill
+                    // out or drift out of alignment with the columns.
+                    clip: true;
+
+                    header-layout := HorizontalLayout {
+                        x: body-list.viewport-x;
+                        width: max(self.preferred-width, parent.width);
+                        padding-left: 16px;
+                        padding-right: 16px;
+
+                        for header[idx] in ResultsState.list-column-headers: Rectangle {
+                            horizontal-stretch: 1;
+                            clip: true;
+                            width: ResultsState.list-column-widths[idx] * 1px;
+                            Text {
+                                text: header;
+                                width: ResultsState.list-column-widths[idx] * 1px;
+                                font-size: 10.5px;
+                                font-family: Theme.font-mono;
+                                font-weight: 600;
+                                color: Theme.text-mute;
+                                overflow: elide;
+                                vertical-alignment: center;
+                                horizontal-alignment: start;
+                            }
+                        }
+                        Rectangle { }
+                    }
+
+                    Rectangle {
+                        x: 0;
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.border-soft;
+                    }
+                }
+
+                body-list := ScrollView {
+                    vertical-stretch: 1;
+                    accessible-role: list;
+                    accessible-orientation: Orientation.vertical;
+                    viewport-width: header-layout.width;
+                    viewport-height: ResultsState.list-rows.length * 34px;
+
+                    for row[index] in ResultsState.list-rows: Rectangle {
+                        y: index * 34px;
+                        height: 34px;
+                        width: header-layout.width;
+
+                        background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
+
+                        property <bool> row-visible: self.y + self.height >= -body-list.viewport-y - 3 * self.height
+                            && self.y <= -body-list.viewport-y + body-list.height + 3 * self.height;
+
+                        Rectangle {
+                            y: 34px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            height: 1px;
+                            x: 0;
+                        }
+
+                        ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { ResultsState.list-row-clicked(index); }
+                        }
+
+                        if row-visible: row-layout := HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            padding-top: 9px;
+                            padding-bottom: 9px;
+
+                            // Column virtualization, same reasoning as
+                            // `row-visible` above: with 600-700 selectable
+                            // columns, only a handful are ever actually on
+                            // screen at once horizontally — the rest don't
+                            // need a live Text element just to sit clipped
+                            // off to the side.
+                            for cell[c-index] in row.cells: Rectangle {
+                                height: 16.5px;
+                                horizontal-stretch: 1;
+                                clip: true;
+                                width: ResultsState.list-column-widths[c-index] * 1px;
+
+                                property <bool> col-visible: self.x + self.width >= -body-list.viewport-x - 3 * self.width
+                                    && self.x <= -body-list.viewport-x + header-rect.width + 3 * self.width;
+
+                                if col-visible: Text {
+                                    text: cell;
+                                    width: ResultsState.list-column-widths[c-index] * 1px;
+                                    font-size: 12px;
+                                    font-family: Theme.font-mono;
+                                    color: Theme.text;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: start;
+                                }
+                            }
+                            Rectangle { }
+                        }
+                    }
+                }
+            }
+
+            if ResultsState.list-rows.length == 0: Rectangle {
+                Text {
+                    text: "No objects match the current filters";
+                    font-size: 12px;
+                    color: Theme.text-mute;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // -- Pagination footer --
+        // Next/previous rather than infinite scroll: each page is a fresh,
+        // bounded query (see LIST_PAGE_SIZE in results_state_controller.rs),
+        // so paging never has to accumulate rows or track scroll position.
+        Rectangle {
+            height: 44px;
+            background: Theme.bg;
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: 1px;
+                background: Theme.border-soft;
+            }
+
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 10px;
+                alignment: end;
+                cross-axis-alignment: center;
+
+                AppButton {
+                    text: "‹ Prev";
+                    height: 28px;
+                    min-width: 72px;
+                    enabled: ResultsState.list-page-number > 1;
+                    clicked => { ResultsState.list-prev-page(); }
+                }
+
+                Text {
+                    text: "Page " + ResultsState.list-page-number;
+                    font-size: 11.5px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+
+                AppButton {
+                    text: "Next ›";
+                    height: 28px;
+                    min-width: 72px;
+                    enabled: ResultsState.list-has-next-page;
+                    clicked => { ResultsState.list-next-page(); }
+                }
+            }
+        }
+    }
+}

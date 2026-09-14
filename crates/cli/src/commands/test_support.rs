@@ -49,10 +49,6 @@ impl Drop for TempProjectFile {
 /// from this crate.
 const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_raw":1.0,"sum_scaled":255.0,"mean_raw":0.5,"mean_scaled":127.0,"median_raw":0.5,"median_scaled":127.0,"std_raw":0.1,"std_scaled":25.5,"min_raw":0.0,"min_scaled":0.0,"max_raw":1.0,"max_scaled":255.0}}"#;
 
-/// Creates the `objects`/`coloc_stats` schema (matching the schema
-/// `evanalyzer_core::storage::duckdb::CREATE_TABLES` writes - that constant
-/// isn't public, so this mirrors it by hand, same as `evanalyzer_app`'s
-/// internal fixture) on an already-open connection.
 fn create_results_schema(conn: &duckdb::Connection) {
     conn.execute_batch(
         "CREATE TABLE objects (
@@ -82,21 +78,27 @@ fn create_results_schema(conn: &duckdb::Connection) {
             image_bit_depth UTINYINT,
             intensities_json JSON, coloc_json JSON
         );
-        CREATE TABLE coloc_stats (
-            image VARCHAR NOT NULL, source_class VARCHAR NOT NULL, target_class VARCHAR NOT NULL,
-            n_colocalized UBIGINT, avg_targets_per_object DOUBLE, total_source_objects UBIGINT
-        );
         CREATE TABLE images (
-            image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY
+            image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
+            successful BOOLEAN NOT NULL DEFAULT true, error_message VARCHAR,
+            disabled BOOLEAN NOT NULL DEFAULT false,
+            width UINTEGER NOT NULL, height UINTEGER NOT NULL,
+            c_stacks UINTEGER NOT NULL, z_stacks UINTEGER NOT NULL, t_stacks UINTEGER NOT NULL
+        );
+        CREATE TABLE classes (
+            class_id INTEGER NOT NULL PRIMARY KEY, name VARCHAR NOT NULL, color UINTEGER
         );",
     )
     .expect("create schema");
 }
 
-/// Builds a minimal `objects` table for `view`/`columns` command tests: two
-/// objects from two different images/classes, with distinct `t_stack`/
-/// `z_stack` values (so `get_t_stack_range`/`get_z_stack_range` each report a
-/// real `Some((min, max))` range instead of the "no axis" `None`) and
+/// Builds a minimal `objects` table for `view`/`export` command tests: two
+/// objects from two different images/classes, at two different (but
+/// contiguous, 0-indexed — real z/t stacks always are)
+/// `t_stack`/`z_stack` planes, so a full-range export
+/// (`ResultsGenerator::get_nr_of_z_stacks`/`get_nr_of_t_stacks`, both of
+/// which return the *max* stack index, not a count) actually has to sweep
+/// more than one plane to see both objects, and
 /// channel-0 intensities (so `--channels` has something to discover).
 pub(crate) fn seed_view_results_db(path: &Path) {
     let conn = duckdb::Connection::open(path).expect("open test db");
@@ -119,7 +121,7 @@ pub(crate) fn seed_view_results_db(path: &Path) {
                 bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
                 area_px, area_nm2, perimeter_px, perimeter_nm,
                 circularity, solidity, aspect_ratio, roundness, compactness,
-                major_axis_px, minor_axis_px, touches_edge,
+                major_axis_px, minor_axis_px, eccentricity, touches_edge,
                 pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
                 intensities_json, coloc_json
             ) VALUES (
@@ -131,7 +133,7 @@ pub(crate) fn seed_view_results_db(path: &Path) {
                 0, 0, 0, 0,
                 ?, ?, 40, 40,
                 1.0, 1.0, 1.0, 1.0, 1.0,
-                10, 10, false,
+                10, 10, 1.0, false,
                 1.0, 1.0, 1.0,
                 ?, '{}'
             )",
@@ -168,19 +170,103 @@ pub(crate) fn seed_view_results_db(path: &Path) {
         "ClassB",
         2,
         200,
-        3,
-        5,
+        1,
+        1,
     );
 
     // Mirrors what `DuckDbExporter::finalize_image` would have written for
-    // these two images.
+    // these two images: one measured channel (`CH0_INTENSITIES_JSON`), and
+    // 2 z/t stacks each - matching the two distinct (t_stack, z_stack) planes
+    // `insert` above used (img1 @ (0,0), img2 @ (1,1)).
     for image in ["img1.tif", "img2.tif"] {
         conn.execute(
-            "INSERT INTO images (image_name, image_rel_path) VALUES (?, ?)",
+            "INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks) \
+             VALUES (?, ?, 100, 100, 1, 2, 2)",
             duckdb::params![image, image],
         )
         .unwrap_or_else(|e| panic!("insert image {image}: {e}"));
     }
+
+    for (id, name) in [(1, "ClassA"), (2, "ClassB")] {
+        conn.execute(
+            "INSERT INTO classes (class_id, name, color) VALUES (?, ?, 0)",
+            duckdb::params![id, name],
+        )
+        .unwrap_or_else(|e| panic!("insert class {name}: {e}"));
+    }
+}
+
+/// Same JSON shape as [`CH0_INTENSITIES_JSON`] but keyed `"0".."n_channels-1"`,
+/// for tests asserting the CLI reports one intensity column group per real
+/// image channel (`evanalyzer_app`'s `ResultsGenerator::get_nr_of_c_stacks`)
+/// rather than a fixed count regardless of how many channels the image
+/// actually has.
+fn intensities_json_for_channels(n_channels: u32) -> String {
+    let entries: Vec<String> = (0..n_channels)
+        .map(|ch| {
+            format!(
+                "\"{ch}\":{{\"sum_raw\":1.0,\"sum_scaled\":255.0,\"mean_raw\":0.5,\"mean_scaled\":127.0,\
+                 \"median_raw\":0.5,\"median_scaled\":127.0,\"std_raw\":0.1,\"std_scaled\":25.5,\
+                 \"min_raw\":0.0,\"min_scaled\":0.0,\"max_raw\":1.0,\"max_scaled\":255.0}}"
+            )
+        })
+        .collect();
+    format!("{{{}}}", entries.join(","))
+}
+
+/// Builds a single-image, single-object results DB whose object carries
+/// intensity data for `n_channels` channels - unlike [`seed_view_results_db`]
+/// (always channel 0 only), for tests that need a specific real channel
+/// count. This `images` table (via `create_results_schema`) predates
+/// `c_stacks`/`z_stacks`/`t_stacks`, so opening it through
+/// `ResultsGenerator::open_database` exercises the same backfill migration a
+/// real pre-upgrade `.evadb` would.
+pub(crate) fn seed_multi_channel_results_db(path: &Path, n_channels: u32) {
+    let conn = duckdb::Connection::open(path).expect("open test db");
+    create_results_schema(&conn);
+
+    conn.execute(
+        "INSERT INTO objects (
+            image_name, image_rel_path, t_stack, z_stack,
+            object_id, seg_class_name, seg_class_id,
+            object_class_name, object_class_id, track_id,
+            centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+            bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+            bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+            area_px, area_nm2, perimeter_px, perimeter_nm,
+            circularity, solidity, aspect_ratio, roundness, compactness,
+            major_axis_px, minor_axis_px, eccentricity, touches_edge,
+            pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+            intensities_json, coloc_json
+        ) VALUES (
+            'img1.tif', 'img1.tif', 0, 0,
+            '00000000-0000-0000-0000-000000000001', 'ClassA', 1,
+            '[\"ClassA\"]', '[1]', 0,
+            0, 0, 0, 0,
+            0, 0, 10, 10,
+            0, 0, 0, 0,
+            100, 100.0, 40, 40,
+            1.0, 1.0, 1.0, 1.0, 1.0,
+            10, 10, 1.0, false,
+            1.0, 1.0, 1.0,
+            ?, '{}'
+        )",
+        duckdb::params![intensities_json_for_channels(n_channels)],
+    )
+    .expect("insert object");
+
+    conn.execute(
+        "INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks) \
+         VALUES ('img1.tif', 'img1.tif', 100, 100, ?, 1, 1)",
+        duckdb::params![n_channels],
+    )
+    .expect("insert image");
+
+    conn.execute(
+        "INSERT INTO classes (class_id, name, color) VALUES (1, 'ClassA', 0)",
+        [],
+    )
+    .expect("insert class");
 }
 
 /// A scratch directory holding a seeded results DuckDB file, cleaned up on
@@ -201,6 +287,15 @@ impl TempResultsDb {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path().join("results.evadb");
         seed_view_results_db(&path);
+        Self { _dir: dir, path }
+    }
+
+    /// Same as [`Self::seeded`], but the one seeded object carries intensity
+    /// data for `n_channels` channels (see [`seed_multi_channel_results_db`]).
+    pub(crate) fn with_channels(n_channels: u32) -> Self {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("results.evadb");
+        seed_multi_channel_results_db(&path, n_channels);
         Self { _dir: dir, path }
     }
 }

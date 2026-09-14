@@ -12,8 +12,8 @@ evanalyzer_cfg = { workspace = true }
 evanalyzer_app = { workspace = true }
 schemars  = { workspace = true}
 serde_json  = { workspace = true}
-candle-core = "0.11.0"
-candle-transformers = "0.11.0"
-tokenizers = "0.23.1"
-llguidance = "1.7.6"
+candle-core = { workspace = true}
+candle-transformers = { workspace = true}
+tokenizers = { workspace = true}
+llguidance = { workspace = true}
 log = { workspace = true }

@@ -1,0 +1,368 @@
+// results_charts.slint — Charts view: chart-kind tabs (Histogram/Scatter/
+// Boxplot) + Property/Class filter pills in the header, and the actual
+// chart rendering (bars/points/boxes, driven by the data Rust computes in
+// `ResultsGenerator::get_histogram`/`get_scatter`/`get_boxplot` and pushes
+// into `ResultsState.chart-*`) in the stretch area below.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ResultsState, ResultsChartKind2 } from "results_state.slint";
+import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
+
+component ChartTab inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active;
+    callback clicked;
+
+    border-radius: Theme.radius-sm;
+    background: root.active ? Theme.accent : (ta.has-hover ? Theme.raised : transparent);
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 7px;
+        padding-bottom: 7px;
+        spacing: 6px;
+        cross-axis-alignment: center;
+
+        Image {
+            source: root.icon;
+            width: 14px;
+            height: 14px;
+            colorize: root.active ? white : Theme.text-dim;
+        }
+
+        Text {
+            text: root.label;
+            font-size: 12.5px;
+            font-family: Theme.font-sans;
+            color: root.active ? white : Theme.text-dim;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component ChartErrorOrEmpty inherits Text {
+    text: ResultsState.chart-error;
+    color: Theme.text-mute;
+    font-size: 12px;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+    wrap: word-wrap;
+}
+
+component HistogramChart inherits Rectangle {
+    if ResultsState.chart-error != "": ChartErrorOrEmpty { }
+
+    if ResultsState.chart-error == "": VerticalLayout {
+        padding: 24px;
+        spacing: 8px;
+
+        Text {
+            text: ResultsState.chart-histogram-object-count + " objects";
+            font-size: 11px;
+            color: Theme.text-mute;
+        }
+
+        bars := HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 2px;
+
+            for bin in ResultsState.chart-histogram-bins: Rectangle {
+                horizontal-stretch: 1;
+
+                Rectangle {
+                    y: parent.height - self.height;
+                    width: parent.width;
+                    height: parent.height * bin;
+                    background: Theme.accent;
+                    border-radius: 2px;
+                }
+            }
+
+            if ResultsState.chart-histogram-bins.length == 0: Text {
+                text: "No data for the selected filters";
+                color: Theme.text-mute;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            Text {
+                text: ResultsState.chart-histogram-min-label;
+                font-size: 10px;
+                color: Theme.text-faint;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: ResultsState.chart-histogram-max-label;
+                font-size: 10px;
+                color: Theme.text-faint;
+            }
+        }
+    }
+}
+
+component ScatterChart inherits Rectangle {
+    if ResultsState.chart-error != "": ChartErrorOrEmpty { }
+
+    if ResultsState.chart-error == "": VerticalLayout {
+        padding: 24px;
+        spacing: 8px;
+
+        Text {
+            text: ResultsState.chart-scatter-shown-count + " of " + ResultsState.chart-scatter-total-count + " objects plotted";
+            font-size: 11px;
+            color: Theme.text-mute;
+        }
+
+        plot-area := Rectangle {
+            vertical-stretch: 1;
+            background: Theme.raised;
+            border-radius: 4px;
+            clip: true;
+
+            for pt in ResultsState.chart-scatter-points: Rectangle {
+                width: 5px;
+                height: 5px;
+                border-radius: 2.5px;
+                background: Theme.accent.with-alpha(0.65);
+                x: pt.x * (plot-area.width - self.width);
+                y: (1.0 - pt.y) * (plot-area.height - self.height);
+            }
+
+            if ResultsState.chart-scatter-points.length == 0: Text {
+                text: "No data for the selected filters";
+                color: Theme.text-mute;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            Text {
+                x: 4px;
+                y: 2px;
+                text: ResultsState.chart-scatter-y-max-label;
+                font-size: 9px;
+                color: Theme.text-faint;
+            }
+            Text {
+                x: 4px;
+                y: parent.height - self.height - 2px;
+                text: ResultsState.chart-scatter-y-min-label;
+                font-size: 9px;
+                color: Theme.text-faint;
+            }
+        }
+
+        HorizontalLayout {
+            Text {
+                text: ResultsState.chart-scatter-x-min-label;
+                font-size: 10px;
+                color: Theme.text-faint;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: ResultsState.chart-scatter-x-max-label;
+                font-size: 10px;
+                color: Theme.text-faint;
+            }
+        }
+    }
+}
+
+component BoxplotChart inherits Rectangle {
+    if ResultsState.chart-error != "": ChartErrorOrEmpty { }
+
+    if ResultsState.chart-error == "" && ResultsState.chart-boxplot-boxes.length == 0: Text {
+        text: "No data for the selected filters";
+        color: Theme.text-mute;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    // A box per class can easily be more than fit the panel at once (a
+    // database can register dozens of classes) — a plain `ScrollView`
+    // (not `ListView`) is fine here since every box is always instantiated
+    // (no virtualization needed at this scale), so its own auto-inferred
+    // scrollable width just works.
+    if ResultsState.chart-error == "" && ResultsState.chart-boxplot-boxes.length > 0: ScrollView {
+        HorizontalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            for box in ResultsState.chart-boxplot-boxes: VerticalLayout {
+                width: 90px;
+                spacing: 4px;
+
+                plot := Rectangle {
+                    vertical-stretch: 1;
+
+                    // whisker: min -> max
+                    Rectangle {
+                        x: (parent.width - self.width) / 2;
+                        width: 1.5px;
+                        y: parent.height * (1.0 - box.max);
+                        height: max(0px, parent.height * (box.max - box.min));
+                        background: box.color;
+                    }
+
+                    // box: Q1 -> Q3
+                    Rectangle {
+                        x: parent.width * 0.2;
+                        width: parent.width * 0.6;
+                        y: parent.height * (1.0 - box.q3);
+                        height: max(1px, parent.height * (box.q3 - box.q1));
+                        background: box.color.with-alpha(0.35);
+                        border-width: 1.5px;
+                        border-color: box.color;
+                        border-radius: 2px;
+                    }
+
+                    // median line
+                    Rectangle {
+                        x: parent.width * 0.2;
+                        width: parent.width * 0.6;
+                        y: parent.height * (1.0 - box.median) - 1px;
+                        height: 2px;
+                        background: box.color;
+                    }
+
+                    for outlier in box.outliers: Rectangle {
+                        width: 4px;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: box.color;
+                        x: (parent.width - self.width) / 2;
+                        y: parent.height * (1.0 - outlier) - self.height / 2;
+                    }
+                }
+
+                Text {
+                    text: box.label;
+                    font-size: 9.5px;
+                    color: Theme.text-mute;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: box.object-count + " objects";
+                    font-size: 8.5px;
+                    color: Theme.text-faint;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+export component ResultsChartsView inherits Rectangle {
+    background: Theme.bg;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: 54px;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                ChartTab {
+                    icon: @image-url("../icons/regular-black/chart-bar.svg");
+                    label: "Histogram";
+                    active: ResultsState.chart-kind == ResultsChartKind2.histogram;
+                    clicked => { ResultsState.chart-kind = ResultsChartKind2.histogram; ResultsState.chart-kind-selected(ResultsChartKind2.histogram); }
+                }
+
+                ChartTab {
+                    icon: @image-url("../icons/regular-black/chart-scatter.svg");
+                    label: "Scatter";
+                    active: ResultsState.chart-kind == ResultsChartKind2.scatter;
+                    clicked => { ResultsState.chart-kind = ResultsChartKind2.scatter; ResultsState.chart-kind-selected(ResultsChartKind2.scatter); }
+                }
+
+                ChartTab {
+                    icon: @image-url("../icons/regular-black/grid-four.svg");
+                    label: "Boxplot";
+                    active: ResultsState.chart-kind == ResultsChartKind2.boxplot;
+                    clicked => { ResultsState.chart-kind = ResultsChartKind2.boxplot; ResultsState.chart-kind-selected(ResultsChartKind2.boxplot); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                MultiSelectDropdown {
+                    label: ResultsState.chart-kind == ResultsChartKind2.scatter ? "X" : "PROPERTY";
+                    summary-text: ResultsState.chart-column-summary;
+                    items <=> ResultsState.chart-column-items;
+                    multi-select: false;
+                    pill-width: 140px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.chart-column-summary = value;
+                        ResultsState.chart-column-selected(key);
+                    }
+                }
+
+                if ResultsState.chart-kind == ResultsChartKind2.scatter: MultiSelectDropdown {
+                    label: "Y";
+                    summary-text: ResultsState.chart-y-column-summary;
+                    items <=> ResultsState.chart-y-column-items;
+                    multi-select: false;
+                    pill-width: 140px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.chart-y-column-summary = value;
+                        ResultsState.chart-y-column-selected(key);
+                    }
+                }
+
+                if ResultsState.chart-kind != ResultsChartKind2.boxplot: MultiSelectDropdown {
+                    label: "CLASS";
+                    summary-text: ResultsState.chart-class-summary;
+                    items <=> ResultsState.chart-class-items;
+                    multi-select: false;
+                    pill-width: 140px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.chart-class-summary = value;
+                        ResultsState.chart-class-selected(key, selected);
+                    }
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: parent.height - 1px;
+                width: parent.width;
+                height: 1px;
+                background: Theme.border-soft;
+            }
+        }
+
+        if ResultsState.chart-kind == ResultsChartKind2.histogram: HistogramChart {
+            vertical-stretch: 1;
+        }
+        if ResultsState.chart-kind == ResultsChartKind2.scatter: ScatterChart {
+            vertical-stretch: 1;
+        }
+        if ResultsState.chart-kind == ResultsChartKind2.boxplot: BoxplotChart {
+            vertical-stretch: 1;
+        }
+    }
+}

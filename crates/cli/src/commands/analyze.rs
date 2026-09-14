@@ -113,7 +113,9 @@ fn apply_progress_event(event: ProgressEvent, total: &mut usize, failed: &mut us
 #[cfg(test)]
 mod tests {
     use super::*;
+    use calamine::DataType as _;
     use crate::commands::test_support::TempProjectFile;
+    use evanalyzer_app::result::{Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter, ResultsGenerator};
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 
     #[test]
@@ -304,5 +306,265 @@ mod tests {
 
         assert_eq!(total, 4);
         assert_eq!(failed, 1);
+    }
+
+    /// Full end-to-end proof the CLI actually works, not just that its
+    /// pieces do in isolation: `analyze` runs a real (manual, full-range
+    /// threshold -> connected components -> extract objects, mirroring
+    /// evanalyzer_core's own `threshold_connected_components_extract_pipeline`
+    /// integration test) pipeline against two real fixture images, then the
+    /// resulting `.evadb` is exported via the CLI's own `export csv`/
+    /// `export xlsx` commands (`crate::commands::export::run`, the exact
+    /// function `evanalyzer_cli export csv/xlsx` invokes) and the produced
+    /// files are checked for real content, not just "didn't error".
+    #[test]
+    fn run_then_export_csv_and_xlsx_via_the_cli_end_to_end() {
+        use crate::args::{ExportArgs, ExportCommand, FilterArgs, GroupArgs, TableExportArgs};
+        use evanalyzer_cfg::core_types::{ImageAddress, PipelineId, SegmentationClass};
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ConnectedComponentsSettings, ExtractObjectsSettings, ThresholdEntrySettings,
+            ThresholdSettings,
+        };
+        use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+
+        // A manual threshold defaults to `min_threshold: 0.0, max_threshold:
+        // 65535.0` (`ThresholdEntrySettings::default()`) - every pixel of
+        // any real image falls in range, so this reliably produces at least
+        // one connected component regardless of the fixture's actual
+        // intensity distribution, same reasoning as the core-level test this
+        // mirrors.
+        let mut settings = ProjectSettings::default();
+        settings.pipelines = vec![PipelineSettings {
+            id: PipelineId(1),
+            name: "detect".to_string(),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![
+                PipelineStepSettings {
+                    enabled: true,
+                    command: PipelineCommand::Threshold(ThresholdSettings {
+                        thresholds: vec![ThresholdEntrySettings {
+                            object_class_id: SegmentationClass(1),
+                            ..Default::default()
+                        }],
+                    }),
+                },
+                PipelineStepSettings {
+                    enabled: true,
+                    command: PipelineCommand::ConnectedComponents(
+                        ConnectedComponentsSettings::default(),
+                    ),
+                },
+                PipelineStepSettings {
+                    enabled: true,
+                    command: PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
+                },
+            ],
+        }];
+
+        let file = TempProjectFile::new(&settings);
+        let images_dir = file.path.parent().unwrap().join("images");
+        std::fs::create_dir_all(&images_dir).unwrap();
+        // Two real fixture images (already used elsewhere in this crate's
+        // and evanalyzer_core's own tests), so the export step has more than
+        // one image's worth of objects to report on.
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/tests");
+        std::fs::copy(
+            fixture_dir.join("multi-channel-4D-series.ome.tif"),
+            images_dir.join("a.ome.tif"),
+        )
+        .expect("copy fixture a");
+        std::fs::copy(fixture_dir.join("slice_Z0_C0_T0.tif"), images_dir.join("b.tif"))
+            .expect("copy fixture b");
+
+        run(AnalyzeArgs {
+            project: file.path.clone(),
+            images: Some(images_dir),
+            threads: Some(1),
+            job_name: Some("e2e".into()),
+        })
+        .expect("analyze should succeed against real fixture images with a working pipeline");
+
+        let results_root = file.path.parent().unwrap().join("results");
+        let evadb =
+            find_evadb(&results_root).expect("analyze should have produced a .evadb file");
+
+        let out_dir = tempfile::tempdir().expect("tempdir");
+
+        // -- Ground truth: every detected object's full row, straight from
+        // `ResultsGenerator` itself (the same source both `export csv` and
+        // `export xlsx` read from) - swept across every z/t plane the same
+        // way `export_table` does (`0..=get_nr_of_{z,t}_stacks()`), and
+        // keyed by object id so row *order* differences between the direct
+        // query and the exported files can't cause a false mismatch.
+        let database = ResultsGenerator::open_database(evadb.clone()).expect("open evadb");
+        let expected_columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let mut expected_by_id: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for z in 0..=database.get_nr_of_z_stacks() {
+            for t in 0..=database.get_nr_of_t_stacks() {
+                let page = database
+                    .get_object_list(&ListFilter {
+                        plane: PlaneFilter { z_stack: z, t_stack: t },
+                        images: None,
+                        object_classes: None,
+                        columns: expected_columns.clone(),
+                        with_coloc_details: false,
+                        page: Pagination { limit: 1_000_000, after: None },
+                    })
+                    .expect("ground-truth object list");
+                for (id, row) in page.row_names.iter().zip(page.rows) {
+                    expected_by_id.insert(id.clone(), row.iter().map(cell_to_comparable).collect());
+                }
+            }
+        }
+        assert!(
+            !expected_by_id.is_empty(),
+            "thresholding the whole pixel range should have detected at least one object"
+        );
+
+        let csv_out = out_dir.path().join("out.csv");
+        crate::commands::export::run(ExportArgs {
+            command: ExportCommand::Csv(TableExportArgs {
+                db: evadb.clone(),
+                out: csv_out.clone(),
+                filter: FilterArgs::default(),
+                group: GroupArgs::default(),
+            }),
+        })
+        .expect("csv export should succeed");
+        let csv_content = std::fs::read_to_string(&csv_out).expect("read exported csv");
+        let mut csv_lines = csv_content.lines();
+        let csv_header: Vec<&str> = csv_lines.next().expect("csv header row").split(',').collect();
+        assert_eq!(csv_header[0], "Object ID", "header: {csv_header:?}");
+        let object_id_col = 0;
+
+        let mut csv_row_count = 0;
+        for line in csv_lines {
+            csv_row_count += 1;
+            let fields: Vec<&str> = line.split(',').collect();
+            assert_eq!(
+                fields.len(),
+                expected_columns.len(),
+                "csv row has a different column count than expected: {line}"
+            );
+            let id = fields[object_id_col];
+            let expected_row = expected_by_id
+                .get(id)
+                .unwrap_or_else(|| panic!("csv row for object {id} has no ground-truth match"));
+            for (col_idx, (field, expected)) in fields.iter().zip(expected_row).enumerate() {
+                assert_values_match(field, expected, &csv_header[col_idx], "csv");
+            }
+        }
+        assert_eq!(
+            csv_row_count,
+            expected_by_id.len(),
+            "csv must contain exactly one row per detected object"
+        );
+
+        let xlsx_out = out_dir.path().join("out.xlsx");
+        crate::commands::export::run(ExportArgs {
+            command: ExportCommand::Xlsx(TableExportArgs {
+                db: evadb,
+                out: xlsx_out.clone(),
+                filter: FilterArgs::default(),
+                group: GroupArgs::default(),
+            }),
+        })
+        .expect("xlsx export should succeed");
+
+        use calamine::Reader;
+        let mut workbook: calamine::Xlsx<_> =
+            calamine::open_workbook(&xlsx_out).expect("open exported xlsx");
+        let range = workbook.worksheet_range("List").expect("List sheet");
+        let mut rows = range.rows();
+        let xlsx_header = rows.next().expect("xlsx header row");
+        assert_eq!(
+            xlsx_header.first().and_then(|c| c.get_string()),
+            Some("Object ID")
+        );
+
+        let mut xlsx_row_count = 0;
+        for row in rows {
+            xlsx_row_count += 1;
+            let id = row[object_id_col]
+                .get_string()
+                .expect("object id cell should be a string");
+            let expected_row = expected_by_id
+                .get(id)
+                .unwrap_or_else(|| panic!("xlsx row for object {id} has no ground-truth match"));
+            for (col_idx, (cell, expected)) in row.iter().zip(expected_row).enumerate() {
+                let got = match cell {
+                    calamine::Data::String(s) => s.clone(),
+                    calamine::Data::Float(f) => f.to_string(),
+                    calamine::Data::Int(i) => i.to_string(),
+                    calamine::Data::Empty => String::new(),
+                    other => panic!("unexpected xlsx cell type: {other:?}"),
+                };
+                assert_values_match(&got, expected, &xlsx_header[col_idx].to_string(), "xlsx");
+            }
+        }
+        assert_eq!(
+            xlsx_row_count,
+            expected_by_id.len(),
+            "xlsx must contain exactly one row per detected object"
+        );
+    }
+
+    /// Canonical text form of a ground-truth `Cell`, matching what CSV/XLSX
+    /// actually write for the same value (`results_exporter.rs`'s own
+    /// `cell_text`/`write_cell`) closely enough for [`assert_values_match`]
+    /// to compare against - only the numeric-vs-text distinction and the
+    /// literal digits matter, not exact formatting.
+    fn cell_to_comparable(cell: &Cell) -> String {
+        match &cell.value {
+            CellValue::Empty => String::new(),
+            CellValue::String(s) => s.clone(),
+            CellValue::Class((s, _)) => s.clone(),
+            CellValue::Float(v) => v.to_string(),
+            CellValue::Integer(v) => v.to_string(),
+        }
+    }
+
+    /// Asserts `got` (a field read back from an exported CSV/XLSX file) and
+    /// `expected` (the same column's `ResultsGenerator`-derived ground
+    /// truth, via `cell_to_comparable`) agree - numerically (with a small
+    /// tolerance, since XLSX round-trips every number through `f64`
+    /// regardless of the original `Cell`'s `Integer`/`Float` type) when both
+    /// parse as numbers, textually otherwise.
+    fn assert_values_match(got: &str, expected: &str, column: &str, format: &str) {
+        match (got.parse::<f64>(), expected.parse::<f64>()) {
+            (Ok(g), Ok(e)) => assert!(
+                (g - e).abs() < 1e-3,
+                "{format} column {column:?}: expected {expected}, got {got}"
+            ),
+            _ => assert_eq!(got, expected, "{format} column {column:?}"),
+        }
+    }
+
+    /// Recursively finds the first `*.evadb` file under `dir` — `analyze`
+    /// writes its results database under a timestamped subdirectory of
+    /// `<project_dir>/results/`, so the exact path isn't predictable ahead
+    /// of time.
+    fn find_evadb(dir: &std::path::Path) -> Option<PathBuf> {
+        for entry in std::fs::read_dir(dir).ok()? {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find_evadb(&path) {
+                    return Some(found);
+                }
+            } else if path.extension().and_then(|e| e.to_str()) == Some("evadb") {
+                return Some(path);
+            }
+        }
+        None
     }
 }

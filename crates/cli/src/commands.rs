@@ -1,5 +1,5 @@
 pub mod analyze;
-mod common;
+pub(crate) mod common;
 pub mod export;
 pub mod project;
 #[cfg(test)]

@@ -1,718 +1,1561 @@
-use crate::results::plate_matrix::{
-    PlateMatrixResult, WellMatrixResult, compute_plate_matrix, compute_well_matrix, resolve_range,
-    row_label,
+use super::results_generator::class_display_label;
+use crate::result::{
+    Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry, DatabaseResult,
+    GroupedByImageFilter, ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter, PlateDimensions,
+    PlateFilter, PlateFilterMulti, ResultsGenerator, View, WellSize, WellsBatchFilter,
+    WellsBatchFilterMulti,
 };
-use crate::results::results_chart::HeatmapColorScheme;
-use crate::results::results_loader::{
-    AggFunc, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, ResultsLoader,
-    aggregate_objects_sql, build_coloc_detail_column_specs, coloc_partner_ids,
-    discover_coloc_detail_columns, flatten_coloc_rows, to_display_row, to_object_filter,
-};
-use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_core::{DuckDbReader, ObjectRow};
-use rust_xlsxwriter::{Color, Format, Workbook};
-use std::{collections::HashSet, path::Path, sync::Arc};
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
+use rust_xlsxwriter::{Color, Format, Workbook, Worksheet, XlsxError};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
+use std::range::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Source rows accumulated per colocalization-partner lookup while streaming
-/// the colocalization detail export - each batch does one `IN (...)` query
-/// for every partner id its rows reference, so this bounds both that query's
-/// size and how many source rows are held in memory at once. Not used by the
-/// plain per-object/grouped export, which streams the DB's own row-at-a-time
-/// cursor straight through to the CSV/XLSX writer (see `export_rows`).
-const COLOC_PARTNER_BATCH_SIZE: usize = 5_000;
+/// Light gray Excel gives every other coloc-detail row (`Cell::alternating_color`)
+/// so the fanned-out rows belonging to one source object stay visually
+/// grouped — matches `Theme.list-row-alt-bg`'s role in the GUI's own List
+/// view, just as a plain hex constant here since XLSX formatting has no
+/// theme to pull from.
+const ALTERNATING_ROW_BG: u32 = 0xF1F1F1;
 
-pub struct ResultsExporter {
-    results_loader: Arc<ResultsLoader>,
+/// Excel cell size (both width and height, in pixels) every plate/well/
+/// heatmap grid block is laid out at, so its cells read as squares — the
+/// grid's own values are unitless relative to a real image/plate scale, so
+/// there's no "correct" size to derive them from; this just needs to be
+/// visually square and legible.
+const GRID_CELL_PX: u32 = 40;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    #[default]
+    XLSX,
+    CSV,
+    Parquet,
 }
 
-impl ResultsExporter {
-    pub fn new(results_loader: Arc<ResultsLoader>) -> Self {
-        Self { results_loader }
-    }
+/// One export step/document completing — `current`/`total` describe
+/// progress *within* the step named by `message` (e.g. "Plate/Well: ch2@spot"
+/// at `current=3, total=22` for the 3rd of 22 classes), not overall export
+/// progress across List/Plate/Well/Heatmap combined, since those phases
+/// have no shared unit to make a single running percentage meaningful.
+pub type ExportProgress<'a> = &'a mut dyn FnMut(&str, usize, usize);
 
-    /// Exports the rows matching `filter` as a CSV file to `export_path`.
-    /// When `group.group_by` is not `None`, the aggregated/grouped rows are
-    /// exported instead of the per-object rows (mirroring the table view).
-    pub fn export_to_csv(
-        &self,
-        filter: DatabaseFilter,
-        group: &GroupConfig,
-        base_specs: &[ColumnSpec],
-        export_path: &Path,
-    ) -> Result<(), InternalErrors> {
-        let mut writer =
-            csv::Writer::from_path(export_path).map_err(|e| InternalErrors::Io(e.to_string()))?;
+#[derive(Default, Clone)]
+pub struct ResultExport {
+    /// Directory the export writes its file(s) into — created if missing.
+    /// Every document below lives directly under it (`list.xlsx`,
+    /// `plate.xlsx`, `well.xlsx`, `heatmap_{image}.xlsx`).
+    pub output_dir: PathBuf,
+    pub format: ExportFormat,
+    pub t_stacks: Range<u32>,
+    pub z_stacks: Range<u32>,
+    /// `[]` means every image in the database (see `resolve_images`).
+    pub image_rel_paths: Vec<String>,
 
-        self.export_rows(filter, group, base_specs, |row| {
-            writer
-                .write_record(row)
-                .map_err(|e| InternalErrors::Io(e.to_string()))
-        })?;
+    // Variants
+    pub columns: Vec<Column>,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub grouping_regex: String,
+    /// `[]` means every object class registered in the database (see
+    /// `export_plate_and_well`/`export_heatmap`).
+    pub object_classes: Vec<ObjectClass>,
 
-        writer
-            .flush()
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
-        Ok(())
-    }
+    // Matrix view options
+    pub aggregations: Vec<Aggregation>,
+    pub plate_dimension: Option<PlateDimensions>,
+    pub well_size: Option<WellSize>,
+    pub well_order: Option<Vec<u32>>,
+    pub square_size: Option<usize>,
 
-    /// Exports the rows matching `filter` as an XLSX file to `export_path`.
-    /// When `group.group_by` is not `None`, the aggregated/grouped rows are
-    /// exported instead of the per-object rows (mirroring the table view).
-    pub fn export_to_xlsx(
-        &self,
-        filter: DatabaseFilter,
-        group: &GroupConfig,
-        base_specs: &[ColumnSpec],
-        export_path: &Path,
-    ) -> Result<(), InternalErrors> {
-        let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
-        let mut workbook = Workbook::new();
-        // `export_rows` always writes strictly in row order (never revisits
-        // an earlier row), so "constant memory" mode applies cleanly here —
-        // it flushes each row to a temp file as the next one is written
-        // instead of buffering the whole sheet, keeping memory flat
-        // regardless of row count.
-        let sheet = workbook.add_worksheet_with_constant_memory();
-        sheet.set_name("Results").map_err(err)?;
-        sheet.set_freeze_panes(1, 0).map_err(err)?;
+    // What to export
+    pub with_list_view: bool,
+    pub with_list_coloc_details: bool,
+    /// `list_{image}.xlsx` per image instead of one shared `list.xlsx` —
+    /// needed once a single image's own object count risks Excel's
+    /// 1,048,576-row-per-sheet limit (a large plate scan can comfortably
+    /// exceed that combined across images, even if no single image does).
+    pub with_list_one_file_per_image: bool,
+    /// `grouped_by_image.xlsx`: one row per image, one column per
+    /// (selected column × selected aggregation) combination — see
+    /// `export_grouped_by_image`. Independent of `with_list_view`: it's a
+    /// separate document, not a variant of the per-object list.
+    pub with_grouped_by_image_list: bool,
+    pub with_plate_view_heatmap: bool,
+    pub with_well_view_heatmap: bool,
+    pub with_plate_view_list: bool,
+    pub with_well_view_list: bool,
+    pub with_heatmap: bool,
+}
 
-        self.export_rows(filter, group, base_specs, xlsx_row_writer(sheet))?;
-
-        workbook.save(export_path).map_err(err)?;
-        Ok(())
-    }
-
-    /// Exports the colocalization detail flat table to CSV:
-    /// one row per (source object, colocalized partner) pair.
+impl ResultExport {
+    /// `on_progress(message, current, total)` is called throughout to
+    /// report what's happening — see `ExportProgress`'s doc comment for what
+    /// `current`/`total` are relative to. Called from a background thread
+    /// (this can take a while for a large database), so `on_progress`
+    /// itself must not touch UI state directly — the caller's closure
+    /// should just forward each call through `slint::invoke_from_event_loop`
+    /// or equivalent.
     ///
-    /// `visible_labels`, when given, restricts the exported columns to just
-    /// those labels (columns are discovered fresh from `filter` regardless,
-    /// since coloc-detail columns depend on which partner classes/channels
-    /// are actually present — this only trims which of the discovered
-    /// columns get written out). `None` exports every discovered column.
-    pub fn export_coloc_detail_to_csv(
+    /// `cancel`: checked between documents and, within a large document,
+    /// between images/classes/planes (see `check_cancelled`) — set it to
+    /// `true` from another thread (e.g. a dialog's Cancel button) to stop
+    /// the export at the next such checkpoint, returning
+    /// `Err(InternalErrors::Cancelled)` rather than finishing. A fresh
+    /// `AtomicBool::new(false)` is fine for a caller that never cancels
+    /// (the CLI, today).
+    pub fn start_export(
         &self,
-        filter: DatabaseFilter,
-        visible_labels: Option<&HashSet<String>>,
-        export_path: &Path,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
-        let mut writer =
-            csv::Writer::from_path(export_path).map_err(|e| InternalErrors::Io(e.to_string()))?;
-        self.export_coloc_detail_rows(filter, visible_labels, |row| {
-            writer
-                .write_record(row)
-                .map_err(|e| InternalErrors::Io(e.to_string()))
-        })?;
-        writer
-            .flush()
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
-        Ok(())
-    }
-
-    /// Exports the colocalization detail flat table to XLSX:
-    /// one row per (source object, colocalized partner) pair.
-    /// See `export_coloc_detail_to_csv` for `visible_labels`.
-    pub fn export_coloc_detail_to_xlsx(
-        &self,
-        filter: DatabaseFilter,
-        visible_labels: Option<&HashSet<String>>,
-        export_path: &Path,
-    ) -> Result<(), InternalErrors> {
-        let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
-        let mut workbook = Workbook::new();
-        let sheet = workbook.add_worksheet_with_constant_memory();
-        sheet.set_name("Coloc Detail").map_err(err)?;
-        sheet.set_freeze_panes(1, 0).map_err(err)?;
-
-        self.export_coloc_detail_rows(filter, visible_labels, xlsx_row_writer(sheet))?;
-
-        workbook.save(export_path).map_err(err)?;
-        Ok(())
-    }
-
-    /// Exports one Matrix (Plate) view as a plain-text grid to CSV: a header
-    /// row of column numbers, a header column of row letters (`A`, `B`, ...,
-    /// `AA`, ... via [`row_label`]), and each well's aggregated value at its
-    /// plate position — no color (CSV can't carry it), mirroring
-    /// `export_matrix_to_xlsx` otherwise. Recomputes the matrix fresh from
-    /// `filter` (the same way `export_to_csv` recomputes grouped rows fresh
-    /// rather than reusing cached UI state), so each batch's own class/image
-    /// filter is respected.
-    #[allow(clippy::too_many_arguments)]
-    pub fn export_matrix_to_csv(
-        &self,
-        filter: DatabaseFilter,
-        group_by: GroupBy,
-        regex: &str,
-        agg: AggFunc,
-        metric: &ColumnSpec,
-        plate_rows: usize,
-        plate_cols: usize,
-        export_path: &Path,
-    ) -> Result<(), InternalErrors> {
-        let result =
-            self.compute_matrix(filter, group_by, regex, agg, metric, plate_rows, plate_cols)?;
-
-        let mut writer =
-            csv::Writer::from_path(export_path).map_err(|e| InternalErrors::Io(e.to_string()))?;
-        let mut header = vec![String::new()];
-        header.extend((1..=result.cols).map(|c| c.to_string()));
-        writer
-            .write_record(&header)
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
-        for r in 0..result.rows {
-            let mut row = vec![row_label(r)];
-            for c in 0..result.cols {
-                let value = result.cells[r * result.cols + c].value;
-                row.push(value.map(|v| format!("{v:.3}")).unwrap_or_default());
-            }
-            writer
-                .write_record(&row)
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
-        }
-        writer
-            .flush()
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
-        Ok(())
-    }
-
-    /// Exports one Matrix (Plate) view to XLSX: same grid shape as
-    /// `export_matrix_to_csv`, plus each well's cell colored via
-    /// `color_scheme` over `[range_min, range_max]` (or auto-ranged to
-    /// `[0, max(values)]` when `range_auto`) — the same color mapping the
-    /// live Matrix view uses (see `resolve_range`), so the exported sheet
-    /// looks the same as what's on screen.
-    #[allow(clippy::too_many_arguments)]
-    pub fn export_matrix_to_xlsx(
-        &self,
-        filter: DatabaseFilter,
-        group_by: GroupBy,
-        regex: &str,
-        agg: AggFunc,
-        metric: &ColumnSpec,
-        plate_rows: usize,
-        plate_cols: usize,
-        color_scheme: HeatmapColorScheme,
-        range_auto: bool,
-        range_min: f64,
-        range_max: f64,
-        export_path: &Path,
-    ) -> Result<(), InternalErrors> {
-        let result =
-            self.compute_matrix(filter, group_by, regex, agg, metric, plate_rows, plate_cols)?;
-        let values: Vec<f64> = result.cells.iter().filter_map(|c| c.value).collect();
-        let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
-
-        let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
-        let mut workbook = Workbook::new();
-        let sheet = workbook.add_worksheet();
-        sheet.set_name("Matrix").map_err(err)?;
-
-        let header_fmt = Format::new().set_bold();
-        for c in 0..result.cols {
-            sheet
-                .write_number_with_format(0, (c + 1) as u16, (c + 1) as f64, &header_fmt)
-                .map_err(err)?;
-        }
-        for r in 0..result.rows {
-            sheet
-                .write_with_format(r as u32 + 1, 0, row_label(r), &header_fmt)
-                .map_err(err)?;
-            for c in 0..result.cols {
-                let Some(v) = result.cells[r * result.cols + c].value else {
-                    continue;
-                };
-                let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
-                let (cr, cg, cb) = color_scheme.color_rgb(t);
-                let cell_fmt = Format::new()
-                    .set_background_color(Color::RGB(
-                        ((cr as u32) << 16) | ((cg as u32) << 8) | cb as u32,
-                    ))
-                    .set_font_color(Color::White);
-                sheet
-                    .write_number_with_format(r as u32 + 1, (c + 1) as u16, v, &cell_fmt)
-                    .map_err(err)?;
-            }
-        }
-
-        workbook.save(export_path).map_err(err)?;
-        Ok(())
-    }
-
-    /// Loads every object matching `filter` and computes the plate matrix —
-    /// the shared first step of both `export_matrix_to_csv`/`_xlsx`.
-    #[allow(clippy::too_many_arguments)]
-    fn compute_matrix(
-        &self,
-        filter: DatabaseFilter,
-        group_by: GroupBy,
-        regex: &str,
-        agg: AggFunc,
-        metric: &ColumnSpec,
-        plate_rows: usize,
-        plate_cols: usize,
-    ) -> Result<PlateMatrixResult, InternalErrors> {
-        let objects = self.results_loader.get_objects(DatabaseFilter {
-            needs_intensities: true,
-            page_size: 0,
-            ..filter
-        })?;
-        let all_images = self.results_loader.get_images()?;
-        Ok(compute_plate_matrix(
-            &objects,
-            &all_images,
-            group_by,
-            regex,
-            agg,
-            metric,
-            plate_rows,
-            plate_cols,
-        ))
-    }
-
-    /// Loads every object matching `filter` once, computes the plate matrix to
-    /// discover which wells actually have data (`count > 0`), then computes
-    /// each of those wells' field-of-view grid (see [`compute_well_matrix`]) -
-    /// the shared first step of `export_well_matrices_to_csv`/`_xlsx`. A well
-    /// whose regex has no usable sub-position data is silently skipped
-    /// (mirrors the live Matrix view's own well drill-down).
-    #[allow(clippy::too_many_arguments)]
-    fn compute_well_matrices(
-        &self,
-        filter: DatabaseFilter,
-        group_by: GroupBy,
-        regex: &str,
-        agg: AggFunc,
-        metric: &ColumnSpec,
-        plate_rows: usize,
-        plate_cols: usize,
-        well_rows: usize,
-        well_cols: usize,
-        well_image_order: &[i32],
-    ) -> Result<Vec<WellMatrixResult>, InternalErrors> {
-        let objects = self.results_loader.get_objects(DatabaseFilter {
-            needs_intensities: true,
-            page_size: 0,
-            ..filter
-        })?;
-        let all_images = self.results_loader.get_images()?;
-        let plate = compute_plate_matrix(
-            &objects,
-            &all_images,
-            group_by,
-            regex,
-            agg,
-            metric,
-            plate_rows,
-            plate_cols,
-        );
-        Ok(plate
-            .cells
-            .iter()
-            .filter(|c| c.count > 0 && !c.label.is_empty())
-            .filter_map(|c| {
-                compute_well_matrix(
-                    &objects,
-                    &all_images,
-                    regex,
-                    &c.label,
-                    agg,
-                    metric,
-                    well_rows,
-                    well_cols,
-                    well_image_order,
-                )
-            })
-            .collect())
-    }
-
-    /// Exports one CSV file per well actually present in the plate (see
-    /// `compute_well_matrices`) into `folder`, named
-    /// `<base_name>_<well_label>.csv` - the Well-view counterpart to
-    /// `export_matrix_to_csv`'s single plate-wide grid. Errors if no well has
-    /// usable sub-position data (regex has no group 4, or nothing matched)
-    /// rather than silently writing nothing.
-    #[allow(clippy::too_many_arguments)]
-    pub fn export_well_matrices_to_csv(
-        &self,
-        filter: DatabaseFilter,
-        group_by: GroupBy,
-        regex: &str,
-        agg: AggFunc,
-        metric: &ColumnSpec,
-        plate_rows: usize,
-        plate_cols: usize,
-        well_rows: usize,
-        well_cols: usize,
-        well_image_order: &[i32],
-        folder: &Path,
-        base_name: &str,
-    ) -> Result<(), InternalErrors> {
-        let wells = self.compute_well_matrices(
-            filter,
-            group_by,
-            regex,
-            agg,
-            metric,
-            plate_rows,
-            plate_cols,
-            well_rows,
-            well_cols,
-            well_image_order,
-        )?;
-        if wells.is_empty() {
-            return Err(InternalErrors::Io(
-                "No wells with sub-position data found - check the regex has a 4th capture group."
-                    .to_string(),
+        if matches!(self.format, ExportFormat::CSV)
+            && (self.with_plate_view_heatmap
+                || self.with_well_view_heatmap
+                || self.with_plate_view_list
+                || self.with_well_view_list
+                || self.with_heatmap)
+        {
+            return Err(InternalErrors::Internal(
+                "CSV export only supports the List and Grouped-by-Image views — use XLSX for Plate/Well/Heatmap".to_string(),
             ));
         }
+        check_cancelled(cancel)?;
 
-        for well in &wells {
-            let export_path = folder.join(format!(
-                "{base_name}_{}.csv",
-                sanitize_component(&well.well_label)
-            ));
-            let mut writer = csv::Writer::from_path(&export_path)
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
-            let mut header = vec![String::new()];
-            header.extend((1..=well.cols).map(|c| c.to_string()));
-            writer
-                .write_record(&header)
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
-            for r in 0..well.rows {
-                let mut row = vec![row_label(r)];
-                for c in 0..well.cols {
-                    let value = well.cells[r * well.cols + c].value;
-                    row.push(value.map(|v| format!("{v:.3}")).unwrap_or_default());
-                }
-                writer
-                    .write_record(&row)
-                    .map_err(|e| InternalErrors::Io(e.to_string()))?;
-            }
-            writer
-                .flush()
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        std::fs::create_dir_all(&self.output_dir).map_err(|e| {
+            InternalErrors::Internal(format!(
+                "Could not create export directory {:?}: {e}",
+                self.output_dir
+            ))
+        })?;
+
+        // Parquet ignores every `with_*`/column/filter setting below - it's
+        // always a single raw dump of the whole `objects` table
+        if matches!(self.format, ExportFormat::Parquet) {
+            return self.export_as_parquet(database, cancel, &mut *on_progress);
+        }
+
+        if self.with_list_view {
+            self.export_list(database, cancel, &mut *on_progress)?;
+        }
+        if self.with_grouped_by_image_list {
+            self.export_grouped_by_image(database, cancel, &mut *on_progress)?;
+        }
+        if self.with_plate_view_heatmap || self.with_well_view_heatmap {
+            self.export_plate_and_well(database, cancel, &mut *on_progress)?;
+        }
+        if self.with_plate_view_list || self.with_well_view_list {
+            self.export_plate_and_well_as_flat_list(database, cancel, &mut *on_progress)?;
+        }
+        if self.with_heatmap {
+            self.export_heatmap(database, cancel, &mut *on_progress)?;
         }
         Ok(())
     }
 
-    /// Exports every well actually present in the plate (see
-    /// `compute_well_matrices`) into one XLSX workbook, one worksheet per well
-    /// (named after the well label) - the Well-view counterpart to
-    /// `export_matrix_to_xlsx`'s single plate-wide grid, each sheet colored
-    /// the same way. Errors if no well has usable sub-position data.
-    #[allow(clippy::too_many_arguments)]
-    pub fn export_well_matrices_to_xlsx(
+    // `list.xlsx`/`list.csv`: every object, ordered exactly as requested —
+    // every object for image0 at t0, then image1 at t0, ..., then image0 at
+    // t1, image1 at t1, .... `get_list`'s own SQL only orders by `object_id`
+    // and only ever filters one (z, t) pair at a time, so that ordering is
+    // produced here by calling it once per (z, t, image) triple, in
+    // `z`/`t`/name-sorted order, and concatenating — not by a single broader
+    // query. For XLSX, a second "List (Coloc Details)" sheet is added
+    // alongside it when `with_list_coloc_details` is also set; for CSV
+    // (which has no concept of a second sheet in the same file) that becomes
+    // a second `list_coloc_details.csv` document instead.
+    //
+    // `with_list_one_file_per_image` splits this into `list_{image}.xlsx`/
+    // `.csv` per image instead — each one its own independent single-image,
+    // multi-t/z document — so a dataset whose combined row count would blow
+    // past Excel's 1,048,576-row-per-sheet limit in one shared file still
+    // exports cleanly, as long as no single image alone exceeds it (CSV has
+    // no such limit, but honors the same flag for output-shape parity
+    // between formats).
+    fn export_list(
         &self,
-        filter: DatabaseFilter,
-        group_by: GroupBy,
-        regex: &str,
-        agg: AggFunc,
-        metric: &ColumnSpec,
-        plate_rows: usize,
-        plate_cols: usize,
-        well_rows: usize,
-        well_cols: usize,
-        well_image_order: &[i32],
-        color_scheme: HeatmapColorScheme,
-        range_auto: bool,
-        range_min: f64,
-        range_max: f64,
-        export_path: &Path,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
-        let wells = self.compute_well_matrices(
-            filter,
-            group_by,
-            regex,
-            agg,
-            metric,
-            plate_rows,
-            plate_cols,
-            well_rows,
-            well_cols,
-            well_image_order,
-        )?;
-        if wells.is_empty() {
-            return Err(InternalErrors::Io(
-                "No wells with sub-position data found - check the regex has a 4th capture group."
-                    .to_string(),
-            ));
-        }
+        let images = resolve_images(database, self)?;
+        let object_classes = if self.object_classes.is_empty() {
+            None
+        } else {
+            Some(self.object_classes.clone())
+        };
 
-        let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
-        let mut workbook = Workbook::new();
-        let mut used_sheet_names = HashSet::new();
-        let header_fmt = Format::new().set_bold();
-
-        for well in &wells {
-            let values: Vec<f64> = well.cells.iter().filter_map(|c| c.value).collect();
-            let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
-            let sheet_name = unique_sheet_name(&well.well_label, &mut used_sheet_names);
-            let sheet = workbook.add_worksheet();
-            sheet.set_name(sheet_name).map_err(err)?;
-
-            for c in 0..well.cols {
-                sheet
-                    .write_number_with_format(0, (c + 1) as u16, (c + 1) as f64, &header_fmt)
-                    .map_err(err)?;
-            }
-            for r in 0..well.rows {
-                sheet
-                    .write_with_format(r as u32 + 1, 0, row_label(r), &header_fmt)
-                    .map_err(err)?;
-                for c in 0..well.cols {
-                    let Some(v) = well.cells[r * well.cols + c].value else {
-                        continue;
-                    };
-                    let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
-                    let (cr, cg, cb) = color_scheme.color_rgb(t);
-                    let cell_fmt = Format::new()
-                        .set_background_color(Color::RGB(
-                            ((cr as u32) << 16) | ((cg as u32) << 8) | cb as u32,
-                        ))
-                        .set_font_color(Color::White);
-                    sheet
-                        .write_number_with_format(r as u32 + 1, (c + 1) as u16, v, &cell_fmt)
-                        .map_err(err)?;
-                }
-            }
-        }
-
-        workbook.save(export_path).map_err(err)?;
-        Ok(())
-    }
-
-    // -------------------------------------------------------------------------
-
-    /// Streams the rows matching `filter` (or grouped/aggregated rows, when
-    /// `group.group_by != GroupBy::None`) to `emit_row` — the header labels
-    /// first, then each data row — instead of materializing the whole
-    /// matching result set as one `Vec` in memory.
-    ///
-    /// `base_specs` are the per-object column specs from the table (carrying the
-    /// current visibility selection), so the export mirrors what is shown:
-    /// - grouped → one aggregated row per group over the visible metrics
-    ///   (always a single, small pass — the aggregated result set is never
-    ///   large regardless of how many ROIs it summarizes);
-    /// - otherwise → per-object rows for the visible columns only, via a single
-    ///   DB cursor over every matching row (see `DuckDbReader::stream_objects`)
-    ///   instead of a fresh `LIMIT`/`OFFSET` query per page — the entire
-    ///   matching set is sorted/scanned exactly once, no matter how many
-    ///   rows it contains, and Rust-side memory stays at one row at a time.
-    fn export_rows(
-        &self,
-        filter: DatabaseFilter,
-        group: &GroupConfig,
-        base_specs: &[ColumnSpec],
-        mut emit_row: impl FnMut(&[String]) -> Result<(), InternalErrors>,
-    ) -> Result<(), InternalErrors> {
-        if group.group_by != GroupBy::None {
-            // Aggregation is computed directly in DuckDB (see
-            // `aggregate_objects_sql`) instead of fetching every matching row.
-            let (specs, display_rows) =
-                aggregate_objects_sql(&self.results_loader, filter, group, base_specs)?;
-            let headers: Vec<String> = specs.iter().map(|c| c.label.clone()).collect();
-            emit_row(&headers)?;
-            for row in &display_rows {
-                emit_row(&row.values)?;
+        if self.with_list_one_file_per_image {
+            for (image_idx, image) in images.iter().enumerate() {
+                check_cancelled(cancel)?;
+                on_progress(
+                    &format!("Exporting List: {image}"),
+                    image_idx + 1,
+                    images.len(),
+                );
+                let single_image = std::slice::from_ref(image);
+                let stem = sanitize_filename_component(&image_stub(image));
+                self.write_list_document(
+                    database,
+                    cancel,
+                    single_image,
+                    &object_classes,
+                    &format!("list_{stem}"),
+                )?;
             }
             return Ok(());
         }
 
-        let headers: Vec<String> = base_specs
-            .iter()
-            .filter(|c| c.visible)
-            .map(|c| c.label.clone())
-            .collect();
-        emit_row(&headers)?;
-
-        let reader = self.results_loader.open_reader()?;
-        let object_filter = to_object_filter(DatabaseFilter {
-            needs_intensities: true,
-            ..filter
-        });
-        let mut row_idx = 0usize;
-        reader.stream_objects(&object_filter, |object| {
-            let display = to_display_row(row_idx, &object, base_specs);
-            row_idx += 1;
-            let values: Vec<String> = base_specs
-                .iter()
-                .zip(display.values.iter())
-                .filter(|(col, _)| col.visible)
-                .map(|(_, v)| v.clone())
-                .collect();
-            emit_row(&values)
-        })
+        on_progress("Exporting List view", 0, 1);
+        self.write_list_document(database, cancel, &images, &object_classes, "list")?;
+        on_progress("Exporting List view", 1, 1);
+        Ok(())
     }
 
-    /// Streams the colocalization detail flat table to `emit_row` — the header
-    /// labels first, then each flattened row — via a single DB cursor over
-    /// every matching source object (see `DuckDbReader::stream_objects`), fetching
-    /// only the colocalization partner ROIs each batch of
-    /// `COLOC_PARTNER_BATCH_SIZE` source rows actually references (via
-    /// `DatabaseFilter::object_id_filter`) instead of every object in the image.
-    /// The source stream and every partner lookup share one open connection
-    /// (see `ResultsLoader::open_reader`), so a large export pays for exactly
-    /// one connection instead of one per batch.
-    fn export_coloc_detail_rows(
+    /// Writes one List document (plus, when `with_list_coloc_details` is
+    /// set, its coloc-details companion) under `file_stem` — `list.xlsx` /
+    /// `list.xlsx`'s "List (Coloc Details)" sheet for XLSX, or
+    /// `{file_stem}.csv` / `{file_stem}_coloc_details.csv` for CSV. Shared by
+    /// both branches of `export_list` (whole-database and
+    /// one-file-per-image) so they can't drift on how a document's content is
+    /// built, only on which `images` slice and `file_stem` they pass in.
+    fn write_list_document(
         &self,
-        filter: DatabaseFilter,
-        visible_labels: Option<&HashSet<String>>,
-        mut emit_row: impl FnMut(&[String]) -> Result<(), InternalErrors>,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        images: &[String],
+        object_classes: &Option<Vec<ObjectClass>>,
+        file_stem: &str,
     ) -> Result<(), InternalErrors> {
-        let (channels, coloc_partner_classes) =
-            discover_coloc_detail_columns(&self.results_loader, &filter)?;
-        let mut specs = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
-        if let Some(labels) = visible_labels {
-            for spec in specs.iter_mut() {
-                spec.visible = labels.contains(&spec.label);
+        match self.format {
+            ExportFormat::XLSX => {
+                let mut workbook = Workbook::new();
+                // `write_list_sheet` only ever writes strictly top-to-bottom
+                // (one page's rows after another, never revisiting an
+                // earlier row) - exactly what "constant memory" mode
+                // requires, and what lets it flush each row to a tempfile
+                // as soon as the next one is written instead of keeping
+                // every cell in memory for the life of the `Workbook`. A
+                // standard `add_worksheet()` here would otherwise scale
+                // memory with the row count writen - `rust_xlsxwriter`'s
+                // own numbers put a 1M-row-ish sheet at ~200+ MB *before*
+                // accounting for column count (cost is roughly per-cell),
+                // which a single large image's object list can blow past
+                // well under Excel's 1,048,576-row sheet cap.
+                let sheet = workbook.add_worksheet_with_constant_memory();
+                sheet.set_name("List").map_err(xlsx_err)?;
+                write_list_sheet(sheet, database, cancel, self, images, object_classes, false)?;
+
+                if self.with_list_coloc_details {
+                    let coloc_sheet = workbook.add_worksheet_with_constant_memory();
+                    coloc_sheet
+                        .set_name("List (Coloc Details)")
+                        .map_err(xlsx_err)?;
+                    write_list_sheet(
+                        coloc_sheet,
+                        database,
+                        cancel,
+                        self,
+                        images,
+                        object_classes,
+                        true,
+                    )?;
+                }
+
+                workbook
+                    .save(self.output_dir.join(format!("{file_stem}.xlsx")))
+                    .map_err(xlsx_err)?;
+            }
+            ExportFormat::CSV => {
+                write_list_csv(
+                    database,
+                    cancel,
+                    self,
+                    images,
+                    object_classes,
+                    false,
+                    &self.output_dir.join(format!("{file_stem}.csv")),
+                )?;
+                if self.with_list_coloc_details {
+                    write_list_csv(
+                        database,
+                        cancel,
+                        self,
+                        images,
+                        object_classes,
+                        true,
+                        &self
+                            .output_dir
+                            .join(format!("{file_stem}_coloc_details.csv")),
+                    )?;
+                }
+            }
+            // `start_export` returns early for `Parquet` before ever calling
+            // `export_list`/`write_list_document` - reachable only if
+            // something calls this directly, so this stays a real error
+            // rather than a panic.
+            ExportFormat::Parquet => {
+                return Err(InternalErrors::Internal(
+                    "Parquet export doesn't support the List view — call export_as_parquet directly instead".to_string(),
+                ));
             }
         }
-        let headers: Vec<String> = specs
+        Ok(())
+    }
+
+    // `grouped_by_image.xlsx`: one row per image, one column per (selected
+    // column × selected aggregation) combination — `get_grouped_by_image`'s
+    // own shape, just paginated through in full rather than exposed live.
+    // Single plane only (like `export_plate_and_well`/`export_heatmap`):
+    // grouping by image is itself a per-plane aggregate, so there's no
+    // meaningful "stack every t/z" equivalent the way there is for the
+    // per-object List export.
+    fn export_grouped_by_image(
+        &self,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        check_cancelled(cancel)?;
+        on_progress("Exporting Grouped Image List", 0, 1);
+
+        let images = resolve_images(database, self)?;
+        let object_classes = if self.object_classes.is_empty() {
+            None
+        } else {
+            Some(self.object_classes.clone())
+        };
+        let columns: Vec<Column> = self
+            .columns
             .iter()
-            .filter(|c| c.visible)
-            .map(|c| c.label.clone())
+            .filter(|column| is_aggregable(column))
+            .cloned()
             .collect();
-        emit_row(&headers)?;
 
-        let reader = self.results_loader.open_reader()?;
-        let object_filter = to_object_filter(DatabaseFilter {
-            needs_intensities: true,
-            ..filter
-        });
+        let base_filter = GroupedByImageFilter {
+            plane: PlaneFilter {
+                z_stack: self.z_stacks.start,
+                t_stack: self.t_stacks.start,
+            },
+            images: Some(images),
+            object_classes,
+            columns,
+            aggregation: self.aggregations.clone(),
+            page: Pagination {
+                limit: 0,
+                after: None,
+            },
+        };
+        let result = fetch_all_grouped_by_image_rows(database, &base_filter)?;
 
-        let mut batch: Vec<ObjectRow> = Vec::with_capacity(COLOC_PARTNER_BATCH_SIZE);
-        reader.stream_objects(&object_filter, |object| {
-            batch.push(object);
-            if batch.len() >= COLOC_PARTNER_BATCH_SIZE {
-                flush_coloc_detail_batch(&reader, &mut batch, &specs, &mut emit_row)?;
+        match self.format {
+            ExportFormat::XLSX => {
+                let mut workbook = Workbook::new();
+                let sheet = workbook.add_worksheet();
+                sheet.set_name("Grouped by Image").map_err(xlsx_err)?;
+                write_database_result_sheet(sheet, &result)?;
+
+                workbook
+                    .save(self.output_dir.join("grouped_by_image.xlsx"))
+                    .map_err(xlsx_err)?;
             }
-            Ok(())
-        })?;
-        flush_coloc_detail_batch(&reader, &mut batch, &specs, &mut emit_row)
-    }
-}
-
-/// Replaces characters illegal in a filename or XLSX sheet name (`/ \ : * ? "
-/// < > |` plus the sheet-name-only `[ ]`) with `_`. Falls back to `"well"` if
-/// nothing usable is left.
-fn sanitize_component(name: &str) -> String {
-    let cleaned: String = name
-        .trim()
-        .chars()
-        .map(|c| {
-            if matches!(
-                c,
-                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '[' | ']'
-            ) {
-                '_'
-            } else {
-                c
+            ExportFormat::CSV => {
+                write_csv(&result, &self.output_dir.join("grouped_by_image.csv"))?;
             }
-        })
-        .collect();
-    let cleaned = cleaned.trim().to_string();
-    if cleaned.is_empty() || cleaned.chars().all(|c| c == '_') {
-        "well".to_string()
-    } else {
-        cleaned
-    }
-}
-
-/// Sanitizes `label` into a valid XLSX sheet name (see [`sanitize_component`]),
-/// truncated to Excel's 31-character limit, and disambiguated against
-/// `used` with a numeric suffix on collision (well labels are normally
-/// already unique, so this is a defensive fallback rather than the common
-/// case).
-fn unique_sheet_name(label: &str, used: &mut HashSet<String>) -> String {
-    let base: String = sanitize_component(label).chars().take(31).collect();
-    if used.insert(base.clone()) {
-        return base;
-    }
-    for n in 2..1000 {
-        let suffix = format!("_{n}");
-        let cut = 31usize.saturating_sub(suffix.chars().count());
-        let candidate: String = base.chars().take(cut).collect::<String>() + &suffix;
-        if used.insert(candidate.clone()) {
-            return candidate;
+            // See the identical arm in `write_list_document` above.
+            ExportFormat::Parquet => {
+                return Err(InternalErrors::Internal(
+                    "Parquet export doesn't support the Grouped-by-Image view — call export_as_parquet directly instead".to_string(),
+                ));
+            }
         }
+        on_progress("Exporting Grouped Image List", 1, 1);
+        Ok(())
     }
-    base
+
+    // `plate.xlsx` and `well.xlsx`: one tab per object class in each
+    // document, every tab stacking one square, colored grid block per
+    // (column, aggregation) combination (and, one level further down in
+    // `well.xlsx`, per well on top of that) — see `write_grid_block`.
+    // Independently toggled by `with_plate_view_heatmap`/
+    // `with_well_view_heatmap` - either can run without the other, each
+    // skipping that side's own query and file entirely when off. The
+    // flat-list form of the same data (see `export_plate_and_well_as_flat_list`)
+    // is a separate pass into separate files, not appended here — this
+    // function only ever needs `View::Heatmap` data.
+    //
+    // Only the first z/t in `self.z_stacks`/`self.t_stacks` is rendered:
+    // unlike the List export, a plate/well grid is inherently a single
+    // plane's snapshot (matching the GUI's own Matrix view, which shows one
+    // z/t at a time via the global stepper, not a time series) — there's no
+    // "stack every t one after another" equivalent for a grid the way
+    // there is for a flat table.
+    fn export_plate_and_well(
+        &self,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        if !self.with_plate_view_heatmap && !self.with_well_view_heatmap {
+            return Ok(());
+        }
+
+        let classes_all = database.get_object_classes()?;
+        let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
+            classes_all.iter().map(|class| class.id).collect()
+        } else {
+            self.object_classes.clone()
+        };
+        let available_columns = database.get_available_columns()?;
+        let z = self.z_stacks.start;
+        let t = self.t_stacks.start;
+
+        let aggregable_columns: Vec<&Column> = self
+            .columns
+            .iter()
+            .filter(|column| is_aggregable(column))
+            .collect();
+        let no_combos = target_classes.is_empty()
+            || aggregable_columns.is_empty()
+            || self.aggregations.is_empty();
+
+        // Plate and well each run their own independent query + document,
+        // rather than one combined pass over both - `get_group_by_plate_multi`/
+        // `get_wells_for_plate_multi` already batch every (class, column,
+        // aggregation) combination into `target_classes.len()` scans each
+        // (see their own doc comments), so splitting them here just means
+        // skipping one side's scan and file entirely when its flag is off,
+        // instead of always paying for both and discarding whichever one
+        // wasn't wanted.
+        if self.with_plate_view_heatmap {
+            let mut plate_workbook = Workbook::new();
+            let mut plate_names = SheetNamer::new();
+            let mut plate_grids_iter = if no_combos {
+                Vec::new().into_iter()
+            } else {
+                let plate_filter = PlateFilterMulti {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: self.aggregations.clone(),
+                    object_class: target_classes.clone(),
+                    column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    matrix_dimension: self.plate_dimension,
+                };
+                database
+                    .get_group_by_plate_multi(&plate_filter, &View::Heatmap)?
+                    .into_iter()
+            };
+
+            for (class_idx, class) in target_classes.iter().enumerate() {
+                check_cancelled(cancel)?;
+                let class_label = class_display_label(*class, &classes_all);
+                on_progress(
+                    &format!("Exporting Plate: {class_label}"),
+                    class_idx + 1,
+                    target_classes.len(),
+                );
+
+                let plate_sheet = plate_workbook.add_worksheet();
+                plate_sheet
+                    .set_name(plate_names.unique(&class_label))
+                    .map_err(xlsx_err)?;
+                let mut plate_row = 0u32;
+
+                for column in &aggregable_columns {
+                    let column_label = column_display_name(column, &available_columns);
+                    for aggregation in &self.aggregations {
+                        let plate_grid = plate_grids_iter.next().ok_or_else(|| {
+                            InternalErrors::Io(
+                                "plate export: plate result count desynced from class x \
+                                 column x aggregation combinations"
+                                    .to_string(),
+                            )
+                        })?;
+                        let caption =
+                            format!("{column_label} — {}", aggregation_label(aggregation));
+                        plate_row =
+                            write_grid_block(plate_sheet, plate_row, &caption, &plate_grid)?;
+                    }
+                }
+            }
+
+            plate_workbook
+                .save(self.output_dir.join("plate.xlsx"))
+                .map_err(xlsx_err)?;
+        }
+
+        if self.with_well_view_heatmap {
+            let mut well_workbook = Workbook::new();
+            let mut well_names = SheetNamer::new();
+            let mut well_heatmaps_iter = if no_combos {
+                Vec::new().into_iter()
+            } else {
+                let wells_filter = WellsBatchFilterMulti {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: self.aggregations.clone(),
+                    object_class: target_classes.clone(),
+                    column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    well_size: self.well_size,
+                    well_order: self.well_order.clone(),
+                };
+                database
+                    .get_wells_for_plate_multi(&wells_filter, &View::Heatmap)?
+                    .into_iter()
+            };
+
+            for (class_idx, class) in target_classes.iter().enumerate() {
+                check_cancelled(cancel)?;
+                let class_label = class_display_label(*class, &classes_all);
+                on_progress(
+                    &format!("Exporting Well: {class_label}"),
+                    class_idx + 1,
+                    target_classes.len(),
+                );
+
+                let well_sheet = well_workbook.add_worksheet();
+                well_sheet
+                    .set_name(well_names.unique(&class_label))
+                    .map_err(xlsx_err)?;
+                let mut well_row = 0u32;
+
+                for column in &aggregable_columns {
+                    let column_label = column_display_name(column, &available_columns);
+                    for aggregation in &self.aggregations {
+                        let mut well_heatmaps = well_heatmaps_iter.next().ok_or_else(|| {
+                            InternalErrors::Io(
+                                "well export: well result count desynced from class x \
+                                 column x aggregation combinations"
+                                    .to_string(),
+                            )
+                        })?;
+                        let caption =
+                            format!("{column_label} — {}", aggregation_label(aggregation));
+
+                        // Sorted for deterministic, well-id-ordered output -
+                        // `well_heatmaps` is a `HashMap`, so its own
+                        // iteration order isn't meaningful on its own.
+                        let mut well_ids: Vec<String> = well_heatmaps.keys().cloned().collect();
+                        well_ids.sort();
+
+                        for well_id in &well_ids {
+                            let well_caption = format!("{caption} — Well {well_id}");
+                            let Some(well_grid) = well_heatmaps.remove(well_id) else {
+                                continue;
+                            };
+                            well_row = write_grid_block(
+                                well_sheet,
+                                well_row,
+                                &well_caption,
+                                &well_grid,
+                            )?;
+                        }
+                    }
+                }
+            }
+
+            well_workbook
+                .save(self.output_dir.join("well.xlsx"))
+                .map_err(xlsx_err)?;
+        }
+
+        Ok(())
+    }
+
+    // `plate_list.xlsx` and `well_list.xlsx`: the same aggregated data as
+    // `export_plate_and_well`, but pivoted into one plain table per document
+    // instead of a grid-per-class-tab — one row per well (or, in
+    // `well_list.xlsx`, per well+field), one column per (class, column,
+    // aggregation) combination, so every class sits side by side in the
+    // same tab rather than needing its own. `well_list.xlsx` also carries
+    // an "Image" column (the source image for that field), independent of
+    // which class/column/aggregation combination is being looked at.
+    // Independently toggled by `with_plate_view_list`/`with_well_view_list`,
+    // same as `export_plate_and_well`'s own heatmap flags.
+    //
+    // Only ever needs `View::List` data - never overlaps in query cost with
+    // `export_plate_and_well`'s `View::Heatmap`-only fetches above, even
+    // though both run in the same export when this is enabled.
+    fn export_plate_and_well_as_flat_list(
+        &self,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        if !self.with_plate_view_list && !self.with_well_view_list {
+            return Ok(());
+        }
+
+        let classes_all = database.get_object_classes()?;
+        let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
+            classes_all.iter().map(|class| class.id).collect()
+        } else {
+            self.object_classes.clone()
+        };
+        let available_columns = database.get_available_columns()?;
+        let z = self.z_stacks.start;
+        let t = self.t_stacks.start;
+        let aggregable_columns: Vec<&Column> = self
+            .columns
+            .iter()
+            .filter(|column| is_aggregable(column))
+            .collect();
+        let combo_count = target_classes.len() * aggregable_columns.len() * self.aggregations.len();
+        let no_combos = combo_count == 0;
+
+        // Shared by both outputs and independent of which data actually
+        // gets fetched below - built once, up front, purely from the
+        // requested class/column/aggregation combinations.
+        let mut combo_labels: Vec<String> = Vec::with_capacity(combo_count);
+        for class in &target_classes {
+            let class_label = class_display_label(*class, &classes_all);
+            for column in &aggregable_columns {
+                let column_label = column_display_name(column, &available_columns);
+                for aggregation in &self.aggregations {
+                    combo_labels.push(format!(
+                        "{class_label} — {column_label} — {}",
+                        aggregation_label(aggregation)
+                    ));
+                }
+            }
+        }
+
+        // Plate and well each run their own independent query + document -
+        // see the identical reasoning in `export_plate_and_well`.
+        if self.with_plate_view_list {
+            let mut plate_values: HashMap<String, Vec<Option<f64>>> = HashMap::new();
+            let mut plate_lists_iter = if no_combos {
+                Vec::new().into_iter()
+            } else {
+                let plate_filter = PlateFilterMulti {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: self.aggregations.clone(),
+                    object_class: target_classes.clone(),
+                    column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    matrix_dimension: self.plate_dimension,
+                };
+                database
+                    .get_group_by_plate_multi(&plate_filter, &View::List)?
+                    .into_iter()
+            };
+
+            let mut combo_idx = 0usize;
+            for (class_idx, class) in target_classes.iter().enumerate() {
+                check_cancelled(cancel)?;
+                on_progress(
+                    &format!(
+                        "Exporting Flat List (Plate): {}",
+                        class_display_label(*class, &classes_all)
+                    ),
+                    class_idx + 1,
+                    target_classes.len(),
+                );
+                for _ in &aggregable_columns {
+                    for _ in &self.aggregations {
+                        let plate_list = plate_lists_iter.next().ok_or_else(|| {
+                            InternalErrors::Io(
+                                "plate flat list export: plate result count desynced from \
+                                 class x column x aggregation combinations"
+                                    .to_string(),
+                            )
+                        })?;
+                        for (well_id, row) in plate_list.row_names.iter().zip(&plate_list.rows) {
+                            if let Some(value) = row.get(1).and_then(cell_to_f64) {
+                                plate_values
+                                    .entry(well_id.clone())
+                                    .or_insert_with(|| vec![None; combo_count])[combo_idx] =
+                                    Some(value);
+                            }
+                        }
+                        combo_idx += 1;
+                    }
+                }
+            }
+
+            let mut plate_rows: Vec<(String, Vec<Option<f64>>)> =
+                plate_values.into_iter().collect();
+            plate_rows.sort_by(|(a, _), (b, _)| a.cmp(b));
+            write_flat_pivot(
+                &self.output_dir.join("plate_list.xlsx"),
+                "Plate",
+                &["Well"],
+                &combo_labels,
+                plate_rows
+                    .into_iter()
+                    .map(|(well_id, values)| (vec![well_id], values)),
+            )?;
+        }
+
+        if self.with_well_view_list {
+            let mut well_values: HashMap<(String, String), Vec<Option<f64>>> = HashMap::new();
+            let mut well_images: HashMap<(String, String), String> = HashMap::new();
+            let mut well_lists_iter = if no_combos {
+                Vec::new().into_iter()
+            } else {
+                let wells_filter = WellsBatchFilterMulti {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: self.aggregations.clone(),
+                    object_class: target_classes.clone(),
+                    column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    well_size: self.well_size,
+                    well_order: self.well_order.clone(),
+                };
+                database
+                    .get_wells_for_plate_multi(&wells_filter, &View::List)?
+                    .into_iter()
+            };
+
+            let mut combo_idx = 0usize;
+            for (class_idx, class) in target_classes.iter().enumerate() {
+                check_cancelled(cancel)?;
+                on_progress(
+                    &format!(
+                        "Exporting Flat List (Well): {}",
+                        class_display_label(*class, &classes_all)
+                    ),
+                    class_idx + 1,
+                    target_classes.len(),
+                );
+                for _ in &aggregable_columns {
+                    for _ in &self.aggregations {
+                        let well_lists = well_lists_iter.next().ok_or_else(|| {
+                            InternalErrors::Io(
+                                "well flat list export: well result count desynced from \
+                                 class x column x aggregation combinations"
+                                    .to_string(),
+                            )
+                        })?;
+                        for (well_id, result) in &well_lists {
+                            for (field_idx, row) in result.row_names.iter().zip(&result.rows) {
+                                let key = (well_id.clone(), field_idx.clone());
+                                if let Some(value) = row.get(1).and_then(cell_to_f64) {
+                                    well_values
+                                        .entry(key.clone())
+                                        .or_insert_with(|| vec![None; combo_count])[combo_idx] =
+                                        Some(value);
+                                }
+                                if let Some((image_name, _)) =
+                                    row.get(1).and_then(|cell| cell.search_key.as_ref())
+                                {
+                                    well_images.entry(key).or_insert_with(|| image_name.clone());
+                                }
+                            }
+                        }
+                        combo_idx += 1;
+                    }
+                }
+            }
+
+            let mut well_rows: Vec<((String, String), Vec<Option<f64>>)> =
+                well_values.into_iter().collect();
+            well_rows.sort_by(|(a, _), (b, _)| {
+                a.0.cmp(&b.0).then_with(|| {
+                    a.1.parse::<u32>()
+                        .ok()
+                        .cmp(&b.1.parse::<u32>().ok())
+                        .then_with(|| a.1.cmp(&b.1))
+                })
+            });
+            write_flat_pivot(
+                &self.output_dir.join("well_list.xlsx"),
+                "Well",
+                &["Well", "Field", "Image"],
+                &combo_labels,
+                well_rows.into_iter().map(|((well_id, field_idx), values)| {
+                    let image = well_images
+                        .get(&(well_id.clone(), field_idx.clone()))
+                        .cloned()
+                        .unwrap_or_default();
+                    (vec![well_id, field_idx, image], values)
+                }),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    // One `heatmap_{image}.xlsx` per image — same one-tab-per-class,
+    // stacked-column/aggregation-blocks shape as `plate.xlsx`/`well.xlsx`
+    // above, just partitioned by image into separate files instead of
+    // sharing one document, since a heatmap is inherently local to a single
+    // image. Same single-plane caveat as `export_plate_and_well` applies:
+    // only the first z/t in the given ranges is rendered.
+    fn export_heatmap(
+        &self,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        let classes_all = database.get_object_classes()?;
+        let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
+            classes_all.iter().map(|class| class.id).collect()
+        } else {
+            self.object_classes.clone()
+        };
+        let available_columns = database.get_available_columns()?;
+        let images = resolve_images(database, self)?;
+        let z = self.z_stacks.start;
+        let t = self.t_stacks.start;
+
+        for (image_idx, image) in images.iter().enumerate() {
+            check_cancelled(cancel)?;
+            on_progress(
+                &format!("Exporting Heatmap: {image}"),
+                image_idx + 1,
+                images.len(),
+            );
+            let mut workbook = Workbook::new();
+            let mut names = SheetNamer::new();
+
+            for class in &target_classes {
+                let class_label = class_display_label(*class, &classes_all);
+                let sheet = workbook.add_worksheet();
+                sheet
+                    .set_name(names.unique(&class_label))
+                    .map_err(xlsx_err)?;
+
+                let mut row = 0u32;
+                for column in self.columns.iter().filter(|column| is_aggregable(column)) {
+                    let column_label = column_display_name(column, &available_columns);
+                    for aggregation in &self.aggregations {
+                        let caption =
+                            format!("{column_label} — {}", aggregation_label(aggregation));
+                        let filter = ImageHeatmapFilter {
+                            plane: PlaneFilter {
+                                z_stack: z,
+                                t_stack: t,
+                            },
+                            image_rel_path: image.clone(),
+                            aggregation: aggregation.clone(),
+                            object_class: *class,
+                            column: column.clone(),
+                            color_schema: self.color_schema.clone(),
+                            color_scale: self.color_scale.clone(),
+                            square_size: self.square_size,
+                        };
+                        let grid = database.get_image_heatmap(&filter, &View::Heatmap)?;
+                        row = write_grid_block(sheet, row, &caption, &grid)?;
+                    }
+                }
+            }
+
+            let file_name = format!(
+                "heatmap_{}.xlsx",
+                sanitize_filename_component(&image_stub(image))
+            );
+            workbook
+                .save(self.output_dir.join(file_name))
+                .map_err(xlsx_err)?;
+        }
+        Ok(())
+    }
+
+    /// `objects.parquet`: the entire `objects` table, every column, no z/t/
+    /// image/class filtering and no column selection — DuckDB's own `COPY`
+    /// writes the file directly, so this bypasses `get_object_list`/
+    /// `stream_list_pages` entirely (unlike every other export above).
+    /// Meant for a downstream tool that reads Parquet natively rather than
+    /// for a human to open, so there's no equivalent of `with_list_view`'s
+    /// column/plane scoping to apply here.
+    fn export_as_parquet(
+        &self,
+        database: &ResultsGenerator,
+        cancel: &AtomicBool,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        check_cancelled(cancel)?;
+        on_progress("Exporting Parquet", 0, 1);
+        let path = self.output_dir.join("objects.parquet");
+        // DuckDB's `COPY` takes the destination as a single-quoted string
+        // literal inside the SQL text itself (not a bindable parameter), so
+        // any literal `'` in the path has to be escaped the same way a SQL
+        // string literal would be (doubling it) rather than passed through
+        // `params![]`.
+        let path_literal = path.to_string_lossy().replace('\'', "''");
+        let sql = format!("COPY objects TO '{path_literal}' (FORMAT parquet);");
+        database
+            .connection()
+            .execute_batch(&sql)
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        on_progress("Exporting Parquet", 1, 1);
+        Ok(())
+    }
 }
 
-/// Resolves colocalization partners for one accumulated batch of source ROIs
-/// against `reader` (the same connection `export_coloc_detail_rows`'s source
-/// stream is still open on — see `DuckDbReader::stream_objects`'s doc comment
-/// for why nesting a second query here is safe), flattens and emits the
-/// batch's rows, then clears it for the next batch. A no-op on an empty
-/// batch (the final flush after a source count that divides evenly).
-fn flush_coloc_detail_batch(
-    reader: &DuckDbReader,
-    batch: &mut Vec<ObjectRow>,
-    specs: &[ColumnSpec],
-    emit_row: &mut dyn FnMut(&[String]) -> Result<(), InternalErrors>,
+fn xlsx_err(error: XlsxError) -> InternalErrors {
+    InternalErrors::Internal(format!("XLSX export error: {error}"))
+}
+
+/// The images an export should cover, in the same image-name-sorted order
+/// `get_images()` returns them in — regardless of what order
+/// `ResultExport::image_rel_paths` happens to list them in, so "sorted by
+/// image name" (see `export_list`'s doc comment) holds even when the caller
+/// supplies an explicit subset. `[]` means every image in the database,
+/// except ones the user has disabled — an explicit list is taken as
+/// overriding that (the caller asked for exactly these, disabled or not).
+fn resolve_images(
+    database: &ResultsGenerator,
+    export: &ResultExport,
+) -> Result<Vec<String>, InternalErrors> {
+    let all = database.get_images()?;
+    if export.image_rel_paths.is_empty() {
+        Ok(all
+            .into_iter()
+            .filter(|image| !image.disabled)
+            .map(|image| image.rel_path.to_string_lossy().into_owned())
+            .collect())
+    } else {
+        let wanted: HashSet<&str> = export.image_rel_paths.iter().map(String::as_str).collect();
+        Ok(all
+            .into_iter()
+            .map(|image| image.rel_path.to_string_lossy().into_owned())
+            .filter(|rel_path| wanted.contains(rel_path.as_str()))
+            .collect())
+    }
+}
+
+// `get_list` only ever hands back one bounded page (`ListFilter.page`) —
+// same keyset-pagination shape `results_state_controller.rs` pages through
+// for the GUI's List view (see its own `update_list_view`) — so an export,
+// which needs every matching row rather than one page of them, walks every
+// page via the same cursor-from-last-row-id trick.
+//
+// Every requested image is folded into ONE combined `images` filter here
+// (not called once per image) - a `WHERE image_rel_path IN (...)` scoped
+// to a single image still has to plan and run a full `objects` scan of its
+// own, and that cost is dominated by the *whole* table's size, not just
+// the matching image's row count, on a database that holds far more than
+// what's being exported (the common case). So an N-image export previously
+// meant N scans each paying that overhead; batching turns it into
+// `total_matching_rows / PAGE_SIZE` queries instead of `images.len()`.
+// `write_list_document`'s callers pass either every requested image at
+// once (the shared-file List export) or a single-element slice
+// (`export_list`'s `with_list_one_file_per_image` branch, calling it once
+// per image) - either way this is the one shared entry point for turning a
+// `ListFilter` sweep into pages.
+//
+// `on_page` runs once per page in z/t-then-row-id order, rather than this
+// merging every page into one in-memory `DatabaseResult` first (unlike
+// `fetch_all_grouped_by_image_rows`'s approach, which suits its much
+// smaller image-grouped row count): peak RAM for a List export stays
+// bounded by one page's worth of rows (`PAGE_SIZE`) regardless of how many
+// images or planes the export spans, instead of growing with the combined
+// row count now that a page can span every image at once.
+fn stream_list_pages(
+    database: &ResultsGenerator,
+    cancel: &AtomicBool,
+    export: &ResultExport,
+    images: &[String],
+    object_classes: &Option<Vec<ObjectClass>>,
+    with_coloc_details: bool,
+    mut on_page: impl FnMut(&DatabaseResult, bool) -> Result<(), InternalErrors>,
 ) -> Result<(), InternalErrors> {
-    if batch.is_empty() {
+    const PAGE_SIZE: i32 = 20_000;
+    // Matches the old per-image loop's behavior when there's nothing to
+    // scan at all: no query, no header, an empty document - rather than
+    // running one (z, t) query per plane for a filter that's already known
+    // to match nothing.
+    if images.is_empty() {
         return Ok(());
     }
 
-    let ids = coloc_partner_ids(batch);
-    let partner_batch = if ids.is_empty() {
-        vec![]
-    } else {
-        reader.get_objects(&to_object_filter(DatabaseFilter {
-            object_id_filter: Some(ids),
-            page_size: 0,
-            needs_intensities: true,
-            ..Default::default()
-        }))?
-    };
+    let mut header_written = false;
 
-    for row in flatten_coloc_rows(batch, &partner_batch, specs) {
-        let values: Vec<String> = specs
-            .iter()
-            .zip(row.values.iter())
-            .filter(|(col, _)| col.visible)
-            .map(|(_, v)| v.clone())
-            .collect();
-        emit_row(&values)?;
+    for z in export.z_stacks {
+        for t in export.t_stacks {
+            let mut cursor: Option<String> = None;
+            loop {
+                check_cancelled(cancel)?;
+                let filter = ListFilter {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    images: Some(images.to_vec()),
+                    object_classes: object_classes.clone(),
+                    columns: export.columns.clone(),
+                    with_coloc_details,
+                    page: Pagination {
+                        limit: PAGE_SIZE,
+                        after: cursor.take(),
+                    },
+                };
+                let page = database.get_object_list(&filter)?;
+                let is_last_page = page.source_object_count < PAGE_SIZE as usize;
+                cursor = page.row_names.last().cloned();
+
+                on_page(&page, !header_written)?;
+                header_written = true;
+
+                if is_last_page {
+                    break;
+                }
+            }
+        }
     }
-    batch.clear();
+
     Ok(())
 }
 
-/// Builds an `emit_row` closure that writes each row into `sheet` in turn —
-/// the first call (the header row) bold and at row 0, every later call as a
-/// data row at the next row index. Numeric-looking strings are written as
-/// actual Excel numbers (so they can be sorted/filtered); empty cells are
-/// skipped entirely rather than writing an empty string.
-fn xlsx_row_writer(
-    sheet: &mut rust_xlsxwriter::Worksheet,
-) -> impl FnMut(&[String]) -> Result<(), InternalErrors> + '_ {
-    let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
-    let bold = Format::new().set_bold();
+// Same keyset-pagination walk as `stream_list_pages`, just over
+// `get_grouped_by_image`'s (image-grouped, not per-object) pages instead —
+// its cursor is the last page's final `image_rel_path`, exactly like
+// `get_object_list`'s own row-id cursor.
+fn fetch_all_grouped_by_image_rows(
+    database: &ResultsGenerator,
+    base_filter: &GroupedByImageFilter,
+) -> Result<DatabaseResult, InternalErrors> {
+    const PAGE_SIZE: i32 = 20_000;
+
+    let mut merged = DatabaseResult {
+        column_names: Vec::new(),
+        row_names: Vec::new(),
+        rows: Vec::new(),
+        min: f32::INFINITY,
+        max: f32::NEG_INFINITY,
+        source_object_count: 0,
+        row_locations: Vec::new(),
+    };
+    let mut cursor: Option<String> = None;
+    let mut first_page = true;
+
+    loop {
+        let filter = GroupedByImageFilter {
+            page: Pagination {
+                limit: PAGE_SIZE,
+                after: cursor.take(),
+            },
+            ..base_filter.clone()
+        };
+        let mut page = database.get_grouped_by_image(&filter)?;
+        let is_last_page = page.source_object_count < PAGE_SIZE as usize;
+        cursor = page.row_names.last().cloned();
+
+        if first_page {
+            merged.column_names = std::mem::take(&mut page.column_names);
+            first_page = false;
+        }
+        merged.min = merged.min.min(page.min);
+        merged.max = merged.max.max(page.max);
+        merged.row_names.extend(page.row_names);
+        merged.rows.extend(page.rows);
+        merged.source_object_count += page.source_object_count;
+
+        if is_last_page {
+            break;
+        }
+    }
+
+    if !merged.min.is_finite() || !merged.max.is_finite() {
+        merged.min = 0.0;
+        merged.max = 0.0;
+    }
+
+    Ok(merged)
+}
+
+// Writes every object matching `export`'s filters, in
+// z/t/image-name-sorted order (see `ResultExport::export_list`), as one
+// continuous table starting at the worksheet's top row.
+fn write_list_sheet(
+    worksheet: &mut Worksheet,
+    database: &ResultsGenerator,
+    cancel: &AtomicBool,
+    export: &ResultExport,
+    images: &[String],
+    object_classes: &Option<Vec<ObjectClass>>,
+    with_coloc_details: bool,
+) -> Result<(), InternalErrors> {
+    let header_format = Format::new().set_bold();
     let mut next_row: u32 = 0;
-    move |row: &[String]| -> Result<(), InternalErrors> {
-        let xlsx_row = next_row;
-        next_row += 1;
-        for (col, value) in row.iter().enumerate() {
-            if value.is_empty() {
-                continue;
+
+    stream_list_pages(
+        database,
+        cancel,
+        export,
+        images,
+        object_classes,
+        with_coloc_details,
+        |page, is_first_page| {
+            if is_first_page {
+                for (col_idx, name) in page.column_names.iter().enumerate() {
+                    worksheet
+                        .write_with_format(next_row, col_idx as u16, name.as_str(), &header_format)
+                        .map_err(xlsx_err)?;
+                }
+                next_row += 1;
             }
-            let xlsx_col = col as u16;
-            if xlsx_row == 0 {
-                sheet
-                    .write_with_format(xlsx_row, xlsx_col, value, &bold)
-                    .map_err(err)?;
-                continue;
+
+            for row in &page.rows {
+                for (col_idx, cell) in row.iter().enumerate() {
+                    write_cell(worksheet, next_row, col_idx as u16, cell)?;
+                }
+                next_row += 1;
             }
-            // Write numeric strings as actual numbers so Excel can sort/filter them.
-            if let Ok(n) = value.parse::<f64>() {
-                sheet.write_number(xlsx_row, xlsx_col, n).map_err(err)?;
-            } else {
-                sheet.write_string(xlsx_row, xlsx_col, value).map_err(err)?;
+            Ok(())
+        },
+    )
+}
+
+/// CSV sibling of `write_list_sheet`: same combined-images/per-page sweep
+/// (so the two formats can never disagree on row order or content), written
+/// straight to `path` a page at a time instead of into an XLSX worksheet.
+fn write_list_csv(
+    database: &ResultsGenerator,
+    cancel: &AtomicBool,
+    export: &ResultExport,
+    images: &[String],
+    object_classes: &Option<Vec<ObjectClass>>,
+    with_coloc_details: bool,
+    path: &Path,
+) -> Result<(), InternalErrors> {
+    let mut out = create_csv_writer(path)?;
+    let write_err = |e: std::io::Error| {
+        InternalErrors::Internal(format!("could not write {}: {e}", path.display()))
+    };
+
+    stream_list_pages(
+        database,
+        cancel,
+        export,
+        images,
+        object_classes,
+        with_coloc_details,
+        |page, is_first_page| {
+            if is_first_page {
+                write_csv_row(&mut out, &page.column_names).map_err(write_err)?;
+            }
+            for row in &page.rows {
+                let cells: Vec<String> = row.iter().map(cell_text).collect();
+                write_csv_row(&mut out, &cells).map_err(write_err)?;
+            }
+            Ok(())
+        },
+    )
+}
+
+/// Writes `result` as CSV to `path` in one shot — `result.column_names` as
+/// the header, then one line per row. Used by whichever export step already
+/// has its whole result in memory (e.g. `export_grouped_by_image`, which
+/// pages through `fetch_all_grouped_by_image_rows` and merges before
+/// writing); `write_list_csv` above streams instead, since a List export
+/// covers every z/t/image plane and its per-plane fetch is already the
+/// natural place to write each batch of rows.
+fn write_csv(result: &DatabaseResult, path: &Path) -> Result<(), InternalErrors> {
+    let mut out = create_csv_writer(path)?;
+    let write_err = |e: std::io::Error| {
+        InternalErrors::Internal(format!("could not write {}: {e}", path.display()))
+    };
+    write_csv_row(&mut out, &result.column_names).map_err(write_err)?;
+    for row in &result.rows {
+        let cells: Vec<String> = row.iter().map(cell_text).collect();
+        write_csv_row(&mut out, &cells).map_err(write_err)?;
+    }
+    Ok(())
+}
+
+/// XLSX sibling of `write_csv`: writes `result` into `worksheet` in one
+/// shot from an already-fetched, in-memory `DatabaseResult` - a bold
+/// header row at row 0, then one row per `result.rows` entry below it.
+/// Used by whichever export step already has its whole result in memory
+/// (`export_grouped_by_image`); `write_list_sheet` writes straight from
+/// `stream_list_pages`'s own pages instead, since a List export's combined
+/// row count is the thing that RAM-bounded streaming exists for.
+fn write_database_result_sheet(
+    worksheet: &mut Worksheet,
+    result: &DatabaseResult,
+) -> Result<(), InternalErrors> {
+    let header_format = Format::new().set_bold();
+    for (col_idx, name) in result.column_names.iter().enumerate() {
+        worksheet
+            .write_with_format(0, col_idx as u16, name.as_str(), &header_format)
+            .map_err(xlsx_err)?;
+    }
+    for (row_idx, row) in result.rows.iter().enumerate() {
+        let row_n = (row_idx + 1) as u32;
+        for (col_idx, cell) in row.iter().enumerate() {
+            write_cell(worksheet, row_n, col_idx as u16, cell)?;
+        }
+    }
+    Ok(())
+}
+
+fn create_csv_writer(path: &Path) -> Result<std::io::BufWriter<std::fs::File>, InternalErrors> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            InternalErrors::Internal(format!("could not create {}: {e}", parent.display()))
+        })?;
+    }
+    let file = std::fs::File::create(path).map_err(|e| {
+        InternalErrors::Internal(format!("could not create {}: {e}", path.display()))
+    })?;
+    Ok(std::io::BufWriter::new(file))
+}
+
+fn write_csv_row(out: &mut impl std::io::Write, fields: &[String]) -> std::io::Result<()> {
+    let line: Vec<String> = fields.iter().map(|f| csv_escape(f)).collect();
+    writeln!(out, "{}", line.join(","))
+}
+
+fn csv_escape(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
+    }
+}
+
+/// Plain-text form of a `Cell`'s value for CSV, dropping its color/formatting
+/// (CSV has no cells to color) — matches the CLI's identically-named helper
+/// in `crates/cli/src/commands/common.rs`, kept separate there since it's
+/// also used by that crate's table/JSON rendering, unrelated to export.
+fn cell_text(cell: &Cell) -> String {
+    match &cell.value {
+        CellValue::Empty => String::new(),
+        CellValue::String(s) => s.clone(),
+        CellValue::Class((s, _)) => s.clone(),
+        CellValue::Float(v) => v.to_string(),
+        CellValue::Integer(v) => v.to_string(),
+    }
+}
+
+/// Writes one square, colored grid block (`result`, a `View::Heatmap`
+/// `DatabaseResult`) starting at `start_row`: a bold caption, a header row
+/// of `result.column_names`, then one row per `result.row_names` with that
+/// row's label in column 0 and its cells across — see `write_cell` for how
+/// a cell's value/color are actually rendered. Returns the next free row
+/// (one blank row after the block).
+fn write_grid_block(
+    worksheet: &mut Worksheet,
+    start_row: u32,
+    caption: &str,
+    result: &DatabaseResult,
+) -> Result<u32, InternalErrors> {
+    let bold = Format::new().set_bold();
+    // Row/col header cells (the top row of column labels and the left
+    // column of row labels) — solid black fill, white bold text, so they
+    // read as a distinct axis rather than blending into the data cells.
+    let header_format = Format::new()
+        .set_bold()
+        .set_background_color(Color::Black)
+        .set_font_color(Color::White);
+    worksheet
+        .write_with_format(start_row, 0, caption, &bold)
+        .map_err(xlsx_err)?;
+
+    let header_row = start_row + 1;
+    worksheet
+        .set_row_height_pixels(header_row, GRID_CELL_PX)
+        .map_err(xlsx_err)?;
+    worksheet
+        .set_column_width_pixels(0, GRID_CELL_PX)
+        .map_err(xlsx_err)?;
+    for (col_idx, col_name) in result.column_names.iter().enumerate() {
+        let col = (col_idx + 1) as u16;
+        worksheet
+            .write_with_format(header_row, col, col_name.as_str(), &header_format)
+            .map_err(xlsx_err)?;
+        worksheet
+            .set_column_width_pixels(col, GRID_CELL_PX)
+            .map_err(xlsx_err)?;
+    }
+
+    for (row_idx, row_name) in result.row_names.iter().enumerate() {
+        let row = header_row + 1 + row_idx as u32;
+        worksheet
+            .write_with_format(row, 0, row_name.as_str(), &header_format)
+            .map_err(xlsx_err)?;
+        worksheet
+            .set_row_height_pixels(row, GRID_CELL_PX)
+            .map_err(xlsx_err)?;
+        for (col_idx, cell) in result.rows[row_idx].iter().enumerate() {
+            let col = (col_idx + 1) as u16;
+            write_cell(worksheet, row, col, cell)?;
+        }
+    }
+
+    Ok(header_row + 1 + result.row_names.len() as u32 + 1)
+}
+
+/// Writes one pivoted flat-list document: a single sheet named
+/// `sheet_name`, headed by `key_labels` (e.g. `["Well"]` or
+/// `["Well", "Field", "Image"]`) followed by `combo_labels` (one column per
+/// class/column/aggregation combination), then one row per `rows` entry —
+/// each a `(key values, one Some(value)-or-None per combo_labels column)`
+/// pair. A `None` (that key had no matching data for that particular
+/// combination — e.g. a well with no objects of some other class) is
+/// written as a plain `"-"`, matching how a missing cell reads everywhere
+/// else in these exports. Unlike `write_grid_block`, this is a plain table,
+/// not a matrix - no square sizing or per-cell color.
+fn write_flat_pivot(
+    path: &Path,
+    sheet_name: &str,
+    key_labels: &[&str],
+    combo_labels: &[String],
+    rows: impl Iterator<Item = (Vec<String>, Vec<Option<f64>>)>,
+) -> Result<(), InternalErrors> {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.add_worksheet();
+    sheet.set_name(sheet_name).map_err(xlsx_err)?;
+    let bold = Format::new().set_bold();
+
+    for (col_idx, label) in key_labels.iter().enumerate() {
+        sheet
+            .write_with_format(0, col_idx as u16, *label, &bold)
+            .map_err(xlsx_err)?;
+    }
+    let key_cols = key_labels.len();
+    for (i, label) in combo_labels.iter().enumerate() {
+        sheet
+            .write_with_format(0, (key_cols + i) as u16, label.as_str(), &bold)
+            .map_err(xlsx_err)?;
+    }
+
+    for (row_idx, (keys, values)) in rows.enumerate() {
+        let row = (row_idx + 1) as u32;
+        for (col_idx, key) in keys.iter().enumerate() {
+            sheet
+                .write(row, col_idx as u16, key.as_str())
+                .map_err(xlsx_err)?;
+        }
+        for (i, value) in values.iter().enumerate() {
+            let col = (key_cols + i) as u16;
+            match value {
+                Some(v) => {
+                    sheet.write(row, col, *v).map_err(xlsx_err)?;
+                }
+                None => {
+                    sheet.write(row, col, "-").map_err(xlsx_err)?;
+                }
             }
         }
+    }
+
+    workbook.save(path).map_err(xlsx_err)?;
+    Ok(())
+}
+
+/// Extracts a `View::List` value cell's number — always `CellValue::Float`
+/// in practice (see `well_fields_to_result`/`get_group_by_plate`'s own
+/// `View::List` arms), but matching `Integer` too costs nothing and keeps
+/// this from silently going quiet if that ever changes.
+fn cell_to_f64(cell: &Cell) -> Option<f64> {
+    match &cell.value {
+        CellValue::Float(value) => Some(*value as f64),
+        CellValue::Integer(value) => Some(*value as f64),
+        _ => None,
+    }
+}
+
+/// Writes one `Cell` — its value, typed appropriately (`write_string`/
+/// `write_number`, not everything flattened to text, so the sheet stays
+/// sortable/usable as real data) rather than pre-formatted display text,
+/// plus a background fill: `bg_color` when it's set (`0` is every
+/// non-colored cell's sentinel throughout `results_generator.rs`, e.g. a
+/// `CellValue::Empty` grid gap, so it's left with Excel's default fill
+/// rather than painted black) takes priority since it's real data (e.g. a
+/// class badge's own color) — `alternating_color` only ever paints
+/// `ALTERNATING_ROW_BG` as a fallback, for a cell that has no color of its
+/// own to show.
+fn write_cell(
+    worksheet: &mut Worksheet,
+    row: u32,
+    col: u16,
+    cell: &Cell,
+) -> Result<(), InternalErrors> {
+    let format = if cell.bg_color != 0 {
+        Some(Format::new().set_background_color(Color::RGB(cell.bg_color)))
+    } else if cell.alternating_color {
+        Some(Format::new().set_background_color(Color::RGB(ALTERNATING_ROW_BG)))
+    } else {
+        None
+    };
+
+    match &cell.value {
+        CellValue::Empty => {
+            if let Some(format) = &format {
+                worksheet.write_blank(row, col, format).map_err(xlsx_err)?;
+            }
+        }
+        CellValue::String(s) | CellValue::Class((s, _)) => match &format {
+            Some(format) => {
+                worksheet
+                    .write_string_with_format(row, col, s, format)
+                    .map_err(xlsx_err)?;
+            }
+            None => {
+                worksheet.write_string(row, col, s).map_err(xlsx_err)?;
+            }
+        },
+        CellValue::Float(value) => match &format {
+            Some(format) => {
+                worksheet
+                    .write_number_with_format(row, col, *value as f64, format)
+                    .map_err(xlsx_err)?;
+            }
+            None => {
+                worksheet
+                    .write_number(row, col, *value as f64)
+                    .map_err(xlsx_err)?;
+            }
+        },
+        CellValue::Integer(value) => match &format {
+            Some(format) => {
+                worksheet
+                    .write_number_with_format(row, col, *value as f64, format)
+                    .map_err(xlsx_err)?;
+            }
+            None => {
+                worksheet
+                    .write_number(row, col, *value as f64)
+                    .map_err(xlsx_err)?;
+            }
+        },
+    }
+    Ok(())
+}
+
+/// Whether `column` can drive a plate/well/heatmap grid at all — the
+/// inverse of `column_aggregate_expr`'s (in results_generator.rs) "cannot be
+/// aggregated for the plate view yet" arm, kept in sync with it by
+/// inspecting the exact same variants. `self.columns` is shared with the
+/// List export, where every column is valid (one row per object, nothing to
+/// aggregate), so a grid export must filter it down to this subset itself
+/// rather than assume every selected column applies.
+fn is_aggregable(column: &Column) -> bool {
+    !matches!(
+        column,
+        Column::ObjectId
+            | Column::ImageName
+            | Column::ObjectClass
+            | Column::IntensityAvg(_)
+            | Column::IntensitySum(_)
+            | Column::IntensityMin(_)
+            | Column::IntensityMax(_)
+    )
+}
+
+/// `Column`'s human-readable label, matching `get_available_columns()`'s
+/// own `display_name` for that column — falls back to the raw db key
+/// (`Column::as_key`) for a column this database's `available_columns`
+/// doesn't (or no longer) list, e.g. stale export settings.
+fn column_display_name(column: &Column, available_columns: &[ColumnEntry]) -> String {
+    available_columns
+        .iter()
+        .find(|entry| entry.key == *column)
+        .map(|entry| entry.display_name.clone())
+        .unwrap_or_else(|| column.display_label(&[]))
+}
+
+fn aggregation_label(aggregation: &Aggregation) -> &'static str {
+    match aggregation {
+        Aggregation::Avg => "Average",
+        Aggregation::Min => "Minimum",
+        Aggregation::Max => "Maximum",
+        Aggregation::Stddev => "Std Dev",
+        Aggregation::Sum => "Sum",
+        Aggregation::Median => "Median",
+        Aggregation::Skewness => "Skewness",
+    }
+}
+
+/// A usable base filename for `image_rel_path`'s heatmap document — its
+/// file stem (no directory, no extension), since the rel path's own
+/// separators/extension aren't valid or wanted in a sibling file's name.
+fn image_stub(image_rel_path: &str) -> String {
+    Path::new(image_rel_path)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| image_rel_path.to_string())
+}
+
+fn sanitize_filename_component(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Hands out sanitized, unique-within-one-workbook Excel sheet names.
+/// Excel rejects a sheet name that's empty, over 31 characters, contains
+/// `[ ] : * ? / \`, or duplicates another sheet in the same workbook —
+/// `unique` fixes up all four so a class's own (arbitrary, user-entered)
+/// name is always safe to use directly as a tab name.
+struct SheetNamer {
+    used: HashSet<String>,
+}
+
+impl SheetNamer {
+    fn new() -> Self {
+        Self {
+            used: HashSet::new(),
+        }
+    }
+
+    fn unique(&mut self, wanted: &str) -> String {
+        let mut sanitized: String = wanted
+            .chars()
+            .map(|c| if "[]:*?/\\".contains(c) { '_' } else { c })
+            .collect();
+        sanitized = sanitized.trim().to_string();
+        if sanitized.is_empty() {
+            sanitized = "Sheet".to_string();
+        }
+        if sanitized.chars().count() > 31 {
+            sanitized = sanitized.chars().take(31).collect();
+        }
+
+        let mut candidate = sanitized.clone();
+        let mut suffix_n = 2;
+        while self.used.contains(&candidate) {
+            let suffix = format!(" ({suffix_n})");
+            let max_base = 31usize.saturating_sub(suffix.chars().count());
+            let base: String = sanitized.chars().take(max_base).collect();
+            candidate = format!("{base}{suffix}");
+            suffix_n += 1;
+        }
+        self.used.insert(candidate.clone());
+        candidate
+    }
+}
+
+/// Check for cancle the export process
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), InternalErrors> {
+    if cancel.load(Ordering::Relaxed) {
+        Err(InternalErrors::Cancelled)
+    } else {
         Ok(())
     }
 }
@@ -720,1051 +1563,1063 @@ fn xlsx_row_writer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results::results_loader::{AggFunc, build_column_specs};
-    use crate::results::test_support::{
-        decode_object_id_idx, seed_large_coloc_db, seed_large_results_db, seed_plate_results_db,
-        seed_results_db,
-    };
-    use calamine::{Data, Reader, open_workbook_auto};
+    use crate::results::test_support::{ObjectSpec, seed_db};
+    use calamine::Reader as _;
 
-    fn parse_csv(path: &Path) -> Vec<Vec<String>> {
-        let mut reader = csv::Reader::from_path(path).expect("read csv back");
-        let mut rows = vec![
-            reader
-                .headers()
-                .expect("csv header row")
-                .iter()
-                .map(String::from)
-                .collect::<Vec<_>>(),
-        ];
-        for record in reader.records() {
-            rows.push(
-                record
-                    .expect("csv data row")
-                    .iter()
-                    .map(String::from)
-                    .collect(),
+    #[test]
+    fn csv_escape_quotes_fields_containing_commas_or_quotes() {
+        assert_eq!(csv_escape("plain"), "plain");
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
+    }
+
+    #[test]
+    fn csv_escape_leaves_a_plain_field_untouched() {
+        assert_eq!(csv_escape("plain text"), "plain text");
+        assert_eq!(csv_escape(""), "");
+    }
+
+    #[test]
+    fn csv_escape_quotes_a_field_containing_a_newline() {
+        assert_eq!(csv_escape("a\nb"), "\"a\nb\"");
+        assert_eq!(csv_escape("a\rb"), "\"a\rb\"");
+    }
+
+    fn cell_str(value: &str) -> Cell {
+        Cell {
+            value: CellValue::String(value.to_string()),
+            bg_color: 0,
+            alternating_color: false,
+            search_key: None,
+        }
+    }
+
+    #[test]
+    fn cell_text_reads_back_every_cell_value_variant_as_plain_text() {
+        assert_eq!(cell_text(&cell_str("hi")), "hi");
+        assert_eq!(
+            cell_text(&Cell {
+                value: CellValue::Empty,
+                bg_color: 0,
+                alternating_color: false,
+                search_key: None,
+            }),
+            ""
+        );
+        assert_eq!(
+            cell_text(&Cell {
+                value: CellValue::Float(1.5),
+                bg_color: 0,
+                alternating_color: false,
+                search_key: None,
+            }),
+            "1.5"
+        );
+        assert_eq!(
+            cell_text(&Cell {
+                value: CellValue::Integer(7),
+                bg_color: 0,
+                alternating_color: false,
+                search_key: None,
+            }),
+            "7"
+        );
+        assert_eq!(
+            cell_text(&Cell {
+                value: CellValue::Class(("ClassA".to_string(), 0)),
+                bg_color: 0,
+                alternating_color: false,
+                search_key: None,
+            }),
+            "ClassA"
+        );
+    }
+
+    /// Opens a fresh `ResultsGenerator` over a temp `.evadb` seeded with
+    /// `objects` (see `test_support::seed_db`). Leaks the backing `TempDir`
+    /// (the returned generator only holds an open `Connection`, not the
+    /// directory) - acceptable for a short-lived test process.
+    fn open(objects: &[ObjectSpec]) -> (ResultsGenerator, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("results.evadb");
+        seed_db(&db_path, objects);
+        let out_dir = dir.path().join("out");
+        std::mem::forget(dir);
+        (
+            ResultsGenerator::open_database(db_path).expect("open database"),
+            out_dir,
+        )
+    }
+
+    fn no_progress() -> impl FnMut(&str, usize, usize) {
+        |_message: &str, _current: usize, _total: usize| {}
+    }
+
+    fn no_cancel() -> AtomicBool {
+        AtomicBool::new(false)
+    }
+
+    fn full_range() -> (Range<u32>, Range<u32>) {
+        (Range { start: 0, end: 1 }, Range { start: 0, end: 1 })
+    }
+
+    /// End-to-end proof that `start_export`'s CSV path (shared by the CLI
+    /// and the GUI export dialog) actually writes a real
+    /// `list.csv`/`grouped_by_image.csv` with the expected content — not
+    /// just that a caller's own call site happens to work.
+    #[test]
+    fn start_export_writes_csv_for_list_and_grouped_by_image() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+        ]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+
+        let list_export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            columns: columns.clone(),
+            with_list_view: true,
+            ..Default::default()
+        };
+        list_export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("csv list export");
+        let list_csv = std::fs::read_to_string(out_dir.join("list.csv")).expect("read list.csv");
+        let mut lines = list_csv.lines();
+        assert!(lines.next().unwrap().contains("Class"));
+        assert_eq!(lines.count(), 2, "expected 2 data rows");
+        assert!(list_csv.contains("ClassA"));
+        assert!(list_csv.contains("ClassB"));
+
+        let grouped_export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            columns,
+            aggregations: vec![Aggregation::Avg],
+            with_grouped_by_image_list: true,
+            ..Default::default()
+        };
+        grouped_export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("csv grouped export");
+        let grouped_csv = std::fs::read_to_string(out_dir.join("grouped_by_image.csv"))
+            .expect("read grouped_by_image.csv");
+        assert_eq!(
+            grouped_csv.lines().count(),
+            3,
+            "expected a header plus one row per image: {grouped_csv}"
+        );
+    }
+
+    #[test]
+    fn start_export_writes_a_valid_xlsx_for_list_and_grouped_by_image() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+        ]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            columns,
+            aggregations: vec![Aggregation::Avg],
+            with_list_view: true,
+            with_grouped_by_image_list: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("xlsx export");
+
+        for name in ["list.xlsx", "grouped_by_image.xlsx"] {
+            let bytes =
+                std::fs::read(out_dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"));
+            assert!(
+                bytes.len() > 4,
+                "{name} is too small: {} bytes",
+                bytes.len()
+            );
+            assert_eq!(&bytes[..4], b"PK\x03\x04", "{name} is not a zip/xlsx file");
+        }
+    }
+
+    #[test]
+    fn start_export_with_list_coloc_details_writes_a_second_csv_document() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            columns,
+            with_list_view: true,
+            with_list_coloc_details: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("csv export with coloc details");
+
+        assert!(out_dir.join("list.csv").exists());
+        assert!(out_dir.join("list_coloc_details.csv").exists());
+    }
+
+    #[test]
+    fn start_export_with_one_file_per_image_writes_a_document_per_image() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+        ]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            columns,
+            with_list_view: true,
+            with_list_one_file_per_image: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("csv per-image export");
+
+        let img1 = std::fs::read_to_string(out_dir.join("list_img1.csv")).expect("list_img1.csv");
+        let img2 = std::fs::read_to_string(out_dir.join("list_img2.csv")).expect("list_img2.csv");
+        assert!(img1.contains("ClassA") && !img1.contains("ClassB"));
+        assert!(img2.contains("ClassB") && !img2.contains("ClassA"));
+    }
+
+    #[test]
+    fn start_export_rejects_csv_combined_with_plate_view_heatmap() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            with_plate_view_heatmap: true,
+            ..Default::default()
+        };
+        let result = export.start_export(&database, &no_cancel(), &mut no_progress());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn start_export_rejects_csv_combined_with_heatmap() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            with_heatmap: true,
+            ..Default::default()
+        };
+        let result = export.start_export(&database, &no_cancel(), &mut no_progress());
+        assert!(result.is_err());
+    }
+
+    /// The Parquet path (`export_as_parquet`) executes DuckDB's own
+    /// `COPY objects TO '<path>' (FORMAT parquet)` directly against the raw
+    /// `objects` table — this proves it actually produces a file DuckDB
+    /// itself can read back, with every seeded row intact, and (unlike
+    /// CSV/XLSX) completely ignoring `columns`/`with_list_view`/filters.
+    #[test]
+    fn start_export_parquet_dumps_the_whole_objects_table_ignoring_other_settings() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 300),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::Parquet,
+            // Deliberately left at defaults / unset: `columns` is empty,
+            // every `with_*` flag is false - Parquet must ignore all of it.
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("parquet export");
+
+        let parquet_path = out_dir.join("objects.parquet");
+        let bytes = std::fs::read(&parquet_path).expect("read objects.parquet");
+        assert!(bytes.len() > 8);
+        assert_eq!(&bytes[..4], b"PAR1", "missing leading PAR1 magic");
+        assert_eq!(
+            &bytes[bytes.len() - 4..],
+            b"PAR1",
+            "missing trailing PAR1 magic"
+        );
+
+        // Read it back through a *separate* DuckDB connection - proof the
+        // file is genuinely valid Parquet, not just magic-byte-shaped.
+        let verify = duckdb::Connection::open_in_memory().expect("open verify connection");
+        let count: i64 = verify
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM read_parquet('{}')",
+                    parquet_path.to_string_lossy().replace('\'', "''")
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .expect("query parquet row count");
+        assert_eq!(count, 3, "expected every seeded object, unfiltered");
+    }
+
+    /// `write_list_document`'s `Parquet` arm is unreachable through
+    /// `start_export` (which returns early for Parquet before ever calling
+    /// `export_list`) - this proves it's still a real, safe error rather
+    /// than a panic if something calls it directly.
+    #[test]
+    fn write_list_document_rejects_parquet_directly() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::Parquet,
+            ..Default::default()
+        };
+        let result = export.write_list_document(&database, &no_cancel(), &[], &None, "list");
+        assert!(result.is_err());
+    }
+
+    /// Same defensive-arm proof as `write_list_document_rejects_parquet_directly`,
+    /// for `export_grouped_by_image`'s equivalent early return.
+    #[test]
+    fn export_grouped_by_image_rejects_parquet_directly() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::Parquet,
+            ..Default::default()
+        };
+        let result = export.export_grouped_by_image(&database, &no_cancel(), &mut no_progress());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_images_defaults_to_every_non_disabled_image_sorted_by_name() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img2.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir,
+            ..Default::default()
+        };
+        let images = resolve_images(&database, &export).expect("resolve images");
+        assert_eq!(images, vec!["img1.tif".to_string(), "img2.tif".to_string()]);
+    }
+
+    #[test]
+    fn resolve_images_with_an_explicit_list_returns_only_those_images() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 100),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir,
+            image_rel_paths: vec!["img2.tif".to_string()],
+            ..Default::default()
+        };
+        let images = resolve_images(&database, &export).expect("resolve images");
+        assert_eq!(images, vec!["img2.tif".to_string()]);
+    }
+
+    #[test]
+    fn is_aggregable_excludes_identity_and_intensity_columns() {
+        assert!(!is_aggregable(&Column::ObjectId));
+        assert!(!is_aggregable(&Column::ImageName));
+        assert!(!is_aggregable(&Column::ObjectClass));
+        assert!(!is_aggregable(&Column::IntensityAvg(0)));
+        assert!(is_aggregable(&Column::AreaSizePx));
+        assert!(is_aggregable(&Column::Circularity));
+    }
+
+    #[test]
+    fn image_stub_strips_directory_and_extension() {
+        assert_eq!(image_stub("folder/img1.tif"), "img1");
+        assert_eq!(image_stub("img2.ome.tif"), "img2.ome");
+        assert_eq!(image_stub("no_extension"), "no_extension");
+    }
+
+    #[test]
+    fn sanitize_filename_component_replaces_unsafe_characters() {
+        assert_eq!(sanitize_filename_component("a/b:c"), "a_b_c");
+        assert_eq!(sanitize_filename_component("plain-name_1"), "plain-name_1");
+    }
+
+    #[test]
+    fn sheet_namer_deduplicates_and_truncates_long_names() {
+        let mut namer = SheetNamer::new();
+        assert_eq!(namer.unique("Class A"), "Class A");
+        assert_eq!(namer.unique("Class A"), "Class A (2)");
+        assert_eq!(namer.unique("Class A"), "Class A (3)");
+
+        let long_name = "x".repeat(40);
+        let sanitized = namer.unique(&long_name);
+        assert!(sanitized.chars().count() <= 31);
+    }
+
+    #[test]
+    fn sheet_namer_rejects_excel_forbidden_characters() {
+        let mut namer = SheetNamer::new();
+        let name = namer.unique("a[b]:c*d?e/f\\g");
+        assert!(!name.contains(['[', ']', ':', '*', '?', '/', '\\']));
+    }
+
+    // -- calamine smoke test: confirms the reader API used below -------------
+
+    #[test]
+    fn calamine_can_read_back_a_real_exported_xlsx() {
+        use calamine::{Data, Reader, Xlsx, open_workbook};
+
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            columns,
+            with_list_view: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("xlsx export");
+
+        let mut workbook: Xlsx<_> =
+            open_workbook(out_dir.join("list.xlsx")).expect("open exported xlsx");
+        let range = workbook.worksheet_range("List").expect("List sheet");
+        assert_eq!(
+            range.get_value((0, 0)),
+            Some(&Data::String("Object ID".to_string()))
+        );
+    }
+
+    // -- plate/well/heatmap exports: plausibility against the same values --
+    // `ResultsGenerator` reports through its own query methods.
+    //
+    // Each of these re-derives the *expected* grid by calling the exact same
+    // `ResultsGenerator` method `export_plate_and_well`/`export_heatmap`
+    // calls internally, then reads the real produced XLSX file back with
+    // `calamine` and asserts every header/row-label/value cell matches - this
+    // is what actually exercises `write_grid_block`'s XLSX-writing logic
+    // (previously untested), and proves the exported file faithfully
+    // reflects the grid `ResultsGenerator` computed rather than the two
+    // silently drifting apart.
+
+    fn data_f64(data: Option<&calamine::Data>) -> f64 {
+        match data {
+            Some(calamine::Data::Float(v)) => *v,
+            Some(calamine::Data::Int(v)) => *v as f64,
+            other => panic!("expected a numeric cell, got {other:?}"),
+        }
+    }
+
+    /// Asserts that `range`'s grid starting at `start_row` (as written by
+    /// `write_grid_block`: a caption row, then a header row of
+    /// `expected.column_names`, then one row per `expected.row_names`)
+    /// matches `expected` cell-for-cell.
+    fn assert_grid_matches_at(
+        range: &calamine::Range<calamine::Data>,
+        start_row: u32,
+        expected: &DatabaseResult,
+    ) {
+        let header_row = start_row + 1;
+        for (col_idx, name) in expected.column_names.iter().enumerate() {
+            let col = (col_idx + 1) as u32;
+            assert_eq!(
+                range.get_value((header_row, col)),
+                Some(&calamine::Data::String(name.clone())),
+                "column header at ({header_row}, {col})"
             );
         }
-        rows
-    }
-
-    /// Reads an XLSX workbook's first sheet back as strings, mirroring
-    /// `parse_csv`'s shape (header row first) so both formats can be
-    /// asserted on with the same test logic. Numeric cells (written by
-    /// `xlsx_row_writer` as real numbers, not strings) are rendered without
-    /// a trailing `.0` when they're integral, matching the CSV writer's text
-    /// output for the same value.
-    fn parse_xlsx(path: &Path) -> Vec<Vec<String>> {
-        let mut workbook: calamine::Sheets<_> = open_workbook_auto(path).expect("open xlsx back");
-        let range = workbook
-            .worksheet_range_at(0)
-            .expect("sheet 0 present")
-            .expect("read sheet 0");
-        range
-            .rows()
-            .map(|row| {
-                row.iter()
-                    .map(|cell| match cell {
-                        Data::Float(f) if f.fract() == 0.0 => format!("{f:.0}"),
-                        Data::Int(i) => i.to_string(),
-                        Data::Float(f) => f.to_string(),
-                        Data::Empty => String::new(),
-                        other => other.to_string(),
-                    })
-                    .collect()
-            })
-            .collect()
-    }
-
-    fn col_index(header: &[String], label: &str) -> usize {
-        header
-            .iter()
-            .position(|h| h == label)
-            .unwrap_or_else(|| panic!("no {label:?} column in {header:?}"))
-    }
-
-    #[test]
-    fn export_to_csv_writes_one_row_per_object_with_the_right_values() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let specs = build_column_specs(&[0], &[]);
-
-        let csv_path = dir.path().join("out.csv");
-        exporter
-            .export_to_csv(
-                DatabaseFilter::default(),
-                &GroupConfig::default(),
-                &specs,
-                &csv_path,
-            )
-            .expect("export should succeed");
-
-        let rows = parse_csv(&csv_path);
-        assert_eq!(rows.len(), 3, "header + 2 object rows");
-
-        let header = &rows[0];
-        let class_col = col_index(header, "Class");
-        let image_col = col_index(header, "Image");
-        let area_col = col_index(header, "Area (px\u{00B2})");
-        let ch0_avg_col = col_index(header, "Ch0 Avg (bit)");
-
-        let by_image: std::collections::HashMap<&str, &Vec<String>> = rows[1..]
-            .iter()
-            .map(|r| (r[image_col].as_str(), r))
-            .collect();
-
-        let row1 = by_image["img1.tif"];
-        assert_eq!(row1[class_col], "ClassA");
-        assert_eq!(row1[area_col], "100");
-        assert_eq!(row1[ch0_avg_col], "127.0");
-
-        let row2 = by_image["img2.tif"];
-        assert_eq!(row2[class_col], "ClassB");
-        assert_eq!(row2[area_col], "200");
-    }
-
-    #[test]
-    fn export_to_csv_only_includes_visible_columns() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let mut specs = build_column_specs(&[0], &[]);
-        for s in specs.iter_mut() {
-            if s.id == "class" {
-                s.visible = false;
+        for (row_idx, row_name) in expected.row_names.iter().enumerate() {
+            let row = header_row + 1 + row_idx as u32;
+            assert_eq!(
+                range.get_value((row, 0)),
+                Some(&calamine::Data::String(row_name.clone())),
+                "row label at ({row}, 0)"
+            );
+            for (col_idx, cell) in expected.rows[row_idx].iter().enumerate() {
+                let col = (col_idx + 1) as u32;
+                match &cell.value {
+                    CellValue::Float(v) => {
+                        let got = data_f64(range.get_value((row, col)));
+                        assert!(
+                            (got - *v as f64).abs() < 1e-6,
+                            "value at ({row}, {col}): expected {v}, got {got}"
+                        );
+                    }
+                    CellValue::Empty => {
+                        assert!(
+                            matches!(
+                                range.get_value((row, col)),
+                                None | Some(calamine::Data::Empty)
+                            ),
+                            "expected an empty cell at ({row}, {col})"
+                        );
+                    }
+                    _ => {}
+                }
             }
         }
-
-        let csv_path = dir.path().join("out.csv");
-        exporter
-            .export_to_csv(
-                DatabaseFilter::default(),
-                &GroupConfig::default(),
-                &specs,
-                &csv_path,
-            )
-            .expect("export should succeed");
-
-        let rows = parse_csv(&csv_path);
-        assert!(
-            !rows[0].contains(&"Class".to_string()),
-            "hidden column must not appear in the header"
-        );
     }
 
     #[test]
-    fn export_to_csv_respects_the_image_filter() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let specs = build_column_specs(&[0], &[]);
-
-        let csv_path = dir.path().join("out.csv");
-        let filter = DatabaseFilter {
-            image_filter: Some(vec!["img1.tif".to_string()]),
+    fn start_export_xlsx_plate_grid_matches_get_group_by_plate_heatmap() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 100),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_plate_view_heatmap: true,
             ..Default::default()
         };
-        exporter
-            .export_to_csv(filter, &GroupConfig::default(), &specs, &csv_path)
-            .unwrap();
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("plate export");
 
-        let rows = parse_csv(&csv_path);
-        assert_eq!(rows.len(), 2, "header + only the one matching object");
+        // Same filter `export_plate_and_well` builds internally for this
+        // (single class, single column, single aggregation) configuration.
+        let expected = database
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Valid(1),
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::Heatmap,
+            )
+            .expect("expected plate grid");
+
+        let mut workbook: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate.xlsx")).expect("open plate.xlsx");
+        let range = workbook.worksheet_range("ClassA").expect("ClassA sheet");
+        assert_grid_matches_at(&range, 0, &expected);
+
+        // Belt-and-suspenders on the actual numbers, independent of the
+        // `DatabaseResult` plumbing above.
+        assert_eq!(data_f64(range.get_value((2, 1))), 15.0, "A1 = avg(10, 20)");
+        assert_eq!(data_f64(range.get_value((3, 2))), 100.0, "B2");
     }
 
     #[test]
-    fn export_to_csv_grouped_writes_one_aggregated_row_per_image() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let specs = build_column_specs(&[0], &[]);
-
-        let group = GroupConfig {
-            group_by: GroupBy::Image,
-            aggs: vec![AggFunc::Avg],
+    fn start_export_xlsx_well_grid_matches_get_wells_for_plate_heatmap() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_well_view_heatmap: true,
             ..Default::default()
         };
-        let csv_path = dir.path().join("grouped.csv");
-        exporter
-            .export_to_csv(DatabaseFilter::default(), &group, &specs, &csv_path)
-            .unwrap();
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("well export");
 
-        let rows = parse_csv(&csv_path);
-        // One image per source object here, so grouping by image still yields
-        // one row per object - this exercises the `group.group_by != None`
-        // branch (`aggregate_objects_sql`) end-to-end rather than proving a
-        // specific row count.
-        assert_eq!(
-            rows.len(),
-            3,
-            "header + one aggregated row per distinct image"
-        );
+        let expected_by_well = database
+            .get_wells_for_plate(
+                &WellsBatchFilter {
+                    plane: PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Valid(1),
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    well_size: None,
+                    well_order: None,
+                },
+                &View::Heatmap,
+            )
+            .expect("expected well grid");
+        assert_eq!(expected_by_well.len(), 1, "only well A1 was seeded");
+        let expected = &expected_by_well["A1"];
+
+        let mut workbook: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("well.xlsx")).expect("open well.xlsx");
+        let range = workbook.worksheet_range("ClassA").expect("ClassA sheet");
+        assert_grid_matches_at(&range, 0, expected);
+        assert_eq!(data_f64(range.get_value((2, 1))), 10.0, "field 01");
+        assert_eq!(data_f64(range.get_value((2, 2))), 20.0, "field 02");
     }
 
     #[test]
-    fn export_to_csv_grouped_computes_the_correct_aggregated_values() {
-        // Unlike `export_to_csv_grouped_writes_one_aggregated_row_per_image`
-        // above (which only checks row *count*, since its fixture puts one
-        // object per image), this seeds real multi-object groups so the
-        // exported numbers actually exercise the aggregation math, not just
-        // the grouping/row-shape plumbing.
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        // n=6, cycling 3 images x 2 classes, area_px = row index:
-        // img1={0,3} sum=3 avg=1.5; img2={1,4} sum=5 avg=2.5; img3={2,5} sum=7 avg=3.5.
-        seed_large_results_db(&db_path, 6);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let specs = build_column_specs(&[], &[]);
-
-        let group = GroupConfig {
-            group_by: GroupBy::Image,
-            aggs: vec![AggFunc::Sum, AggFunc::Avg],
+    fn start_export_xlsx_heatmap_grid_matches_get_image_heatmap() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 20)
+                .at_centroid(60.0, 10.0)
+                .with_image_size(100, 100),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            square_size: Some(50),
+            with_heatmap: true,
             ..Default::default()
         };
-        let csv_path = dir.path().join("grouped_values.csv");
-        exporter
-            .export_to_csv(DatabaseFilter::default(), &group, &specs, &csv_path)
-            .unwrap();
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("heatmap export");
 
-        let rows = parse_csv(&csv_path);
-        let header = &rows[0];
-        let area_sum_col = header
-            .iter()
-            .position(|h| h.contains("Area") && h.contains("sum"))
-            .expect("an Area [sum] column must be present");
-        let area_avg_col = header
-            .iter()
-            .position(|h| h.contains("Area") && h.contains("avg"))
-            .expect("an Area [avg] column must be present");
-        let image_col = header.iter().position(|h| h == "Image").unwrap();
+        let expected = database
+            .get_image_heatmap(
+                &ImageHeatmapFilter {
+                    plane: PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
+                    image_rel_path: "img1.tif".to_string(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Valid(1),
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    square_size: Some(50),
+                },
+                &View::Heatmap,
+            )
+            .expect("expected image heatmap grid");
 
-        let mut by_image: std::collections::HashMap<String, (String, String)> = rows[1..]
-            .iter()
-            .map(|r| {
-                (
-                    r[image_col].clone(),
-                    (r[area_sum_col].clone(), r[area_avg_col].clone()),
-                )
-            })
-            .collect();
-
-        assert_eq!(
-            by_image.remove("img1.tif"),
-            Some(("3.0".to_string(), "1.5".to_string()))
-        );
-        assert_eq!(
-            by_image.remove("img2.tif"),
-            Some(("5.0".to_string(), "2.5".to_string()))
-        );
-        assert_eq!(
-            by_image.remove("img3.tif"),
-            Some(("7.0".to_string(), "3.5".to_string()))
-        );
+        let mut workbook: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("heatmap_img1.xlsx"))
+                .expect("open heatmap_img1.xlsx");
+        let range = workbook.worksheet_range("ClassA").expect("ClassA sheet");
+        assert_grid_matches_at(&range, 0, &expected);
+        assert_eq!(data_f64(range.get_value((2, 1))), 10.0, "R0C0");
+        assert_eq!(data_f64(range.get_value((2, 2))), 20.0, "R0C1");
     }
 
     #[test]
-    fn export_to_xlsx_writes_a_readable_workbook() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let specs = build_column_specs(&[0], &[]);
-
-        let xlsx_path = dir.path().join("out.xlsx");
-        exporter
-            .export_to_xlsx(
-                DatabaseFilter::default(),
-                &GroupConfig::default(),
-                &specs,
-                &xlsx_path,
-            )
-            .expect("export should succeed");
-
-        let bytes = std::fs::read(&xlsx_path).expect("xlsx file should exist");
-        assert!(
-            bytes.len() > 100,
-            "workbook should have real content, not just a stub file"
-        );
-        // XLSX is a ZIP container - "PK\x03\x04" is the local-file-header
-        // magic every valid ZIP (and therefore every valid XLSX) starts with.
-        assert_eq!(&bytes[0..4], b"PK\x03\x04", "not a valid XLSX/ZIP file");
-    }
-
-    #[test]
-    fn export_to_xlsx_writes_numeric_columns_as_real_excel_numbers_not_text() {
-        // `xlsx_row_writer`'s whole point is writing numeric-looking cells as
-        // actual Excel numbers (`write_number`) rather than text
-        // (`write_string`), so Excel formulas like SUM/AVERAGE work directly
-        // over an exported column. Every previous XLSX test reads cells back
-        // through `parse_xlsx`, which stringifies everything - a regression
-        // that silently switched to `write_string` for every column would
-        // still pass those. This reads the raw `calamine::Data` variant
-        // instead, so it actually distinguishes the two.
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let specs = build_column_specs(&[], &[]);
-
-        let xlsx_path = dir.path().join("types.xlsx");
-        exporter
-            .export_to_xlsx(
-                DatabaseFilter::default(),
-                &GroupConfig::default(),
-                &specs,
-                &xlsx_path,
-            )
-            .unwrap();
-
-        let mut workbook = open_workbook_auto(&xlsx_path).expect("open exported xlsx");
-        let sheet = workbook.worksheet_range("Results").expect("Results sheet");
-        let header: Vec<String> = sheet
-            .rows()
-            .next()
-            .unwrap()
-            .iter()
-            .map(|c| c.to_string())
-            .collect();
-        let area_col = header
-            .iter()
-            .position(|h| h.starts_with("Area (px"))
-            .expect("Area column header");
-        let image_col = header.iter().position(|h| h == "Image").unwrap();
-
-        let data_row = sheet.rows().nth(1).expect("one data row");
-        assert!(
-            matches!(data_row[area_col], Data::Float(_) | Data::Int(_)),
-            "numeric column must be a real Excel number, got {:?}",
-            data_row[area_col]
-        );
-        assert!(
-            matches!(&data_row[image_col], Data::String(_)),
-            "image name must stay a text cell, got {:?}",
-            data_row[image_col]
-        );
-    }
-
-    #[test]
-    fn export_to_csv_round_trips_values_containing_commas_and_quotes() {
-        // The `csv` crate handles RFC 4180 escaping itself, but this proves
-        // the actual export+reparse round trip preserves a class name with
-        // characters that would corrupt a naive comma-joined line - a
-        // realistic case since class names are free-form user text.
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_results_db(&db_path);
-
-        let image_name = "img \"weird\", name.tif";
-        let class_name = "Class, \"A\"";
-        let object_class_json = serde_json::to_string(&vec![class_name]).unwrap();
-        let conn = duckdb::Connection::open(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO objects (
-                image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
-                object_class_name, object_class_id, track_id,
-                centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
-                bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
-                bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
-                area_px, area_nm2, perimeter_px, perimeter_nm,
-                circularity, solidity, aspect_ratio, roundness, compactness,
-                major_axis_px, minor_axis_px, touches_edge,
-                pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-                intensities_json, coloc_json
-            ) VALUES (
-                ?, ?, '00000000-0000-0000-0000-000000000099',
-                ?, 1, ?, '[1]', 0,
-                0, 0, 0, 0, 0, 0, 10, 10, 0, 0, 0, 0,
-                50, 50.0, 40, 40, 1.0, 1.0, 1.0, 1.0, 1.0, 10, 10, false,
-                1.0, 1.0, 1.0, '{}', '{}'
-            )",
-            duckdb::params![image_name, image_name, class_name, object_class_json],
-        )
-        .unwrap();
-        drop(conn);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let specs = build_column_specs(&[], &[]);
-        let csv_path = dir.path().join("special_chars.csv");
-        exporter
-            .export_to_csv(
-                DatabaseFilter::default(),
-                &GroupConfig::default(),
-                &specs,
-                &csv_path,
-            )
-            .unwrap();
-
-        let rows = parse_csv(&csv_path);
-        let header = &rows[0];
-        let image_col = header.iter().position(|h| h == "Image").unwrap();
-        let class_col = header.iter().position(|h| h == "Class").unwrap();
-        let row = rows[1..]
-            .iter()
-            .find(|r| r[image_col] == image_name)
-            .expect("the special-character row must round-trip through export");
-        assert_eq!(row[class_col], class_name);
-    }
-
-    // -------------------------------------------------------------------------
-    // Matrix (Plate) export tests.
-
-    fn area_metric() -> ColumnSpec {
-        ColumnSpec {
-            id: "area_px".to_string(),
-            label: "Area (px\u{00B2})".to_string(),
-            filterable: false,
-            visible: true,
-        }
-    }
-
-    #[test]
-    fn export_matrix_to_csv_places_wells_by_folder_and_formats_values() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_plate_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-
-        let csv_path = dir.path().join("plate.csv");
-        exporter
-            .export_matrix_to_csv(
-                DatabaseFilter::default(),
-                GroupBy::Folder,
-                "",
-                AggFunc::Avg,
-                &area_metric(),
-                2,
-                2,
-                &csv_path,
-            )
-            .expect("matrix export should succeed");
-
-        let rows = parse_csv(&csv_path);
-        assert_eq!(
-            rows,
-            vec![
-                vec!["".to_string(), "1".to_string(), "2".to_string()],
-                vec!["A".to_string(), "10.000".to_string(), "".to_string()],
-                vec!["B".to_string(), "".to_string(), "20.000".to_string()],
-            ],
-            "folder \"A1\" -> row A/col 1 (value 10), folder \"B2\" -> row B/col 2 (value 20)"
-        );
-    }
-
-    #[test]
-    fn export_matrix_to_csv_regex_grouping_produces_the_same_grid_as_folder_grouping() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_plate_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-
-        let csv_path = dir.path().join("plate.csv");
-        exporter
-            .export_matrix_to_csv(
-                DatabaseFilter::default(),
-                GroupBy::Regex,
-                r"^([A-Z]\d+)_",
-                AggFunc::Avg,
-                &area_metric(),
-                2,
-                2,
-                &csv_path,
-            )
-            .expect("matrix export should succeed");
-
-        let rows = parse_csv(&csv_path);
-        assert_eq!(
-            rows,
-            vec![
-                vec!["".to_string(), "1".to_string(), "2".to_string()],
-                vec!["A".to_string(), "10.000".to_string(), "".to_string()],
-                vec!["B".to_string(), "".to_string(), "20.000".to_string()],
-            ]
-        );
-    }
-
-    #[test]
-    fn export_matrix_to_xlsx_writes_the_same_values_as_csv_with_a_distinct_fill_per_cell() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_plate_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-
-        let xlsx_path = dir.path().join("plate.xlsx");
-        exporter
-            .export_matrix_to_xlsx(
-                DatabaseFilter::default(),
-                GroupBy::Folder,
-                "",
-                AggFunc::Avg,
-                &area_metric(),
-                2,
-                2,
-                HeatmapColorScheme::Viridis,
-                true,
-                0.0,
-                1.0,
-                &xlsx_path,
-            )
-            .expect("matrix export should succeed");
-
-        let rows = parse_xlsx(&xlsx_path);
-        assert_eq!(
-            rows[0],
-            vec!["".to_string(), "1".to_string(), "2".to_string()]
-        );
-        assert_eq!(
-            rows[1],
-            vec!["A".to_string(), "10".to_string(), "".to_string()]
-        );
-        assert_eq!(
-            rows[2],
-            vec!["B".to_string(), "".to_string(), "20".to_string()]
-        );
-
-        let bytes = std::fs::read(&xlsx_path).expect("xlsx file should exist");
-        assert_eq!(&bytes[0..4], b"PK\x03\x04", "not a valid XLSX/ZIP file");
-        // Per-cell fill coloring (via `HeatmapColorScheme::color_rgb`) is
-        // covered by live GUI verification rather than here - inspecting it
-        // would need a zip/XML reader this crate doesn't otherwise depend on,
-        // out of proportion to what a unit test should pull in.
-    }
-
-    #[test]
-    fn export_matrix_to_xlsx_writes_the_same_rounded_value_the_table_view_shows() {
-        // `compute_plate_matrix`/`compute_well_matrix` (shared by the Table
-        // view, the GUI's live Matrix grid, and both Matrix export formats)
-        // already round every metric to `metric_precision(column_id)`
-        // decimals *before* any of these ever sees it - by re-parsing the
-        // `aggregate_rows`-formatted display string rather than keeping a
-        // full-precision float. `export_matrix_to_xlsx` writes that value
-        // via plain `write_number` with no further `.set_num_format(...)`
-        // rounding on top, so it must land in the workbook exactly as
-        // Table shows it (unlike `export_matrix_to_csv`, which reformats
-        // to a fixed `{:.3}`, and the GUI's on-screen Matrix cell, which
-        // reformats to a fixed `{:.1}` - both *additional* roundings on top
-        // of this same first one, see the two tests below). Uses the raw
-        // `calamine::Data` value (not the `parse_xlsx` test helper, which
-        // itself special-cases whole-ish floats for display and would hide
-        // a real mismatch here).
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_plate_results_db(&db_path); // establishes the schema + wells A1/B2
-        let conn = duckdb::Connection::open(&db_path).unwrap();
-        // A new well "A2" (row 0, col 1 - within the 2x2 plate below, and
-        // untouched by seed_plate_results_db) with 3 objects: area_px =
-        // 10, 11, 11 -> avg = 32/3 = 10.6666... - genuinely non-terminating,
-        // so "full precision" and "rounded to N decimals" can't coincide.
-        for (idx, area) in [10u64, 11, 11].into_iter().enumerate() {
-            conn.execute(
-                "INSERT INTO objects (
-                    image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
-                    object_class_name, object_class_id, track_id,
-                    centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
-                    bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
-                    bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
-                    area_px, area_nm2, perimeter_px, perimeter_nm,
-                    circularity, solidity, aspect_ratio, roundness, compactness,
-                    major_axis_px, minor_axis_px, touches_edge,
-                    pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-                    intensities_json, coloc_json
-                ) VALUES (
-                    'A2_extra.tif', 'A2/A2_extra.tif', ?, 'ClassA', 1,
-                    '[\"ClassA\"]', '[1]', 0,
-                    0, 0, 0, 0, 0, 0, 10, 10, 0, 0, 0, 0,
-                    ?, ?, 40, 40, 1.0, 1.0, 1.0, 1.0, 1.0, 10, 10, false,
-                    1.0, 1.0, 1.0, '{}', '{}'
-                )",
-                duckdb::params![
-                    format!("00000000-0000-0000-0000-0000000001{idx:02}"),
-                    area,
-                    area as f64
-                ],
-            )
-            .unwrap();
-        }
-        drop(conn);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let xlsx_path = dir.path().join("plate_precision.xlsx");
-        exporter
-            .export_matrix_to_xlsx(
-                DatabaseFilter::default(),
-                GroupBy::Folder,
-                "",
-                AggFunc::Avg,
-                &area_metric(),
-                2,
-                2,
-                HeatmapColorScheme::Viridis,
-                true,
-                0.0,
-                1.0,
-                &xlsx_path,
-            )
-            .unwrap();
-
-        let mut workbook = open_workbook_auto(&xlsx_path).unwrap();
-        let sheet = workbook.worksheet_range("Matrix").unwrap();
-        // Row "A" (sheet row 1), col "2" (sheet col 2: row-label col 0 + 1-indexed col 1 + 1).
-        let cell = sheet.get_value((1, 2)).expect("well A2's cell value");
-        let Data::Float(v) = cell else {
-            panic!("expected a numeric cell, got {cell:?}");
-        };
-        // True average is 32/3 = 10.6666..., but `area_px`'s
-        // `metric_precision` is 1 decimal, so the value every consumer
-        // (Table included) actually works with is the already-rounded 10.7.
-        assert!(
-            (v - 10.7).abs() < 1e-9,
-            "expected the metric_precision-rounded 10.7 (matching what the Table view shows), got {v}"
-        );
-    }
-
-    #[test]
-    fn export_matrix_to_csv_pads_to_a_fixed_3_decimals_even_when_the_table_view_shows_fewer() {
-        // Same fixture/value as the XLSX test above (10.7, already rounded
-        // to `area_px`'s 1-decimal `metric_precision`) - `export_matrix_to_csv`
-        // additionally reformats every value to a fixed `{:.3}`, so the CSV
-        // cell reads "10.700" even though the Table view (and the XLSX
-        // export) show "10.7". Same numeric value, cosmetically different
-        // text - documented so a future reader doesn't mistake the extra
-        // trailing zeros for a real precision difference.
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_plate_results_db(&db_path);
-        let conn = duckdb::Connection::open(&db_path).unwrap();
-        for (idx, area) in [10u64, 11, 11].into_iter().enumerate() {
-            conn.execute(
-                "INSERT INTO objects (
-                    image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
-                    object_class_name, object_class_id, track_id,
-                    centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
-                    bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
-                    bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
-                    area_px, area_nm2, perimeter_px, perimeter_nm,
-                    circularity, solidity, aspect_ratio, roundness, compactness,
-                    major_axis_px, minor_axis_px, touches_edge,
-                    pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-                    intensities_json, coloc_json
-                ) VALUES (
-                    'A2_extra.tif', 'A2/A2_extra.tif', ?, 'ClassA', 1,
-                    '[\"ClassA\"]', '[1]', 0,
-                    0, 0, 0, 0, 0, 0, 10, 10, 0, 0, 0, 0,
-                    ?, ?, 40, 40, 1.0, 1.0, 1.0, 1.0, 1.0, 10, 10, false,
-                    1.0, 1.0, 1.0, '{}', '{}'
-                )",
-                duckdb::params![
-                    format!("00000000-0000-0000-0000-0000000002{idx:02}"),
-                    area,
-                    area as f64
-                ],
-            )
-            .unwrap();
-        }
-        drop(conn);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let csv_path = dir.path().join("plate_precision.csv");
-        exporter
-            .export_matrix_to_csv(
-                DatabaseFilter::default(),
-                GroupBy::Folder,
-                "",
-                AggFunc::Avg,
-                &area_metric(),
-                2,
-                2,
-                &csv_path,
-            )
-            .unwrap();
-
-        let rows = parse_csv(&csv_path);
-        assert_eq!(rows[1][2], "10.700", "well A2 (row A, col 2)");
-    }
-
-    /// A well regex with the 4th capture group `compute_well_matrix` needs
-    /// (sub-position) - matches `seed_plate_results_db`'s "A1_01.tif" /
-    /// "B2_01.tif" image names exactly: group 1 = well id ("A1"/"B2"),
-    /// group 4 = sub-position ("01").
-    const WELL_REGEX: &str = r"^(([A-Z])(\d+))_(\d+)";
-
-    #[test]
-    fn export_well_matrices_to_csv_writes_one_file_per_well() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_plate_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-
-        exporter
-            .export_well_matrices_to_csv(
-                DatabaseFilter::default(),
-                GroupBy::Regex,
-                WELL_REGEX,
-                AggFunc::Avg,
-                &area_metric(),
-                2,
-                2,
-                1,
-                1,
-                &[1],
-                dir.path(),
-                "wells",
-            )
-            .expect("well matrix export should succeed");
-
-        let rows_a1 = parse_csv(&dir.path().join("wells_A1.csv"));
-        assert_eq!(
-            rows_a1,
-            vec![
-                vec!["".to_string(), "1".to_string()],
-                vec!["A".to_string(), "10.000".to_string()]
-            ]
-        );
-        let rows_b2 = parse_csv(&dir.path().join("wells_B2.csv"));
-        assert_eq!(
-            rows_b2,
-            vec![
-                vec!["".to_string(), "1".to_string()],
-                vec!["A".to_string(), "20.000".to_string()]
-            ]
-        );
-    }
-
-    #[test]
-    fn export_well_matrices_to_csv_errors_when_no_well_has_sub_position_data() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_plate_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-
-        let result = exporter.export_well_matrices_to_csv(
-            DatabaseFilter::default(),
-            GroupBy::Regex,
-            r"^([A-Z]\d+)_", // only 1 capture group - no sub-position
-            AggFunc::Avg,
-            &area_metric(),
-            2,
-            2,
-            1,
-            1,
-            &[1],
-            dir.path(),
-            "wells",
-        );
-        assert!(
-            result.is_err(),
-            "no well has usable sub-position data - should error, not write nothing"
-        );
-    }
-
-    #[test]
-    fn export_well_matrices_to_xlsx_writes_one_sheet_per_well() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_plate_results_db(&db_path);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-
-        let xlsx_path = dir.path().join("wells.xlsx");
-        exporter
-            .export_well_matrices_to_xlsx(
-                DatabaseFilter::default(),
-                GroupBy::Regex,
-                WELL_REGEX,
-                AggFunc::Avg,
-                &area_metric(),
-                2,
-                2,
-                1,
-                1,
-                &[1],
-                HeatmapColorScheme::Viridis,
-                true,
-                0.0,
-                1.0,
-                &xlsx_path,
-            )
-            .expect("well matrix export should succeed");
-
-        let mut workbook: calamine::Sheets<_> =
-            open_workbook_auto(&xlsx_path).expect("open xlsx back");
-        let mut sheet_names = workbook.sheet_names().to_vec();
-        sheet_names.sort();
-        assert_eq!(sheet_names, vec!["A1".to_string(), "B2".to_string()]);
-
-        let sheet_a1 = workbook.worksheet_range("A1").expect("read sheet A1");
-        let rows_a1: Vec<Vec<String>> = sheet_a1
-            .rows()
-            .map(|row| {
-                row.iter()
-                    .map(|cell| match cell {
-                        Data::Float(f) if f.fract() == 0.0 => format!("{f:.0}"),
-                        Data::Empty => String::new(),
-                        other => other.to_string(),
-                    })
-                    .collect()
-            })
-            .collect();
-        assert_eq!(
-            rows_a1,
-            vec![
-                vec!["".to_string(), "1".to_string()],
-                vec!["A".to_string(), "10".to_string()]
-            ]
-        );
-    }
-
-    // -------------------------------------------------------------------------
-    // Large-dataset characterization tests.
-    //
-    // These seed far more rows than any GUI page or DB round-trip holds and
-    // assert every seeded row appears in the export exactly once, in the
-    // expected order - proving there's no off-by-one, duplicate, or
-    // dropped-row bug when a result set spans many DB round-trips. Originally
-    // written against the per-page `LIMIT`/`OFFSET` re-query implementation
-    // (each round-trip a separate page) and left unchanged across the move to
-    // `DuckDbReader::stream_objects`'s single-cursor implementation (each
-    // round-trip a chunk of one continuous scan) - passing before and after
-    // is exactly what proves the two implementations return identical
-    // results.
-
-    #[test]
-    fn export_to_csv_across_a_large_result_set_returns_every_row_exactly_once_in_order() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        let n = COLOC_PARTNER_BATCH_SIZE * 2 + 345;
-        seed_large_results_db(&db_path, n);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let specs = build_column_specs(&[0], &[]);
-
-        let csv_path = dir.path().join("out.csv");
-        exporter
-            .export_to_csv(
-                DatabaseFilter::default(),
-                &GroupConfig::default(),
-                &specs,
-                &csv_path,
-            )
-            .expect("export should succeed");
-
-        let rows = parse_csv(&csv_path);
-        assert_eq!(
-            rows.len(),
-            n + 1,
-            "header + one row per seeded object, none dropped or duplicated"
-        );
-
-        let area_col = col_index(&rows[0], "Area (px\u{00B2})");
-        let areas: Vec<u64> = rows[1..]
-            .iter()
-            .map(|r| r[area_col].parse().unwrap())
-            .collect();
-        let expected: Vec<u64> = (0..n as u64).collect();
-        assert_eq!(
-            areas, expected,
-            "rows must come back in ascending object_id order across every export page"
-        );
-    }
-
-    #[test]
-    fn export_to_xlsx_across_a_large_result_set_returns_every_row_exactly_once_in_order() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        let n = COLOC_PARTNER_BATCH_SIZE * 2 + 345;
-        seed_large_results_db(&db_path, n);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-        let specs = build_column_specs(&[0], &[]);
-
-        let xlsx_path = dir.path().join("out.xlsx");
-        exporter
-            .export_to_xlsx(
-                DatabaseFilter::default(),
-                &GroupConfig::default(),
-                &specs,
-                &xlsx_path,
-            )
-            .expect("export should succeed");
-
-        let rows = parse_xlsx(&xlsx_path);
-        assert_eq!(
-            rows.len(),
-            n + 1,
-            "header + one row per seeded object, none dropped or duplicated"
-        );
-
-        let area_col = col_index(&rows[0], "Area (px\u{00B2})");
-        let areas: Vec<u64> = rows[1..]
-            .iter()
-            .map(|r| r[area_col].parse().unwrap())
-            .collect();
-        let expected: Vec<u64> = (0..n as u64).collect();
-        assert_eq!(
-            areas, expected,
-            "rows must come back in ascending object_id order across every export page"
-        );
-    }
-
-    #[test]
-    fn export_coloc_detail_to_csv_across_a_large_result_set_resolves_every_partner_correctly() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        let n_sources = COLOC_PARTNER_BATCH_SIZE + 777;
-        let n_partners = 500;
-        seed_large_coloc_db(&db_path, n_sources, n_partners);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-
-        let csv_path = dir.path().join("coloc_detail.csv");
-        let filter = DatabaseFilter {
-            class_filter: Some(vec!["ClassA".to_string()]),
+    fn start_export_xlsx_plate_list_and_well_list_report_the_seeded_average() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_plate_view_list: true,
+            with_well_view_list: true,
             ..Default::default()
         };
-        exporter
-            .export_coloc_detail_to_csv(filter, None, &csv_path)
-            .expect("export should succeed");
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("flat-pivot export");
 
-        let rows = parse_csv(&csv_path);
+        let mut plate_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate_list.xlsx")).expect("open plate_list.xlsx");
+        let plate_range = plate_wb.worksheet_range("Plate").expect("Plate sheet");
         assert_eq!(
-            rows.len(),
-            n_sources + 1,
-            "header + exactly one flattened row per source object"
+            plate_range.get_value((0, 0)),
+            Some(&calamine::Data::String("Well".to_string()))
         );
-
-        let object_id_col = col_index(&rows[0], "object ID");
-        let partner_id_col = col_index(&rows[0], "Coloc ClassB object ID");
-
-        let mut seen_source_idx = vec![false; n_sources];
-        for row in &rows[1..] {
-            let source_idx = decode_object_id_idx(&row[object_id_col]);
-            let partner_idx = decode_object_id_idx(&row[partner_id_col]);
-            assert_eq!(
-                partner_idx,
-                source_idx % n_partners,
-                "row for source {source_idx} resolved the wrong partner across an export page boundary"
-            );
-            assert!(
-                !seen_source_idx[source_idx],
-                "source object {source_idx} exported more than once"
-            );
-            seen_source_idx[source_idx] = true;
-        }
-        assert!(
-            seen_source_idx.into_iter().all(|seen| seen),
-            "every source object must be exported exactly once"
+        assert_eq!(
+            plate_range.get_value((1, 0)),
+            Some(&calamine::Data::String("A1".to_string()))
         );
+        assert_eq!(data_f64(plate_range.get_value((1, 1))), 15.0);
+
+        let mut well_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("well_list.xlsx")).expect("open well_list.xlsx");
+        let well_range = well_wb.worksheet_range("Well").expect("Well sheet");
+        assert_eq!(
+            well_range.get_value((0, 0)),
+            Some(&calamine::Data::String("Well".to_string()))
+        );
+        // Two data rows: field "01" (value 10) and field "02" (value 20),
+        // sorted by (well, field-as-number) - see `export_plate_and_well_as_flat_list`.
+        assert_eq!(data_f64(well_range.get_value((1, 3))), 10.0);
+        assert_eq!(data_f64(well_range.get_value((2, 3))), 20.0);
     }
 
     #[test]
-    fn export_coloc_detail_to_xlsx_writes_a_readable_workbook_and_respects_the_column_filter() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_large_coloc_db(&db_path, 2, 1);
-
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
-
-        let xlsx_path = dir.path().join("coloc_detail.xlsx");
-        let visible: HashSet<String> = ["object ID", "Coloc ClassB object ID"]
+    fn start_export_runs_every_xlsx_document_type_together() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 20)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+        ]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
             .into_iter()
-            .map(String::from)
+            .map(|entry| entry.key)
             .collect();
-        // Scoped to ClassA (the source class) only - otherwise the ClassB
-        // partner objects seeded alongside the sources would themselves be
-        // treated as (partner-less) source rows too, same as the large-scale
-        // CSV test above.
-        let filter = DatabaseFilter {
-            class_filter: Some(vec!["ClassA".to_string()]),
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            columns,
+            aggregations: vec![Aggregation::Avg],
+            with_list_view: true,
+            with_grouped_by_image_list: true,
+            with_plate_view_heatmap: true,
+            with_well_view_heatmap: true,
+            with_plate_view_list: true,
+            with_well_view_list: true,
+            with_heatmap: true,
             ..Default::default()
         };
-        exporter
-            .export_coloc_detail_to_xlsx(filter, Some(&visible), &xlsx_path)
-            .expect("export should succeed");
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("full xlsx export");
 
-        let rows = parse_xlsx(&xlsx_path);
-        assert_eq!(
-            rows.len(),
-            3,
-            "header + one flattened row per source object"
-        );
-        assert_eq!(
-            rows[0],
-            vec![
-                "object ID".to_string(),
-                "Coloc ClassB object ID".to_string()
-            ],
-            "hidden columns (Image, Class, Area, ...) must not appear in the header"
-        );
-
-        let bytes = std::fs::read(&xlsx_path).expect("xlsx file should exist");
-        assert_eq!(&bytes[0..4], b"PK\x03\x04", "not a valid XLSX/ZIP file");
+        for name in [
+            "list.xlsx",
+            "grouped_by_image.xlsx",
+            "plate.xlsx",
+            "well.xlsx",
+            "plate_list.xlsx",
+            "well_list.xlsx",
+            "heatmap_A1_01.xlsx",
+            "heatmap_B2_01.xlsx",
+        ] {
+            let bytes =
+                std::fs::read(out_dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"));
+            assert_eq!(&bytes[..4], b"PK\x03\x04", "{name} is not a zip/xlsx file");
+        }
     }
 
     #[test]
-    fn export_coloc_detail_rows_with_no_colocalization_data_still_exports_object_rows() {
-        // `seed_results_db`'s two objects both carry an empty `coloc_json`
-        // ('{}') and no `coloc_stats` rows - the shape of a project whose
-        // colocalization pipeline step has never run. The exporter must
-        // still succeed (zero partner classes discovered, zero partner ids
-        // resolved per batch) rather than erroring or panicking.
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("results.duckdb");
-        seed_results_db(&db_path);
+    fn start_export_object_classes_filter_restricts_plate_well_flat_list_and_heatmap() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+            ObjectSpec::new("A1_01.tif", "ClassB", 2, 999)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            object_classes: vec![ObjectClass::Valid(1)],
+            square_size: Some(50),
+            with_plate_view_heatmap: true,
+            with_well_view_heatmap: true,
+            with_plate_view_list: true,
+            with_well_view_list: true,
+            with_heatmap: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("filtered export");
 
-        let loader = Arc::new(ResultsLoader::new(db_path));
-        let exporter = ResultsExporter::new(loader);
+        for file in ["plate.xlsx", "well.xlsx", "heatmap_A1_01.xlsx"] {
+            let workbook: calamine::Xlsx<_> = calamine::open_workbook(out_dir.join(file))
+                .unwrap_or_else(|e| panic!("open {file}: {e}"));
+            let sheets = workbook.sheet_names();
+            assert_eq!(
+                sheets,
+                vec!["ClassA".to_string()],
+                "{file} must only have a sheet for the selected class, not ClassB: {sheets:?}"
+            );
+        }
 
-        let csv_path = dir.path().join("coloc_detail.csv");
-        exporter
-            .export_coloc_detail_to_csv(DatabaseFilter::default(), None, &csv_path)
-            .expect("export should succeed even with no colocalization data at all");
+        let mut plate_list_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate_list.xlsx")).expect("open plate_list.xlsx");
+        let plate_list_range = plate_list_wb.worksheet_range("Plate").expect("Plate sheet");
+        let header = plate_list_range.get_value((0, 1)).expect("combo header");
+        assert!(
+            matches!(header, calamine::Data::String(s) if s.contains("ClassA") && !s.contains("ClassB")),
+            "plate_list.xlsx combo header must only reference the selected class: {header:?}"
+        );
+    }
 
-        let rows = parse_csv(&csv_path);
+    #[test]
+    fn start_export_with_list_coloc_details_xlsx_writes_a_second_sheet_with_shaded_rows() {
+        let objects = vec![
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .with_coloc(r#"{"2":["00000000-0000-0000-0000-000000000001"]}"#),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 99),
+        ];
+        let (database, out_dir) = open(&objects);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            columns: vec![
+                Column::ObjectClass,
+                Column::AreaSizePx,
+                Column::ColocCount(ObjectClass::Valid(2)),
+            ],
+            with_list_view: true,
+            with_list_coloc_details: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("xlsx export with coloc details");
+
+        let mut workbook: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("list.xlsx")).expect("open list.xlsx");
+        let sheets = workbook.sheet_names();
+        assert!(sheets.contains(&"List".to_string()));
+        assert!(sheets.contains(&"List (Coloc Details)".to_string()));
+        let coloc_range = workbook
+            .worksheet_range("List (Coloc Details)")
+            .expect("coloc details sheet");
+        // 2 fanned-out rows (one per source object) plus the header.
+        assert_eq!(coloc_range.rows().count(), 3);
+    }
+
+    #[test]
+    fn start_export_reports_an_error_when_the_output_directory_cannot_be_created() {
+        let (database, _out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocking_file = dir.path().join("blocker");
+        std::fs::write(&blocking_file, b"not a directory").expect("write blocking file");
+        let export = ResultExport {
+            // A regular file can't have a subdirectory created under it.
+            output_dir: blocking_file.join("sub"),
+            format: ExportFormat::CSV,
+            with_list_view: true,
+            ..Default::default()
+        };
+        let result = export.start_export(&database, &no_cancel(), &mut no_progress());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn start_export_xlsx_save_failure_surfaces_as_an_internal_error() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        // Pre-create a *directory* at the exact path `list.xlsx` would be
+        // saved to, so `Workbook::save` fails instead of succeeding.
+        std::fs::create_dir_all(out_dir.join("list.xlsx")).expect("pre-create blocking directory");
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::XLSX,
+            columns,
+            with_list_view: true,
+            ..Default::default()
+        };
+        let result = export.start_export(&database, &no_cancel(), &mut no_progress());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn start_export_grouped_by_image_with_a_non_matching_class_filter_is_an_empty_but_valid_document()
+     {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            // No class 99 was ever seeded - a non-empty selection matching
+            // zero rows, exercising `fetch_all_grouped_by_image_rows`'s
+            // "no rows at all" min/max fallback (as opposed to an
+            // explicitly-empty `Some(vec![])` selection, which short-
+            // circuits earlier).
+            object_classes: vec![ObjectClass::Valid(99)],
+            with_grouped_by_image_list: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("export with a non-matching filter should still succeed");
+        let content =
+            std::fs::read_to_string(out_dir.join("grouped_by_image.csv")).expect("read csv");
+        assert_eq!(content.lines().count(), 1, "header only, no data rows");
+    }
+
+    #[test]
+    fn aggregation_label_covers_every_variant() {
+        assert_eq!(aggregation_label(&Aggregation::Avg), "Average");
+        assert_eq!(aggregation_label(&Aggregation::Min), "Minimum");
+        assert_eq!(aggregation_label(&Aggregation::Max), "Maximum");
+        assert_eq!(aggregation_label(&Aggregation::Stddev), "Std Dev");
+        assert_eq!(aggregation_label(&Aggregation::Sum), "Sum");
+        assert_eq!(aggregation_label(&Aggregation::Median), "Median");
+        assert_eq!(aggregation_label(&Aggregation::Skewness), "Skewness");
+    }
+
+    #[test]
+    fn cell_to_f64_reads_both_numeric_cell_variants_and_rejects_others() {
+        let float_cell = Cell {
+            value: CellValue::Float(1.5),
+            bg_color: 0,
+            alternating_color: false,
+            search_key: None,
+        };
+        let int_cell = Cell {
+            value: CellValue::Integer(7),
+            bg_color: 0,
+            alternating_color: false,
+            search_key: None,
+        };
+        let string_cell = Cell {
+            value: CellValue::String("x".to_string()),
+            bg_color: 0,
+            alternating_color: false,
+            search_key: None,
+        };
+        assert_eq!(cell_to_f64(&float_cell), Some(1.5));
+        assert_eq!(cell_to_f64(&int_cell), Some(7.0));
+        assert_eq!(cell_to_f64(&string_cell), None);
+    }
+
+    #[test]
+    fn sheet_namer_falls_back_to_a_generic_name_for_a_blank_class_name() {
+        let mut namer = SheetNamer::new();
+        assert_eq!(namer.unique("   "), "Sheet");
+    }
+
+    // -- cancellation -----------------------------------------------------
+
+    #[test]
+    fn start_export_returns_cancelled_immediately_when_already_cancelled() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            with_list_view: true,
+            ..Default::default()
+        };
+        let cancel = AtomicBool::new(true);
+        let result = export.start_export(&database, &cancel, &mut no_progress());
+        assert!(matches!(result, Err(InternalErrors::Cancelled)));
+        // Nothing should have been written - cancellation is checked before
+        // even creating the output directory.
+        assert!(!out_dir.join("list.csv").exists());
+    }
+
+    #[test]
+    fn start_export_stops_partway_through_a_one_file_per_image_export_once_cancelled() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 20),
+            ObjectSpec::new("img3.tif", "ClassA", 1, 30),
+        ]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            columns: vec![Column::AreaSizePx],
+            with_list_view: true,
+            with_list_one_file_per_image: true,
+            ..Default::default()
+        };
+        let cancel = AtomicBool::new(false);
+        // Cancel as soon as the very first image's document has been
+        // written, from inside the progress callback - proves cancellation
+        // is actually observed *during* the export, not just checked once
+        // up front.
+        let mut seen_images = 0usize;
+        let result = export.start_export(&database, &cancel, &mut |_message, _current, _total| {
+            seen_images += 1;
+            cancel.store(true, Ordering::Relaxed);
+        });
+        assert!(matches!(result, Err(InternalErrors::Cancelled)));
         assert_eq!(
-            rows.len(),
-            3,
-            "header + one row per object, no partner columns"
+            seen_images, 1,
+            "should stop right after the first image's progress callback"
         );
         assert!(
-            !rows[0].iter().any(|h| h.starts_with("Coloc ")),
-            "no partner classes were ever recorded, so no Coloc-prefixed column should exist"
+            out_dir.join("list_img1.csv").exists(),
+            "the first image's file was already written"
+        );
+        assert!(
+            !out_dir.join("list_img2.csv").exists(),
+            "must not start the second image"
         );
     }
 }

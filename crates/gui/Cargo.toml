@@ -12,13 +12,13 @@ evanalyzer_app = { workspace = true }
 evanalyzer_cfg = { workspace = true }
 evanalyzer_gui_slint = { path = "ui" }
 
-rfd = "0.17"
-copypasta = "0.10"
+rfd = { workspace = true }
+copypasta = { workspace = true }
 log = { workspace = true }
 rayon = { workspace = true }
 kornia-image = { workspace = true }
 kornia-imgproc = { workspace = true }
-clru = "0.6.3"
+clru = { workspace = true }
 indexmap = { workspace = true }
 bitvec = { workspace = true }
 chrono = { workspace = true }
@@ -46,5 +46,7 @@ features = [
 [dev-dependencies]
 kornia-apriltag = { workspace = true }
 i-slint-backend-testing = "=1.17.1"
+duckdb = { workspace = true, features = ["bundled"] }
+tempfile = { workspace = true }
 
 
