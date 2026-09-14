@@ -1,5 +1,7 @@
+use crate::result::Column;
+
 use super::results_generator::{
-    Column, PlaneFilter, ResultsGenerator, class_display_label, column_aggregate_expr,
+    PlaneFilter, ResultsGenerator, class_display_label, column_aggregate_expr,
     sql_int_array_literal, sql_string_in_list,
 };
 use duckdb::types::Value;
@@ -1041,7 +1043,10 @@ mod tests {
             .expect("scatter");
         assert!(scatter.points.is_empty());
         assert_eq!(scatter.total_object_count, 0);
-        assert_eq!((scatter.x_min, scatter.x_max, scatter.y_min, scatter.y_max), (0.0, 0.0, 0.0, 0.0));
+        assert_eq!(
+            (scatter.x_min, scatter.x_max, scatter.y_min, scatter.y_max),
+            (0.0, 0.0, 0.0, 0.0)
+        );
     }
 
     // -- value_to_f64 / extract_f64_list ----------------------------------
@@ -1075,7 +1080,10 @@ mod tests {
             vec![1.0],
             "non-numeric list elements are dropped, not errored on"
         );
-        assert_eq!(extract_f64_list(Value::Array(vec![Value::Int(2)])), vec![2.0]);
+        assert_eq!(
+            extract_f64_list(Value::Array(vec![Value::Int(2)])),
+            vec![2.0]
+        );
         assert_eq!(extract_f64_list(Value::Null), Vec::<f64>::new());
     }
 }

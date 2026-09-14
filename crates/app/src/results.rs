@@ -1,9 +1,11 @@
+mod column;
 mod results_charts;
 mod results_exporter;
 mod results_generator;
 #[cfg(test)]
 mod test_support;
 
+pub use column::Column;
 pub use results_charts::BoxplotBox;
 pub use results_charts::BoxplotFilter;
 pub use results_charts::BoxplotResult;
@@ -20,7 +22,6 @@ pub use results_generator::Cell;
 pub use results_generator::CellValue;
 pub use results_generator::ColorScale;
 pub use results_generator::ColorSchema;
-pub use results_generator::Column;
 pub use results_generator::ColumnEntry;
 pub use results_generator::DatabaseResult;
 pub use results_generator::GroupedByImageFilter;
