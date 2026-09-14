@@ -227,12 +227,24 @@ impl ResultExport {
         match self.format {
             ExportFormat::XLSX => {
                 let mut workbook = Workbook::new();
-                let sheet = workbook.add_worksheet();
+                // `write_list_sheet` only ever writes strictly top-to-bottom
+                // (one page's rows after another, never revisiting an
+                // earlier row) - exactly what "constant memory" mode
+                // requires, and what lets it flush each row to a tempfile
+                // as soon as the next one is written instead of keeping
+                // every cell in memory for the life of the `Workbook`. A
+                // standard `add_worksheet()` here would otherwise scale
+                // memory with the row count writen - `rust_xlsxwriter`'s
+                // own numbers put a 1M-row-ish sheet at ~200+ MB *before*
+                // accounting for column count (cost is roughly per-cell),
+                // which a single large image's object list can blow past
+                // well under Excel's 1,048,576-row sheet cap.
+                let sheet = workbook.add_worksheet_with_constant_memory();
                 sheet.set_name("List").map_err(xlsx_err)?;
                 write_list_sheet(sheet, database, cancel, self, images, object_classes, false)?;
 
                 if self.with_list_coloc_details {
-                    let coloc_sheet = workbook.add_worksheet();
+                    let coloc_sheet = workbook.add_worksheet_with_constant_memory();
                     coloc_sheet
                         .set_name("List (Coloc Details)")
                         .map_err(xlsx_err)?;
@@ -435,8 +447,9 @@ impl ResultExport {
         // Both are returned flattened in class -> column -> aggregation
         // order, matching the loop nesting below, so they're simply
         // drained in lockstep as the loop progresses.
-        let no_combos =
-            target_classes.is_empty() || aggregable_columns.is_empty() || self.aggregations.is_empty();
+        let no_combos = target_classes.is_empty()
+            || aggregable_columns.is_empty()
+            || self.aggregations.is_empty();
         let mut plate_grids_iter = if no_combos {
             Vec::new().into_iter()
         } else {
@@ -597,8 +610,9 @@ impl ResultExport {
         // Both are returned flattened in class -> column -> aggregation
         // order, matching the loop nesting below, so they're simply
         // drained in lockstep as the loop progresses.
-        let no_combos =
-            target_classes.is_empty() || aggregable_columns.is_empty() || self.aggregations.is_empty();
+        let no_combos = target_classes.is_empty()
+            || aggregable_columns.is_empty()
+            || self.aggregations.is_empty();
         let mut plate_lists_iter = if no_combos {
             Vec::new().into_iter()
         } else {
@@ -887,55 +901,81 @@ fn resolve_images(
 // same keyset-pagination shape `results_state_controller.rs` pages through
 // for the GUI's List view (see its own `update_list_view`) — so an export,
 // which needs every matching row rather than one page of them, walks every
-// page via the same cursor-from-last-row-id trick and concatenates them.
-// Compared against `source_object_count` (not `rows.len()`), matching that
-// same reasoning: `ListFilter::with_coloc_details` fan-out can multiply
-// `rows.len()` past `PAGE_SIZE` on what's still the final page.
-fn fetch_all_list_rows(
+// page via the same cursor-from-last-row-id trick.
+//
+// Every requested image is folded into ONE combined `images` filter here
+// (not called once per image, the way `write_list_sheet`/`write_list_csv`
+// used to loop) - a `WHERE image_rel_path IN (...)` scoped to a single
+// image still has to plan and run a full `objects` scan of its own, so an
+// N-image export previously meant N scans dominated by that per-query
+// overhead rather than actual I/O; batching them turns that into
+// `total_matching_rows / PAGE_SIZE` queries instead of `images.len()`
+// (`export_list`'s `with_list_one_file_per_image` branch still calls this
+// once per image, since it genuinely needs one document per image - there,
+// `images` is already a single-element slice, so this degrades to exactly
+// what it did before).
+//
+// `on_page` runs once per page in z/t-then-row-id order, rather than this
+// merging every page into one in-memory `DatabaseResult` first (unlike
+// `fetch_all_grouped_by_image_rows`'s approach, which suits its much
+// smaller image-grouped row count): peak RAM for a List export stays
+// bounded by one page's worth of rows (`PAGE_SIZE`) regardless of how many
+// images or planes the export spans, instead of growing with the combined
+// row count now that a page can span every image at once.
+fn stream_list_pages(
     database: &ResultsGenerator,
-    base_filter: &ListFilter,
-) -> Result<DatabaseResult, InternalErrors> {
+    cancel: &AtomicBool,
+    export: &ResultExport,
+    images: &[String],
+    object_classes: &Option<Vec<ObjectClass>>,
+    with_coloc_details: bool,
+    mut on_page: impl FnMut(&DatabaseResult, bool) -> Result<(), InternalErrors>,
+) -> Result<(), InternalErrors> {
     const PAGE_SIZE: i32 = 20_000;
+    // Matches the old per-image loop's behavior when there's nothing to
+    // scan at all: no query, no header, an empty document - rather than
+    // running one (z, t) query per plane for a filter that's already known
+    // to match nothing.
+    if images.is_empty() {
+        return Ok(());
+    }
 
-    let mut merged = DatabaseResult {
-        column_names: Vec::new(),
-        row_names: Vec::new(),
-        rows: Vec::new(),
-        min: 0.0,
-        max: 0.0,
-        source_object_count: 0,
-        row_locations: Vec::new(),
-    };
-    let mut cursor: Option<String> = None;
-    let mut first_page = true;
+    let mut header_written = false;
 
-    loop {
-        let filter = ListFilter {
-            page: Pagination {
-                limit: PAGE_SIZE,
-                after: cursor.take(),
-            },
-            ..base_filter.clone()
-        };
-        let mut page = database.get_object_list(&filter)?;
-        let is_last_page = page.source_object_count < PAGE_SIZE as usize;
-        cursor = page.row_names.last().cloned();
+    for z in export.z_stacks {
+        for t in export.t_stacks {
+            let mut cursor: Option<String> = None;
+            loop {
+                check_cancelled(cancel)?;
+                let filter = ListFilter {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    images: Some(images.to_vec()),
+                    object_classes: object_classes.clone(),
+                    columns: export.columns.clone(),
+                    with_coloc_details,
+                    page: Pagination {
+                        limit: PAGE_SIZE,
+                        after: cursor.take(),
+                    },
+                };
+                let page = database.get_object_list(&filter)?;
+                let is_last_page = page.source_object_count < PAGE_SIZE as usize;
+                cursor = page.row_names.last().cloned();
 
-        if first_page {
-            merged.column_names = std::mem::take(&mut page.column_names);
-            first_page = false;
-        }
-        merged.row_names.extend(page.row_names);
-        merged.rows.extend(page.rows);
-        merged.row_locations.extend(page.row_locations);
-        merged.source_object_count += page.source_object_count;
+                on_page(&page, !header_written)?;
+                header_written = true;
 
-        if is_last_page {
-            break;
+                if is_last_page {
+                    break;
+                }
+            }
         }
     }
 
-    Ok(merged)
+    Ok(())
 }
 
 // Same keyset-pagination walk as `fetch_all_list_rows`, just over
@@ -1009,60 +1049,38 @@ fn write_list_sheet(
 ) -> Result<(), InternalErrors> {
     let header_format = Format::new().set_bold();
     let mut next_row: u32 = 0;
-    let mut header_written = false;
 
-    for z in export.z_stacks {
-        for t in export.t_stacks {
-            for image in images {
-                check_cancelled(cancel)?;
-                let base_filter = ListFilter {
-                    plane: PlaneFilter {
-                        z_stack: z,
-                        t_stack: t,
-                    },
-                    images: Some(vec![image.clone()]),
-                    object_classes: object_classes.clone(),
-                    columns: export.columns.clone(),
-                    with_coloc_details,
-                    page: Pagination {
-                        limit: 0,
-                        after: None,
-                    },
-                };
-                let result = fetch_all_list_rows(database, &base_filter)?;
-
-                if !header_written {
-                    for (col_idx, name) in result.column_names.iter().enumerate() {
-                        worksheet
-                            .write_with_format(
-                                next_row,
-                                col_idx as u16,
-                                name.as_str(),
-                                &header_format,
-                            )
-                            .map_err(xlsx_err)?;
-                    }
-                    next_row += 1;
-                    header_written = true;
+    stream_list_pages(
+        database,
+        cancel,
+        export,
+        images,
+        object_classes,
+        with_coloc_details,
+        |page, is_first_page| {
+            if is_first_page {
+                for (col_idx, name) in page.column_names.iter().enumerate() {
+                    worksheet
+                        .write_with_format(next_row, col_idx as u16, name.as_str(), &header_format)
+                        .map_err(xlsx_err)?;
                 }
-
-                for row in &result.rows {
-                    for (col_idx, cell) in row.iter().enumerate() {
-                        write_cell(worksheet, next_row, col_idx as u16, cell)?;
-                    }
-                    next_row += 1;
-                }
+                next_row += 1;
             }
-        }
-    }
 
-    Ok(())
+            for row in &page.rows {
+                for (col_idx, cell) in row.iter().enumerate() {
+                    write_cell(worksheet, next_row, col_idx as u16, cell)?;
+                }
+                next_row += 1;
+            }
+            Ok(())
+        },
+    )
 }
 
-/// CSV sibling of `write_list_sheet`: same z/t/image sweep and per-plane
-/// fetch (so the two formats can never disagree on row order or content),
-/// written straight to `path` a plane at a time instead of into an XLSX
-/// worksheet.
+/// CSV sibling of `write_list_sheet`: same combined-images/per-page sweep
+/// (so the two formats can never disagree on row order or content), written
+/// straight to `path` a page at a time instead of into an XLSX worksheet.
 fn write_list_csv(
     database: &ResultsGenerator,
     cancel: &AtomicBool,
@@ -1076,41 +1094,25 @@ fn write_list_csv(
     let write_err = |e: std::io::Error| {
         InternalErrors::Internal(format!("could not write {}: {e}", path.display()))
     };
-    let mut header_written = false;
 
-    for z in export.z_stacks {
-        for t in export.t_stacks {
-            for image in images {
-                check_cancelled(cancel)?;
-                let base_filter = ListFilter {
-                    plane: PlaneFilter {
-                        z_stack: z,
-                        t_stack: t,
-                    },
-                    images: Some(vec![image.clone()]),
-                    object_classes: object_classes.clone(),
-                    columns: export.columns.clone(),
-                    with_coloc_details,
-                    page: Pagination {
-                        limit: 0,
-                        after: None,
-                    },
-                };
-                let result = fetch_all_list_rows(database, &base_filter)?;
-
-                if !header_written {
-                    write_csv_row(&mut out, &result.column_names).map_err(write_err)?;
-                    header_written = true;
-                }
-                for row in &result.rows {
-                    let cells: Vec<String> = row.iter().map(cell_text).collect();
-                    write_csv_row(&mut out, &cells).map_err(write_err)?;
-                }
+    stream_list_pages(
+        database,
+        cancel,
+        export,
+        images,
+        object_classes,
+        with_coloc_details,
+        |page, is_first_page| {
+            if is_first_page {
+                write_csv_row(&mut out, &page.column_names).map_err(write_err)?;
             }
-        }
-    }
-
-    Ok(())
+            for row in &page.rows {
+                let cells: Vec<String> = row.iter().map(cell_text).collect();
+                write_csv_row(&mut out, &cells).map_err(write_err)?;
+            }
+            Ok(())
+        },
+    )
 }
 
 /// Writes `result` as CSV to `path` in one shot — `result.column_names` as
