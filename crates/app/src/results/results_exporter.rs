@@ -13,28 +13,19 @@ use std::path::PathBuf;
 use std::range::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// `Err(InternalErrors::Cancelled)` if `cancel` has been set, `Ok(())`
-/// otherwise — checked at the start of every per-image/per-class/per-plane
-/// iteration below (list export's z/t/image sweep, one document per class in
-/// Plate/Well/flat-list, one document per image in the image heatmap export)
-/// so a cancelled export stops promptly instead of finishing whatever
-/// document it was partway through. Mirrors the identical
-/// `cancel.load(Ordering::Relaxed)` check `JobExecutor::run`/`run_tile` use
-/// for the analyze job in evanalyzer_core's `job_executor.rs`.
-fn check_cancelled(cancel: &AtomicBool) -> Result<(), InternalErrors> {
-    if cancel.load(Ordering::Relaxed) {
-        Err(InternalErrors::Cancelled)
-    } else {
-        Ok(())
-    }
-}
-
 /// Light gray Excel gives every other coloc-detail row (`Cell::alternating_color`)
 /// so the fanned-out rows belonging to one source object stay visually
 /// grouped — matches `Theme.list-row-alt-bg`'s role in the GUI's own List
 /// view, just as a plain hex constant here since XLSX formatting has no
 /// theme to pull from.
 const ALTERNATING_ROW_BG: u32 = 0xF1F1F1;
+
+/// Excel cell size (both width and height, in pixels) every plate/well/
+/// heatmap grid block is laid out at, so its cells read as squares — the
+/// grid's own values are unitless relative to a real image/plate scale, so
+/// there's no "correct" size to derive them from; this just needs to be
+/// visually square and legible.
+const GRID_CELL_PX: u32 = 40;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -136,10 +127,7 @@ impl ResultExport {
         })?;
 
         // Parquet ignores every `with_*`/column/filter setting below - it's
-        // always a single raw dump of the whole `objects` table (see
-        // `export_as_parquet`'s doc comment), so it's handled as its own
-        // early return rather than threaded through the List/Grouped/Plate/
-        // Well/Heatmap dispatch those settings drive.
+        // always a single raw dump of the whole `objects` table
         if matches!(self.format, ExportFormat::Parquet) {
             return self.export_as_parquet(database, cancel, &mut *on_progress);
         }
@@ -150,9 +138,6 @@ impl ResultExport {
         if self.with_grouped_by_image_list {
             self.export_grouped_by_image(database, cancel, &mut *on_progress)?;
         }
-        // Single flag drives both documents — see the doc comment on
-        // `export_plate_and_well` for why plate and well are always
-        // exported together rather than needing their own toggle each.
         if self.with_plate_view {
             self.export_plate_and_well(database, cancel, &mut *on_progress)?;
         }
@@ -250,7 +235,15 @@ impl ResultExport {
                     coloc_sheet
                         .set_name("List (Coloc Details)")
                         .map_err(xlsx_err)?;
-                    write_list_sheet(coloc_sheet, database, cancel, self, images, object_classes, true)?;
+                    write_list_sheet(
+                        coloc_sheet,
+                        database,
+                        cancel,
+                        self,
+                        images,
+                        object_classes,
+                        true,
+                    )?;
                 }
 
                 workbook
@@ -1130,13 +1123,6 @@ fn cell_text(cell: &Cell) -> String {
     }
 }
 
-/// Excel cell size (both width and height, in pixels) every plate/well/
-/// heatmap grid block is laid out at, so its cells read as squares — the
-/// grid's own values are unitless relative to a real image/plate scale, so
-/// there's no "correct" size to derive them from; this just needs to be
-/// visually square and legible.
-const GRID_CELL_PX: u32 = 40;
-
 /// Writes one square, colored grid block (`result`, a `View::Heatmap`
 /// `DatabaseResult`) starting at `start_row`: a bold caption, a header row
 /// of `result.column_names`, then one row per `result.row_names` with that
@@ -1442,11 +1428,20 @@ impl SheetNamer {
     }
 }
 
+/// Check for cancle the export process
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), InternalErrors> {
+    if cancel.load(Ordering::Relaxed) {
+        Err(InternalErrors::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use calamine::Reader as _;
     use crate::results::test_support::{ObjectSpec, seed_db};
+    use calamine::Reader as _;
 
     #[test]
     fn csv_escape_quotes_fields_containing_commas_or_quotes() {
@@ -1920,7 +1915,10 @@ mod tests {
         let mut workbook: Xlsx<_> =
             open_workbook(out_dir.join("list.xlsx")).expect("open exported xlsx");
         let range = workbook.worksheet_range("List").expect("List sheet");
-        assert_eq!(range.get_value((0, 0)), Some(&Data::String("Object ID".to_string())));
+        assert_eq!(
+            range.get_value((0, 0)),
+            Some(&Data::String("Object ID".to_string()))
+        );
     }
 
     // -- plate/well/heatmap exports: plausibility against the same values --
@@ -2135,7 +2133,8 @@ mod tests {
             .expect("expected image heatmap grid");
 
         let mut workbook: calamine::Xlsx<_> =
-            calamine::open_workbook(out_dir.join("heatmap_img1.xlsx")).expect("open heatmap_img1.xlsx");
+            calamine::open_workbook(out_dir.join("heatmap_img1.xlsx"))
+                .expect("open heatmap_img1.xlsx");
         let range = workbook.worksheet_range("ClassA").expect("ClassA sheet");
         assert_grid_matches_at(&range, 0, &expected);
         assert_eq!(data_f64(range.get_value((2, 1))), 10.0, "R0C0");
@@ -2231,7 +2230,8 @@ mod tests {
             "heatmap_A1_01.xlsx",
             "heatmap_B2_01.xlsx",
         ] {
-            let bytes = std::fs::read(out_dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"));
+            let bytes =
+                std::fs::read(out_dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"));
             assert_eq!(&bytes[..4], b"PK\x03\x04", "{name} is not a zip/xlsx file");
         }
     }
@@ -2263,8 +2263,8 @@ mod tests {
             .expect("filtered export");
 
         for file in ["plate.xlsx", "well.xlsx", "heatmap_A1_01.xlsx"] {
-            let workbook: calamine::Xlsx<_> =
-                calamine::open_workbook(out_dir.join(file)).unwrap_or_else(|e| panic!("open {file}: {e}"));
+            let workbook: calamine::Xlsx<_> = calamine::open_workbook(out_dir.join(file))
+                .unwrap_or_else(|e| panic!("open {file}: {e}"));
             let sheets = workbook.sheet_names();
             assert_eq!(
                 sheets,
@@ -2363,7 +2363,8 @@ mod tests {
     }
 
     #[test]
-    fn start_export_grouped_by_image_with_a_non_matching_class_filter_is_an_empty_but_valid_document() {
+    fn start_export_grouped_by_image_with_a_non_matching_class_filter_is_an_empty_but_valid_document()
+     {
         let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
         let export = ResultExport {
             output_dir: out_dir.clone(),
@@ -2480,8 +2481,17 @@ mod tests {
             cancel.store(true, Ordering::Relaxed);
         });
         assert!(matches!(result, Err(InternalErrors::Cancelled)));
-        assert_eq!(seen_images, 1, "should stop right after the first image's progress callback");
-        assert!(out_dir.join("list_img1.csv").exists(), "the first image's file was already written");
-        assert!(!out_dir.join("list_img2.csv").exists(), "must not start the second image");
+        assert_eq!(
+            seen_images, 1,
+            "should stop right after the first image's progress callback"
+        );
+        assert!(
+            out_dir.join("list_img1.csv").exists(),
+            "the first image's file was already written"
+        );
+        assert!(
+            !out_dir.join("list_img2.csv").exists(),
+            "must not start the second image"
+        );
     }
 }
