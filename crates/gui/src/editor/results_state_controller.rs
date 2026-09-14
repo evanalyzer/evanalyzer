@@ -983,6 +983,38 @@ impl ResultsStateController {
                     state.set_image_summary(image_summary_text(0, total));
                 });
 
+            // Search box in the export dialog's own IMAGES picker -
+            // narrows which rows show without touching selection, same as
+            // the main List view's `list_image_filter_changed`/
+            // `filtered_image_items` (see that one's own doc comment for
+            // why this can't just filter `items` in Slint directly). Reads
+            // the *current* selection straight off the dialog's own
+            // `image-items` (not `manager.list_filter`, which tracks the
+            // main List view's filter, a separate, independently-editable
+            // selection once the export dialog is open) so a filter+toggle
+            // combo doesn't clobber unrelated selections made before the
+            // filter narrowed the view.
+            let ui_weak = self.ui.clone();
+            let manager = self.clone();
+            ui.global::<ExportDialogState>()
+                .on_image_filter_changed(move |query| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_image_filter_changed");
+                        return;
+                    };
+                    let state = ui_ready.global::<ExportDialogState>();
+                    let selected_paths: Vec<PathBuf> = state
+                        .get_image_items()
+                        .iter()
+                        .filter(|item| item.selected)
+                        .map(|item| PathBuf::from(item.key.to_string()))
+                        .collect();
+                    let images = manager.images.lock().expect("Poisened");
+                    let items = filtered_image_items(&images, &selected_paths, &query);
+                    drop(images);
+                    state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                });
+
             let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ExportDialogState>()
@@ -2619,22 +2651,49 @@ impl ResultsStateController {
         let well_size = well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
         let square_size = square_size.unwrap_or(DEFAULT_SQUARE_SIZE);
 
+        // Seeds the export dialog's own image selection from whatever the
+        // main List view's image filter currently has selected - except
+        // when that's "all" (`image_rel_paths` empty, the sentinel
+        // convention above) or "none" (the sentinel case, which maps to
+        // the same empty `image_rel_paths` here), or when it's such a
+        // large individual selection (> 50) that pre-checking every one of
+        // them would make the dialog's own picker unwieldy to review/
+        // change - in either case, default to just the first image rather
+        // than a wall of checkmarks (or none at all) the user almost
+        // certainly still needs to narrow down anyway.
+        let select_individually = !image_rel_paths.is_empty()
+            && image_rel_paths.len() <= 50
+            && image_rel_paths.len() < images.len();
+
         let image_items_vec: Vec<MultiSelectItem> = images
             .iter()
             .enumerate()
             .map(|(index, image)| {
                 let key = image.rel_path.to_str().unwrap_or_default();
+                let selected = if select_individually {
+                    image_rel_paths.iter().any(|p| p == key)
+                } else {
+                    index == 0
+                };
                 MultiSelectItem {
                     key: key.into(),
                     value: image.name.as_str().into(),
                     color: Color::default(),
                     group: "".into(),
-                    selected: index == 0,
+                    selected,
                 }
             })
             .collect();
 
-        let image_summary = list_summary(1, images.len(), "Images");
+        let image_summary = list_summary(
+            if select_individually {
+                image_rel_paths.len()
+            } else {
+                1
+            },
+            images.len(),
+            "Images",
+        );
 
         let class_items_vec: Vec<MultiSelectItem> = classes
             .iter()

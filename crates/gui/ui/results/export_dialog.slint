@@ -78,6 +78,7 @@ export global ExportDialogState {
     callback image-item-selected(string, bool);
     callback image-select-all();
     callback image-select-none();
+    callback image-filter-changed(string);
     callback class-item-selected(string, bool);
     callback class-select-all();
     callback class-select-none();
@@ -271,10 +272,12 @@ export component ExportDialog inherits Rectangle {
                                         items <=> ExportDialogState.image-items;
                                         multi-select: true;
                                         show-select-all: true;
+                                        show-search: true;
                                         pill-width: 210px;
                                         item-selected(key, value, selected) => { ExportDialogState.image-item-selected(key, selected); }
                                         select-all => { ExportDialogState.image-select-all(); }
                                         select-none => { ExportDialogState.image-select-none(); }
+                                        filter-changed(text) => { ExportDialogState.image-filter-changed(text); }
                                         enabled: ExportDialogState.with-list-view;
                                     }
                                 }
