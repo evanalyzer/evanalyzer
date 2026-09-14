@@ -84,8 +84,10 @@ pub struct ResultExport {
     /// `export_grouped_by_image`. Independent of `with_list_view`: it's a
     /// separate document, not a variant of the per-object list.
     pub with_grouped_by_image_list: bool,
-    pub with_plate_view: bool,
-    pub with_plates_and_wells_as_list: bool,
+    pub with_plate_view_heatmap: bool,
+    pub with_well_view_heatmap: bool,
+    pub with_plate_view_list: bool,
+    pub with_well_view_list: bool,
     pub with_heatmap: bool,
 }
 
@@ -112,7 +114,11 @@ impl ResultExport {
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
         if matches!(self.format, ExportFormat::CSV)
-            && (self.with_plate_view || self.with_plates_and_wells_as_list || self.with_heatmap)
+            && (self.with_plate_view_heatmap
+                || self.with_well_view_heatmap
+                || self.with_plate_view_list
+                || self.with_well_view_list
+                || self.with_heatmap)
         {
             return Err(InternalErrors::Internal(
                 "CSV export only supports the List and Grouped-by-Image views — use XLSX for Plate/Well/Heatmap".to_string(),
@@ -139,10 +145,10 @@ impl ResultExport {
         if self.with_grouped_by_image_list {
             self.export_grouped_by_image(database, cancel, &mut *on_progress)?;
         }
-        if self.with_plate_view {
+        if self.with_plate_view_heatmap || self.with_well_view_heatmap {
             self.export_plate_and_well(database, cancel, &mut *on_progress)?;
         }
-        if self.with_plates_and_wells_as_list {
+        if self.with_plate_view_list || self.with_well_view_list {
             self.export_plate_and_well_as_flat_list(database, cancel, &mut *on_progress)?;
         }
         if self.with_heatmap {
@@ -350,18 +356,7 @@ impl ResultExport {
                 let mut workbook = Workbook::new();
                 let sheet = workbook.add_worksheet();
                 sheet.set_name("Grouped by Image").map_err(xlsx_err)?;
-                let header_format = Format::new().set_bold();
-                for (col_idx, name) in result.column_names.iter().enumerate() {
-                    sheet
-                        .write_with_format(0, col_idx as u16, name.as_str(), &header_format)
-                        .map_err(xlsx_err)?;
-                }
-                for (row_idx, row) in result.rows.iter().enumerate() {
-                    let row_n = (row_idx + 1) as u32;
-                    for (col_idx, cell) in row.iter().enumerate() {
-                        write_cell(sheet, row_n, col_idx as u16, cell)?;
-                    }
-                }
+                write_database_result_sheet(sheet, &result)?;
 
                 workbook
                     .save(self.output_dir.join("grouped_by_image.xlsx"))
@@ -381,16 +376,16 @@ impl ResultExport {
         Ok(())
     }
 
-    // `plate.xlsx` + `well.xlsx`: one tab per object class in each
+    // `plate.xlsx` and `well.xlsx`: one tab per object class in each
     // document, every tab stacking one square, colored grid block per
     // (column, aggregation) combination (and, one level further down in
-    // `well.xlsx`, per well on top of that) — see `write_grid_block`. Both
-    // documents come from the same flag: a plate view without its wells (or
-    // vice versa) isn't a meaningful export on its own, so there's no
-    // separate toggle for each. The flat-list form of the same data (see
-    // `export_plate_and_well_as_flat_list`) is a separate pass into
-    // separate files, not appended here — this function only ever needs
-    // `View::Heatmap` data.
+    // `well.xlsx`, per well on top of that) — see `write_grid_block`.
+    // Independently toggled by `with_plate_view_heatmap`/
+    // `with_well_view_heatmap` - either can run without the other, each
+    // skipping that side's own query and file entirely when off. The
+    // flat-list form of the same data (see `export_plate_and_well_as_flat_list`)
+    // is a separate pass into separate files, not appended here — this
+    // function only ever needs `View::Heatmap` data.
     //
     // Only the first z/t in `self.z_stacks`/`self.t_stacks` is rendered:
     // unlike the List export, a plate/well grid is inherently a single
@@ -404,6 +399,10 @@ impl ResultExport {
         cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
+        if !self.with_plate_view_heatmap && !self.with_well_view_heatmap {
+            return Ok(());
+        }
+
         let classes_all = database.get_object_classes()?;
         let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
             classes_all.iter().map(|class| class.id).collect()
@@ -414,154 +413,169 @@ impl ResultExport {
         let z = self.z_stacks.start;
         let t = self.t_stacks.start;
 
-        let mut plate_workbook = Workbook::new();
-        let mut plate_names = SheetNamer::new();
-        let mut well_workbook = Workbook::new();
-        let mut well_names = SheetNamer::new();
-
         let aggregable_columns: Vec<&Column> = self
             .columns
             .iter()
             .filter(|column| is_aggregable(column))
             .collect();
-
-        // Every (class, column, aggregation) combination's plate grid in one
-        // call, rather than one `get_group_by_plate_multi` call per (class,
-        // column) pair — `get_group_by_plate_multi` already batches every
-        // requested column x aggregation into a single query per class, so
-        // fetching every class at once here brings the plate side down to
-        // exactly `target_classes.len()` scans total, from
-        // `target_classes.len() * aggregable_columns.len()`. Combined with
-        // `get_wells_for_plate_multi_agg`'s own per-well aggregation
-        // batching below, a full "every class, every column, every
-        // aggregation" export goes from
-        // classes × columns × aggregations × wells scans down to
-        // classes (plate) + classes × columns (wells).
-        //
-        // Same batching for the per-well grids: `get_wells_for_plate_multi`
-        // also collapses every column x aggregation into one query per
-        // class, so fetching every class here brings the well side down to
-        // exactly `target_classes.len()` scans too, from
-        // `target_classes.len() * aggregable_columns.len()`.
-        //
-        // Both are returned flattened in class -> column -> aggregation
-        // order, matching the loop nesting below, so they're simply
-        // drained in lockstep as the loop progresses.
         let no_combos = target_classes.is_empty()
             || aggregable_columns.is_empty()
             || self.aggregations.is_empty();
-        let mut plate_grids_iter = if no_combos {
-            Vec::new().into_iter()
-        } else {
-            let plate_filter = PlateFilterMulti {
-                plane: PlaneFilter {
-                    z_stack: z,
-                    t_stack: t,
-                },
-                grouping_regex: self.grouping_regex.clone(),
-                aggregation: self.aggregations.clone(),
-                object_class: target_classes.clone(),
-                column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
-                color_schema: self.color_schema.clone(),
-                color_scale: self.color_scale.clone(),
-                matrix_dimension: self.plate_dimension,
+
+        // Plate and well each run their own independent query + document,
+        // rather than one combined pass over both - `get_group_by_plate_multi`/
+        // `get_wells_for_plate_multi` already batch every (class, column,
+        // aggregation) combination into `target_classes.len()` scans each
+        // (see their own doc comments), so splitting them here just means
+        // skipping one side's scan and file entirely when its flag is off,
+        // instead of always paying for both and discarding whichever one
+        // wasn't wanted.
+        if self.with_plate_view_heatmap {
+            let mut plate_workbook = Workbook::new();
+            let mut plate_names = SheetNamer::new();
+            let mut plate_grids_iter = if no_combos {
+                Vec::new().into_iter()
+            } else {
+                let plate_filter = PlateFilterMulti {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: self.aggregations.clone(),
+                    object_class: target_classes.clone(),
+                    column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    matrix_dimension: self.plate_dimension,
+                };
+                database
+                    .get_group_by_plate_multi(&plate_filter, &View::Heatmap)?
+                    .into_iter()
             };
-            database
-                .get_group_by_plate_multi(&plate_filter, &View::Heatmap)?
-                .into_iter()
-        };
-        let mut well_heatmaps_iter = if no_combos {
-            Vec::new().into_iter()
-        } else {
-            let wells_filter = WellsBatchFilterMulti {
-                plane: PlaneFilter {
-                    z_stack: z,
-                    t_stack: t,
-                },
-                grouping_regex: self.grouping_regex.clone(),
-                aggregation: self.aggregations.clone(),
-                object_class: target_classes.clone(),
-                column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
-                color_schema: self.color_schema.clone(),
-                color_scale: self.color_scale.clone(),
-                well_size: self.well_size,
-                well_order: self.well_order.clone(),
-            };
-            database
-                .get_wells_for_plate_multi(&wells_filter, &View::Heatmap)?
-                .into_iter()
-        };
 
-        for (class_idx, class) in target_classes.iter().enumerate() {
-            check_cancelled(cancel)?;
-            let class_label = class_display_label(*class, &classes_all);
-            on_progress(
-                &format!("Exporting Plate/Well: {class_label}"),
-                class_idx + 1,
-                target_classes.len(),
-            );
+            for (class_idx, class) in target_classes.iter().enumerate() {
+                check_cancelled(cancel)?;
+                let class_label = class_display_label(*class, &classes_all);
+                on_progress(
+                    &format!("Exporting Plate: {class_label}"),
+                    class_idx + 1,
+                    target_classes.len(),
+                );
 
-            let plate_sheet = plate_workbook.add_worksheet();
-            plate_sheet
-                .set_name(plate_names.unique(&class_label))
-                .map_err(xlsx_err)?;
-            let well_sheet = well_workbook.add_worksheet();
-            well_sheet
-                .set_name(well_names.unique(&class_label))
-                .map_err(xlsx_err)?;
+                let plate_sheet = plate_workbook.add_worksheet();
+                plate_sheet
+                    .set_name(plate_names.unique(&class_label))
+                    .map_err(xlsx_err)?;
+                let mut plate_row = 0u32;
 
-            let mut plate_row = 0u32;
-            let mut well_row = 0u32;
-
-            for column in &aggregable_columns {
-                let column_label = column_display_name(column, &available_columns);
-
-                for aggregation in &self.aggregations {
-                    let plate_grid = plate_grids_iter.next().ok_or_else(|| {
-                        InternalErrors::Io(
-                            "plate/well export: plate result count desynced from class x \
-                             column x aggregation combinations"
-                                .to_string(),
-                        )
-                    })?;
-                    let mut well_heatmaps = well_heatmaps_iter.next().ok_or_else(|| {
-                        InternalErrors::Io(
-                            "plate/well export: well result count desynced from class x \
-                             column x aggregation combinations"
-                                .to_string(),
-                        )
-                    })?;
-                    let caption = format!("{column_label} — {}", aggregation_label(aggregation));
-                    plate_row = write_grid_block(plate_sheet, plate_row, &caption, &plate_grid)?;
-
-                    // Sorted for deterministic, well-id-ordered output -
-                    // `well_heatmaps` is a `HashMap`, so its own iteration
-                    // order isn't meaningful on its own.
-                    let mut well_ids: Vec<String> = well_heatmaps.keys().cloned().collect();
-                    well_ids.sort();
-
-                    for well_id in &well_ids {
-                        let well_caption = format!("{caption} — Well {well_id}");
-                        let Some(well_grid) = well_heatmaps.remove(well_id) else {
-                            continue;
-                        };
-                        well_row =
-                            write_grid_block(well_sheet, well_row, &well_caption, &well_grid)?;
+                for column in &aggregable_columns {
+                    let column_label = column_display_name(column, &available_columns);
+                    for aggregation in &self.aggregations {
+                        let plate_grid = plate_grids_iter.next().ok_or_else(|| {
+                            InternalErrors::Io(
+                                "plate export: plate result count desynced from class x \
+                                 column x aggregation combinations"
+                                    .to_string(),
+                            )
+                        })?;
+                        let caption =
+                            format!("{column_label} — {}", aggregation_label(aggregation));
+                        plate_row =
+                            write_grid_block(plate_sheet, plate_row, &caption, &plate_grid)?;
                     }
                 }
             }
+
+            plate_workbook
+                .save(self.output_dir.join("plate.xlsx"))
+                .map_err(xlsx_err)?;
         }
 
-        plate_workbook
-            .save(self.output_dir.join("plate.xlsx"))
-            .map_err(xlsx_err)?;
-        well_workbook
-            .save(self.output_dir.join("well.xlsx"))
-            .map_err(xlsx_err)?;
+        if self.with_well_view_heatmap {
+            let mut well_workbook = Workbook::new();
+            let mut well_names = SheetNamer::new();
+            let mut well_heatmaps_iter = if no_combos {
+                Vec::new().into_iter()
+            } else {
+                let wells_filter = WellsBatchFilterMulti {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: self.aggregations.clone(),
+                    object_class: target_classes.clone(),
+                    column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    well_size: self.well_size,
+                    well_order: self.well_order.clone(),
+                };
+                database
+                    .get_wells_for_plate_multi(&wells_filter, &View::Heatmap)?
+                    .into_iter()
+            };
+
+            for (class_idx, class) in target_classes.iter().enumerate() {
+                check_cancelled(cancel)?;
+                let class_label = class_display_label(*class, &classes_all);
+                on_progress(
+                    &format!("Exporting Well: {class_label}"),
+                    class_idx + 1,
+                    target_classes.len(),
+                );
+
+                let well_sheet = well_workbook.add_worksheet();
+                well_sheet
+                    .set_name(well_names.unique(&class_label))
+                    .map_err(xlsx_err)?;
+                let mut well_row = 0u32;
+
+                for column in &aggregable_columns {
+                    let column_label = column_display_name(column, &available_columns);
+                    for aggregation in &self.aggregations {
+                        let mut well_heatmaps = well_heatmaps_iter.next().ok_or_else(|| {
+                            InternalErrors::Io(
+                                "well export: well result count desynced from class x \
+                                 column x aggregation combinations"
+                                    .to_string(),
+                            )
+                        })?;
+                        let caption =
+                            format!("{column_label} — {}", aggregation_label(aggregation));
+
+                        // Sorted for deterministic, well-id-ordered output -
+                        // `well_heatmaps` is a `HashMap`, so its own
+                        // iteration order isn't meaningful on its own.
+                        let mut well_ids: Vec<String> = well_heatmaps.keys().cloned().collect();
+                        well_ids.sort();
+
+                        for well_id in &well_ids {
+                            let well_caption = format!("{caption} — Well {well_id}");
+                            let Some(well_grid) = well_heatmaps.remove(well_id) else {
+                                continue;
+                            };
+                            well_row = write_grid_block(
+                                well_sheet,
+                                well_row,
+                                &well_caption,
+                                &well_grid,
+                            )?;
+                        }
+                    }
+                }
+            }
+
+            well_workbook
+                .save(self.output_dir.join("well.xlsx"))
+                .map_err(xlsx_err)?;
+        }
+
         Ok(())
     }
 
-    // `plate_list.xlsx` + `well_list.xlsx`: the same aggregated data as
+    // `plate_list.xlsx` and `well_list.xlsx`: the same aggregated data as
     // `export_plate_and_well`, but pivoted into one plain table per document
     // instead of a grid-per-class-tab — one row per well (or, in
     // `well_list.xlsx`, per well+field), one column per (class, column,
@@ -569,6 +583,8 @@ impl ResultExport {
     // same tab rather than needing its own. `well_list.xlsx` also carries
     // an "Image" column (the source image for that field), independent of
     // which class/column/aggregation combination is being looked at.
+    // Independently toggled by `with_plate_view_list`/`with_well_view_list`,
+    // same as `export_plate_and_well`'s own heatmap flags.
     //
     // Only ever needs `View::List` data - never overlaps in query cost with
     // `export_plate_and_well`'s `View::Heatmap`-only fetches above, even
@@ -579,6 +595,10 @@ impl ResultExport {
         cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
+        if !self.with_plate_view_list && !self.with_well_view_list {
+            return Ok(());
+        }
+
         let classes_all = database.get_object_classes()?;
         let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
             classes_all.iter().map(|class| class.id).collect()
@@ -594,165 +614,187 @@ impl ResultExport {
             .filter(|column| is_aggregable(column))
             .collect();
         let combo_count = target_classes.len() * aggregable_columns.len() * self.aggregations.len();
+        let no_combos = combo_count == 0;
 
+        // Shared by both outputs and independent of which data actually
+        // gets fetched below - built once, up front, purely from the
+        // requested class/column/aggregation combinations.
         let mut combo_labels: Vec<String> = Vec::with_capacity(combo_count);
-        let mut plate_values: HashMap<String, Vec<Option<f64>>> = HashMap::new();
-        let mut well_values: HashMap<(String, String), Vec<Option<f64>>> = HashMap::new();
-        let mut well_images: HashMap<(String, String), String> = HashMap::new();
-        let mut combo_idx = 0usize;
-
-        // Same batching for the per-well lists - `get_wells_for_plate_multi`
-        // also collapses every column x aggregation into one query per
-        // class, so this brings the well side down to
-        // `target_classes.len()` scans too, from
-        // `target_classes.len() * aggregable_columns.len()`.
-        //
-        // Both are returned flattened in class -> column -> aggregation
-        // order, matching the loop nesting below, so they're simply
-        // drained in lockstep as the loop progresses.
-        let no_combos = target_classes.is_empty()
-            || aggregable_columns.is_empty()
-            || self.aggregations.is_empty();
-        let mut plate_lists_iter = if no_combos {
-            Vec::new().into_iter()
-        } else {
-            let plate_filter = PlateFilterMulti {
-                plane: PlaneFilter {
-                    z_stack: z,
-                    t_stack: t,
-                },
-                grouping_regex: self.grouping_regex.clone(),
-                aggregation: self.aggregations.clone(),
-                object_class: target_classes.clone(),
-                column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
-                color_schema: self.color_schema.clone(),
-                color_scale: self.color_scale.clone(),
-                matrix_dimension: self.plate_dimension,
-            };
-            database
-                .get_group_by_plate_multi(&plate_filter, &View::List)?
-                .into_iter()
-        };
-        let mut well_lists_iter = if no_combos {
-            Vec::new().into_iter()
-        } else {
-            let wells_filter = WellsBatchFilterMulti {
-                plane: PlaneFilter {
-                    z_stack: z,
-                    t_stack: t,
-                },
-                grouping_regex: self.grouping_regex.clone(),
-                aggregation: self.aggregations.clone(),
-                object_class: target_classes.clone(),
-                column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
-                color_schema: self.color_schema.clone(),
-                color_scale: self.color_scale.clone(),
-                well_size: self.well_size,
-                well_order: self.well_order.clone(),
-            };
-            database
-                .get_wells_for_plate_multi(&wells_filter, &View::List)?
-                .into_iter()
-        };
-
-        for (class_idx, class) in target_classes.iter().enumerate() {
-            check_cancelled(cancel)?;
+        for class in &target_classes {
             let class_label = class_display_label(*class, &classes_all);
-            on_progress(
-                &format!("Exporting Flat List: {class_label}"),
-                class_idx + 1,
-                target_classes.len(),
-            );
-
             for column in &aggregable_columns {
                 let column_label = column_display_name(column, &available_columns);
-
                 for aggregation in &self.aggregations {
-                    let plate_list = plate_lists_iter.next().ok_or_else(|| {
-                        InternalErrors::Io(
-                            "plate/well flat list export: plate result count desynced from \
-                             class x column x aggregation combinations"
-                                .to_string(),
-                        )
-                    })?;
-                    let well_lists = well_lists_iter.next().ok_or_else(|| {
-                        InternalErrors::Io(
-                            "plate/well flat list export: well result count desynced from \
-                             class x column x aggregation combinations"
-                                .to_string(),
-                        )
-                    })?;
                     combo_labels.push(format!(
                         "{class_label} — {column_label} — {}",
                         aggregation_label(aggregation)
                     ));
-
-                    for (well_id, row) in plate_list.row_names.iter().zip(&plate_list.rows) {
-                        if let Some(value) = row.get(1).and_then(cell_to_f64) {
-                            plate_values
-                                .entry(well_id.clone())
-                                .or_insert_with(|| vec![None; combo_count])[combo_idx] =
-                                Some(value);
-                        }
-                    }
-
-                    for (well_id, result) in &well_lists {
-                        for (field_idx, row) in result.row_names.iter().zip(&result.rows) {
-                            let key = (well_id.clone(), field_idx.clone());
-                            if let Some(value) = row.get(1).and_then(cell_to_f64) {
-                                well_values
-                                    .entry(key.clone())
-                                    .or_insert_with(|| vec![None; combo_count])[combo_idx] =
-                                    Some(value);
-                            }
-                            if let Some((image_name, _)) =
-                                row.get(1).and_then(|cell| cell.search_key.as_ref())
-                            {
-                                well_images.entry(key).or_insert_with(|| image_name.clone());
-                            }
-                        }
-                    }
-
-                    combo_idx += 1;
                 }
             }
         }
 
-        let mut plate_rows: Vec<(String, Vec<Option<f64>>)> = plate_values.into_iter().collect();
-        plate_rows.sort_by(|(a, _), (b, _)| a.cmp(b));
-        write_flat_pivot(
-            &self.output_dir.join("plate_list.xlsx"),
-            "Plate",
-            &["Well"],
-            &combo_labels,
-            plate_rows
-                .into_iter()
-                .map(|(well_id, values)| (vec![well_id], values)),
-        )?;
+        // Plate and well each run their own independent query + document -
+        // see the identical reasoning in `export_plate_and_well`.
+        if self.with_plate_view_list {
+            let mut plate_values: HashMap<String, Vec<Option<f64>>> = HashMap::new();
+            let mut plate_lists_iter = if no_combos {
+                Vec::new().into_iter()
+            } else {
+                let plate_filter = PlateFilterMulti {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: self.aggregations.clone(),
+                    object_class: target_classes.clone(),
+                    column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    matrix_dimension: self.plate_dimension,
+                };
+                database
+                    .get_group_by_plate_multi(&plate_filter, &View::List)?
+                    .into_iter()
+            };
 
-        let mut well_rows: Vec<((String, String), Vec<Option<f64>>)> =
-            well_values.into_iter().collect();
-        well_rows.sort_by(|(a, _), (b, _)| {
-            a.0.cmp(&b.0).then_with(|| {
-                a.1.parse::<u32>()
-                    .ok()
-                    .cmp(&b.1.parse::<u32>().ok())
-                    .then_with(|| a.1.cmp(&b.1))
-            })
-        });
-        write_flat_pivot(
-            &self.output_dir.join("well_list.xlsx"),
-            "Well",
-            &["Well", "Field", "Image"],
-            &combo_labels,
-            well_rows.into_iter().map(|((well_id, field_idx), values)| {
-                let image = well_images
-                    .get(&(well_id.clone(), field_idx.clone()))
-                    .cloned()
-                    .unwrap_or_default();
-                (vec![well_id, field_idx, image], values)
-            }),
-        )?;
+            let mut combo_idx = 0usize;
+            for (class_idx, class) in target_classes.iter().enumerate() {
+                check_cancelled(cancel)?;
+                on_progress(
+                    &format!(
+                        "Exporting Flat List (Plate): {}",
+                        class_display_label(*class, &classes_all)
+                    ),
+                    class_idx + 1,
+                    target_classes.len(),
+                );
+                for _ in &aggregable_columns {
+                    for _ in &self.aggregations {
+                        let plate_list = plate_lists_iter.next().ok_or_else(|| {
+                            InternalErrors::Io(
+                                "plate flat list export: plate result count desynced from \
+                                 class x column x aggregation combinations"
+                                    .to_string(),
+                            )
+                        })?;
+                        for (well_id, row) in plate_list.row_names.iter().zip(&plate_list.rows) {
+                            if let Some(value) = row.get(1).and_then(cell_to_f64) {
+                                plate_values
+                                    .entry(well_id.clone())
+                                    .or_insert_with(|| vec![None; combo_count])[combo_idx] =
+                                    Some(value);
+                            }
+                        }
+                        combo_idx += 1;
+                    }
+                }
+            }
+
+            let mut plate_rows: Vec<(String, Vec<Option<f64>>)> =
+                plate_values.into_iter().collect();
+            plate_rows.sort_by(|(a, _), (b, _)| a.cmp(b));
+            write_flat_pivot(
+                &self.output_dir.join("plate_list.xlsx"),
+                "Plate",
+                &["Well"],
+                &combo_labels,
+                plate_rows
+                    .into_iter()
+                    .map(|(well_id, values)| (vec![well_id], values)),
+            )?;
+        }
+
+        if self.with_well_view_list {
+            let mut well_values: HashMap<(String, String), Vec<Option<f64>>> = HashMap::new();
+            let mut well_images: HashMap<(String, String), String> = HashMap::new();
+            let mut well_lists_iter = if no_combos {
+                Vec::new().into_iter()
+            } else {
+                let wells_filter = WellsBatchFilterMulti {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: self.aggregations.clone(),
+                    object_class: target_classes.clone(),
+                    column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    well_size: self.well_size,
+                    well_order: self.well_order.clone(),
+                };
+                database
+                    .get_wells_for_plate_multi(&wells_filter, &View::List)?
+                    .into_iter()
+            };
+
+            let mut combo_idx = 0usize;
+            for (class_idx, class) in target_classes.iter().enumerate() {
+                check_cancelled(cancel)?;
+                on_progress(
+                    &format!(
+                        "Exporting Flat List (Well): {}",
+                        class_display_label(*class, &classes_all)
+                    ),
+                    class_idx + 1,
+                    target_classes.len(),
+                );
+                for _ in &aggregable_columns {
+                    for _ in &self.aggregations {
+                        let well_lists = well_lists_iter.next().ok_or_else(|| {
+                            InternalErrors::Io(
+                                "well flat list export: well result count desynced from \
+                                 class x column x aggregation combinations"
+                                    .to_string(),
+                            )
+                        })?;
+                        for (well_id, result) in &well_lists {
+                            for (field_idx, row) in result.row_names.iter().zip(&result.rows) {
+                                let key = (well_id.clone(), field_idx.clone());
+                                if let Some(value) = row.get(1).and_then(cell_to_f64) {
+                                    well_values
+                                        .entry(key.clone())
+                                        .or_insert_with(|| vec![None; combo_count])[combo_idx] =
+                                        Some(value);
+                                }
+                                if let Some((image_name, _)) =
+                                    row.get(1).and_then(|cell| cell.search_key.as_ref())
+                                {
+                                    well_images.entry(key).or_insert_with(|| image_name.clone());
+                                }
+                            }
+                        }
+                        combo_idx += 1;
+                    }
+                }
+            }
+
+            let mut well_rows: Vec<((String, String), Vec<Option<f64>>)> =
+                well_values.into_iter().collect();
+            well_rows.sort_by(|(a, _), (b, _)| {
+                a.0.cmp(&b.0).then_with(|| {
+                    a.1.parse::<u32>()
+                        .ok()
+                        .cmp(&b.1.parse::<u32>().ok())
+                        .then_with(|| a.1.cmp(&b.1))
+                })
+            });
+            write_flat_pivot(
+                &self.output_dir.join("well_list.xlsx"),
+                "Well",
+                &["Well", "Field", "Image"],
+                &combo_labels,
+                well_rows.into_iter().map(|((well_id, field_idx), values)| {
+                    let image = well_images
+                        .get(&(well_id.clone(), field_idx.clone()))
+                        .cloned()
+                        .unwrap_or_default();
+                    (vec![well_id, field_idx, image], values)
+                }),
+            )?;
+        }
 
         Ok(())
     }
@@ -836,7 +878,7 @@ impl ResultExport {
     /// `objects.parquet`: the entire `objects` table, every column, no z/t/
     /// image/class filtering and no column selection — DuckDB's own `COPY`
     /// writes the file directly, so this bypasses `get_object_list`/
-    /// `fetch_all_list_rows` entirely (unlike every other export above).
+    /// `stream_list_pages` entirely (unlike every other export above).
     /// Meant for a downstream tool that reads Parquet natively rather than
     /// for a human to open, so there's no equivalent of `with_list_view`'s
     /// column/plane scoping to apply here.
@@ -904,16 +946,18 @@ fn resolve_images(
 // page via the same cursor-from-last-row-id trick.
 //
 // Every requested image is folded into ONE combined `images` filter here
-// (not called once per image, the way `write_list_sheet`/`write_list_csv`
-// used to loop) - a `WHERE image_rel_path IN (...)` scoped to a single
-// image still has to plan and run a full `objects` scan of its own, so an
-// N-image export previously meant N scans dominated by that per-query
-// overhead rather than actual I/O; batching them turns that into
-// `total_matching_rows / PAGE_SIZE` queries instead of `images.len()`
-// (`export_list`'s `with_list_one_file_per_image` branch still calls this
-// once per image, since it genuinely needs one document per image - there,
-// `images` is already a single-element slice, so this degrades to exactly
-// what it did before).
+// (not called once per image) - a `WHERE image_rel_path IN (...)` scoped
+// to a single image still has to plan and run a full `objects` scan of its
+// own, and that cost is dominated by the *whole* table's size, not just
+// the matching image's row count, on a database that holds far more than
+// what's being exported (the common case). So an N-image export previously
+// meant N scans each paying that overhead; batching turns it into
+// `total_matching_rows / PAGE_SIZE` queries instead of `images.len()`.
+// `write_list_document`'s callers pass either every requested image at
+// once (the shared-file List export) or a single-element slice
+// (`export_list`'s `with_list_one_file_per_image` branch, calling it once
+// per image) - either way this is the one shared entry point for turning a
+// `ListFilter` sweep into pages.
 //
 // `on_page` runs once per page in z/t-then-row-id order, rather than this
 // merging every page into one in-memory `DatabaseResult` first (unlike
@@ -978,7 +1022,7 @@ fn stream_list_pages(
     Ok(())
 }
 
-// Same keyset-pagination walk as `fetch_all_list_rows`, just over
+// Same keyset-pagination walk as `stream_list_pages`, just over
 // `get_grouped_by_image`'s (image-grouped, not per-object) pages instead —
 // its cursor is the last page's final `image_rel_path`, exactly like
 // `get_object_list`'s own row-id cursor.
@@ -1131,6 +1175,32 @@ fn write_csv(result: &DatabaseResult, path: &Path) -> Result<(), InternalErrors>
     for row in &result.rows {
         let cells: Vec<String> = row.iter().map(cell_text).collect();
         write_csv_row(&mut out, &cells).map_err(write_err)?;
+    }
+    Ok(())
+}
+
+/// XLSX sibling of `write_csv`: writes `result` into `worksheet` in one
+/// shot from an already-fetched, in-memory `DatabaseResult` - a bold
+/// header row at row 0, then one row per `result.rows` entry below it.
+/// Used by whichever export step already has its whole result in memory
+/// (`export_grouped_by_image`); `write_list_sheet` writes straight from
+/// `stream_list_pages`'s own pages instead, since a List export's combined
+/// row count is the thing that RAM-bounded streaming exists for.
+fn write_database_result_sheet(
+    worksheet: &mut Worksheet,
+    result: &DatabaseResult,
+) -> Result<(), InternalErrors> {
+    let header_format = Format::new().set_bold();
+    for (col_idx, name) in result.column_names.iter().enumerate() {
+        worksheet
+            .write_with_format(0, col_idx as u16, name.as_str(), &header_format)
+            .map_err(xlsx_err)?;
+    }
+    for (row_idx, row) in result.rows.iter().enumerate() {
+        let row_n = (row_idx + 1) as u32;
+        for (col_idx, cell) in row.iter().enumerate() {
+            write_cell(worksheet, row_n, col_idx as u16, cell)?;
+        }
     }
     Ok(())
 }
@@ -1757,7 +1827,7 @@ mod tests {
     }
 
     #[test]
-    fn start_export_rejects_csv_combined_with_plate_view() {
+    fn start_export_rejects_csv_combined_with_plate_view_heatmap() {
         let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
         let (z_stacks, t_stacks) = full_range();
         let export = ResultExport {
@@ -1765,7 +1835,7 @@ mod tests {
             format: ExportFormat::CSV,
             z_stacks,
             t_stacks,
-            with_plate_view: true,
+            with_plate_view_heatmap: true,
             ..Default::default()
         };
         let result = export.start_export(&database, &no_cancel(), &mut no_progress());
@@ -2056,7 +2126,7 @@ mod tests {
             format: ExportFormat::XLSX,
             columns: vec![Column::AreaSizePx],
             aggregations: vec![Aggregation::Avg],
-            with_plate_view: true,
+            with_plate_view_heatmap: true,
             ..Default::default()
         };
         export
@@ -2106,7 +2176,7 @@ mod tests {
             format: ExportFormat::XLSX,
             columns: vec![Column::AreaSizePx],
             aggregations: vec![Aggregation::Avg],
-            with_plate_view: true,
+            with_well_view_heatmap: true,
             ..Default::default()
         };
         export
@@ -2205,7 +2275,8 @@ mod tests {
             format: ExportFormat::XLSX,
             columns: vec![Column::AreaSizePx],
             aggregations: vec![Aggregation::Avg],
-            with_plates_and_wells_as_list: true,
+            with_plate_view_list: true,
+            with_well_view_list: true,
             ..Default::default()
         };
         export
@@ -2264,8 +2335,10 @@ mod tests {
             aggregations: vec![Aggregation::Avg],
             with_list_view: true,
             with_grouped_by_image_list: true,
-            with_plate_view: true,
-            with_plates_and_wells_as_list: true,
+            with_plate_view_heatmap: true,
+            with_well_view_heatmap: true,
+            with_plate_view_list: true,
+            with_well_view_list: true,
             with_heatmap: true,
             ..Default::default()
         };
@@ -2306,8 +2379,10 @@ mod tests {
             aggregations: vec![Aggregation::Avg],
             object_classes: vec![ObjectClass::Valid(1)],
             square_size: Some(50),
-            with_plate_view: true,
-            with_plates_and_wells_as_list: true,
+            with_plate_view_heatmap: true,
+            with_well_view_heatmap: true,
+            with_plate_view_list: true,
+            with_well_view_list: true,
             with_heatmap: true,
             ..Default::default()
         };

@@ -125,7 +125,8 @@ fn main() {
     run(
         "plate_and_well_view_xlsx",
         ResultExport {
-            with_plate_view: true,
+            with_plate_view_heatmap: true,
+            with_well_view_heatmap: true,
             format: ExportFormat::XLSX,
             ..base.clone()
         },
@@ -134,7 +135,8 @@ fn main() {
     run(
         "plate_and_well_flat_list_xlsx",
         ResultExport {
-            with_plates_and_wells_as_list: true,
+            with_plate_view_list: true,
+            with_well_view_list: true,
             format: ExportFormat::XLSX,
             ..base.clone()
         },

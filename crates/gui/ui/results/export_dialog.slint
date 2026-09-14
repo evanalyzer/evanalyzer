@@ -55,13 +55,16 @@ export global ExportDialogState {
     in-out property <string> square-size-summary: "256 px";
 
     // -- What to export --
-    in-out property <bool> with-list-view: true;
+    in-out property <bool> with-list-view: false;
     in-out property <bool> with-list-coloc-details: false;
-    in-out property <bool> with-list-one-file-per-image: false;
-    in-out property <bool> with-grouped-by-image-list: false;
-    in-out property <bool> with-plate-view: false;
-    in-out property <bool> with-plates-and-wells-as-list: false;
+    in-out property <bool> with-list-one-file-per-image: true;
+    in-out property <bool> with-grouped-by-image-list: true;
     in-out property <bool> with-heatmap: false;
+
+    in-out property <bool> with-plate-heatmap-view: false;
+    in-out property <bool> with-well-heatmap-view: false;
+    in-out property <bool> with-plate-list: false;
+    in-out property <bool> with-well-list: false;
 
     // -- Progress (set from Rust while the background export thread runs) --
     in-out property <bool> is-exporting: false;
@@ -247,11 +250,16 @@ export component ExportDialog inherits Rectangle {
                                 font-weight: 600;
                             }
 
+                            CheckBox {
+                                text: "Image list";
+                                checked <=> ExportDialogState.with-grouped-by-image-list;
+                            }
+
                             HorizontalLayout {
                                 alignment: start;
-                                spacing: 128px;
+                                spacing: 10px;
                                 CheckBox {
-                                    text: "Object list";
+                                    text: "Object list (objects per image)";
                                     checked <=> ExportDialogState.with-list-view;
                                 }
 
@@ -267,6 +275,7 @@ export component ExportDialog inherits Rectangle {
                                         item-selected(key, value, selected) => { ExportDialogState.image-item-selected(key, selected); }
                                         select-all => { ExportDialogState.image-select-all(); }
                                         select-none => { ExportDialogState.image-select-none(); }
+                                        enabled: ExportDialogState.with-list-view;
                                     }
                                 }
                             }
@@ -309,11 +318,6 @@ export component ExportDialog inherits Rectangle {
                                 }
                             }
 
-                            CheckBox {
-                                text: "Image list";
-                                checked <=> ExportDialogState.with-grouped-by-image-list;
-                            }
-
                             Rectangle { }
 
                             Text {
@@ -323,25 +327,97 @@ export component ExportDialog inherits Rectangle {
                                 font-weight: 600;
                             }
 
-                            CheckBox {
-                                text: "Plate and Wells as list";
-                                checked <=> ExportDialogState.with-plates-and-wells-as-list;
-                                enabled: ExportDialogState.format-summary == "XLSX";
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: 165px;
+                                CheckBox {
+                                    text: "Plate as heatmap";
+                                    checked <=> ExportDialogState.with-plate-heatmap-view;
+                                    enabled: ExportDialogState.format-summary == "XLSX";
+                                }
+
+                                HorizontalLayout {
+                                    alignment: start;
+                                    spacing: 8px;
+                                    MultiSelectDropdown {
+                                        enabled: ExportDialogState.with-plate-heatmap-view;
+                                        summary-text: ExportDialogState.plate-size-summary;
+                                        items <=> ExportDialogState.plate-size-items;
+                                        multi-select: false;
+                                        pill-width: 130px;
+                                        item-selected(key, value, selected) => { if selected { ExportDialogState.plate-size-summary = value; } }
+                                    }
+                                }
                             }
 
                             CheckBox {
-                                text: "Plate and Wells as heatmap";
-                                checked <=> ExportDialogState.with-plate-view;
+                                text: "Plate as list";
+                                checked <=> ExportDialogState.with-plate-list;
                                 enabled: ExportDialogState.format-summary == "XLSX";
                             }
 
-                            LabeledField {
-                                field-label: "Grouping regex:";
-                                LineEdit {
-                                    horizontal-stretch: 1;
-                                    placeholder-text: "Default (e.g. A1_01.vsi)";
-                                    text <=> ExportDialogState.grouping-regex;
-                                    enabled: ExportDialogState.with-plates-and-wells-as-list || ExportDialogState.with-plate-view;
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: 165px;
+                                CheckBox {
+                                    text: "Wells as heatmap";
+                                    checked <=> ExportDialogState.with-well-heatmap-view;
+                                    enabled: ExportDialogState.format-summary == "XLSX";
+                                }
+
+                                HorizontalLayout {
+                                    alignment: start;
+                                    spacing: 8px;
+                                    LabeledField {
+                                        LineEdit {
+                                            horizontal-alignment: center;
+                                            width: 46px;
+                                            input-type: number;
+                                            text <=> ExportDialogState.well-rows;
+                                            enabled: ExportDialogState.with-well-heatmap-view;
+                                        }
+
+                                        Text {
+                                            vertical-alignment: center;
+                                            text: "x";
+                                        }
+
+                                        LineEdit {
+                                            horizontal-alignment: center;
+                                            width: 46px;
+                                            input-type: number;
+                                            text <=> ExportDialogState.well-cols;
+                                            enabled: ExportDialogState.with-well-heatmap-view;
+                                        }
+                                    }
+                                }
+                            }
+
+                            CheckBox {
+                                text: "Wells as list";
+                                checked <=> ExportDialogState.with-well-list;
+                                enabled: ExportDialogState.format-summary == "XLSX";
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                LabeledField {
+                                    field-label: "Grouping regex:";
+                                    LineEdit {
+                                        horizontal-stretch: 1;
+                                        placeholder-text: "Default (e.g. A1_01.vsi)";
+                                        text <=> ExportDialogState.grouping-regex;
+                                        enabled: ExportDialogState.with-plate-heatmap-view || ExportDialogState.with-plate-list || ExportDialogState.with-well-list || ExportDialogState.with-well-heatmap-view;
+                                    }
+                                }
+
+                                MultiSelectDropdown {
+                                    label: "COLOR SCHEMA";
+                                    summary-text: ExportDialogState.color-schema-summary;
+                                    items <=> ExportDialogState.color-schema-items;
+                                    multi-select: false;
+                                    pill-width: 140px;
+                                    item-selected(key, value, selected) => { if selected { ExportDialogState.color-schema-summary = value; } }
                                 }
                             }
                         }
@@ -363,12 +439,14 @@ export component ExportDialog inherits Rectangle {
                                 LabeledField {
                                     field-label: "Z:";
                                     LineEdit {
+                                        horizontal-alignment: center;
                                         width: 56px;
                                         input-type: number;
                                         text <=> ExportDialogState.z-start;
                                     }
 
                                     Text {
+                                        horizontal-alignment: center;
                                         text: "to";
                                         vertical-alignment: center;
                                         color: Theme.text-mute;
@@ -389,6 +467,7 @@ export component ExportDialog inherits Rectangle {
                                 LabeledField {
                                     field-label: "T:";
                                     LineEdit {
+                                        horizontal-alignment: center;
                                         width: 56px;
                                         input-type: number;
                                         text <=> ExportDialogState.t-start;
@@ -402,6 +481,7 @@ export component ExportDialog inherits Rectangle {
                                     }
 
                                     LineEdit {
+                                        horizontal-alignment: center;
                                         width: 56px;
                                         input-type: number;
                                         text <=> ExportDialogState.t-end;
@@ -448,23 +528,7 @@ export component ExportDialog inherits Rectangle {
                                     select-all => { ExportDialogState.column-select-all(); }
                                     select-none => { ExportDialogState.column-select-none(); }
                                 }
-                            }
-                        }
 
-                        // -- Plate/Well/Heatmap options --
-                        VerticalLayout {
-                            spacing: 8px;
-                            alignment: start;
-                            Text {
-                                text: "Plate/ Wells Options";
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 600;
-                            }
-
-                            HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
                                 MultiSelectDropdown {
                                     label: "AGGREGATIONS";
                                     summary-text: ExportDialogState.aggregation-summary;
@@ -473,39 +537,6 @@ export component ExportDialog inherits Rectangle {
                                     show-select-all: true;
                                     pill-width: 140px;
                                     item-selected(key, value, selected) => { ExportDialogState.aggregation-item-selected(key, selected); }
-                                }
-
-                                MultiSelectDropdown {
-                                    label: "COLOR SCHEMA";
-                                    summary-text: ExportDialogState.color-schema-summary;
-                                    items <=> ExportDialogState.color-schema-items;
-                                    multi-select: false;
-                                    pill-width: 140px;
-                                    item-selected(key, value, selected) => { if selected { ExportDialogState.color-schema-summary = value; } }
-                                }
-
-                                MultiSelectDropdown {
-                                    label: "PLATE SIZE";
-                                    summary-text: ExportDialogState.plate-size-summary;
-                                    items <=> ExportDialogState.plate-size-items;
-                                    multi-select: false;
-                                    pill-width: 140px;
-                                    item-selected(key, value, selected) => { if selected { ExportDialogState.plate-size-summary = value; } }
-                                }
-
-                                LabeledField {
-                                    field-label: "Well rows/cols:";
-                                    LineEdit {
-                                        width: 46px;
-                                        input-type: number;
-                                        text <=> ExportDialogState.well-rows;
-                                    }
-
-                                    LineEdit {
-                                        width: 46px;
-                                        input-type: number;
-                                        text <=> ExportDialogState.well-cols;
-                                    }
                                 }
                             }
                         }

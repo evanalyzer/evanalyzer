@@ -1130,7 +1130,12 @@ impl ResultsStateController {
 
             let manager = self.clone();
             ui.global::<ExportDialogState>().on_cancel_clicked(move || {
-                if let Some(flag) = manager.export_cancel_flag.lock().expect("Poisened").as_ref() {
+                if let Some(flag) = manager
+                    .export_cancel_flag
+                    .lock()
+                    .expect("Poisened")
+                    .as_ref()
+                {
                     flag.store(true, Ordering::Relaxed);
                 }
             });
@@ -2579,30 +2584,22 @@ impl ResultsStateController {
         let well_size = well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
         let square_size = square_size.unwrap_or(DEFAULT_SQUARE_SIZE);
 
-        let selected_images: std::collections::HashSet<&str> =
-            image_rel_paths.iter().map(String::as_str).collect();
         let image_items_vec: Vec<MultiSelectItem> = images
             .iter()
-            .map(|image| {
+            .enumerate()
+            .map(|(index, image)| {
                 let key = image.rel_path.to_str().unwrap_or_default();
                 MultiSelectItem {
                     key: key.into(),
                     value: image.name.as_str().into(),
                     color: Color::default(),
                     group: "".into(),
-                    selected: image_rel_paths.is_empty() || selected_images.contains(key),
+                    selected: index == 0,
                 }
             })
             .collect();
-        let image_summary = list_summary(
-            if image_rel_paths.is_empty() {
-                images.len()
-            } else {
-                image_rel_paths.len()
-            },
-            images.len(),
-            "Images",
-        );
+
+        let image_summary = list_summary(1, images.len(), "Images");
 
         let class_items_vec: Vec<MultiSelectItem> = classes
             .iter()
@@ -2614,6 +2611,7 @@ impl ResultsStateController {
                 selected: object_classes.is_empty() || object_classes.contains(&class.id),
             })
             .collect();
+
         let class_summary = list_summary(
             if object_classes.is_empty() {
                 classes.len()
@@ -2690,12 +2688,14 @@ impl ResultsStateController {
         )))));
         state.set_square_size_summary(format!("{square_size} px").into());
 
-        state.set_with_list_view(rail_mode == ResultsRailMode::List);
+        state.set_with_list_view(false);
         state.set_with_list_coloc_details(false);
-        state.set_with_list_one_file_per_image(false);
-        state.set_with_grouped_by_image_list(false);
-        state.set_with_plate_view(rail_mode == ResultsRailMode::Matrix);
-        state.set_with_plates_and_wells_as_list(false);
+        state.set_with_list_one_file_per_image(true);
+        state.set_with_grouped_by_image_list(true);
+        state.set_with_plate_heatmap_view(rail_mode == ResultsRailMode::Matrix);
+        state.set_with_well_heatmap_view(rail_mode == ResultsRailMode::Matrix);
+        state.set_with_plate_list(false);
+        state.set_with_well_list(false);
         state.set_with_heatmap(false);
 
         state.set_is_exporting(false);
@@ -2849,8 +2849,10 @@ impl ResultsStateController {
             with_list_coloc_details: state.get_with_list_coloc_details(),
             with_list_one_file_per_image: state.get_with_list_one_file_per_image(),
             with_grouped_by_image_list: state.get_with_grouped_by_image_list(),
-            with_plate_view: state.get_with_plate_view(),
-            with_plates_and_wells_as_list: state.get_with_plates_and_wells_as_list(),
+            with_plate_view_heatmap: state.get_with_plate_heatmap_view(),
+            with_well_view_heatmap: state.get_with_well_heatmap_view(),
+            with_plate_view_list: state.get_with_plate_list(),
+            with_well_view_list: state.get_with_well_list(),
             with_heatmap: state.get_with_heatmap(),
         })
     }
@@ -3465,10 +3467,19 @@ mod tests {
 
         let state = results_ui.global::<ExportDialogState>();
         assert!(state.get_active(), "dialog should activate on open");
-        // No matrix view has been rendered yet (`matrix_filter` starts
-        // `None`) and the rail starts on List - see `populate_export_defaults`.
-        assert!(state.get_with_list_view());
-        assert!(!state.get_with_plate_view());
+        // See `populate_export_defaults`: the Object list starts unchecked
+        // (one-file-per-image and the Image/Grouped-by-image list start
+        // checked instead), and the plate/well heatmap flags follow
+        // whether the rail was on Matrix - no matrix view has been
+        // rendered yet (`matrix_filter` starts `None`) and the rail starts
+        // on List, so both start unchecked too.
+        assert!(!state.get_with_list_view());
+        assert!(state.get_with_list_one_file_per_image());
+        assert!(state.get_with_grouped_by_image_list());
+        assert!(!state.get_with_plate_heatmap_view());
+        assert!(!state.get_with_well_heatmap_view());
+        assert!(!state.get_with_plate_list());
+        assert!(!state.get_with_well_list());
         assert!(!state.get_with_heatmap());
         // z/t default to the database's full range, exclusive end - starting
         // at 0, and past whatever `ResultsState.z-stack-max`/`t-stack-max`
@@ -3599,7 +3610,10 @@ mod tests {
             .global::<ExportDialogState>()
             .invoke_cancel_clicked();
 
-        assert!(flag.load(Ordering::Relaxed), "cancel-clicked must signal the stored flag");
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "cancel-clicked must signal the stored flag"
+        );
     }
 
     // -- Real-database fixture ---------------------------------------------
@@ -3707,7 +3721,15 @@ mod tests {
             .unwrap_or_else(|e| panic!("insert object {idx}: {e}"));
         };
 
-        insert(0, "A1_01.tif", "ClassA", 1, 10, (10.0, 10.0), r#"{"2":["00000000-0000-0000-0000-000000000002"]}"#);
+        insert(
+            0,
+            "A1_01.tif",
+            "ClassA",
+            1,
+            10,
+            (10.0, 10.0),
+            r#"{"2":["00000000-0000-0000-0000-000000000002"]}"#,
+        );
         insert(1, "A1_02.tif", "ClassA", 1, 20, (60.0, 10.0), "{}");
         insert(2, "A2_01.tif", "ClassB", 2, 30, (10.0, 10.0), "{}");
 
@@ -3762,7 +3784,11 @@ mod tests {
 
         let list_filter = controller.list_filter.lock().unwrap();
         assert_eq!(list_filter.columns, DEFAULT_LIST_COLUMNS.to_vec());
-        assert_eq!(list_filter.object_classes.len(), 2, "every class selected by default");
+        assert_eq!(
+            list_filter.object_classes.len(),
+            2,
+            "every class selected by default"
+        );
         drop(list_filter);
 
         assert!(controller.matrix_filter.lock().unwrap().is_some());
@@ -3808,12 +3834,14 @@ mod tests {
         let state = results_ui.global::<ResultsState>();
 
         state.invoke_list_columns_item_selected("area_px".into(), true);
-        assert!(controller
-            .list_filter
-            .lock()
-            .unwrap()
-            .columns
-            .contains(&Column::AreaSizePx));
+        assert!(
+            controller
+                .list_filter
+                .lock()
+                .unwrap()
+                .columns
+                .contains(&Column::AreaSizePx)
+        );
         state.invoke_list_columns_select_none();
         assert!(controller.list_filter.lock().unwrap().columns.is_empty());
         state.invoke_list_columns_select_all();
@@ -3827,7 +3855,11 @@ mod tests {
         assert!(controller.list_filter.lock().unwrap().with_coloc_details);
 
         state.invoke_list_group_by_selected("images".into());
-        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 0, "grouped view has no per-object rows");
+        assert_eq!(
+            controller.list_row_locations.lock().unwrap().len(),
+            0,
+            "grouped view has no per-object rows"
+        );
         state.invoke_list_group_by_selected("objects".into());
 
         state.invoke_list_next_page();
@@ -3850,13 +3882,25 @@ mod tests {
         state.invoke_matrix_value_clicked();
         state.invoke_matrix_aggregate_selected("Minimum".into());
         assert_eq!(
-            controller.matrix_filter.lock().unwrap().as_ref().unwrap().aggregation,
+            controller
+                .matrix_filter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .aggregation,
             Aggregation::Min
         );
 
         state.invoke_matrix_class_selected("ClassB".into(), true);
         assert_eq!(
-            controller.matrix_filter.lock().unwrap().as_ref().unwrap().object_classe,
+            controller
+                .matrix_filter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .object_classe,
             ObjectClass::Valid(2)
         );
 
@@ -3864,12 +3908,24 @@ mod tests {
         state.invoke_matrix_color_schema_selected("Viridis".into(), true);
         state.invoke_matrix_scale_set_manual(0.0, 100.0);
         assert!(matches!(
-            controller.matrix_filter.lock().unwrap().as_ref().unwrap().color_scale,
+            controller
+                .matrix_filter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .color_scale,
             ColorScale::Manual(_, _)
         ));
         state.invoke_matrix_scale_set_auto();
         assert!(matches!(
-            controller.matrix_filter.lock().unwrap().as_ref().unwrap().color_scale,
+            controller
+                .matrix_filter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .color_scale,
             ColorScale::Auto
         ));
 
@@ -3877,12 +3933,24 @@ mod tests {
         state.invoke_matrix_well_rows_changed("6".into());
         state.invoke_matrix_well_cols_changed("6".into());
         assert_eq!(
-            controller.matrix_filter.lock().unwrap().as_ref().unwrap().well_size,
+            controller
+                .matrix_filter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .well_size,
             Some(WellSize { rows: 6, cols: 6 })
         );
         state.invoke_matrix_square_size_selected("128".into(), true);
         assert_eq!(
-            controller.matrix_filter.lock().unwrap().as_ref().unwrap().square_size,
+            controller
+                .matrix_filter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .square_size,
             Some(128)
         );
     }
@@ -3897,7 +3965,10 @@ mod tests {
         assert_eq!(state.get_active_well(), "A1");
 
         state.invoke_open_well_clicked("A1".into());
-        assert_eq!(controller.current_well.lock().unwrap().as_deref(), Some("A1"));
+        assert_eq!(
+            controller.current_well.lock().unwrap().as_deref(),
+            Some("A1")
+        );
         let well_cells = controller.well_cells.lock().unwrap();
         assert!(well_cells.contains_key("A1_01.tif"));
         assert!(well_cells.contains_key("A1_02.tif"));
@@ -3943,11 +4014,17 @@ mod tests {
         let state = results_ui.global::<ResultsState>();
 
         state.invoke_chart_column_selected("area_px".into());
-        assert_eq!(controller.chart_filter.lock().unwrap().column, Column::AreaSizePx);
+        assert_eq!(
+            controller.chart_filter.lock().unwrap().column,
+            Column::AreaSizePx
+        );
 
         state.invoke_chart_kind_selected(ResultsChartKind2::Scatter);
         state.invoke_chart_y_column_selected("area_px".into());
-        assert_eq!(controller.chart_filter.lock().unwrap().kind, ChartKind::Scatter);
+        assert_eq!(
+            controller.chart_filter.lock().unwrap().kind,
+            ChartKind::Scatter
+        );
 
         state.invoke_chart_kind_selected(ResultsChartKind2::Boxplot);
         state.invoke_chart_class_selected("ClassA".into(), true);
@@ -3962,7 +4039,9 @@ mod tests {
     #[test]
     fn export_dialog_select_all_and_select_none_callbacks_do_not_panic() {
         let (_ui, results_ui, _controller) = controller_with_open_database();
-        results_ui.global::<ResultsState>().invoke_export_dialog_open();
+        results_ui
+            .global::<ResultsState>()
+            .invoke_export_dialog_open();
         let state = results_ui.global::<ExportDialogState>();
 
         state.invoke_image_select_all();
