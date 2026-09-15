@@ -114,7 +114,7 @@ pub fn configure(
             });
             PipelineCommand::Cellpose(CellposeSettings {
                 model_path: model_path.clone(),
-                input_channels: channels.clamp(1, 8) as i32,
+                input_channels: channels.clamp(1, 3) as i32,
                 ..Default::default()
             })
         }
@@ -459,7 +459,7 @@ inputs:
         let cfg = configure(&rdf, None).unwrap();
         match cfg.command {
             PipelineCommand::Cellpose(s) => {
-                assert_eq!(s.input_channels, 8, "must clamp to the documented max of 8")
+                assert_eq!(s.input_channels, 3, "must clamp to the documented max of 3")
             }
             other => panic!("expected Cellpose, got {other:?}"),
         }
