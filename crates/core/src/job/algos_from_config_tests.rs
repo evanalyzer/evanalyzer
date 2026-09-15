@@ -522,19 +522,43 @@ fn color_filter_command_settings_convert_nested_hsv_range() {
         range: HsvRangeSettings {
             min_h: 1.0,
             max_h: 2.0,
-            min_s: 3.0,
-            max_s: 4.0,
-            min_v: 5.0,
-            max_v: 6.0,
+            min_s: 0.3,
+            max_s: 0.4,
+            min_v: 0.5,
+            max_v: 0.6,
         },
     };
     let result = ColorFilterCommand::from(settings);
     assert_eq!(result.range.min_h, 1.0);
     assert_eq!(result.range.max_h, 2.0);
-    assert_eq!(result.range.min_s, 3.0);
-    assert_eq!(result.range.max_s, 4.0);
-    assert_eq!(result.range.min_v, 5.0);
-    assert_eq!(result.range.max_v, 6.0);
+    assert_eq!(result.range.min_s, 0.3);
+    assert_eq!(result.range.max_s, 0.4);
+    assert_eq!(result.range.min_v, 0.5);
+    assert_eq!(result.range.max_v, 0.6);
+}
+
+/// Every field is clamped to its valid HSV domain (`[0, 360]` for hue,
+/// `[0, 1]` for saturation/value) - see the fix in #29 for a color image
+/// scratchpad bug this guards against.
+#[test]
+fn color_filter_command_settings_clamps_out_of_domain_max_hsv_values() {
+    let settings = ColorFilterCommandSettings {
+        range: HsvRangeSettings {
+            min_h: -10.0,
+            max_h: 400.0,
+            min_s: -1.0,
+            max_s: 4.0,
+            min_v: -1.0,
+            max_v: 6.0,
+        },
+    };
+    let result = ColorFilterCommand::from(settings);
+    assert_eq!(result.range.min_h, 0.0, "min_h is clamped to [0, 360]");
+    assert_eq!(result.range.max_h, 360.0, "max_h is clamped to [0, 360]");
+    assert_eq!(result.range.min_s, 0.0, "min_s is clamped to [0, 1]");
+    assert_eq!(result.range.max_s, 1.0, "max_s is clamped to [0, 1]");
+    assert_eq!(result.range.min_v, 0.0, "min_v is clamped to [0, 1]");
+    assert_eq!(result.range.max_v, 1.0, "max_v is clamped to [0, 1]");
 }
 
 #[test]

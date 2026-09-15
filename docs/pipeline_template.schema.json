@@ -772,19 +772,25 @@
           "description": "Minimum Hue angle in degrees [0.0, 360.0].",
           "type": "number",
           "format": "float",
-          "default": 0.0
+          "default": 0.0,
+          "maximum": 360,
+          "minimum": 0
         },
         "minS": {
           "description": "Minimum Saturation normalized [0.0, 1.0].",
           "type": "number",
           "format": "float",
-          "default": 0.0
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0
         },
         "minV": {
           "description": "Minimum Value (Brightness) normalized [0.0, 1.0].",
           "type": "number",
           "format": "float",
-          "default": 0.0
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0
         }
       }
     },
