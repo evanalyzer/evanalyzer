@@ -260,6 +260,20 @@ impl Cellpose {
     /// exactly there (it's the only tile contributing to every pixel), so
     /// small images are unaffected by the blending.
     fn run_model_tiled(model: &CModule, input: &Tensor, device: Device) -> Result<Tensor, InternalErrors> {
+        // Without this, every tile's forward pass keeps its autograd graph
+        // (all of the ViT encoder's intermediate activations) alive, and the
+        // in-place `acc_region += ...` accumulation below chains each tile's
+        // graph onto the last - so a large image's memory use grows with
+        // *every* tile instead of being bounded by one tile's peak, which
+        // reliably exhausts GPU memory on anything but a tiny image.
+        tch::no_grad(|| Self::run_model_tiled_inner(model, input, device))
+    }
+
+    fn run_model_tiled_inner(
+        model: &CModule,
+        input: &Tensor,
+        device: Device,
+    ) -> Result<Tensor, InternalErrors> {
         let sizes = input.size();
         let (orig_h, orig_w) = (sizes[2], sizes[3]);
 

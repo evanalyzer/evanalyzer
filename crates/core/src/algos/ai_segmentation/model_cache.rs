@@ -63,6 +63,21 @@ pub fn load_cached_model<E>(
     path: &Path,
     load: impl FnOnce() -> Result<CModule, E>,
 ) -> Result<Arc<CModule>, E> {
+    // Some traced graphs (e.g. Cellpose-SAM's ViT encoder, whose relative-
+    // position-embedding math is a long chain of elementwise adds/unsqueezes)
+    // contain op sequences PyTorch's JIT fuser tries to compile into a single
+    // CUDA kernel via NVRTC on first run. That requires the CUDA *toolkit*'s
+    // `libnvrtc-builtins` to be installed system-wide - most end-user
+    // machines that only have a GPU driver installed don't have it, and the
+    // failure only surfaces the first time that particular fused op pattern
+    // runs. Disabling both JIT fusers trades that (unfused, marginally
+    // slower) elementwise math for never depending on NVRTC being present.
+    // Cheap enough to set unconditionally on every call - whether this flag
+    // is process-global or per-thread isn't documented, and redoing it on a
+    // cache hit costs nothing.
+    tch::jit::set_tensor_expr_fuser_enabled(false);
+    tch::jit::fuser_cuda_set_enabled(false);
+
     MODEL_CACHE.with(|cache| get_or_insert(&mut cache.borrow_mut(), path, load))
 }
 
