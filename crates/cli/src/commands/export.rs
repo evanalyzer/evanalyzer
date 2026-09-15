@@ -35,18 +35,20 @@ fn export_parquet(args: ParquetExportArgs) -> Result<(), InternalErrors> {
 
     let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
     let cancel = AtomicBool::new(false);
-    let outcome = export.start_export(&db, &cancel, &mut no_progress).and_then(|_| {
-        if let Some(parent) = args.out.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                InternalErrors::Internal(format!("could not create {}: {e}", parent.display()))
-            })?;
-        }
-        std::fs::rename(scratch_dir.join("objects.parquet"), &args.out).map_err(|e| {
-            InternalErrors::Internal(format!("could not move export output into place: {e}"))
-        })
-    });
+    let outcome = export
+        .start_export(&db, &cancel, &mut no_progress)
+        .and_then(|_| {
+            if let Some(parent) = args.out.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    InternalErrors::Internal(format!("could not create {}: {e}", parent.display()))
+                })?;
+            }
+            std::fs::rename(scratch_dir.join("objects.parquet"), &args.out).map_err(|e| {
+                InternalErrors::Internal(format!("could not move export output into place: {e}"))
+            })
+        });
     let _ = std::fs::remove_dir_all(&scratch_dir);
     outcome?;
     println!("Exported to {}", args.out.display());
@@ -125,23 +127,25 @@ fn export_table(args: TableExportArgs, format: ExportFormat) -> Result<(), Inter
     };
     let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
     let cancel = AtomicBool::new(false);
-    let outcome = export.start_export(&db, &cancel, &mut no_progress).and_then(|_| {
-        if let Some(parent) = args.out.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                InternalErrors::Internal(format!("could not create {}: {e}", parent.display()))
-            })?;
-        }
-        let produced = scratch_dir.join(if grouping.group_by_image {
-            format!("grouped_by_image.{extension}")
-        } else {
-            format!("list.{extension}")
+    let outcome = export
+        .start_export(&db, &cancel, &mut no_progress)
+        .and_then(|_| {
+            if let Some(parent) = args.out.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    InternalErrors::Internal(format!("could not create {}: {e}", parent.display()))
+                })?;
+            }
+            let produced = scratch_dir.join(if grouping.group_by_image {
+                format!("grouped_by_image.{extension}")
+            } else {
+                format!("list.{extension}")
+            });
+            std::fs::rename(&produced, &args.out).map_err(|e| {
+                InternalErrors::Internal(format!("could not move export output into place: {e}"))
+            })
         });
-        std::fs::rename(&produced, &args.out).map_err(|e| {
-            InternalErrors::Internal(format!("could not move export output into place: {e}"))
-        })
-    });
     let _ = std::fs::remove_dir_all(&scratch_dir);
     outcome?;
     println!("Exported to {}", args.out.display());

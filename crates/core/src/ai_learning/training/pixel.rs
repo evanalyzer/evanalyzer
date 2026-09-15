@@ -115,9 +115,7 @@ fn compute_channel(
             PreprocessingSteps::StructureTensor(s) => {
                 StructureTensor::from(s.clone()).run(&mut ctx, &mut cache)?
             }
-            PreprocessingSteps::Hessian(s) => {
-                Hessian::from(s.clone()).run(&mut ctx, &mut cache)?
-            }
+            PreprocessingSteps::Hessian(s) => Hessian::from(s.clone()).run(&mut ctx, &mut cache)?,
             PreprocessingSteps::RankFilter(s) => {
                 RankFilter::from(s.clone()).run(&mut ctx, &mut cache)?
             }
