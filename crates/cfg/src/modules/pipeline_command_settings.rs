@@ -1396,18 +1396,31 @@ pub struct WeightedDeviationSettings {
 
 // ============ SEGMENTATION ============
 
-/// Instance segmentation using a pretrained Cellpose model exported as TorchScript.
+/// Instance segmentation using a Cellpose-SAM model exported as TorchScript
+/// (see `docs/convert_cellpose.py`).
 ///
-/// The model is fed a `[1, input_channels, H, W]` float tensor: the (normalized)
-/// grayscale image is placed in channel 0 and any remaining channels are filled
-/// with zeros. Standard Cellpose networks expect **two** channels (cytoplasm +
-/// optional nucleus), which is the default; single-channel exports use
-/// `input_channels = 1`. The model must return a `[1, C, H, W]` tensor with
-/// `C >= 3` channels: the vertical flow `dY` (channel 0), the horizontal flow
-/// `dX` (channel 1) and the cell-probability logits (channel 2), which is
-/// Cellpose's spatial-gradient representation. Exports that wrap the output in a
-/// tuple (e.g. `(flows, style)`) are also supported — the first tensor with at
-/// least three channels is used.
+/// Cellpose-SAM's SAM-derived ViT encoder bakes its positional embeddings for
+/// a **fixed 256x256 token grid** at export time, so the exported graph can
+/// only be run on exactly 256x256 tiles — Cellpose's own Python
+/// implementation enforces the same limit (`bsize != 256 is not supported
+/// for cpsam`). This command hides that constraint: the (normalized) image is
+/// padded and split into overlapping 256x256 tiles internally, each tile is
+/// run through the model, and the outputs are blended back together with the
+/// same feathered (sigmoid taper) weighting Cellpose's own tiling uses
+/// (`transforms.average_tiles`), so a segmentation spanning a tile boundary
+/// doesn't show a seam.
+///
+/// Each tile is a `[1, input_channels, 256, 256]` float tensor: the
+/// (normalized) grayscale image goes in channel 0 and any remaining channels
+/// are zero-filled. Cellpose-SAM's patch-embedding convolution only has
+/// weights for up to 3 input channels, so `input_channels` must be `1`-`3`
+/// (`2`, cytoplasm + optional nucleus, is standard). The model must return a
+/// `[1, C, 256, 256]` tensor per tile with `C >= 3` channels: the vertical
+/// flow `dY` (channel 0), the horizontal flow `dX` (channel 1) and the
+/// cell-probability logits (channel 2), which is Cellpose's spatial-gradient
+/// representation. Exports that wrap the output in a tuple (e.g.
+/// `(flows, style)`) are also supported — the first tensor with at least
+/// three channels is used.
 ///
 /// Instances are recovered with Cellpose's *dynamics*: every pixel whose
 /// cell probability reaches `probability_threshold` is advected for
@@ -1427,10 +1440,11 @@ pub struct CellposeSettings {
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
     pub object_class_id: SegmentationClass,
     /// Number of input channels the model expects. The grayscale image goes in
-    /// channel 0; any further channels are zero-filled. Standard Cellpose models
-    /// take `2` (cytoplasm + optional nucleus); set `1` for single-channel
-    /// exports, or higher to match a custom model.
-    #[schemars(range(min = 1, max = 8))]
+    /// channel 0; any further channels are zero-filled. Cellpose-SAM's
+    /// patch-embedding convolution only has weights for up to 3 input
+    /// channels: `2` (cytoplasm + optional nucleus) is standard, `1` is for
+    /// single-channel exports.
+    #[schemars(range(min = 1, max = 3))]
     pub input_channels: i32,
     /// Cell probability above which a pixel takes part in the flow dynamics and
     /// can be assigned to an object. The raw cell-probability logits are passed
