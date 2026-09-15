@@ -18,39 +18,20 @@ use crate::{
 };
 
 /// Instance segmentation using a Cellpose-SAM model exported as TorchScript
-/// (see `docs/convert_cellpose.py`).
 ///
-/// Cellpose-SAM's SAM-derived ViT encoder bakes its positional embeddings for
-/// a **fixed 256x256 token grid** at export time, so the exported graph can
-/// only be run on exactly 256x256 tiles — Cellpose's own Python
-/// implementation enforces the same limit (`bsize != 256 is not supported
-/// for cpsam`). This command hides that constraint: the (normalized) image is
-/// padded and split into overlapping 256x256 tiles internally, each tile is
-/// run through the model, and the outputs are blended back together with the
-/// same feathered (sigmoid taper) weighting Cellpose's own tiling uses
-/// (`transforms.average_tiles`), so a segmentation spanning a tile boundary
-/// doesn't show a seam.
+/// [AI Cellpose Segmentation] -> [Extract Objects]
 ///
-/// Each tile is a `[1, input_channels, 256, 256]` float tensor: the
-/// (normalized) grayscale image goes in channel 0 and any remaining channels
-/// are zero-filled. Cellpose-SAM's patch-embedding convolution only has
-/// weights for up to 3 input channels, so `input_channels` must be `1`-`3`
-/// (`2`, cytoplasm + optional nucleus, is standard). The model must return a
-/// `[1, C, 256, 256]` tensor per tile with `C >= 3` channels: the vertical
-/// flow `dY` (channel 0), the horizontal flow `dX` (channel 1) and the
-/// cell-probability logits (channel 2), which is Cellpose's spatial-gradient
-/// representation. Exports that wrap the output in a tuple (e.g.
-/// `(flows, style)`) are also supported — the first tensor with at least
-/// three channels is used.
+/// Object segmentation using Cellpose-SAM model which can be downloaded from
+/// https://evanalyzer.org/downloads/#ai-models
 ///
-/// Instances are recovered with Cellpose's *dynamics*: every pixel whose
-/// cell probability reaches `probability_threshold` is advected for
-/// `flow_iterations` Euler steps along the (down-scaled) flow field until it
-/// converges to the sink at its cell's center. Pixels whose trajectories end in
-/// the same sink basin — found by connected components over the final-position
-/// density map — form one instance. Instances smaller than `min_object_size`
-/// pixels are discarded. Runs on GPU automatically if CUDA is available in the
-/// linked libtorch build, otherwise falls back to CPU.
+/// Cellpose-SAM is a biological segmentation model that integrates the pretrained transformer
+/// architecture of Meta's Segment Anything Model (SAM) with the Cellpose framework to accurately
+/// predict vector flow fields for dense cellular structures.
+/// By combining these methods, it achieves "superhuman generalization," outperforming the average
+/// accuracy of human annotators and reaching near-optimal cell masking performance. [1]
+///
+/// [1] Pachitariu, M., Rariden, M., & Stringer, C. (2025). Cellpose-SAM: superhuman generalization for cellular segmentation. bioRxiv. doi.org
+///
 #[derive(CommandsMeta)]
 #[cmdsmeta(
     category = "segment",
@@ -259,7 +240,11 @@ impl Cellpose {
     /// for images no bigger than `TILE_SIZE`; the taper weight cancels out
     /// exactly there (it's the only tile contributing to every pixel), so
     /// small images are unaffected by the blending.
-    fn run_model_tiled(model: &CModule, input: &Tensor, device: Device) -> Result<Tensor, InternalErrors> {
+    fn run_model_tiled(
+        model: &CModule,
+        input: &Tensor,
+        device: Device,
+    ) -> Result<Tensor, InternalErrors> {
         // Without this, every tile's forward pass keeps its autograd graph
         // (all of the ViT encoder's intermediate activations) alive, and the
         // in-place `acc_region += ...` accumulation below chains each tile's
@@ -340,16 +325,19 @@ impl Cellpose {
                     )
                 });
 
-                let mut acc_region = acc.narrow(2, y, Self::TILE_SIZE).narrow(3, x, Self::TILE_SIZE);
+                let mut acc_region =
+                    acc.narrow(2, y, Self::TILE_SIZE)
+                        .narrow(3, x, Self::TILE_SIZE);
                 acc_region += &tile_out * &mask;
-                let mut norm_region = norm.narrow(2, y, Self::TILE_SIZE).narrow(3, x, Self::TILE_SIZE);
+                let mut norm_region =
+                    norm.narrow(2, y, Self::TILE_SIZE)
+                        .narrow(3, x, Self::TILE_SIZE);
                 norm_region += &mask;
             }
         }
 
-        let acc = acc.ok_or_else(|| {
-            InternalErrors::Generic("Cellpose produced no output tiles".into())
-        })?;
+        let acc =
+            acc.ok_or_else(|| InternalErrors::Generic("Cellpose produced no output tiles".into()))?;
         let stitched = acc / &norm;
         Ok(stitched.narrow(2, 0, orig_h).narrow(3, 0, orig_w))
     }
@@ -363,7 +351,8 @@ impl Cellpose {
             return vec![0];
         }
         let overlap = Self::TILE_OVERLAP.clamp(0.05, 0.5);
-        let n = (((1.0 + 2.0 * overlap) * padded_len as f32) / Self::TILE_SIZE as f32).ceil() as i64;
+        let n =
+            (((1.0 + 2.0 * overlap) * padded_len as f32) / Self::TILE_SIZE as f32).ceil() as i64;
         if n <= 1 {
             return vec![0];
         }
@@ -394,9 +383,12 @@ impl Cellpose {
                 mask2d[y * size + x] = mask1d[y] * mask1d[x];
             }
         }
-        Tensor::from_slice(&mask2d)
-            .to_device(device)
-            .reshape([1, 1, Self::TILE_SIZE, Self::TILE_SIZE])
+        Tensor::from_slice(&mask2d).to_device(device).reshape([
+            1,
+            1,
+            Self::TILE_SIZE,
+            Self::TILE_SIZE,
+        ])
     }
 
     /// Moves a single-channel `[1, 1, H, W]` tensor to the CPU and flattens it
@@ -766,7 +758,10 @@ mod tests {
     #[test]
     fn taper_mask_peaks_at_the_center_and_decays_but_never_reaches_zero_at_the_edges() {
         let mask = Cellpose::taper_mask(Device::Cpu);
-        assert_eq!(mask.size(), vec![1, 1, Cellpose::TILE_SIZE, Cellpose::TILE_SIZE]);
+        assert_eq!(
+            mask.size(),
+            vec![1, 1, Cellpose::TILE_SIZE, Cellpose::TILE_SIZE]
+        );
 
         let at = |y: i64, x: i64| -> f64 {
             f64::try_from(mask.narrow(2, y, 1).narrow(3, x, 1).reshape([1])).unwrap()
@@ -810,13 +805,8 @@ mod tests {
         let output = Cellpose::run_model_tiled(&model, &input, Device::Cpu).unwrap();
         assert_eq!(output.size(), vec![1, 3, height, width]);
 
-        let cell_prob: Vec<f32> = Vec::try_from(
-            &output
-                .narrow(1, 2, 1)
-                .sigmoid()
-                .reshape([height * width]),
-        )
-        .unwrap();
+        let cell_prob: Vec<f32> =
+            Vec::try_from(&output.narrow(1, 2, 1).sigmoid().reshape([height * width])).unwrap();
         for y in 0..height as usize {
             for x in 0..width as usize {
                 let p = cell_prob[y * width as usize + x];

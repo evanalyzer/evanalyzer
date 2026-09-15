@@ -17,6 +17,8 @@ use macros::CommandsMeta;
 
 /// Fills enclosed background holes in the segmentation map.
 ///
+/// [Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
+///
 /// A direct port of ImageJ's `Process > Binary > Fill Holes` command
 /// (`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel
 /// Landini): a background pixel counts as a "hole" - and is turned into
@@ -30,19 +32,6 @@ use macros::CommandsMeta;
 /// carries several distinct label values, holes are not attributed back to
 /// the object that encloses them - only ImageJ's original background/
 /// foreground distinction is reproduced here.
-///
-/// # Algorithm (matches `ij.process.FloodFiller.fill(x, y)`)
-/// 1. Scan every pixel on the image border; for each one that is background
-///    (`0`), flood-fill outward from it using 4-connectivity (up/down/left/
-///    right only - diagonal neighbors are **not** considered connected),
-///    marking every background pixel reached this way as "outside".
-/// 2. Any background pixel never marked "outside" is enclosed and becomes
-///    foreground. Every non-background pixel is copied through unchanged.
-///
-/// The 4-connectivity in step 1 is load-bearing, not an implementation
-/// detail: a boundary that only touches itself diagonally (8-connected) does
-/// **not** block this flood fill, exactly mirroring ImageJ's `FloodFiller`,
-/// whose own docs specify a 4-connected fill.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "instance_segmentation", next = "instance_segmentation")]
 pub struct FillHoles {}

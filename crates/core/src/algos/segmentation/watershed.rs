@@ -26,8 +26,8 @@ use macros::CommandsMeta;
 use std::sync::Arc;
 
 /// A morphological segmentation algorithm that splits touching objects using distance topography.
-#[derive(CommandsMeta)]
-#[cmdsmeta(category = "instance_segmentation", next = "measure")]
+///
+/// [Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
 ///
 /// This is a faithful port of ImageJ's `Process > Binary > Watershed`
 /// (`MaximumFinder` applied to the Euclidean distance map). Touching objects that
@@ -37,6 +37,7 @@ use std::sync::Arc;
 /// are merged, and a constrained flood draws 1-pixel watershed lines between the
 /// surviving basins. The split blob is then re-labeled into separate instances.
 #[derive(CommandsMeta)]
+#[cmdsmeta(category = "instance_segmentation", next = "measure")]
 pub struct Watershed {
     /// Prominence tolerance for the maximum finder, in pixels of distance -
     /// **or**, when `seed_source == Intensity`, CellProfiler's "typical

@@ -1397,39 +1397,20 @@ pub struct WeightedDeviationSettings {
 // ============ SEGMENTATION ============
 
 /// Instance segmentation using a Cellpose-SAM model exported as TorchScript
-/// (see `docs/convert_cellpose.py`).
 ///
-/// Cellpose-SAM's SAM-derived ViT encoder bakes its positional embeddings for
-/// a **fixed 256x256 token grid** at export time, so the exported graph can
-/// only be run on exactly 256x256 tiles — Cellpose's own Python
-/// implementation enforces the same limit (`bsize != 256 is not supported
-/// for cpsam`). This command hides that constraint: the (normalized) image is
-/// padded and split into overlapping 256x256 tiles internally, each tile is
-/// run through the model, and the outputs are blended back together with the
-/// same feathered (sigmoid taper) weighting Cellpose's own tiling uses
-/// (`transforms.average_tiles`), so a segmentation spanning a tile boundary
-/// doesn't show a seam.
+/// [AI Cellpose Segmentation] -> [Extract Objects]
 ///
-/// Each tile is a `[1, input_channels, 256, 256]` float tensor: the
-/// (normalized) grayscale image goes in channel 0 and any remaining channels
-/// are zero-filled. Cellpose-SAM's patch-embedding convolution only has
-/// weights for up to 3 input channels, so `input_channels` must be `1`-`3`
-/// (`2`, cytoplasm + optional nucleus, is standard). The model must return a
-/// `[1, C, 256, 256]` tensor per tile with `C >= 3` channels: the vertical
-/// flow `dY` (channel 0), the horizontal flow `dX` (channel 1) and the
-/// cell-probability logits (channel 2), which is Cellpose's spatial-gradient
-/// representation. Exports that wrap the output in a tuple (e.g.
-/// `(flows, style)`) are also supported — the first tensor with at least
-/// three channels is used.
+/// Object segmentation using Cellpose-SAM model which can be downloaded from
+/// https://evanalyzer.org/downloads/#ai-models
 ///
-/// Instances are recovered with Cellpose's *dynamics*: every pixel whose
-/// cell probability reaches `probability_threshold` is advected for
-/// `flow_iterations` Euler steps along the (down-scaled) flow field until it
-/// converges to the sink at its cell's center. Pixels whose trajectories end in
-/// the same sink basin — found by connected components over the final-position
-/// density map — form one instance. Instances smaller than `min_object_size`
-/// pixels are discarded. Runs on GPU automatically if CUDA is available in the
-/// linked libtorch build, otherwise falls back to CPU.
+/// Cellpose-SAM is a biological segmentation model that integrates the pretrained transformer
+/// architecture of Meta's Segment Anything Model (SAM) with the Cellpose framework to accurately
+/// predict vector flow fields for dense cellular structures.
+/// By combining these methods, it achieves "superhuman generalization," outperforming the average
+/// accuracy of human annotators and reaching near-optimal cell masking performance. [1]
+///
+/// [1] Pachitariu, M., Rariden, M., & Stringer, C. (2025). Cellpose-SAM: superhuman generalization for cellular segmentation. bioRxiv. doi.org
+///
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
@@ -1702,6 +1683,8 @@ fn _serde_default_connectedcomponents_min_size() -> i32 {
     0i32
 }
 /// Identifies and labels discrete objects within a binary or multi-class image.
+///
+/// [Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
@@ -1728,6 +1711,8 @@ impl Default for ConnectedComponentsSettings {
 
 /// Fills enclosed background holes in the segmentation map.
 ///
+/// [Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
+///
 /// A direct port of ImageJ's `Process > Binary > Fill Holes` command
 /// (`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel
 /// Landini): a background pixel counts as a "hole" - and is turned into
@@ -1741,19 +1726,6 @@ impl Default for ConnectedComponentsSettings {
 /// carries several distinct label values, holes are not attributed back to
 /// the object that encloses them - only ImageJ's original background/
 /// foreground distinction is reproduced here.
-///
-/// # Algorithm (matches `ij.process.FloodFiller.fill(x, y)`)
-/// 1. Scan every pixel on the image border; for each one that is background
-/// (`0`), flood-fill outward from it using 4-connectivity (up/down/left/
-/// right only - diagonal neighbors are **not** considered connected),
-/// marking every background pixel reached this way as "outside".
-/// 2. Any background pixel never marked "outside" is enclosed and becomes
-/// foreground. Every non-background pixel is copied through unchanged.
-///
-/// The 4-connectivity in step 1 is load-bearing, not an implementation
-/// detail: a boundary that only touches itself diagonally (8-connected) does
-/// **not** block this flood fill, exactly mirroring ImageJ's `FloodFiller`,
-/// whose own docs specify a 4-connected fill.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FillHolesSettings {}
@@ -1762,6 +1734,8 @@ fn _serde_default_watershed_seed_source() -> SegmentationWatershedSeedSourceSett
     SegmentationWatershedSeedSourceSettings::DistanceMap
 }
 /// A morphological segmentation algorithm that splits touching objects using distance topography.
+///
+/// [Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]
 ///
 /// This is a faithful port of ImageJ's `Process > Binary > Watershed`
 /// (`MaximumFinder` applied to the Euclidean distance map). Touching objects that
