@@ -378,7 +378,7 @@
       ]
     },
     "ConnectedComponentsSettings": {
-      "description": "Identifies and labels discrete objects within a binary or multi-class image.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nLabelling usually exists to feed a splitter: suggest InstanceSegmentation\n(Watershed) first, while still allowing Measure for callers that don't need to split.",
+      "description": "Identifies and labels discrete objects within a binary or multi-class image.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]",
       "type": "object",
       "properties": {
         "minSize": {
