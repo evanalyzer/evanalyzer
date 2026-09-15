@@ -61,3 +61,8 @@ date,commit,kind,crate,version,advisory_id,cve,cvss_vector,title
 2026-09-15T19:52:50Z,cba5323a,vulnerability,rustls,0.23.43,RUSTSEC-2026-0285,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N,TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries
 2026-09-15T19:52:50Z,cba5323a,unsound,lru,0.16.4,RUSTSEC-2026-0253,,,Potential use-after-free due to lack of panic safety in `LruCache::pop()`
 2026-09-15T19:52:50Z,cba5323a,yanked,chacha20,0.10.1,,,,chacha20 0.10.1 is yanked
+2026-09-15T20:07:37Z,0332401b,vulnerability,quick-xml,0.40.1,RUSTSEC-2026-0194,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Quadratic run time when checking a start tag for duplicate attribute names
+2026-09-15T20:07:37Z,0332401b,vulnerability,quick-xml,0.40.1,RUSTSEC-2026-0195,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service
+2026-09-15T20:07:37Z,0332401b,vulnerability,rustls,0.23.43,RUSTSEC-2026-0285,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N,TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries
+2026-09-15T20:07:37Z,0332401b,unsound,lru,0.16.4,RUSTSEC-2026-0253,,,Potential use-after-free due to lack of panic safety in `LruCache::pop()`
+2026-09-15T20:07:37Z,0332401b,yanked,chacha20,0.10.1,,,,chacha20 0.10.1 is yanked
