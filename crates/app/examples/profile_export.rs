@@ -29,10 +29,8 @@ fn main() {
         .chain((0..nr_c_stacks).map(Column::IntensityAvg))
         .collect();
 
-    let out_root = std::env::temp_dir().join(format!(
-        "evanalyzer_profile_export_{}",
-        std::process::id()
-    ));
+    let out_root =
+        std::env::temp_dir().join(format!("evanalyzer_profile_export_{}", std::process::id()));
     std::fs::create_dir_all(&out_root).unwrap();
 
     let base = ResultExport {
@@ -61,7 +59,9 @@ fn main() {
                     .sum()
             })
             .unwrap_or(0);
-        let nr_files = std::fs::read_dir(&out_dir).map(|it| it.count()).unwrap_or(0);
+        let nr_files = std::fs::read_dir(&out_dir)
+            .map(|it| it.count())
+            .unwrap_or(0);
 
         match result {
             Ok(()) => println!(

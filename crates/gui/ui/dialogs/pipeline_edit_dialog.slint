@@ -2,6 +2,7 @@ import { LineEdit, ComboBox, ScrollView } from "std-widgets.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Theme } from "../style.slint";
 import { GlobalAppState, DialogType, ChannelState } from "../state.slint";
+import { ImageMetaData } from "../editor/image_meta_panel.slint";
 
 // -- Global state --------------------------------------------
 
@@ -201,7 +202,7 @@ component ChannelPicker inherits Rectangle {
                 spacing: 1px;
 
                 // Always show channels 0-9; color + name appear for defined channels
-                for index in 10: ch-ta := TouchArea {
+               for index in 10: ch-ta := TouchArea {
                     height: 45px;
                     clicked => {
                         root.value = index;
@@ -346,15 +347,19 @@ export component PipelineEditDialog inherits Rectangle {
                     spacing: 4px;
 
                     SourceOption {
-                        label: "Channel";
-                        description: "Read directly from an image channel (0-based)";
+                        label: ImageMetaData.is-rgb == false ? "Channel" : "Image";
+                        description: ImageMetaData.is-rgb == false ? "Read directly from an image channel (0-based)" : "Read directly from the RGB image";
                         selected: PipelineEditState.source-type == 2;
                         clicked => {
+                            // For RGB images only source 0 is setup
+                            if ImageMetaData.is-rgb == true {
+                                PipelineEditState.source-channel = 0;
+                            }
                             PipelineEditState.source-type = 2;
                         }
                     }
 
-                    if PipelineEditState.source-type == 2: HorizontalLayout {
+                    if PipelineEditState.source-type == 2 && ImageMetaData.is-rgb == false: HorizontalLayout {
                         padding-left: 26px;
                         padding-top: 2px;
                         padding-bottom: 4px;

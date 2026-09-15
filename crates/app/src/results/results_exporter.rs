@@ -556,12 +556,8 @@ impl ResultExport {
                             let Some(well_grid) = well_heatmaps.remove(well_id) else {
                                 continue;
                             };
-                            well_row = write_grid_block(
-                                well_sheet,
-                                well_row,
-                                &well_caption,
-                                &well_grid,
-                            )?;
+                            well_row =
+                                write_grid_block(well_sheet, well_row, &well_caption, &well_grid)?;
                         }
                     }
                 }

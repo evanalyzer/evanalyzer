@@ -21,6 +21,7 @@ export struct SeriesInfo {
 export global ImageMetaData {
     in property <string> image_name: "No image opened";
     in property <string> dimensions_str: "";
+    in property <bool> is-rgb: false;
     in property <int> nr_c_stacks: 0;
     in property <int> nr_z_stacks: 0;
     in property <int> nr_t_stacks: 0;
@@ -292,6 +293,12 @@ export component ImageMetaPanel inherits Rectangle {
             MetaRow {
                 key: "Channels · Z · T";
                 value: ImageMetaData.dimensions_str;
+            }
+
+            MetaRow {
+                key: "Colormode";
+                value: ImageMetaData.is-rgb ? "Color" : "Grayscale";
+                last: true;
             }
 
             MetaRow {

@@ -123,8 +123,14 @@ fn seed_db(path: &PathBuf, n_classes: usize, objects_per_image_class: usize) -> 
                         let object_class_id_json = format!("[{class_id}]");
                         for i in 0..objects_per_image_class {
                             let object_id = format!("{idx:032x}");
-                            let object_id =
-                                format!("{}-{}-{}-{}-{}", &object_id[0..8], &object_id[8..12], &object_id[12..16], &object_id[16..20], &object_id[20..32]);
+                            let object_id = format!(
+                                "{}-{}-{}-{}-{}",
+                                &object_id[0..8],
+                                &object_id[8..12],
+                                &object_id[12..16],
+                                &object_id[16..20],
+                                &object_id[20..32]
+                            );
                             // Values vary a bit per object so aggregations
                             // (avg/min/max/stddev/median/skewness) aren't
                             // degenerate on constant input.

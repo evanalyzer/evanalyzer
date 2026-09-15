@@ -106,4 +106,26 @@ pub trait ImageAlgorithm: Send + Sync {
     fn name(&self) -> &'static str;
     fn cite(&self) -> Option<&'static CitationMetadata>;
     fn execution_scope(&self) -> ExecutionScope;
+
+    /// Override to `false` only for the rare command that reads `scratch_pad`
+    /// as actual data (not just workspace) - e.g. `ImageMath` configured to
+    /// use the scratch pad as its second operand - where retyping it ahead of
+    /// time would destroy the data it's about to read.
+    fn scratch_is_workspace(&self) -> bool {
+        true
+    }
+
+    /// Entry point pipeline dispatchers should call instead of [`Self::execute`]
+    /// directly: prepares `ctx.scratch_pad` (per [`Self::scratch_is_workspace`])
+    /// and then runs the command.
+    fn run(
+        &self,
+        ctx: &mut PipelineContext,
+        cache: &mut GlobalPipelineCache,
+    ) -> Result<(), InternalErrors> {
+        if self.scratch_is_workspace() {
+            ctx.prepare_scratch_matching_image()?;
+        }
+        self.execute(ctx, cache)
+    }
 }

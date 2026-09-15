@@ -200,6 +200,12 @@ impl ImageMetaController {
                 })
                 .collect();
 
+            let is_rgb = pyramid_info.is_rgb
+                && series_info.nr_c_stacks == 3
+                && channels[0].name == "Red"
+                && channels[1].name == "Green"
+                && channels[2].name == "Blue";
+
             ch_state.set_channels(std::rc::Rc::new(slint::VecModel::from(channels)).into());
 
             // --- Image meta ---
@@ -212,6 +218,7 @@ impl ImageMetaController {
                 )
                 .into(),
             );
+            image_meta_ui.set_is_rgb(is_rgb);
             image_meta_ui.set_nr_c_stacks(series_info.nr_c_stacks);
             image_meta_ui.set_nr_t_stacks(series_info.nr_t_stacks);
             image_meta_ui.set_nr_z_stacks(series_info.nr_z_stacks);

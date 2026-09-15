@@ -1005,21 +1005,38 @@ pub struct HessianSettings {
 /// min_v: 0.2,   max_v: 1.0,
 /// };
 /// ```
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct HsvRangeSettings {
     /// Minimum Hue angle in degrees [0.0, 360.0].
     pub min_h: f32,
     /// Maximum Hue angle in degrees [0.0, 360.0].
+    #[schemars(range(min = 0, max = 360))]
     pub max_h: f32,
     /// Minimum Saturation normalized [0.0, 1.0].
     pub min_s: f32,
     /// Maximum Saturation normalized [0.0, 1.0].
+    #[schemars(range(min = 0, max = 1))]
     pub max_s: f32,
     /// Minimum Value (Brightness) normalized [0.0, 1.0].
     pub min_v: f32,
     /// Maximum Value (Brightness) normalized [0.0, 1.0].
+    #[schemars(range(min = 0, max = 1))]
     pub max_v: f32,
+}
+
+impl Default for HsvRangeSettings {
+    fn default() -> Self {
+        Self {
+            min_h: f32::default(),
+            max_h: 360.0f32,
+            min_s: f32::default(),
+            max_s: 1.0f32,
+            min_v: f32::default(),
+            max_v: 1.0f32,
+        }
+    }
 }
 
 /// Use this when your images are brighter in the middle and dimmer toward

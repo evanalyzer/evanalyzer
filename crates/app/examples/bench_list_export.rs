@@ -172,10 +172,8 @@ fn main() {
         "evanalyzer_bench_list_{}.evadb",
         std::process::id()
     ));
-    let out_root = std::env::temp_dir().join(format!(
-        "evanalyzer_bench_list_out_{}",
-        std::process::id()
-    ));
+    let out_root =
+        std::env::temp_dir().join(format!("evanalyzer_bench_list_out_{}", std::process::id()));
     std::fs::create_dir_all(&out_root).unwrap();
 
     println!("== Seeding ==");

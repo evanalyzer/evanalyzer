@@ -229,10 +229,8 @@ fn main() {
         "evanalyzer_bench_ofpi_{}.evadb",
         std::process::id()
     ));
-    let out_dir = std::env::temp_dir().join(format!(
-        "evanalyzer_bench_ofpi_out_{}",
-        std::process::id()
-    ));
+    let out_dir =
+        std::env::temp_dir().join(format!("evanalyzer_bench_ofpi_out_{}", std::process::id()));
     std::fs::create_dir_all(&out_dir).unwrap();
 
     println!("== Seeding ==");
@@ -299,7 +297,9 @@ fn main() {
                 .sum()
         })
         .unwrap_or(0);
-    let nr_files = std::fs::read_dir(&out_dir).map(|it| it.count()).unwrap_or(0);
+    let nr_files = std::fs::read_dir(&out_dir)
+        .map(|it| it.count())
+        .unwrap_or(0);
 
     match result {
         Ok(()) => println!(
