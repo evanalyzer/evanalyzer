@@ -177,8 +177,11 @@ impl Stardist {
     /// supporting both the two-separate-tensors and the single-concatenated-tensor
     /// TorchScript export conventions.
     fn split_outputs(model: &CModule, input: Tensor) -> Result<(Tensor, Tensor), InternalErrors> {
-        let output = model
-            .forward_is(&[IValue::Tensor(input)])
+        // Without `no_grad`, the model's own weights (loaded with
+        // `requires_grad = true`, the default for `nn.Parameter`) make this
+        // forward pass record a full autograd graph even though `.eval()`
+        // was called - wasting memory that's never needed for inference.
+        let output = tch::no_grad(|| model.forward_is(&[IValue::Tensor(input)]))
             .map_err(|e| InternalErrors::Generic(format!("StarDist inference failed: {e}")))?;
 
         let tensors: Vec<Tensor> = match output {

@@ -44,3 +44,8 @@ tests/_G7_03_/stack1/frame_t_0.ets
 tests/IPOD detection test.nd2
 tests/performance
 tests/20260831_Uptake1_Exp0706_PH1.evadb
+
+# Real Cellpose-SAM TorchScript export (~1.2GB) used by
+# crates/core/tests/cellpose_sam_real_model.rs - too large to commit.
+# Regenerate locally with docs/convert_cellpose.py.
+crates/core/tests/models/

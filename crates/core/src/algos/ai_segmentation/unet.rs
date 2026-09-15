@@ -125,8 +125,11 @@ impl ImageAlgorithm for UNet {
             .to_kind(Kind::Float)
             .reshape([1, 1, height as i64, width as i64]);
 
-        let output = model
-            .forward_ts(&[input])
+        // Without `no_grad`, the model's own weights (loaded with
+        // `requires_grad = true`, the default for `nn.Parameter`) make this
+        // forward pass record a full autograd graph even though `.eval()`
+        // was called - wasting memory that's never needed for inference.
+        let output = tch::no_grad(|| model.forward_ts(&[input]))
             .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))?;
 
         let channels = *output.size().get(1).unwrap_or(&1);

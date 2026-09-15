@@ -107,7 +107,7 @@
       }
     },
     "CellposeSettings": {
-      "description": "Instance segmentation using a pretrained Cellpose model exported as TorchScript.\n\nThe model is fed a `[1, input_channels, H, W]` float tensor: the (normalized)\ngrayscale image is placed in channel 0 and any remaining channels are filled\nwith zeros. Standard Cellpose networks expect **two** channels (cytoplasm +\noptional nucleus), which is the default; single-channel exports use\n`input_channels = 1`. The model must return a `[1, C, H, W]` tensor with\n`C >= 3` channels: the vertical flow `dY` (channel 0), the horizontal flow\n`dX` (channel 1) and the cell-probability logits (channel 2), which is\nCellpose's spatial-gradient representation. Exports that wrap the output in a\ntuple (e.g. `(flows, style)`) are also supported — the first tensor with at\nleast three channels is used.\n\nInstances are recovered with Cellpose's *dynamics*: every pixel whose\ncell probability reaches `probability_threshold` is advected for\n`flow_iterations` Euler steps along the (down-scaled) flow field until it\nconverges to the sink at its cell's center. Pixels whose trajectories end in\nthe same sink basin — found by connected components over the final-position\ndensity map — form one instance. Instances smaller than `min_object_size`\npixels are discarded. Runs on GPU automatically if CUDA is available in the\nlinked libtorch build, otherwise falls back to CPU.",
+      "description": "Instance segmentation using a Cellpose-SAM model exported as TorchScript\n\n[AI Cellpose Segmentation] -> [Extract Objects]\n\nObject segmentation using Cellpose-SAM model which can be downloaded from\nhttps://evanalyzer.org/downloads/#ai-models\n\nCellpose-SAM is a biological segmentation model that integrates the pretrained transformer\narchitecture of Meta's Segment Anything Model (SAM) with the Cellpose framework to accurately\npredict vector flow fields for dense cellular structures.\nBy combining these methods, it achieves \"superhuman generalization,\" outperforming the average\naccuracy of human annotators and reaching near-optimal cell masking performance. [1]\n\n[1] Pachitariu, M., Rariden, M., & Stringer, C. (2025). Cellpose-SAM: superhuman generalization for cellular segmentation. bioRxiv. doi.org",
       "type": "object",
       "properties": {
         "flowIterations": {
@@ -119,11 +119,11 @@
           "minimum": 1
         },
         "inputChannels": {
-          "description": "Number of input channels the model expects. The grayscale image goes in\nchannel 0; any further channels are zero-filled. Standard Cellpose models\ntake `2` (cytoplasm + optional nucleus); set `1` for single-channel\nexports, or higher to match a custom model.",
+          "description": "Number of input channels the model expects. The grayscale image goes in\nchannel 0; any further channels are zero-filled. Cellpose-SAM's\npatch-embedding convolution only has weights for up to 3 input\nchannels: `2` (cytoplasm + optional nucleus) is standard, `1` is for\nsingle-channel exports.",
           "type": "integer",
           "format": "int32",
           "default": 2,
-          "maximum": 8,
+          "maximum": 3,
           "minimum": 1
         },
         "minObjectSize": {
@@ -425,7 +425,7 @@
       ]
     },
     "ConnectedComponentsSettings": {
-      "description": "Identifies and labels discrete objects within a binary or multi-class image.",
+      "description": "Identifies and labels discrete objects within a binary or multi-class image.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nLabelling usually exists to feed a splitter: suggest InstanceSegmentation\n(Watershed) first, while still allowing Measure for callers that don't need to split.",
       "type": "object",
       "properties": {
         "minSize": {
@@ -537,7 +537,7 @@
       }
     },
     "FillHolesSettings": {
-      "description": "Fills enclosed background holes in the segmentation map.\n\nA direct port of ImageJ's `Process > Binary > Fill Holes` command\n(`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel\nLandini): a background pixel counts as a \"hole\" - and is turned into\nforeground - exactly when it cannot be reached from the image border by a\npath of background pixels using 4-connectivity.\n\nLike ImageJ's own command, this treats the image as strictly binary: every\nnon-background pixel is \"foreground\" regardless of its actual label/class\nvalue, and a filled hole is stamped with a single fixed value rather than\ninheriting whatever label happens to surround it. If the segmentation map\ncarries several distinct label values, holes are not attributed back to\nthe object that encloses them - only ImageJ's original background/\nforeground distinction is reproduced here.\n\n# Algorithm (matches `ij.process.FloodFiller.fill(x, y)`)\n1. Scan every pixel on the image border; for each one that is background\n(`0`), flood-fill outward from it using 4-connectivity (up/down/left/\nright only - diagonal neighbors are **not** considered connected),\nmarking every background pixel reached this way as \"outside\".\n2. Any background pixel never marked \"outside\" is enclosed and becomes\nforeground. Every non-background pixel is copied through unchanged.\n\nThe 4-connectivity in step 1 is load-bearing, not an implementation\ndetail: a boundary that only touches itself diagonally (8-connected) does\n**not** block this flood fill, exactly mirroring ImageJ's `FloodFiller`,\nwhose own docs specify a 4-connected fill.",
+      "description": "Fills enclosed background holes in the segmentation map.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nA direct port of ImageJ's `Process > Binary > Fill Holes` command\n(`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel\nLandini): a background pixel counts as a \"hole\" - and is turned into\nforeground - exactly when it cannot be reached from the image border by a\npath of background pixels using 4-connectivity.\n\nWhich pixels count as a \"hole\" is decided the same way ImageJ does it:\nevery non-background pixel is \"foreground\" regardless of its actual\nlabel/class value, so a background pocket enclosed by *any* mix of labels\nis still a hole. Unlike ImageJ, each hole is then attributed back to the\nclass that actually encloses it - every enclosed background region is\ngrouped into a connected component, and that component is filled with\nwhichever label is most common among its immediately bordering pixels\n(falling back to `FILL_VALUE` only in the degenerate case of a hole with\nno foreground neighbor at all). This keeps multi-class segmentation maps\ncorrect: a hole inside a class-2 object is filled with 2, not merged with\na fixed value that happens to collide with an unrelated class elsewhere\nin the image.",
       "type": "object"
     },
     "FiltersHessianHessianModeSettings": {
@@ -2884,7 +2884,7 @@
       ]
     },
     "WatershedSettings": {
-      "description": "A morphological segmentation algorithm that splits touching objects using distance topography.\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
+      "description": "A morphological segmentation algorithm that splits touching objects using distance topography.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
       "type": "object",
       "properties": {
         "maximumFinderTolerance": {
