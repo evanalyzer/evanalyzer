@@ -583,11 +583,11 @@ impl From<HsvRangeSettings> for HsvRange {
     fn from(_s: HsvRangeSettings) -> Self {
         HsvRange {
             min_h: _s.min_h,
-            max_h: _s.max_h,
+            max_h: _s.max_h.clamp(0.0, 360.0),
             min_s: _s.min_s,
-            max_s: _s.max_s,
+            max_s: _s.max_s.clamp(0.0, 1.0),
             min_v: _s.min_v,
-            max_v: _s.max_v,
+            max_v: _s.max_v.clamp(0.0, 1.0),
         }
     }
 }

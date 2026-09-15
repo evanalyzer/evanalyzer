@@ -113,9 +113,11 @@ fn apply_progress_event(event: ProgressEvent, total: &mut usize, failed: &mut us
 #[cfg(test)]
 mod tests {
     use super::*;
-    use calamine::DataType as _;
     use crate::commands::test_support::TempProjectFile;
-    use evanalyzer_app::result::{Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter, ResultsGenerator};
+    use calamine::DataType as _;
+    use evanalyzer_app::result::{
+        Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter, ResultsGenerator,
+    };
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 
     #[test]
@@ -376,8 +378,11 @@ mod tests {
             images_dir.join("a.ome.tif"),
         )
         .expect("copy fixture a");
-        std::fs::copy(fixture_dir.join("slice_Z0_C0_T0.tif"), images_dir.join("b.tif"))
-            .expect("copy fixture b");
+        std::fs::copy(
+            fixture_dir.join("slice_Z0_C0_T0.tif"),
+            images_dir.join("b.tif"),
+        )
+        .expect("copy fixture b");
 
         run(AnalyzeArgs {
             project: file.path.clone(),
@@ -388,8 +393,7 @@ mod tests {
         .expect("analyze should succeed against real fixture images with a working pipeline");
 
         let results_root = file.path.parent().unwrap().join("results");
-        let evadb =
-            find_evadb(&results_root).expect("analyze should have produced a .evadb file");
+        let evadb = find_evadb(&results_root).expect("analyze should have produced a .evadb file");
 
         let out_dir = tempfile::tempdir().expect("tempdir");
 
@@ -412,12 +416,18 @@ mod tests {
             for t in 0..=database.get_nr_of_t_stacks() {
                 let page = database
                     .get_object_list(&ListFilter {
-                        plane: PlaneFilter { z_stack: z, t_stack: t },
+                        plane: PlaneFilter {
+                            z_stack: z,
+                            t_stack: t,
+                        },
                         images: None,
                         object_classes: None,
                         columns: expected_columns.clone(),
                         with_coloc_details: false,
-                        page: Pagination { limit: 1_000_000, after: None },
+                        page: Pagination {
+                            limit: 1_000_000,
+                            after: None,
+                        },
                     })
                     .expect("ground-truth object list");
                 for (id, row) in page.row_names.iter().zip(page.rows) {
@@ -442,7 +452,11 @@ mod tests {
         .expect("csv export should succeed");
         let csv_content = std::fs::read_to_string(&csv_out).expect("read exported csv");
         let mut csv_lines = csv_content.lines();
-        let csv_header: Vec<&str> = csv_lines.next().expect("csv header row").split(',').collect();
+        let csv_header: Vec<&str> = csv_lines
+            .next()
+            .expect("csv header row")
+            .split(',')
+            .collect();
         assert_eq!(csv_header[0], "Object ID", "header: {csv_header:?}");
         let object_id_col = 0;
 

@@ -260,6 +260,14 @@ impl PipelineContext {
         Ok(())
     }
 
+    pub fn prepare_scratch_matching_image(&mut self) -> Result<(), InternalErrors> {
+        match self.image.as_ref() {
+            ImageContainer::F32Gray(_) => self.prepare_f32_gray_scratch(),
+            ImageContainer::F32Rgb(_) => self.prepare_f32_rgb_scratch(),
+            _ => Ok(()),
+        }
+    }
+
     pub fn prepare_f32_gray_scratch(&mut self) -> Result<(), InternalErrors> {
         if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Gray(_)) {
             let size = self.image.size();

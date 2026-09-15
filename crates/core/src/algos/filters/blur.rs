@@ -405,23 +405,20 @@ mod tests {
             panic!("Expected F32Rgb in ctx.image after swap");
         }
     }
-    #[test]
-    fn test_blur_format_mismatch() {
-        // 1. Setup a 5x5 Gray image
+    /// Builds a context whose `scratch_pad` is `F32Rgb` while `image` is a
+    /// 5x5 `F32Gray` - the state `ctx.scratch_pad` is left in after e.g.
+    /// `ColorFilterCommand` swaps an `F32Rgb` input out for an `F32Gray`
+    /// result, since `swap` hands the old `image` container straight to
+    /// `scratch_pad` without retyping it.
+    fn ctx_with_mismatched_scratch_pad_type() -> PipelineContext {
         let size = ImageSize {
             width: 5,
             height: 5,
         };
-        let data_gray = vec![0.0f32; 25];
-        let gray_img = Image::new(size, data_gray, CpuAllocator).unwrap();
+        let gray_img = Image::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
+        let rgb_img = Image::new(size, vec![0.0f32; 75], CpuAllocator).unwrap();
 
-        // 2. Setup a 5x5 RGB image for the scratch pad
-        let data_rgb = vec![0.0f32; 75];
-        let rgb_img = Image::new(size, data_rgb, CpuAllocator).unwrap();
-
-        // 3. Manually construct a context with mismatched buffers
-        // Usually PipelineContext handles this, but we can force it for the test
-        let mut ctx = PipelineContext {
+        PipelineContext {
             output_path: None,
             image: ImageContainer::new_f32_gray_from_image_test(gray_img).into(),
             scratch_pad: ImageContainer::new_f32_rgb_from_image_test(rgb_img).into(),
@@ -443,12 +440,21 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-        };
+        }
+    }
 
+    #[test]
+    fn test_blur_execute_format_mismatch_on_a_mismatched_scratch_pad_type() {
+        // Calling `execute` directly (bypassing the `ImageAlgorithm::run`
+        // wrapper that pipeline dispatchers use) exercises Blur's own raw
+        // precondition: it assumes `scratch_pad` already matches `image`'s
+        // container type and does not retype it itself - that's now the
+        // dispatcher's job (see `prepare_scratch_matching_image_runs_before_a_command_whose_scratch_is_workspace`
+        // in `pipeline.rs`), not each command's.
+        let mut ctx = ctx_with_mismatched_scratch_pad_type();
         let blur_cmd = Blur { kernel_size: 3 };
         let mut cache = GlobalPipelineCache::default();
 
-        // 4. Execute and assert the specific error
         let result = blur_cmd.execute(&mut ctx, &mut cache);
 
         match result {
@@ -459,8 +465,29 @@ mod tests {
                     "Error message should mention the actual image format"
                 );
             }
-            Ok(_) => panic!("Execution should have failed due to format mismatch"),
-            Err(e) => panic!("Expected FormatMismatch error, but got: {:?}", e),
+            other => panic!("Expected FormatMismatch error, but got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_blur_run_recovers_from_a_mismatched_scratch_pad_type() {
+        // `run` (what pipeline dispatchers actually call) prepares
+        // `scratch_pad` first, so it transparently recovers from the same
+        // mismatched state that `execute` alone rejects above.
+        let mut ctx = ctx_with_mismatched_scratch_pad_type();
+        let blur_cmd = Blur { kernel_size: 3 };
+        let mut cache = GlobalPipelineCache::default();
+
+        blur_cmd
+            .run(&mut ctx, &mut cache)
+            .expect("run should recover from a mismatched scratch pad type, not error");
+
+        match ctx.image.as_ref() {
+            ImageContainer::F32Gray(out_img) => {
+                assert_eq!(out_img.width(), 5);
+                assert_eq!(out_img.height(), 5);
+            }
+            other => panic!("Output should be F32Gray, got {:?}", other),
         }
     }
 

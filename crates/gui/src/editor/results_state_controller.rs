@@ -4011,7 +4011,14 @@ mod tests {
         let state = results_ui.global::<ResultsState>();
 
         state.invoke_list_image_filter_changed("A1".into());
-        assert!(controller.list_filter.lock().unwrap().image_rel_path.is_empty());
+        assert!(
+            controller
+                .list_filter
+                .lock()
+                .unwrap()
+                .image_rel_path
+                .is_empty()
+        );
         assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
     }
 
