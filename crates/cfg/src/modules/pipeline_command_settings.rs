@@ -1719,13 +1719,18 @@ impl Default for ConnectedComponentsSettings {
 /// foreground - exactly when it cannot be reached from the image border by a
 /// path of background pixels using 4-connectivity.
 ///
-/// Like ImageJ's own command, this treats the image as strictly binary: every
-/// non-background pixel is "foreground" regardless of its actual label/class
-/// value, and a filled hole is stamped with a single fixed value rather than
-/// inheriting whatever label happens to surround it. If the segmentation map
-/// carries several distinct label values, holes are not attributed back to
-/// the object that encloses them - only ImageJ's original background/
-/// foreground distinction is reproduced here.
+/// Which pixels count as a "hole" is decided the same way ImageJ does it:
+/// every non-background pixel is "foreground" regardless of its actual
+/// label/class value, so a background pocket enclosed by *any* mix of labels
+/// is still a hole. Unlike ImageJ, each hole is then attributed back to the
+/// class that actually encloses it - every enclosed background region is
+/// grouped into a connected component, and that component is filled with
+/// whichever label is most common among its immediately bordering pixels
+/// (falling back to `FILL_VALUE` only in the degenerate case of a hole with
+/// no foreground neighbor at all). This keeps multi-class segmentation maps
+/// correct: a hole inside a class-2 object is filled with 2, not merged with
+/// a fixed value that happens to collide with an unrelated class elsewhere
+/// in the image.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FillHolesSettings {}

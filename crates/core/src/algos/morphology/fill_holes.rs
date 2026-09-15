@@ -25,13 +25,18 @@ use macros::CommandsMeta;
 /// foreground - exactly when it cannot be reached from the image border by a
 /// path of background pixels using 4-connectivity.
 ///
-/// Like ImageJ's own command, this treats the image as strictly binary: every
-/// non-background pixel is "foreground" regardless of its actual label/class
-/// value, and a filled hole is stamped with a single fixed value rather than
-/// inheriting whatever label happens to surround it. If the segmentation map
-/// carries several distinct label values, holes are not attributed back to
-/// the object that encloses them - only ImageJ's original background/
-/// foreground distinction is reproduced here.
+/// Which pixels count as a "hole" is decided the same way ImageJ does it:
+/// every non-background pixel is "foreground" regardless of its actual
+/// label/class value, so a background pocket enclosed by *any* mix of labels
+/// is still a hole. Unlike ImageJ, each hole is then attributed back to the
+/// class that actually encloses it - every enclosed background region is
+/// grouped into a connected component, and that component is filled with
+/// whichever label is most common among its immediately bordering pixels
+/// (falling back to `FILL_VALUE` only in the degenerate case of a hole with
+/// no foreground neighbor at all). This keeps multi-class segmentation maps
+/// correct: a hole inside a class-2 object is filled with 2, not merged with
+/// a fixed value that happens to collide with an unrelated class elsewhere
+/// in the image.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "instance_segmentation", next = "instance_segmentation")]
 pub struct FillHoles {}
@@ -70,8 +75,10 @@ impl ImageAlgorithm for FillHoles {
 }
 
 impl FillHoles {
-    /// The value written into every filled hole. Fixed rather than derived
-    /// from the surrounding label - see the struct docs for why.
+    /// Fallback value for a filled hole that has no foreground neighbor to
+    /// take a label from. Should not occur in practice - an enclosed hole is
+    /// by definition surrounded by non-background pixels - but keeps `fill`
+    /// total. See the struct docs for the normal (per-object) fill value.
     const FILL_VALUE: u32 = 1;
 
     /// Marks `idx` as reachable from the border ("outside") and pushes it
@@ -80,6 +87,36 @@ impl FillHoles {
         if input[idx] == 0 && !outside[idx] {
             outside[idx] = true;
             stack.push(idx);
+        }
+    }
+
+    /// Part of the connected-component walk over one hole: if `nidx` is
+    /// another enclosed-background pixel, claims it into the current
+    /// component (reusing `outside` as the "already assigned to a hole" flag
+    /// so a separate visited buffer isn't needed); if it's foreground,
+    /// tallies its label so the component can later be filled with whichever
+    /// label borders it most. `border_labels` is a flat `(label, count)`
+    /// list rather than a hash map: a hole's border almost always touches
+    /// only one or two distinct labels, so a linear scan beats hashing, and
+    /// the caller reuses the same allocation across holes.
+    fn visit_hole_neighbor(
+        nidx: usize,
+        input: &[u32],
+        outside: &mut [bool],
+        component: &mut Vec<usize>,
+        border_labels: &mut Vec<(u32, u32)>,
+    ) {
+        if input[nidx] == 0 {
+            if !outside[nidx] {
+                outside[nidx] = true;
+                component.push(nidx);
+            }
+        } else {
+            let label = input[nidx];
+            match border_labels.iter_mut().find(|(l, _)| *l == label) {
+                Some((_, count)) => *count += 1,
+                None => border_labels.push((label, 1)),
+            }
         }
     }
 
@@ -127,9 +164,77 @@ impl FillHoles {
         }
 
         // Background never reached from the border is an enclosed hole.
-        for (idx, &v) in input.iter().enumerate() {
-            if v == 0 && !outside[idx] {
-                output[idx] = Self::FILL_VALUE;
+        // Group each hole into its own 4-connected component and fill it
+        // with whichever label borders it most, so holes inside different
+        // objects/classes are filled independently rather than all being
+        // stamped with one fixed value. `component` and `border_labels` are
+        // hoisted out of the loop and `.clear()`-ed between holes (retaining
+        // their capacity) instead of being reallocated per hole.
+        let mut component: Vec<usize> = Vec::new();
+        let mut border_labels: Vec<(u32, u32)> = Vec::new();
+
+        for start in 0..input.len() {
+            if input[start] != 0 || outside[start] {
+                continue;
+            }
+
+            outside[start] = true;
+            component.clear();
+            component.push(start);
+            border_labels.clear();
+
+            let mut head = 0;
+            while head < component.len() {
+                let idx = component[head];
+                head += 1;
+                let x = idx % width;
+                let y = idx / width;
+                if x > 0 {
+                    Self::visit_hole_neighbor(
+                        idx - 1,
+                        input,
+                        &mut outside,
+                        &mut component,
+                        &mut border_labels,
+                    );
+                }
+                if x + 1 < width {
+                    Self::visit_hole_neighbor(
+                        idx + 1,
+                        input,
+                        &mut outside,
+                        &mut component,
+                        &mut border_labels,
+                    );
+                }
+                if y > 0 {
+                    Self::visit_hole_neighbor(
+                        idx - width,
+                        input,
+                        &mut outside,
+                        &mut component,
+                        &mut border_labels,
+                    );
+                }
+                if y + 1 < height {
+                    Self::visit_hole_neighbor(
+                        idx + width,
+                        input,
+                        &mut outside,
+                        &mut component,
+                        &mut border_labels,
+                    );
+                }
+            }
+
+            let fill_value = border_labels
+                .iter()
+                .max_by_key(|&(_, count)| count)
+                .map(|&(label, _)| label)
+                .unwrap_or(Self::FILL_VALUE);
+
+            for &idx in component.iter() {
+                output[idx] = fill_value;
             }
         }
     }
@@ -180,8 +285,8 @@ mod tests {
 
         assert_eq!(
             output[1 * 3 + 1],
-            FillHoles::FILL_VALUE,
-            "center is enclosed under 4-connectivity and must be filled"
+            9,
+            "center is enclosed under 4-connectivity and must be filled with the label that encloses it"
         );
         // The four ring pixels must survive unchanged.
         for &idx in &[1usize, 3, 5, 7] {
@@ -250,8 +355,8 @@ mod tests {
         let labels = ctx.segmentation_map.as_ref().expect("no labels found");
         assert_eq!(
             *labels.get_pixel(2, 2, 0)?,
-            FillHoles::FILL_VALUE,
-            "enclosed center must be filled"
+            9,
+            "enclosed center must be filled with the label of the object that encloses it"
         );
         assert_eq!(
             *labels.get_pixel(2, 1, 0)?,
@@ -264,5 +369,41 @@ mod tests {
             "true background outside the ring must stay background"
         );
         Ok(())
+    }
+
+    /// Regression test for a multi-class segmentation map: two separate
+    /// enclosed holes, belonging to two differently-labeled objects side by
+    /// side, must each be filled with their *own* object's label rather than
+    /// both collapsing onto whichever value happens to be first/fixed.
+    ///
+    /// Fixture (`.` = background, ring of `1`s enclosing hole `A`, ring of
+    /// `2`s enclosing hole `B`):
+    /// ```text
+    /// . 1 . . 2 .
+    /// 1 A 1 2 B 2
+    /// . 1 . . 2 .
+    /// ```
+    #[test]
+    fn test_fill_holes_fills_each_class_hole_with_its_own_label() {
+        #[rustfmt::skip]
+        let input: Vec<u32> = vec![
+            0, 1, 0, 0, 2, 0,
+            1, 0, 1, 2, 0, 2,
+            0, 1, 0, 0, 2, 0,
+        ];
+        let mut output = vec![0u32; input.len()];
+
+        FillHoles::fill(&input, &mut output, 6, 3);
+
+        assert_eq!(
+            output[1 * 6 + 1],
+            1,
+            "hole enclosed by class 1 must be filled with 1, not the other class"
+        );
+        assert_eq!(
+            output[1 * 6 + 4],
+            2,
+            "hole enclosed by class 2 must be filled with 2, not the other class"
+        );
     }
 }
