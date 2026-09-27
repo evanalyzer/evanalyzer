@@ -96,6 +96,14 @@ export component CustomMenuBar inherits Rectangle {
                 width: 200px;
                 MenuContainer {
                     MenuItem {
+                        text: "New";
+                        clicked => {
+                            ToolbarState.new_file_clicked();
+                            file-menu.close();
+                        }
+                    }
+
+                    MenuItem {
                         text: "Open…";
                         icon: @image-url("icons/duotone-black/folder-open-duotone.svg");
                         clicked => {
