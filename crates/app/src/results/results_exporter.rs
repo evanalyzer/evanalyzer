@@ -19,34 +19,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// view, just as a plain hex constant here since XLSX formatting has no
 /// theme to pull from.
 const ALTERNATING_ROW_BG: u32 = 0xF1F1F1;
-
-/// Excel cell size (both width and height, in pixels) every plate/well/
-/// heatmap grid block is laid out at, so its cells read as squares — the
-/// grid's own values are unitless relative to a real image/plate scale, so
-/// there's no "correct" size to derive them from; this just needs to be
-/// visually square and legible. Wide enough, together with `GRID_NUM_FORMAT`
-/// rounding a value to 2 decimals, that a typical aggregate (e.g.
-/// "205011.67", 9 characters) comfortably fits without Excel falling back
-/// to its `#####` too-narrow-to-display placeholder.
 const GRID_CELL_PX: u32 = 60;
-
-/// Number format every plate/well/heatmap grid cell's value is written
-/// with - without it, an `AVG`/`STDDEV_SAMP`/etc. aggregate's raw
-/// full-precision float (e.g. 15 decimal digits) would need a column far
-/// wider than `GRID_CELL_PX` to avoid `#####`. Matches the 2-decimal
-/// precision the GUI's own matrix cells already show
-/// (`flatten_grid_cells`'s `format!("{v:.2}")` in results_state_controller.rs).
+const GRID_HEADER_PX: u32 = 24;
+const EXPORT_FONT_SIZE: f64 = 10.0;
 const GRID_NUM_FORMAT: &str = "0.00";
-
-/// Fill for a grid cell that `exists` (a real well/field sits there - see
-/// `Cell::search_key`) but has no value (a real image with zero detected
-/// objects) - so it reads in the sheet as "there but empty" rather than
-/// looking identical to a grid position with no real well/field at all
-/// (which gets no fill/border, matching `write_blank`'s no-format no-op
-/// below - a `CellValue::Empty` cell only ever occurs in a plate/well/
-/// image-heatmap grid, never a flat list or grouped-by-image sheet, so this
-/// never fires outside grid results).
 const EMPTY_CELL_BG: u32 = 0xE0E0E0;
+// Flat-pivot (plate_list.xlsx/well_list.xlsx) value columns - not the
+// square-grid width above, this is a plain table so there's no per-column
+// budget to share across many columns.
+const LIST_VALUE_COL_PX: u32 = 90;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -705,8 +686,8 @@ impl ResultExport {
                             // Seeded unconditionally (not only when a value
                             // is found) so a well that has images but zero
                             // matching objects for *every* combo still gets
-                            // a row - written as "None" per cell, not
-                            // silently dropped for having nothing to show.
+                            // a row - written as "-" per cell, not silently
+                            // dropped for having nothing to show.
                             let entry = plate_values
                                 .entry(well_id.clone())
                                 .or_insert_with(|| vec![None; combo_count]);
@@ -1132,7 +1113,7 @@ fn write_list_sheet(
     object_classes: &Option<Vec<ObjectClass>>,
     with_coloc_details: bool,
 ) -> Result<(), InternalErrors> {
-    let header_format = Format::new().set_bold();
+    let header_format = Format::new().set_bold().set_font_size(EXPORT_FONT_SIZE);
     let mut next_row: u32 = 0;
 
     stream_list_pages(
@@ -1231,7 +1212,7 @@ fn write_database_result_sheet(
     worksheet: &mut Worksheet,
     result: &DatabaseResult,
 ) -> Result<(), InternalErrors> {
-    let header_format = Format::new().set_bold();
+    let header_format = Format::new().set_bold().set_font_size(EXPORT_FONT_SIZE);
     for (col_idx, name) in result.column_names.iter().enumerate() {
         worksheet
             .write_with_format(0, col_idx as u16, name.as_str(), &header_format)
@@ -1299,24 +1280,25 @@ fn write_grid_block(
     caption: &str,
     result: &DatabaseResult,
 ) -> Result<u32, InternalErrors> {
-    let bold = Format::new().set_bold();
+    let bold = Format::new().set_bold().set_font_size(EXPORT_FONT_SIZE);
     // Row/col header cells (the top row of column labels and the left
     // column of row labels) — solid black fill, white bold text, so they
     // read as a distinct axis rather than blending into the data cells.
     let header_format = Format::new()
         .set_bold()
         .set_background_color(Color::Black)
-        .set_font_color(Color::White);
+        .set_font_color(Color::White)
+        .set_font_size(EXPORT_FONT_SIZE);
     worksheet
         .write_with_format(start_row, 0, caption, &bold)
         .map_err(xlsx_err)?;
 
     let header_row = start_row + 1;
     worksheet
-        .set_row_height_pixels(header_row, GRID_CELL_PX)
+        .set_row_height_pixels(header_row, GRID_HEADER_PX)
         .map_err(xlsx_err)?;
     worksheet
-        .set_column_width_pixels(0, GRID_CELL_PX)
+        .set_column_width_pixels(0, GRID_HEADER_PX)
         .map_err(xlsx_err)?;
     for (col_idx, col_name) in result.column_names.iter().enumerate() {
         let col = (col_idx + 1) as u16;
@@ -1355,8 +1337,8 @@ fn write_grid_block(
 /// `export_plate_and_well_as_flat_list`), so a `None` here only ever means
 /// "this well/field has no matching data for this particular combination"
 /// (e.g. no objects of some other class), never "no such well/field at
-/// all" - written as `"None"`, matching `write_cell`'s own convention for
-/// the same case in the grid export. `disabled` (at least one image behind
+/// all" - written as `"-"`, matching `write_cell`'s own convention for the
+/// same case in the grid export. `disabled` (at least one image behind
 /// this row is disabled - see `Cell::disabled`) strikes the whole row
 /// through. Unlike `write_grid_block`, this is a plain table, not a matrix
 /// - no square sizing or per-cell color.
@@ -1370,8 +1352,17 @@ fn write_flat_pivot(
     let mut workbook = Workbook::new();
     let sheet = workbook.add_worksheet();
     sheet.set_name(sheet_name).map_err(xlsx_err)?;
-    let bold = Format::new().set_bold();
-    let strikethrough = Format::new().set_font_strikethrough();
+    let bold = Format::new().set_bold().set_font_size(EXPORT_FONT_SIZE);
+    // `GRID_NUM_FORMAT` bounds an AVG/etc.'s raw full-precision float to 2
+    // decimals, same reasoning as the grid export - otherwise
+    // `LIST_VALUE_COL_PX` still isn't enough room for it.
+    let plain = Format::new()
+        .set_font_size(EXPORT_FONT_SIZE)
+        .set_num_format(GRID_NUM_FORMAT);
+    let strikethrough = Format::new()
+        .set_font_strikethrough()
+        .set_font_size(EXPORT_FONT_SIZE)
+        .set_num_format(GRID_NUM_FORMAT);
 
     for (col_idx, label) in key_labels.iter().enumerate() {
         sheet
@@ -1380,42 +1371,35 @@ fn write_flat_pivot(
     }
     let key_cols = key_labels.len();
     for (i, label) in combo_labels.iter().enumerate() {
+        let col = (key_cols + i) as u16;
         sheet
-            .write_with_format(0, (key_cols + i) as u16, label.as_str(), &bold)
+            .write_with_format(0, col, label.as_str(), &bold)
+            .map_err(xlsx_err)?;
+        sheet
+            .set_column_width_pixels(col, LIST_VALUE_COL_PX)
             .map_err(xlsx_err)?;
     }
 
     for (row_idx, (keys, values, disabled)) in rows.enumerate() {
         let row = (row_idx + 1) as u32;
+        let format = if disabled { &strikethrough } else { &plain };
         for (col_idx, key) in keys.iter().enumerate() {
-            if disabled {
-                sheet
-                    .write_string_with_format(row, col_idx as u16, key.as_str(), &strikethrough)
-                    .map_err(xlsx_err)?;
-            } else {
-                sheet
-                    .write(row, col_idx as u16, key.as_str())
-                    .map_err(xlsx_err)?;
-            }
+            sheet
+                .write_string_with_format(row, col_idx as u16, key.as_str(), format)
+                .map_err(xlsx_err)?;
         }
         for (i, value) in values.iter().enumerate() {
             let col = (key_cols + i) as u16;
-            match (value, disabled) {
-                (Some(v), true) => {
+            match value {
+                Some(v) => {
                     sheet
-                        .write_number_with_format(row, col, *v, &strikethrough)
+                        .write_number_with_format(row, col, *v, format)
                         .map_err(xlsx_err)?;
                 }
-                (Some(v), false) => {
-                    sheet.write(row, col, *v).map_err(xlsx_err)?;
-                }
-                (None, true) => {
+                None => {
                     sheet
-                        .write_string_with_format(row, col, "None", &strikethrough)
+                        .write_string_with_format(row, col, "-", format)
                         .map_err(xlsx_err)?;
-                }
-                (None, false) => {
-                    sheet.write(row, col, "None").map_err(xlsx_err)?;
                 }
             }
         }
@@ -1437,11 +1421,12 @@ fn cell_to_f64(cell: &Cell) -> Option<f64> {
     }
 }
 
-/// The background fill, strikethrough and/or number format `write_cell`
-/// applies for a given `Cell` - split out from `write_cell` itself so the
-/// formatting logic can be unit-tested directly against `Format` (which
-/// implements `Eq`) instead of only indirectly through a written-and-reread
-/// `.xlsx` file. `bg_color` when it's set (`0` is every non-colored cell's
+/// The font size, background fill, strikethrough and/or number format
+/// `write_cell` applies for a given `Cell` - split out from `write_cell`
+/// itself so the formatting logic can be unit-tested directly against
+/// `Format` (which implements `Eq`) instead of only indirectly through a
+/// written-and-reread `.xlsx` file. Every cell gets `EXPORT_FONT_SIZE` at
+/// minimum. `bg_color` when it's set (`0` is every non-colored cell's
 /// sentinel throughout `results_generator.rs`) takes priority since it's
 /// real data (e.g. a class badge's own color); `EMPTY_CELL_BG` (see above)
 /// comes next; `alternating_color` only ever paints `ALTERNATING_ROW_BG` as
@@ -1457,31 +1442,25 @@ fn cell_to_f64(cell: &Cell) -> Option<f64> {
 /// The number format keeps a long float from forcing the column far wider
 /// than `GRID_CELL_PX` to avoid Excel's `#####` "too narrow to display"
 /// placeholder.
-fn cell_format(cell: &Cell, num_format: Option<&str>) -> Option<Format> {
-    let format = if cell.bg_color != 0 {
-        Some(Format::new().set_background_color(Color::RGB(cell.bg_color)))
+fn cell_format(cell: &Cell, num_format: Option<&str>) -> Format {
+    let mut format = Format::new().set_font_size(EXPORT_FONT_SIZE);
+    if cell.bg_color != 0 {
+        format = format.set_background_color(Color::RGB(cell.bg_color));
     } else if matches!(cell.value, CellValue::Empty) && cell.search_key.is_some() {
-        Some(Format::new().set_background_color(Color::RGB(EMPTY_CELL_BG)))
+        format = format.set_background_color(Color::RGB(EMPTY_CELL_BG));
     } else if cell.alternating_color {
-        Some(Format::new().set_background_color(Color::RGB(ALTERNATING_ROW_BG)))
-    } else {
-        None
-    };
-    let format = if cell.disabled {
-        Some(format.unwrap_or_default().set_font_strikethrough())
-    } else {
-        format
-    };
-    match num_format {
-        Some(num_format) => Some(
-            format
-                .unwrap_or_default()
-                .set_num_format(num_format)
-                .set_align(FormatAlign::Center)
-                .set_align(FormatAlign::VerticalCenter),
-        ),
-        None => format,
+        format = format.set_background_color(Color::RGB(ALTERNATING_ROW_BG));
     }
+    if cell.disabled {
+        format = format.set_font_strikethrough();
+    }
+    if let Some(num_format) = num_format {
+        format = format
+            .set_num_format(num_format)
+            .set_align(FormatAlign::Center)
+            .set_align(FormatAlign::VerticalCenter);
+    }
+    format
 }
 
 /// Writes one `Cell` — its value, typed appropriately (`write_string`/
@@ -1489,7 +1468,9 @@ fn cell_format(cell: &Cell, num_format: Option<&str>) -> Option<Format> {
 /// sortable/usable as real data) rather than pre-formatted display text —
 /// plus whatever `cell_format` computes for it. `num_format` is forwarded
 /// straight to `cell_format` (see its doc comment) - pass `None` outside a
-/// plate/well/heatmap grid.
+/// plate/well/heatmap grid. A real well/field with no value (`CellValue::Empty`
+/// with a `search_key` - see `EMPTY_CELL_BG`) is written as `"-"`; a grid
+/// position with no well/field at all is left a true blank.
 fn write_cell(
     worksheet: &mut Worksheet,
     row: u32,
@@ -1503,49 +1484,30 @@ fn write_cell(
         CellValue::Empty => {
             if cell.search_key.is_some() {
                 // A real well/field with no value (see `EMPTY_CELL_BG`
-                // above) - label it "None" rather than leaving the filled
+                // above) - label it "-" rather than leaving the filled
                 // cell looking blank.
                 worksheet
-                    .write_string_with_format(row, col, "None", &format.unwrap_or_default())
+                    .write_string_with_format(row, col, "-", &format)
                     .map_err(xlsx_err)?;
-            } else if let Some(format) = &format {
-                worksheet.write_blank(row, col, format).map_err(xlsx_err)?;
+            } else {
+                worksheet.write_blank(row, col, &format).map_err(xlsx_err)?;
             }
         }
-        CellValue::String(s) | CellValue::Class((s, _)) => match &format {
-            Some(format) => {
-                worksheet
-                    .write_string_with_format(row, col, s, format)
-                    .map_err(xlsx_err)?;
-            }
-            None => {
-                worksheet.write_string(row, col, s).map_err(xlsx_err)?;
-            }
-        },
-        CellValue::Float(value) => match &format {
-            Some(format) => {
-                worksheet
-                    .write_number_with_format(row, col, *value as f64, format)
-                    .map_err(xlsx_err)?;
-            }
-            None => {
-                worksheet
-                    .write_number(row, col, *value as f64)
-                    .map_err(xlsx_err)?;
-            }
-        },
-        CellValue::Integer(value) => match &format {
-            Some(format) => {
-                worksheet
-                    .write_number_with_format(row, col, *value as f64, format)
-                    .map_err(xlsx_err)?;
-            }
-            None => {
-                worksheet
-                    .write_number(row, col, *value as f64)
-                    .map_err(xlsx_err)?;
-            }
-        },
+        CellValue::String(s) | CellValue::Class((s, _)) => {
+            worksheet
+                .write_string_with_format(row, col, s, &format)
+                .map_err(xlsx_err)?;
+        }
+        CellValue::Float(value) => {
+            worksheet
+                .write_number_with_format(row, col, *value as f64, &format)
+                .map_err(xlsx_err)?;
+        }
+        CellValue::Integer(value) => {
+            worksheet
+                .write_number_with_format(row, col, *value as f64, &format)
+                .map_err(xlsx_err)?;
+        }
     }
     Ok(())
 }
@@ -1707,8 +1669,11 @@ mod tests {
     }
 
     #[test]
-    fn cell_format_is_none_for_a_plain_enabled_cell() {
-        assert_eq!(cell_format(&cell_str("x"), None), None);
+    fn cell_format_is_just_the_font_size_for_a_plain_enabled_cell() {
+        assert_eq!(
+            cell_format(&cell_str("x"), None),
+            Format::new().set_font_size(EXPORT_FONT_SIZE)
+        );
     }
 
     #[test]
@@ -1721,7 +1686,9 @@ mod tests {
                 },
                 None
             ),
-            Some(Format::new().set_font_strikethrough())
+            Format::new()
+                .set_font_size(EXPORT_FONT_SIZE)
+                .set_font_strikethrough()
         );
     }
 
@@ -1736,11 +1703,10 @@ mod tests {
                 },
                 None
             ),
-            Some(
-                Format::new()
-                    .set_background_color(Color::RGB(0x112233))
-                    .set_font_strikethrough()
-            )
+            Format::new()
+                .set_font_size(EXPORT_FONT_SIZE)
+                .set_background_color(Color::RGB(0x112233))
+                .set_font_strikethrough()
         );
     }
 
@@ -1755,11 +1721,10 @@ mod tests {
                 },
                 None
             ),
-            Some(
-                Format::new()
-                    .set_background_color(Color::RGB(ALTERNATING_ROW_BG))
-                    .set_font_strikethrough()
-            )
+            Format::new()
+                .set_font_size(EXPORT_FONT_SIZE)
+                .set_background_color(Color::RGB(ALTERNATING_ROW_BG))
+                .set_font_strikethrough()
         );
     }
 
@@ -1774,12 +1739,14 @@ mod tests {
                 },
                 None
             ),
-            Some(Format::new().set_background_color(Color::RGB(EMPTY_CELL_BG)))
+            Format::new()
+                .set_font_size(EXPORT_FONT_SIZE)
+                .set_background_color(Color::RGB(EMPTY_CELL_BG))
         );
     }
 
     #[test]
-    fn cell_format_leaves_a_truly_absent_grid_position_unformatted() {
+    fn cell_format_leaves_a_truly_absent_grid_position_with_just_the_font_size() {
         assert_eq!(
             cell_format(
                 &Cell {
@@ -1789,7 +1756,7 @@ mod tests {
                 },
                 None
             ),
-            None,
+            Format::new().set_font_size(EXPORT_FONT_SIZE),
             "no well/field sits here at all, so it must stay blank like write_blank's no-op"
         );
     }
@@ -1798,21 +1765,20 @@ mod tests {
     fn cell_format_applies_a_num_format_and_centers_a_grid_cell() {
         assert_eq!(
             cell_format(&cell_str("x"), Some("0.00")),
-            Some(
-                Format::new()
-                    .set_num_format("0.00")
-                    .set_align(FormatAlign::Center)
-                    .set_align(FormatAlign::VerticalCenter)
-            )
+            Format::new()
+                .set_font_size(EXPORT_FONT_SIZE)
+                .set_num_format("0.00")
+                .set_align(FormatAlign::Center)
+                .set_align(FormatAlign::VerticalCenter)
         );
     }
 
     /// `write_cell` itself (not just `cell_format`) - an existing-but-empty
     /// grid cell (a real well/field with no value) must read back as the
-    /// text "None", not a truly blank cell (that's reserved for a grid
+    /// text "-", not a truly blank cell (that's reserved for a grid
     /// position with no well/field at all).
     #[test]
-    fn write_cell_labels_an_existing_but_empty_grid_cell_as_none() {
+    fn write_cell_labels_an_existing_but_empty_grid_cell_as_a_dash() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("cell.xlsx");
         let mut workbook = Workbook::new();
@@ -1847,8 +1813,8 @@ mod tests {
         let range = wb.worksheet_range_at(0).expect("sheet").expect("range");
         assert_eq!(
             range.get_value((0, 0)),
-            Some(&calamine::Data::String("None".to_string())),
-            "a real well/field with no value reads as \"None\""
+            Some(&calamine::Data::String("-".to_string())),
+            "a real well/field with no value reads as \"-\""
         );
         assert!(
             matches!(range.get_value((0, 1)), None | Some(calamine::Data::Empty)),
@@ -2609,10 +2575,9 @@ mod tests {
 
     /// A well with an image but zero matching objects must still get a row
     /// in the flat-pivot list export (not vanish for having nothing to
-    /// aggregate), with `"None"` in its value cell rather than the old `"-"`
-    /// placeholder or a misleading `0`.
+    /// aggregate), with `"-"` in its value cell rather than a misleading `0`.
     #[test]
-    fn start_export_xlsx_plate_list_writes_none_for_a_well_with_no_objects() {
+    fn start_export_xlsx_plate_list_writes_a_dash_for_a_well_with_no_objects() {
         let (database, out_dir) = open_with_empty_image(
             &[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)],
             "B2_01.tif",
@@ -2644,8 +2609,8 @@ mod tests {
         );
         assert_eq!(
             plate_range.get_value((2, 1)),
-            Some(&calamine::Data::String("None".to_string())),
-            "B2 has no matching objects, so its cell must read \"None\", not \"-\" or 0"
+            Some(&calamine::Data::String("-".to_string())),
+            "B2 has no matching objects, so its cell must read \"-\", not 0"
         );
     }
 
@@ -2684,7 +2649,7 @@ mod tests {
         );
         assert_eq!(
             plate_range.get_value((2, 1)),
-            Some(&calamine::Data::String("None".to_string())),
+            Some(&calamine::Data::String("-".to_string())),
             "B2's disabled image must not contribute to the average"
         );
     }
