@@ -791,6 +791,81 @@ impl ResultsStateController {
                     manager.update_image_heatmap_view(&rel_path);
                 });
 
+            // Toggles the selected field's image disabled/enabled (see
+            // `ResultsGenerator::enable_image`), then refreshes the well
+            // grid so the heatmap reflects it immediately. A single image's
+            // own aggregate is never affected by its own disabled flag (see
+            // `get_group_by_well`), so `active-well-value`/`-has-value`
+            // don't need updating here - only `-disabled` (drives the
+            // detail card's crossed-out label) does, set synchronously
+            // right away rather than only through the refresh below, since
+            // `set_well_in_slint` (inside `refresh_active_matrix_view`)
+            // always resets `active-well` to "" as part of that refresh via
+            // a queued `invoke_from_event_loop` call - which the headless
+            // test platform never drains, and which would otherwise close
+            // the detail card for a moment even in a real app. The second
+            // `invoke_from_event_loop` below re-queues behind that reset
+            // (Slint runs queued UI updates in the order they were queued)
+            // to restore the selection once it does drain, in a real app.
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ResultsState>()
+                .on_toggle_active_well_disabled(move || {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_toggle_active_well_disabled");
+                        return;
+                    };
+                    let state = ui_ready.global::<ResultsState>();
+                    let image_name = state.get_active_well();
+                    if image_name.is_empty() {
+                        return;
+                    }
+                    let rel_path = manager
+                        .images
+                        .lock()
+                        .expect("Poisened")
+                        .iter()
+                        .find(|image| image.name == image_name.as_str())
+                        .map(|image| image.rel_path.to_string_lossy().into_owned());
+                    let Some(rel_path) = rel_path else {
+                        warn!("Unknown image to toggle: {image_name}");
+                        return;
+                    };
+                    let disable = !state.get_active_well_disabled();
+                    {
+                        let guard = manager.result_generator.lock().expect("Poisned");
+                        let Some(db) = guard.as_ref() else {
+                            warn!("No database opened!");
+                            return;
+                        };
+                        if let Err(err) = db.enable_image(&rel_path, disable) {
+                            error!("Could not toggle image {rel_path}: {err}");
+                            return;
+                        }
+                    }
+                    state.set_active_well_disabled(disable);
+                    manager.refresh_active_matrix_view();
+
+                    let manager = manager.clone();
+                    slint::invoke_from_event_loop(move || {
+                        let Some(ui_ready) = manager.ui.upgrade() else {
+                            warn!(
+                                "Failed to upgrade UI handle re-selecting field after toggling disabled"
+                            );
+                            return;
+                        };
+                        let state = ui_ready.global::<ResultsState>();
+                        let cells = manager.well_cells.lock().expect("Poisned");
+                        if let Some(cell) = cells.get(image_name.as_str()) {
+                            state.set_active_well(image_name.clone());
+                            state.set_active_well_has_value(cell.exists);
+                            state.set_active_well_value(cell.label.clone());
+                            state.set_active_well_disabled(cell.disabled);
+                        }
+                    })
+                    .ok();
+                });
+
             let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
@@ -4367,6 +4442,62 @@ mod tests {
         state.invoke_matrix_back_to_plate();
         state.invoke_matrix_back_to_well();
         state.invoke_object_marker_clicked(0);
+    }
+
+    #[test]
+    fn toggle_active_well_disabled_flips_the_database_and_refreshes_the_well_grid() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+
+        state.invoke_plate_cell_clicked("A1".into());
+        state.invoke_open_well_clicked("A1".into());
+        state.invoke_well_cell_clicked("A1_01.tif".into());
+        assert_eq!(state.get_active_well(), "A1_01.tif");
+        assert!(!state.get_active_well_disabled());
+
+        state.invoke_toggle_active_well_disabled();
+        assert!(
+            state.get_active_well_disabled(),
+            "the detail card must reflect the new disabled state without a re-click"
+        );
+        assert_eq!(
+            state.get_active_well(),
+            "A1_01.tif",
+            "the same field must stay selected across the refresh the toggle triggers"
+        );
+        let db = controller.result_generator.lock().unwrap();
+        let images = db.as_ref().unwrap().get_images().unwrap();
+        drop(db);
+        assert!(
+            images
+                .iter()
+                .find(|image| image.name == "A1_01.tif")
+                .unwrap()
+                .disabled,
+            "the underlying database must actually be updated"
+        );
+
+        // Toggling again flips it back.
+        state.invoke_toggle_active_well_disabled();
+        assert!(!state.get_active_well_disabled());
+        let db = controller.result_generator.lock().unwrap();
+        let images = db.as_ref().unwrap().get_images().unwrap();
+        drop(db);
+        assert!(
+            !images
+                .iter()
+                .find(|image| image.name == "A1_01.tif")
+                .unwrap()
+                .disabled
+        );
+    }
+
+    #[test]
+    fn toggle_active_well_disabled_with_nothing_selected_does_not_panic() {
+        let (_ui, results_ui, _controller) = controller_with_open_database();
+        results_ui
+            .global::<ResultsState>()
+            .invoke_toggle_active_well_disabled();
     }
 
     #[test]

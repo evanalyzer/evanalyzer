@@ -348,6 +348,10 @@ export global ResultsState {
     callback open-well-clicked(string);
     callback well-cell-clicked(string);
     callback well-field-clicked(string);
+    // Toggles the currently selected well-level field's image between
+    // disabled/enabled (see `MatrixCell.disabled`/`active-well-disabled`),
+    // then refreshes the well grid so its heatmap reflects the change.
+    callback toggle-active-well-disabled();
     callback image-heatmap-cell-clicked(string);
     callback object-marker-clicked(int);
     callback matrix-back-to-plate();

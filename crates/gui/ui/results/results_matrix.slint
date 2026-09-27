@@ -579,6 +579,21 @@ export component ResultsMatrixView inherits Rectangle {
                                     }
                                 }
                             }
+
+                            // Well level only: each cell here is one field's
+                            // own image, so this is the one level where
+                            // "disable/enable" names a single, unambiguous
+                            // image - unlike the plate level (a cell is a
+                            // whole well, several images) or the object
+                            // level (already inside one fixed image).
+                            if ResultsState.matrix-level == MatrixLevel.well: AppButton {
+                                text: ResultsState.active-well-disabled ? "Enable Image" : "Disable Image";
+                                height: 30px;
+                                enabled: ResultsState.active-well-has-value;
+                                clicked => {
+                                    ResultsState.toggle-active-well-disabled();
+                                }
+                            }
                         }
                     }
                 }
