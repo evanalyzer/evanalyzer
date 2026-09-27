@@ -131,12 +131,6 @@ pub struct ResultsStateController {
     // database.
     list_row_locations: Mutex<Vec<(String, [u32; 4])>>,
     image_list_controller: Arc<ImagesListController>,
-    // The path `result_generator`'s connection was opened from — so
-    // `on_export_start_clicked` can open its *own* fresh connection for the
-    // (potentially long-running) export, rather than holding
-    // `result_generator`'s lock for the whole export and blocking every
-    // other List/Matrix query on the UI thread for as long as it runs.
-    db_path: Mutex<Option<PathBuf>>,
     // Whether the export dialog's defaults have already been seeded for the
     // currently-open database (see `populate_export_defaults`) — reset to
     // `false` on every `open_database` so a fresh database gets fresh
@@ -183,7 +177,6 @@ impl ResultsStateController {
             current_image: Mutex::new(None),
             list_row_locations: Mutex::new(Vec::new()),
             image_list_controller,
-            db_path: Mutex::new(None),
             export_populated: Mutex::new(false),
             export_cancel_flag: Mutex::new(None),
         }
@@ -1204,10 +1197,9 @@ impl ResultsStateController {
 
     pub fn open_database(&self, path: PathBuf) {
         info!("Opening database {:?}", path);
-        let db = result::ResultsGenerator::open_database(path.clone());
+        let db = result::ResultsGenerator::open_database(path);
         match db {
             Ok(results) => {
-                *self.db_path.lock().expect("Poisened") = Some(path);
                 *self.export_populated.lock().expect("Poisened") = false;
                 let mut default_object_classes = Vec::new();
                 match results.get_object_classes() {
@@ -2984,27 +2976,38 @@ impl ResultsStateController {
         })
     }
 
-    // Runs `export` on a background thread against a *fresh* database
-    // connection (see `db_path`'s doc comment for why not
-    // `result_generator`), reporting progress/completion/error back to
-    // `ExportDialogState` as it goes.
+    // Runs `export` on a background thread against its *own* connection to
+    // the same already-open database, so the (potentially long-running)
+    // export doesn't hold `result_generator`'s lock for its whole duration
+    // and block every other List/Matrix query on the UI thread meanwhile.
+    // That second connection is `result_generator`'s own connection cloned
+    // via `ResultsGenerator::try_clone` (a new connection to the same
+    // already-open DuckDB database, not a second file open) - opening the
+    // same path a second time via `open_database` was the original
+    // approach, but on Windows the OS enforces exclusive-by-default file
+    // locking even for a second handle from the same process, so the app
+    // ended up locking itself out of its own database on every export.
     fn run_export(self: &Arc<Self>, export: ResultExport) {
-        let Some(path) = self.db_path.lock().expect("Poisened").clone() else {
-            self.push_export_error("No database is open.".to_string());
-            return;
+        let cloned = match self.result_generator.lock().expect("Poisened").as_ref() {
+            Some(database) => database.try_clone(),
+            None => {
+                self.push_export_error("No database is open.".to_string());
+                return;
+            }
+        };
+        let database = match cloned {
+            Ok(database) => database,
+            Err(err) => {
+                self.push_export_error(format!(
+                    "Could not open a database connection for export: {err}"
+                ));
+                return;
+            }
         };
         let cancel = Arc::new(AtomicBool::new(false));
         *self.export_cancel_flag.lock().expect("Poisened") = Some(cancel.clone());
         let manager = self.clone();
         std::thread::spawn(move || {
-            let database = match ResultsGenerator::open_database(path) {
-                Ok(database) => database,
-                Err(err) => {
-                    manager.push_export_error(format!("Could not open database: {err}"));
-                    *manager.export_cancel_flag.lock().expect("Poisened") = None;
-                    return;
-                }
-            };
             let manager_for_progress = manager.clone();
             let result = export.start_export(&database, &cancel, &mut |message, current, total| {
                 manager_for_progress.push_export_progress(message.to_string(), current, total);
@@ -3767,8 +3770,8 @@ mod tests {
     // `on_start_clicked` with no output folder chosen must surface a
     // validation error rather than silently doing nothing or panicking
     // (there's no database open in this test either, so this also exercises
-    // that `read_export_settings` fails fast before ever touching
-    // `db_path`).
+    // that `read_export_settings` fails fast before `run_export` ever
+    // touches `result_generator`).
     #[test]
     fn attach_callbacks_export_start_without_output_dir_reports_an_error() {
         let (ui, results_ui) = test_ui_windows();
@@ -3999,7 +4002,7 @@ mod tests {
         drop(list_filter);
 
         assert!(controller.matrix_filter.lock().unwrap().is_some());
-        assert!(controller.db_path.lock().unwrap().is_some());
+        assert!(controller.result_generator.lock().unwrap().is_some());
         assert!(!*controller.export_populated.lock().unwrap());
 
         // `refresh_list`/`update_matrix_view` both ran as part of opening -

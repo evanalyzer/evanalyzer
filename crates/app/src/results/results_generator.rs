@@ -297,6 +297,25 @@ impl ResultsGenerator {
         })
     }
 
+    /// A second, independent connection to the same already-open database -
+    /// for handing to a background thread (e.g. a potentially long-running
+    /// export) that shouldn't have to either hold this `ResultsGenerator`'s
+    /// caller's lock for its own duration, or reopen the underlying file at
+    /// the OS level. Reopening the same path with a fresh `open_database`
+    /// call instead of cloning was the original approach: it works on
+    /// Linux/macOS, but not Windows, where the OS enforces exclusive-by-
+    /// default file locking even for a second handle opened by the same
+    /// process - the app ended up locking itself out of its own database
+    /// on every export.
+    pub fn try_clone(&self) -> Result<Self, InternalErrors> {
+        let to_io_err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        Ok(Self {
+            database: self.database.try_clone().map_err(to_io_err)?,
+            classes_cache: RefCell::new(None),
+            coloc_classes_cache: RefCell::new(None),
+        })
+    }
+
     /// Raw DB handle
     pub(super) fn connection(&self) -> &Connection {
         &self.database
@@ -3574,6 +3593,32 @@ mod tests {
         let generator = open(&[ObjectSpec::new("a.tif", "ClassA", 1, 10)]);
         generator.enable_image("does-not-exist.tif", true).unwrap();
         assert!(!generator.get_images().unwrap()[0].disabled);
+    }
+
+    /// `try_clone` is the fix for a real Windows bug: exporting used to
+    /// reopen the `.evadb` file by path on a background thread while the
+    /// original `ResultsGenerator` connection was still open, which Windows
+    /// (unlike Linux/macOS) refuses - "used by another process", reporting
+    /// the app's own PID. `try_clone` gets a second, independent connection
+    /// to the *same already-open* database instead of reopening the file,
+    /// so this pins down that both connections stay live and see the same
+    /// data at the same time - the exact scenario a background export needs.
+    #[test]
+    fn try_clone_gives_an_independent_connection_to_the_same_live_database() {
+        let generator = open(&[ObjectSpec::new("a.tif", "ClassA", 1, 10)]);
+        let cloned = generator.try_clone().expect("clone connection");
+
+        // Both connections are usable at the same time...
+        assert_eq!(generator.get_images().unwrap().len(), 1);
+        assert_eq!(cloned.get_images().unwrap().len(), 1);
+
+        // ...and see the same underlying data, not two separate files: a
+        // write through one is visible through the other.
+        cloned.enable_image("a.tif", true).unwrap();
+        assert!(
+            generator.get_images().unwrap()[0].disabled,
+            "the clone must share the original's already-open database, not a second file"
+        );
     }
 
     // -- Column key/label round trips --------------------------------------
