@@ -235,6 +235,7 @@ impl ResultsStateController {
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
+                    state.set_active_well_disabled(false);
                     *manager.current_well.lock().expect("Poisned") = None;
                     *manager.current_image.lock().expect("Poisned") = None;
                 });
@@ -269,6 +270,7 @@ impl ResultsStateController {
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
+                    state.set_active_well_disabled(false);
                     *manager.current_well.lock().expect("Poisned") = None;
                     *manager.current_image.lock().expect("Poisned") = None;
                     return;
@@ -282,6 +284,7 @@ impl ResultsStateController {
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
+                    state.set_active_well_disabled(false);
                     *manager.current_well.lock().expect("Poisned") = None;
                     *manager.current_image.lock().expect("Poisned") = None;
                 } else if keep == 3 {
@@ -289,6 +292,7 @@ impl ResultsStateController {
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
+                    state.set_active_well_disabled(false);
                     *manager.current_image.lock().expect("Poisned") = None;
                     if let Some(well_id) = manager.current_well.lock().expect("Poisned").clone() {
                         manager.update_well_view(&well_id);
@@ -694,8 +698,15 @@ impl ResultsStateController {
                     };
                     let state = ui_ready.global::<ResultsState>();
                     state.set_active_well(key);
-                    state.set_active_well_has_value(cell.has_value);
+                    // `exists` (not `has_value`): the user must be able to
+                    // select/open a well or field even when it has no
+                    // number to show (an image with zero detected
+                    // objects) - this drives both the detail card's
+                    // "—"-vs-value fallback and the "Open well/Image"
+                    // button's `enabled`.
+                    state.set_active_well_has_value(cell.exists);
                     state.set_active_well_value(cell.label.clone());
+                    state.set_active_well_disabled(cell.disabled);
                 });
 
             let manager = self.clone();
@@ -737,8 +748,15 @@ impl ResultsStateController {
                     };
                     let state = ui_ready.global::<ResultsState>();
                     state.set_active_well(key);
-                    state.set_active_well_has_value(cell.has_value);
+                    // `exists` (not `has_value`): the user must be able to
+                    // select/open a well or field even when it has no
+                    // number to show (an image with zero detected
+                    // objects) - this drives both the detail card's
+                    // "—"-vs-value fallback and the "Open well/Image"
+                    // button's `enabled`.
+                    state.set_active_well_has_value(cell.exists);
                     state.set_active_well_value(cell.label.clone());
+                    state.set_active_well_disabled(cell.disabled);
                 });
 
             // `well-field-clicked` fires with the clicked cell's key, which
@@ -795,8 +813,15 @@ impl ResultsStateController {
                     };
                     let state = ui_ready.global::<ResultsState>();
                     state.set_active_well(key.clone());
-                    state.set_active_well_has_value(cell.has_value);
+                    // `exists` (not `has_value`): the user must be able to
+                    // select/open a well or field even when it has no
+                    // number to show (an image with zero detected
+                    // objects) - this drives both the detail card's
+                    // "—"-vs-value fallback and the "Open well/Image"
+                    // button's `enabled`.
+                    state.set_active_well_has_value(cell.exists);
                     state.set_active_well_value(cell.label.clone());
+                    state.set_active_well_disabled(cell.disabled);
                     drop(cells);
 
                     // Paint the clicked tile's own bounds as a rectangle
@@ -1990,6 +2015,7 @@ impl ResultsStateController {
                 state.set_active_well("".into());
                 state.set_active_well_has_value(false);
                 state.set_active_well_value("".into());
+                state.set_active_well_disabled(false);
                 state.set_active_well_caption(value_caption.into());
                 state.set_plate_rows(rows);
                 state.set_plate_cols(cols);
@@ -2037,6 +2063,7 @@ impl ResultsStateController {
                 state.set_active_well("".into());
                 state.set_active_well_has_value(false);
                 state.set_active_well_value("".into());
+                state.set_active_well_disabled(false);
                 state.set_active_well_caption(value_caption.into());
                 state.set_well_rows(rows);
                 state.set_well_cols(cols);
@@ -2133,6 +2160,7 @@ impl ResultsStateController {
                 state.set_active_well("".into());
                 state.set_active_well_has_value(false);
                 state.set_active_well_value("".into());
+                state.set_active_well_disabled(false);
                 state.set_active_well_caption(value_caption.into());
                 state.set_image_heatmap_rows(rows);
                 state.set_image_heatmap_cols(cols);
@@ -3466,8 +3494,16 @@ fn flatten_grid_cells(result: &DatabaseResult) -> Vec<MatrixCell> {
                 .iter()
                 .zip(row_cells.iter())
                 .map(move |(col_key, cell)| {
+                    // `exists` (a real well/field sits here, so it should
+                    // be clickable/openable) is broader than `has_value`
+                    // (there's a real number to show/color by) - an image
+                    // with zero detected objects still has a `search_key`
+                    // (see `get_group_by_plate`/`get_group_by_well`'s
+                    // Heatmap arms) even though its `CellValue` is `Empty`.
+                    let exists = cell.search_key.is_some();
                     let (has_value, value, label) = match &cell.value {
                         CellValue::Float(v) => (true, *v, format!("{v:.2}")),
+                        _ if exists => (false, 0.0, "—".to_string()),
                         _ => (false, 0.0, String::new()),
                     };
                     // Prefer the cell's own search key — the well id
@@ -3486,8 +3522,10 @@ fn flatten_grid_cells(result: &DatabaseResult) -> Vec<MatrixCell> {
                         key: key.into(),
                         value,
                         has_value,
+                        exists,
                         label: label.into(),
                         color: bg_color_to_slint(cell.bg_color),
+                        disabled: cell.disabled,
                     }
                 })
         })

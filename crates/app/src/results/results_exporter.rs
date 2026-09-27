@@ -2,11 +2,10 @@ use super::results_generator::class_display_label;
 use crate::result::{
     Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry, DatabaseResult,
     GroupedByImageFilter, ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter, PlateDimensions,
-    PlateFilter, PlateFilterMulti, ResultsGenerator, View, WellSize, WellsBatchFilter,
-    WellsBatchFilterMulti,
+    PlateFilterMulti, ResultsGenerator, View, WellSize, WellsBatchFilterMulti,
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
-use rust_xlsxwriter::{Color, Format, Workbook, Worksheet, XlsxError};
+use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook, Worksheet, XlsxError};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -25,8 +24,29 @@ const ALTERNATING_ROW_BG: u32 = 0xF1F1F1;
 /// heatmap grid block is laid out at, so its cells read as squares — the
 /// grid's own values are unitless relative to a real image/plate scale, so
 /// there's no "correct" size to derive them from; this just needs to be
-/// visually square and legible.
-const GRID_CELL_PX: u32 = 40;
+/// visually square and legible. Wide enough, together with `GRID_NUM_FORMAT`
+/// rounding a value to 2 decimals, that a typical aggregate (e.g.
+/// "205011.67", 9 characters) comfortably fits without Excel falling back
+/// to its `#####` too-narrow-to-display placeholder.
+const GRID_CELL_PX: u32 = 60;
+
+/// Number format every plate/well/heatmap grid cell's value is written
+/// with - without it, an `AVG`/`STDDEV_SAMP`/etc. aggregate's raw
+/// full-precision float (e.g. 15 decimal digits) would need a column far
+/// wider than `GRID_CELL_PX` to avoid `#####`. Matches the 2-decimal
+/// precision the GUI's own matrix cells already show
+/// (`flatten_grid_cells`'s `format!("{v:.2}")` in results_state_controller.rs).
+const GRID_NUM_FORMAT: &str = "0.00";
+
+/// Fill for a grid cell that `exists` (a real well/field sits there - see
+/// `Cell::search_key`) but has no value (a real image with zero detected
+/// objects) - so it reads in the sheet as "there but empty" rather than
+/// looking identical to a grid position with no real well/field at all
+/// (which gets no fill/border, matching `write_blank`'s no-format no-op
+/// below - a `CellValue::Empty` cell only ever occurs in a plate/well/
+/// image-heatmap grid, never a flat list or grouped-by-image sheet, so this
+/// never fires outside grid results).
+const EMPTY_CELL_BG: u32 = 0xE0E0E0;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -633,6 +653,13 @@ impl ResultExport {
         // see the identical reasoning in `export_plate_and_well`.
         if self.with_plate_view_list {
             let mut plate_values: HashMap<String, Vec<Option<f64>>> = HashMap::new();
+            // Whether at least one image in that well is disabled - see
+            // `Cell::disabled`. Independent of class/column/aggregation (it
+            // only depends on which images belong to the well), but merged
+            // with `|=` across every combo anyway rather than assumed, so a
+            // future combo-dependent source of `disabled` wouldn't silently
+            // under-report it.
+            let mut plate_disabled: HashMap<String, bool> = HashMap::new();
             let mut plate_lists_iter = if no_combos {
                 Vec::new().into_iter()
             } else {
@@ -675,11 +702,20 @@ impl ResultExport {
                             )
                         })?;
                         for (well_id, row) in plate_list.row_names.iter().zip(&plate_list.rows) {
+                            // Seeded unconditionally (not only when a value
+                            // is found) so a well that has images but zero
+                            // matching objects for *every* combo still gets
+                            // a row - written as "None" per cell, not
+                            // silently dropped for having nothing to show.
+                            let entry = plate_values
+                                .entry(well_id.clone())
+                                .or_insert_with(|| vec![None; combo_count]);
                             if let Some(value) = row.get(1).and_then(cell_to_f64) {
-                                plate_values
-                                    .entry(well_id.clone())
-                                    .or_insert_with(|| vec![None; combo_count])[combo_idx] =
-                                    Some(value);
+                                entry[combo_idx] = Some(value);
+                            }
+                            if let Some(cell) = row.get(1) {
+                                *plate_disabled.entry(well_id.clone()).or_insert(false) |=
+                                    cell.disabled;
                             }
                         }
                         combo_idx += 1;
@@ -695,15 +731,19 @@ impl ResultExport {
                 "Plate",
                 &["Well"],
                 &combo_labels,
-                plate_rows
-                    .into_iter()
-                    .map(|(well_id, values)| (vec![well_id], values)),
+                plate_rows.into_iter().map(|(well_id, values)| {
+                    let disabled = plate_disabled.get(&well_id).copied().unwrap_or(false);
+                    (vec![well_id], values, disabled)
+                }),
             )?;
         }
 
         if self.with_well_view_list {
             let mut well_values: HashMap<(String, String), Vec<Option<f64>>> = HashMap::new();
             let mut well_images: HashMap<(String, String), String> = HashMap::new();
+            // Whether that specific field's own image is disabled - see
+            // `Cell::disabled` on `get_group_by_well`'s per-field cells.
+            let mut well_disabled: HashMap<(String, String), bool> = HashMap::new();
             let mut well_lists_iter = if no_combos {
                 Vec::new().into_iter()
             } else {
@@ -749,16 +789,22 @@ impl ResultExport {
                         for (well_id, result) in &well_lists {
                             for (field_idx, row) in result.row_names.iter().zip(&result.rows) {
                                 let key = (well_id.clone(), field_idx.clone());
+                                // Seeded unconditionally - see the matching
+                                // comment on the plate loop above.
+                                let entry = well_values
+                                    .entry(key.clone())
+                                    .or_insert_with(|| vec![None; combo_count]);
                                 if let Some(value) = row.get(1).and_then(cell_to_f64) {
-                                    well_values
-                                        .entry(key.clone())
-                                        .or_insert_with(|| vec![None; combo_count])[combo_idx] =
-                                        Some(value);
+                                    entry[combo_idx] = Some(value);
                                 }
-                                if let Some((image_name, _)) =
-                                    row.get(1).and_then(|cell| cell.search_key.as_ref())
-                                {
-                                    well_images.entry(key).or_insert_with(|| image_name.clone());
+                                if let Some(cell) = row.get(1) {
+                                    *well_disabled.entry(key.clone()).or_insert(false) |=
+                                        cell.disabled;
+                                    if let Some((image_name, _)) = &cell.search_key {
+                                        well_images
+                                            .entry(key)
+                                            .or_insert_with(|| image_name.clone());
+                                    }
                                 }
                             }
                         }
@@ -783,11 +829,10 @@ impl ResultExport {
                 &["Well", "Field", "Image"],
                 &combo_labels,
                 well_rows.into_iter().map(|((well_id, field_idx), values)| {
-                    let image = well_images
-                        .get(&(well_id.clone(), field_idx.clone()))
-                        .cloned()
-                        .unwrap_or_default();
-                    (vec![well_id, field_idx, image], values)
+                    let key = (well_id.clone(), field_idx.clone());
+                    let image = well_images.get(&key).cloned().unwrap_or_default();
+                    let disabled = well_disabled.get(&key).copied().unwrap_or(false);
+                    (vec![well_id, field_idx, image], values, disabled)
                 }),
             )?;
         }
@@ -1109,7 +1154,7 @@ fn write_list_sheet(
 
             for row in &page.rows {
                 for (col_idx, cell) in row.iter().enumerate() {
-                    write_cell(worksheet, next_row, col_idx as u16, cell)?;
+                    write_cell(worksheet, next_row, col_idx as u16, cell, None)?;
                 }
                 next_row += 1;
             }
@@ -1195,7 +1240,7 @@ fn write_database_result_sheet(
     for (row_idx, row) in result.rows.iter().enumerate() {
         let row_n = (row_idx + 1) as u32;
         for (col_idx, cell) in row.iter().enumerate() {
-            write_cell(worksheet, row_n, col_idx as u16, cell)?;
+            write_cell(worksheet, row_n, col_idx as u16, cell, None)?;
         }
     }
     Ok(())
@@ -1293,7 +1338,7 @@ fn write_grid_block(
             .map_err(xlsx_err)?;
         for (col_idx, cell) in result.rows[row_idx].iter().enumerate() {
             let col = (col_idx + 1) as u16;
-            write_cell(worksheet, row, col, cell)?;
+            write_cell(worksheet, row, col, cell, Some(GRID_NUM_FORMAT))?;
         }
     }
 
@@ -1304,23 +1349,29 @@ fn write_grid_block(
 /// `sheet_name`, headed by `key_labels` (e.g. `["Well"]` or
 /// `["Well", "Field", "Image"]`) followed by `combo_labels` (one column per
 /// class/column/aggregation combination), then one row per `rows` entry —
-/// each a `(key values, one Some(value)-or-None per combo_labels column)`
-/// pair. A `None` (that key had no matching data for that particular
-/// combination — e.g. a well with no objects of some other class) is
-/// written as a plain `"-"`, matching how a missing cell reads everywhere
-/// else in these exports. Unlike `write_grid_block`, this is a plain table,
-/// not a matrix - no square sizing or per-cell color.
+/// each a `(key values, one Some(value)-or-None per combo_labels column,
+/// disabled)` triple. Every row here corresponds to a real well/field (the
+/// caller only ever seeds one for a key it actually saw - see
+/// `export_plate_and_well_as_flat_list`), so a `None` here only ever means
+/// "this well/field has no matching data for this particular combination"
+/// (e.g. no objects of some other class), never "no such well/field at
+/// all" - written as `"None"`, matching `write_cell`'s own convention for
+/// the same case in the grid export. `disabled` (at least one image behind
+/// this row is disabled - see `Cell::disabled`) strikes the whole row
+/// through. Unlike `write_grid_block`, this is a plain table, not a matrix
+/// - no square sizing or per-cell color.
 fn write_flat_pivot(
     path: &Path,
     sheet_name: &str,
     key_labels: &[&str],
     combo_labels: &[String],
-    rows: impl Iterator<Item = (Vec<String>, Vec<Option<f64>>)>,
+    rows: impl Iterator<Item = (Vec<String>, Vec<Option<f64>>, bool)>,
 ) -> Result<(), InternalErrors> {
     let mut workbook = Workbook::new();
     let sheet = workbook.add_worksheet();
     sheet.set_name(sheet_name).map_err(xlsx_err)?;
     let bold = Format::new().set_bold();
+    let strikethrough = Format::new().set_font_strikethrough();
 
     for (col_idx, label) in key_labels.iter().enumerate() {
         sheet
@@ -1334,21 +1385,37 @@ fn write_flat_pivot(
             .map_err(xlsx_err)?;
     }
 
-    for (row_idx, (keys, values)) in rows.enumerate() {
+    for (row_idx, (keys, values, disabled)) in rows.enumerate() {
         let row = (row_idx + 1) as u32;
         for (col_idx, key) in keys.iter().enumerate() {
-            sheet
-                .write(row, col_idx as u16, key.as_str())
-                .map_err(xlsx_err)?;
+            if disabled {
+                sheet
+                    .write_string_with_format(row, col_idx as u16, key.as_str(), &strikethrough)
+                    .map_err(xlsx_err)?;
+            } else {
+                sheet
+                    .write(row, col_idx as u16, key.as_str())
+                    .map_err(xlsx_err)?;
+            }
         }
         for (i, value) in values.iter().enumerate() {
             let col = (key_cols + i) as u16;
-            match value {
-                Some(v) => {
+            match (value, disabled) {
+                (Some(v), true) => {
+                    sheet
+                        .write_number_with_format(row, col, *v, &strikethrough)
+                        .map_err(xlsx_err)?;
+                }
+                (Some(v), false) => {
                     sheet.write(row, col, *v).map_err(xlsx_err)?;
                 }
-                None => {
-                    sheet.write(row, col, "-").map_err(xlsx_err)?;
+                (None, true) => {
+                    sheet
+                        .write_string_with_format(row, col, "None", &strikethrough)
+                        .map_err(xlsx_err)?;
+                }
+                (None, false) => {
+                    sheet.write(row, col, "None").map_err(xlsx_err)?;
                 }
             }
         }
@@ -1370,33 +1437,78 @@ fn cell_to_f64(cell: &Cell) -> Option<f64> {
     }
 }
 
-/// Writes one `Cell` — its value, typed appropriately (`write_string`/
-/// `write_number`, not everything flattened to text, so the sheet stays
-/// sortable/usable as real data) rather than pre-formatted display text,
-/// plus a background fill: `bg_color` when it's set (`0` is every
-/// non-colored cell's sentinel throughout `results_generator.rs`, e.g. a
-/// `CellValue::Empty` grid gap, so it's left with Excel's default fill
-/// rather than painted black) takes priority since it's real data (e.g. a
-/// class badge's own color) — `alternating_color` only ever paints
-/// `ALTERNATING_ROW_BG` as a fallback, for a cell that has no color of its
-/// own to show.
-fn write_cell(
-    worksheet: &mut Worksheet,
-    row: u32,
-    col: u16,
-    cell: &Cell,
-) -> Result<(), InternalErrors> {
+/// The background fill, strikethrough and/or number format `write_cell`
+/// applies for a given `Cell` - split out from `write_cell` itself so the
+/// formatting logic can be unit-tested directly against `Format` (which
+/// implements `Eq`) instead of only indirectly through a written-and-reread
+/// `.xlsx` file. `bg_color` when it's set (`0` is every non-colored cell's
+/// sentinel throughout `results_generator.rs`) takes priority since it's
+/// real data (e.g. a class badge's own color); `EMPTY_CELL_BG` (see above)
+/// comes next; `alternating_color` only ever paints `ALTERNATING_ROW_BG` as
+/// a last-resort fallback, for a cell that has no color of its own to show.
+/// `disabled` additionally strikes the text through, so a value derived
+/// from (or, for a well/plate cell, affected by) a disabled image visibly
+/// reads as "shown but excluded from the statistics" rather than looking
+/// like any other value. `num_format` (e.g. `"0.00"`, used by the plate/
+/// well/heatmap grids - see `write_grid_block`) is applied last, along with
+/// centering the cell both horizontally and vertically - `num_format` is
+/// only ever passed for a grid cell, never a flat list/grouped-by-image
+/// one, so it doubles as "this is a grid cell" for alignment purposes too.
+/// The number format keeps a long float from forcing the column far wider
+/// than `GRID_CELL_PX` to avoid Excel's `#####` "too narrow to display"
+/// placeholder.
+fn cell_format(cell: &Cell, num_format: Option<&str>) -> Option<Format> {
     let format = if cell.bg_color != 0 {
         Some(Format::new().set_background_color(Color::RGB(cell.bg_color)))
+    } else if matches!(cell.value, CellValue::Empty) && cell.search_key.is_some() {
+        Some(Format::new().set_background_color(Color::RGB(EMPTY_CELL_BG)))
     } else if cell.alternating_color {
         Some(Format::new().set_background_color(Color::RGB(ALTERNATING_ROW_BG)))
     } else {
         None
     };
+    let format = if cell.disabled {
+        Some(format.unwrap_or_default().set_font_strikethrough())
+    } else {
+        format
+    };
+    match num_format {
+        Some(num_format) => Some(
+            format
+                .unwrap_or_default()
+                .set_num_format(num_format)
+                .set_align(FormatAlign::Center)
+                .set_align(FormatAlign::VerticalCenter),
+        ),
+        None => format,
+    }
+}
+
+/// Writes one `Cell` — its value, typed appropriately (`write_string`/
+/// `write_number`, not everything flattened to text, so the sheet stays
+/// sortable/usable as real data) rather than pre-formatted display text —
+/// plus whatever `cell_format` computes for it. `num_format` is forwarded
+/// straight to `cell_format` (see its doc comment) - pass `None` outside a
+/// plate/well/heatmap grid.
+fn write_cell(
+    worksheet: &mut Worksheet,
+    row: u32,
+    col: u16,
+    cell: &Cell,
+    num_format: Option<&str>,
+) -> Result<(), InternalErrors> {
+    let format = cell_format(cell, num_format);
 
     match &cell.value {
         CellValue::Empty => {
-            if let Some(format) = &format {
+            if cell.search_key.is_some() {
+                // A real well/field with no value (see `EMPTY_CELL_BG`
+                // above) - label it "None" rather than leaving the filled
+                // cell looking blank.
+                worksheet
+                    .write_string_with_format(row, col, "None", &format.unwrap_or_default())
+                    .map_err(xlsx_err)?;
+            } else if let Some(format) = &format {
                 worksheet.write_blank(row, col, format).map_err(xlsx_err)?;
             }
         }
@@ -1559,7 +1671,10 @@ fn check_cancelled(cancel: &AtomicBool) -> Result<(), InternalErrors> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results::test_support::{ObjectSpec, seed_db};
+    use crate::{
+        result::{PlateFilter, WellsBatchFilter},
+        results::test_support::{ObjectSpec, seed_db},
+    };
     use calamine::Reader as _;
 
     #[test]
@@ -1587,7 +1702,158 @@ mod tests {
             bg_color: 0,
             alternating_color: false,
             search_key: None,
+            disabled: false,
         }
+    }
+
+    #[test]
+    fn cell_format_is_none_for_a_plain_enabled_cell() {
+        assert_eq!(cell_format(&cell_str("x"), None), None);
+    }
+
+    #[test]
+    fn cell_format_strikes_through_a_disabled_cell_with_no_other_formatting() {
+        assert_eq!(
+            cell_format(
+                &Cell {
+                    disabled: true,
+                    ..cell_str("x")
+                },
+                None
+            ),
+            Some(Format::new().set_font_strikethrough())
+        );
+    }
+
+    #[test]
+    fn cell_format_combines_strikethrough_with_an_existing_background_color() {
+        assert_eq!(
+            cell_format(
+                &Cell {
+                    bg_color: 0x112233,
+                    disabled: true,
+                    ..cell_str("x")
+                },
+                None
+            ),
+            Some(
+                Format::new()
+                    .set_background_color(Color::RGB(0x112233))
+                    .set_font_strikethrough()
+            )
+        );
+    }
+
+    #[test]
+    fn cell_format_combines_strikethrough_with_the_alternating_row_background() {
+        assert_eq!(
+            cell_format(
+                &Cell {
+                    alternating_color: true,
+                    disabled: true,
+                    ..cell_str("x")
+                },
+                None
+            ),
+            Some(
+                Format::new()
+                    .set_background_color(Color::RGB(ALTERNATING_ROW_BG))
+                    .set_font_strikethrough()
+            )
+        );
+    }
+
+    #[test]
+    fn cell_format_fills_an_existing_but_empty_grid_cell() {
+        assert_eq!(
+            cell_format(
+                &Cell {
+                    value: CellValue::Empty,
+                    search_key: Some(("A1".to_string(), "A1".to_string())),
+                    ..cell_str("x")
+                },
+                None
+            ),
+            Some(Format::new().set_background_color(Color::RGB(EMPTY_CELL_BG)))
+        );
+    }
+
+    #[test]
+    fn cell_format_leaves_a_truly_absent_grid_position_unformatted() {
+        assert_eq!(
+            cell_format(
+                &Cell {
+                    value: CellValue::Empty,
+                    search_key: None,
+                    ..cell_str("x")
+                },
+                None
+            ),
+            None,
+            "no well/field sits here at all, so it must stay blank like write_blank's no-op"
+        );
+    }
+
+    #[test]
+    fn cell_format_applies_a_num_format_and_centers_a_grid_cell() {
+        assert_eq!(
+            cell_format(&cell_str("x"), Some("0.00")),
+            Some(
+                Format::new()
+                    .set_num_format("0.00")
+                    .set_align(FormatAlign::Center)
+                    .set_align(FormatAlign::VerticalCenter)
+            )
+        );
+    }
+
+    /// `write_cell` itself (not just `cell_format`) - an existing-but-empty
+    /// grid cell (a real well/field with no value) must read back as the
+    /// text "None", not a truly blank cell (that's reserved for a grid
+    /// position with no well/field at all).
+    #[test]
+    fn write_cell_labels_an_existing_but_empty_grid_cell_as_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("cell.xlsx");
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet();
+        write_cell(
+            sheet,
+            0,
+            0,
+            &Cell {
+                value: CellValue::Empty,
+                search_key: Some(("A1".to_string(), "A1".to_string())),
+                ..cell_str("unused")
+            },
+            None,
+        )
+        .expect("write existing-but-empty cell");
+        write_cell(
+            sheet,
+            0,
+            1,
+            &Cell {
+                value: CellValue::Empty,
+                search_key: None,
+                ..cell_str("unused")
+            },
+            None,
+        )
+        .expect("write truly absent cell");
+        workbook.save(&path).expect("save workbook");
+
+        let mut wb: calamine::Xlsx<_> = calamine::open_workbook(&path).expect("open cell.xlsx");
+        let range = wb.worksheet_range_at(0).expect("sheet").expect("range");
+        assert_eq!(
+            range.get_value((0, 0)),
+            Some(&calamine::Data::String("None".to_string())),
+            "a real well/field with no value reads as \"None\""
+        );
+        assert!(
+            matches!(range.get_value((0, 1)), None | Some(calamine::Data::Empty)),
+            "a grid position with no well/field at all stays truly blank"
+        );
     }
 
     #[test]
@@ -1599,6 +1865,7 @@ mod tests {
                 bg_color: 0,
                 alternating_color: false,
                 search_key: None,
+                disabled: false,
             }),
             ""
         );
@@ -1608,6 +1875,7 @@ mod tests {
                 bg_color: 0,
                 alternating_color: false,
                 search_key: None,
+                disabled: false,
             }),
             "1.5"
         );
@@ -1617,6 +1885,7 @@ mod tests {
                 bg_color: 0,
                 alternating_color: false,
                 search_key: None,
+                disabled: false,
             }),
             "7"
         );
@@ -1626,6 +1895,7 @@ mod tests {
                 bg_color: 0,
                 alternating_color: false,
                 search_key: None,
+                disabled: false,
             }),
             "ClassA"
         );
@@ -1639,6 +1909,38 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("results.evadb");
         seed_db(&db_path, objects);
+        let out_dir = dir.path().join("out");
+        std::mem::forget(dir);
+        (
+            ResultsGenerator::open_database(db_path).expect("open database"),
+            out_dir,
+        )
+    }
+
+    /// Same as `open`, plus one extra `images` row with no objects at all
+    /// (a well/field that has an image but zero detected objects) -
+    /// `ResultsGenerator`'s own `database` connection is private even to
+    /// this sibling test module, and `seed_db`/`ObjectSpec` only ever
+    /// create an image alongside a seeded object, so the raw insert has to
+    /// happen through its own connection, before `ResultsGenerator` ever
+    /// opens the file (matching how `seed_db` itself closes its connection
+    /// before returning).
+    fn open_with_empty_image(
+        objects: &[ObjectSpec],
+        empty_image_name: &str,
+    ) -> (ResultsGenerator, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("results.evadb");
+        seed_db(&db_path, objects);
+        {
+            let conn = duckdb::Connection::open(&db_path).expect("open db for extra image");
+            conn.execute(
+                "INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks) \
+                 VALUES (?, ?, 100, 100, 1, 1, 1)",
+                duckdb::params![empty_image_name, empty_image_name],
+            )
+            .expect("insert empty image");
+        }
         let out_dir = dir.path().join("out");
         std::mem::forget(dir);
         (
@@ -2305,6 +2607,88 @@ mod tests {
         assert_eq!(data_f64(well_range.get_value((2, 3))), 20.0);
     }
 
+    /// A well with an image but zero matching objects must still get a row
+    /// in the flat-pivot list export (not vanish for having nothing to
+    /// aggregate), with `"None"` in its value cell rather than the old `"-"`
+    /// placeholder or a misleading `0`.
+    #[test]
+    fn start_export_xlsx_plate_list_writes_none_for_a_well_with_no_objects() {
+        let (database, out_dir) = open_with_empty_image(
+            &[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)],
+            "B2_01.tif",
+        );
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_plate_view_list: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("flat-pivot export");
+
+        let mut plate_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate_list.xlsx")).expect("open plate_list.xlsx");
+        let plate_range = plate_wb.worksheet_range("Plate").expect("Plate sheet");
+        assert_eq!(
+            plate_range.get_value((1, 0)),
+            Some(&calamine::Data::String("A1".to_string()))
+        );
+        assert_eq!(data_f64(plate_range.get_value((1, 1))), 10.0);
+        assert_eq!(
+            plate_range.get_value((2, 0)),
+            Some(&calamine::Data::String("B2".to_string())),
+            "B2 has an image but no objects and must still get a row"
+        );
+        assert_eq!(
+            plate_range.get_value((2, 1)),
+            Some(&calamine::Data::String("None".to_string())),
+            "B2 has no matching objects, so its cell must read \"None\", not \"-\" or 0"
+        );
+    }
+
+    /// A well made up only of disabled images must still get a row (its
+    /// images are real, just excluded from the statistics), with every one
+    /// of its cells struck through so the disabled state carries into the
+    /// flat-pivot export the same way it does in the grid export.
+    #[test]
+    fn start_export_xlsx_plate_list_still_includes_a_fully_disabled_well() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 100),
+        ]);
+        database
+            .enable_image("B2_01.tif", true)
+            .expect("disable B2");
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_plate_view_list: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("flat-pivot export");
+
+        let mut plate_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate_list.xlsx")).expect("open plate_list.xlsx");
+        let plate_range = plate_wb.worksheet_range("Plate").expect("Plate sheet");
+        assert_eq!(
+            plate_range.get_value((2, 0)),
+            Some(&calamine::Data::String("B2".to_string())),
+            "B2 must still appear even though its only image is disabled"
+        );
+        assert_eq!(
+            plate_range.get_value((2, 1)),
+            Some(&calamine::Data::String("None".to_string())),
+            "B2's disabled image must not contribute to the average"
+        );
+    }
+
     #[test]
     fn start_export_runs_every_xlsx_document_type_together() {
         let (database, out_dir) = open(&[
@@ -2530,18 +2914,21 @@ mod tests {
             bg_color: 0,
             alternating_color: false,
             search_key: None,
+            disabled: false,
         };
         let int_cell = Cell {
             value: CellValue::Integer(7),
             bg_color: 0,
             alternating_color: false,
             search_key: None,
+            disabled: false,
         };
         let string_cell = Cell {
             value: CellValue::String("x".to_string()),
             bg_color: 0,
             alternating_color: false,
             search_key: None,
+            disabled: false,
         };
         assert_eq!(cell_to_f64(&float_cell), Some(1.5));
         assert_eq!(cell_to_f64(&int_cell), Some(7.0));
