@@ -271,7 +271,25 @@ impl ImageAlgorithm for Threshold {
                     // starts. Omitting this "+1" makes the threshold one
                     // bin too permissive, letting background-adjacent
                     // noise through as foreground.
-                    let bin = compute_auto_threshold(method, hist) + 1;
+                    //
+                    // Clamped to 254: bin 255 always rescales to exactly
+                    // `dmax` (`255.0 / 255.0 == 1.0`), and the classification
+                    // below is a strict `>` against that value - but `dmax`
+                    // is by construction the brightest pixel actually
+                    // present, so nothing can ever be strictly greater than
+                    // it. A cleanly bimodal image (e.g. background at 0,
+                    // objects at one fixed high value) commonly makes an
+                    // auto method return bin 254 - every bin between the two
+                    // populations ties for the same between-class variance,
+                    // and the winning tie lands on the last one checked -
+                    // which, once bumped by the "+1" above, would otherwise
+                    // silently produce zero foreground pixels for every
+                    // entry using this threshold, no matter how many
+                    // genuinely bright pixels the image has. Any method
+                    // returning 254 (or, before this clamp, even 255 itself
+                    // for a method whose own range includes it) hits the
+                    // same unreachable-threshold failure, not just Otsu.
+                    let bin = (compute_auto_threshold(method, hist) + 1).min(254);
                     let relative = if *dmax > *dmin {
                         dmin + (bin as f32 / 255.0) * (dmax - dmin)
                     } else {
@@ -473,33 +491,75 @@ fn compute_auto_threshold(method: &ThresholdMethod, hist: &[f32; 256]) -> usize 
 // in docs/threshold/. Each function accepts a 256-bin f32 histogram and returns
 // the optimal threshold bin index (0–255).
 
+/// A faithful port of ImageJ's `ij.process.AutoThresholder.Otsu(int[] data)`
+/// ("M. Emre Celebi 6.15.2007, Fourier Library... ported to ImageJ plugin by
+/// G.Landini") - fetched and diffed directly against the real source
+/// (`ij/process/AutoThresholder.java`) rather than assumed, since the
+/// earlier port here (a `sk`/`n1` running-sum formulation searched only over
+/// `1..255`, ties broken by `bcv >= bcv_max`) turned out to diverge from it
+/// in two ways real ImageJ doesn't:
+///
+/// - ImageJ searches the *full* `0..256` range, not `1..255`.
+/// - ImageJ's tie-break is strict (`max_bcv < bcv`), so the *first* bin to
+///   reach the maximum between-class variance wins - not the last.
+///
+/// That divergence mattered: a cleanly bimodal histogram (two populations
+/// with an empty run of bins between them) ties across that entire gap,
+/// since the running cumulative count/mean don't change while scanning
+/// empty bins. The old "last tie wins" behavior parked the cut just before
+/// the *upper* population starts; real ImageJ's "first tie wins" parks it
+/// at the *end of the lower* population instead. For a degenerate two-value
+/// histogram (all mass at bin 0 and bin 255, nothing between) the old
+/// version drifted all the way to bin 254 - one below the loop's excluded
+/// upper bound - which collided with `Threshold::execute`'s "+1" rescale
+/// landing exactly on `dmax` (see the `.min(254)` clamp there, still kept
+/// as a backstop for every *other* auto method, but no longer what protects
+/// Otsu itself). This version instead naturally returns bin 0 for that same
+/// input, matching real ImageJ.
 fn thresh_otsu(hist: &[f32; 256]) -> usize {
-    let n: f64 = hist.iter().map(|&v| v as f64).sum();
-    let s: f64 = hist
-        .iter()
-        .enumerate()
-        .map(|(k, &v)| k as f64 * v as f64)
-        .sum();
-    let mut sk = 0.0f64;
-    let mut n1 = hist[0] as f64;
-    let mut bcv_max = 0.0f64;
-    let mut k_star = 0usize;
-    for k in 1..255usize {
-        sk += k as f64 * hist[k] as f64;
-        n1 += hist[k] as f64;
-        let denom = n1 * (n - n1);
-        let bcv = if denom != 0.0 {
-            let num = (n1 / n) * s - sk;
-            num * num / denom
-        } else {
-            0.0
-        };
-        if bcv >= bcv_max {
-            bcv_max = bcv;
-            k_star = k;
+    let num_pixels: f64 = hist.iter().map(|&v| v as f64).sum();
+    if num_pixels == 0.0 {
+        return 0;
+    }
+    let term = 1.0 / num_pixels;
+
+    let mut histo = [0.0f64; 256];
+    for i in 0..256 {
+        histo[i] = term * hist[i] as f64;
+    }
+
+    // Cumulative normalized histogram.
+    let mut cnh = [0.0f64; 256];
+    cnh[0] = histo[0];
+    for i in 1..256 {
+        cnh[i] = cnh[i - 1] + histo[i];
+    }
+
+    // Cumulative mean gray level.
+    let mut mean = [0.0f64; 256];
+    mean[0] = 0.0;
+    for i in 1..256 {
+        mean[i] = mean[i - 1] + i as f64 * histo[i];
+    }
+
+    let total_mean = mean[255];
+
+    let mut threshold = 0usize;
+    let mut max_bcv = 0.0f64;
+    for i in 0..256 {
+        let mut bcv = total_mean * cnh[i] - mean[i];
+        // `cnh[255]` is always exactly 1.0 (the full cumulative sum), so
+        // this denominator is always exactly 0.0 at `i == 255` - the same
+        // `0.0 / 0.0 == NaN` every comparison below treats as "not greater",
+        // matching Java's own IEEE-754 comparison semantics - so the last
+        // bin can never win, same as ImageJ.
+        bcv = bcv * bcv / (cnh[i] * (1.0 - cnh[i]));
+        if max_bcv < bcv {
+            max_bcv = bcv;
+            threshold = i;
         }
     }
-    k_star
+    threshold
 }
 
 /// Three-class Otsu: jointly searches for the two simultaneous cuts `(t1,
@@ -1632,9 +1692,17 @@ mod tests {
         h
     }
 
+    /// Verified directly against real ImageJ source (`ij.process
+    /// .AutoThresholder.Otsu`, fetched and run against this exact
+    /// histogram) rather than assumed: ImageJ's strict, first-tie-wins
+    /// scan over the full `0..256` range parks the cut at the *end of the
+    /// first cluster* (bin 40, the last bin of the 20-40 population) - not
+    /// at the edge of the second cluster's gap like the old `sk`/`n1`
+    /// running-sum port (which returned 159) - see `thresh_otsu`'s doc
+    /// comment for why that mattered beyond just this one number.
     #[test]
     fn test_otsu_matches_reference() {
-        assert_eq!(thresh_otsu(&bimodal_reference_histogram()), 159);
+        assert_eq!(thresh_otsu(&bimodal_reference_histogram()), 40);
     }
 
     /// Three well-separated populations (bins 20-40, 110-130, 200-220), for
@@ -1980,6 +2048,72 @@ mod tests {
         // else (-100, the nine 0s, the nine 10s) is <= 15.0.
         let expected = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
         assert_eq!(result_pixels, &expected[..]);
+        Ok(())
+    }
+
+    /// Regression test for the "+1 lands on `dmax`" bug, originally reported
+    /// as a real Otsu segmentation step finding 0 spots in every frame of
+    /// two ground-truth images, despite the same pipeline correctly finding
+    /// spots on noisier images whose histograms spread across enough bins
+    /// to avoid the tie that triggers this: a cleanly bimodal image
+    /// (background pixels all exactly at one value, foreground pixels all
+    /// exactly at another, much higher value - e.g. a synthetic spot
+    /// channel with no noise) ties every bin between the two populations
+    /// for the same between-class variance.
+    ///
+    /// Now covers both layers of the fix: `thresh_otsu` itself (matching
+    /// real ImageJ's first-tie-wins scan - see its doc comment) resolves
+    /// this particular histogram's tie at bin 0 rather than drifting toward
+    /// the top of the range, and `Threshold::execute`'s `.min(254)` clamp
+    /// remains a backstop for every *other* auto method that can still
+    /// return a bin whose "+1" rescale would otherwise land exactly on
+    /// `dmax` (`255.0 / 255.0 == 1.0`) - unreachable by any real pixel
+    /// under the strict `>` classification below.
+    #[test]
+    fn test_threshold_execute_otsu_clean_bimodal_image_still_finds_the_bright_population()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut input_data = vec![0.0f32; 90];
+        input_data.extend(std::iter::repeat_n(512.0f32, 10));
+
+        let size = ImageSize {
+            width: input_data.len(),
+            height: 1,
+        };
+        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+
+        let settings = vec![ThresholdEntry {
+            method: ThresholdMethod::Otsu {
+                classes: OtsuClasses::Two,
+            },
+            min_threshold: 0.0,
+            max_threshold: 1000.0,
+            object_class_id: SegmentationClass(1),
+            unit: PixelUnits::Relative,
+            value_source: ThresholdValueSource::ActualImage,
+        }];
+        let cmd = Threshold {
+            thresholds: settings,
+        };
+        let mut ctx = PipelineContext::new_from_image_test(input_img)?;
+        let mut cache = GlobalPipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache)?;
+
+        let result_pixels = ctx
+            .segmentation_map
+            .as_ref()
+            .expect("No labels found")
+            .as_slice();
+
+        let foreground_count = result_pixels.iter().filter(|&&id| id == 1).count();
+        assert_eq!(
+            foreground_count, 10,
+            "every one of the 10 bright pixels must be classified as foreground - \
+             before the dmax clamp fix this was 0"
+        );
+        assert!(
+            result_pixels[..90].iter().all(|&id| id == 0),
+            "the 90 background pixels must stay background"
+        );
         Ok(())
     }
 
