@@ -52,7 +52,10 @@ fn fetch_page_no_join(
     after: Option<&str>,
     limit: i32,
 ) -> (Vec<String>, Duration) {
-    let mut conditions = vec![format!("z_stack = {z_stack}"), format!("t_stack = {t_stack}")];
+    let mut conditions = vec![
+        format!("z_stack = {z_stack}"),
+        format!("t_stack = {t_stack}"),
+    ];
     if let Some(cursor) = after {
         conditions.push(format!("object_id > '{cursor}'::UUID"));
     }
@@ -83,7 +86,9 @@ fn fetch_page_no_join(
     );
     let mut stmt = conn.prepare(&sql).unwrap();
     let _rows: Vec<(String, String, String, f64)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
@@ -113,7 +118,13 @@ fn fetch_page_with_join_only(conn: &Connection, ids: &[String]) -> Duration {
     let mut stmt = conn.prepare(&sql).unwrap();
     let _rows: Vec<(String, String, String, f64, bool)> = stmt
         .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })
         .unwrap()
         .collect::<Result<_, _>>()
