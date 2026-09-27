@@ -145,6 +145,14 @@ impl ProjectOwner {
         Ok(())
     }
 
+    /// Replaces the current project with a fresh, blank, unsaved one -
+    /// "File > New". Unlike `load_project`, there's no file to read and
+    /// nothing to fail on, so this can't error.
+    pub fn new_project(&self) {
+        *lock_project_write(&self.project) = ProjectWithRuntime::default();
+        *self.current_path.lock().unwrap() = None;
+    }
+
     /// Saves the current project to disk.
     pub fn save_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
         let mut project = lock_project_write(&self.project);
@@ -244,6 +252,12 @@ impl AppHandle {
         let project = crate::extensions::project_ext::load_project(path)?;
         *lock_project_write(&self.project) = project;
         Ok(())
+    }
+
+    /// Replaces the current project with a fresh, blank, unsaved one -
+    /// "File > New".
+    pub fn new_project(&self) {
+        *lock_project_write(&self.project) = ProjectWithRuntime::default();
     }
 
     /// Imports an old (`.icproj`) project, replacing the current project.

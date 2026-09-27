@@ -232,6 +232,12 @@ impl UiState {
         self.app.load_project(path)
     }
 
+    /// Replaces the current project with a fresh, blank, unsaved one -
+    /// "File > New".
+    pub fn new_project(&self) {
+        self.app.new_project();
+    }
+
     /// Imports an old (`.icproj`) project, replacing the current project.
     /// Returns conversion warnings and the legacy project's image folder, if any.
     pub fn import_legacy_project(
