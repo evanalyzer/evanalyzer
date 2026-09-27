@@ -36,10 +36,19 @@ export struct MatrixCell {
     exists: bool,
     label: string,
     color: color,
-    // True when at least one image contributing to this cell is disabled -
-    // its value is still shown (computed while ignoring that image's
-    // objects), just struck through so the user can tell.
+    // True when this cell's own single image is disabled (well-view field
+    // tiles only) - its value is still shown (computed while ignoring that
+    // image's objects), just struck through so the user can tell. A
+    // plate-view well cell is never itself `disabled`, even if one of its
+    // images is - see `any-disabled` below for that case.
     disabled: bool,
+    // True when at least one image behind this cell is disabled, without
+    // this cell itself being disabled - e.g. a plate-view well that
+    // contains one disabled field among several enabled ones. Shown as a
+    // small corner badge rather than graying/striking the cell out, since
+    // the cell's own value/color is still a real, uncompromised aggregate
+    // of its *other* images.
+    any-disabled: bool,
 }
 
 export struct ObjectMarker {
@@ -57,6 +66,7 @@ export struct ObjectMarker {
 export struct ResultRow {
     cells: [string],
     alternating: bool,
+    disabled: bool,
 }
 
 export struct ChartScatterPoint {

@@ -1444,15 +1444,21 @@ fn cell_to_f64(cell: &Cell) -> Option<f64> {
 /// placeholder.
 fn cell_format(cell: &Cell, num_format: Option<&str>) -> Format {
     let mut format = Format::new().set_font_size(EXPORT_FONT_SIZE);
-    if cell.bg_color != 0 {
+    if cell.disabled {
+        // Gray out a disabled cell regardless of any heatmap/class color it
+        // would otherwise carry - a struck-through value on top of its
+        // normal color still read as "just another colored cell" at a
+        // glance, same complaint as the GUI grid before it switched
+        // disabled tiles to a flat gray fill instead of their heatmap
+        // color.
+        format = format.set_background_color(Color::RGB(EMPTY_CELL_BG));
+        format = format.set_font_strikethrough();
+    } else if cell.bg_color != 0 {
         format = format.set_background_color(Color::RGB(cell.bg_color));
     } else if matches!(cell.value, CellValue::Empty) && cell.search_key.is_some() {
         format = format.set_background_color(Color::RGB(EMPTY_CELL_BG));
     } else if cell.alternating_color {
         format = format.set_background_color(Color::RGB(ALTERNATING_ROW_BG));
-    }
-    if cell.disabled {
-        format = format.set_font_strikethrough();
     }
     if let Some(num_format) = num_format {
         format = format
@@ -1665,6 +1671,7 @@ mod tests {
             alternating_color: false,
             search_key: None,
             disabled: false,
+            any_disabled: false,
         }
     }
 
@@ -1677,7 +1684,7 @@ mod tests {
     }
 
     #[test]
-    fn cell_format_strikes_through_a_disabled_cell_with_no_other_formatting() {
+    fn cell_format_grays_and_strikes_through_a_disabled_cell_with_no_other_formatting() {
         assert_eq!(
             cell_format(
                 &Cell {
@@ -1688,12 +1695,16 @@ mod tests {
             ),
             Format::new()
                 .set_font_size(EXPORT_FONT_SIZE)
+                .set_background_color(Color::RGB(EMPTY_CELL_BG))
                 .set_font_strikethrough()
         );
     }
 
     #[test]
-    fn cell_format_combines_strikethrough_with_an_existing_background_color() {
+    fn cell_format_grays_out_a_disabled_cell_instead_of_its_own_background_color() {
+        // A disabled cell must not keep its heatmap/class color - otherwise
+        // it still reads as "just another colored cell" at a glance, same
+        // as the GUI grid's flat gray fill for a disabled tile.
         assert_eq!(
             cell_format(
                 &Cell {
@@ -1705,13 +1716,13 @@ mod tests {
             ),
             Format::new()
                 .set_font_size(EXPORT_FONT_SIZE)
-                .set_background_color(Color::RGB(0x112233))
+                .set_background_color(Color::RGB(EMPTY_CELL_BG))
                 .set_font_strikethrough()
         );
     }
 
     #[test]
-    fn cell_format_combines_strikethrough_with_the_alternating_row_background() {
+    fn cell_format_grays_out_a_disabled_cell_instead_of_the_alternating_row_background() {
         assert_eq!(
             cell_format(
                 &Cell {
@@ -1723,7 +1734,7 @@ mod tests {
             ),
             Format::new()
                 .set_font_size(EXPORT_FONT_SIZE)
-                .set_background_color(Color::RGB(ALTERNATING_ROW_BG))
+                .set_background_color(Color::RGB(EMPTY_CELL_BG))
                 .set_font_strikethrough()
         );
     }
@@ -1832,6 +1843,7 @@ mod tests {
                 alternating_color: false,
                 search_key: None,
                 disabled: false,
+                any_disabled: false,
             }),
             ""
         );
@@ -1842,6 +1854,7 @@ mod tests {
                 alternating_color: false,
                 search_key: None,
                 disabled: false,
+                any_disabled: false,
             }),
             "1.5"
         );
@@ -1852,6 +1865,7 @@ mod tests {
                 alternating_color: false,
                 search_key: None,
                 disabled: false,
+                any_disabled: false,
             }),
             "7"
         );
@@ -1862,6 +1876,7 @@ mod tests {
                 alternating_color: false,
                 search_key: None,
                 disabled: false,
+                any_disabled: false,
             }),
             "ClassA"
         );
@@ -2615,9 +2630,10 @@ mod tests {
     }
 
     /// A well made up only of disabled images must still get a row (its
-    /// images are real, just excluded from the statistics), with every one
-    /// of its cells struck through so the disabled state carries into the
-    /// flat-pivot export the same way it does in the grid export.
+    /// images are real, just excluded from the statistics) - written as a
+    /// dash like any other well with no matching data, not struck through:
+    /// a well itself is never flagged disabled, only its individual images
+    /// are (see `plate_groups_to_result`).
     #[test]
     fn start_export_xlsx_plate_list_still_includes_a_fully_disabled_well() {
         let (database, out_dir) = open(&[
@@ -2880,6 +2896,7 @@ mod tests {
             alternating_color: false,
             search_key: None,
             disabled: false,
+            any_disabled: false,
         };
         let int_cell = Cell {
             value: CellValue::Integer(7),
@@ -2887,6 +2904,7 @@ mod tests {
             alternating_color: false,
             search_key: None,
             disabled: false,
+            any_disabled: false,
         };
         let string_cell = Cell {
             value: CellValue::String("x".to_string()),
@@ -2894,6 +2912,7 @@ mod tests {
             alternating_color: false,
             search_key: None,
             disabled: false,
+            any_disabled: false,
         };
         assert_eq!(cell_to_f64(&float_cell), Some(1.5));
         assert_eq!(cell_to_f64(&int_cell), Some(7.0));

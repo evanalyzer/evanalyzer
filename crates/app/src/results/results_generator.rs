@@ -258,6 +258,8 @@ pub struct Cell {
     pub search_key: Option<(String, String)>,
     /// True if this cell's value came from a disabled image
     pub disabled: bool,
+    /// True if at least one image that contributed to is disabled
+    pub any_disabled: bool,
 }
 
 #[derive(Clone)]
@@ -495,7 +497,7 @@ impl ResultsGenerator {
         // objects even though only `LIST_PAGE_SIZE` rows ever reach the GUI.
         let needs = ObjectColumnNeeds::for_columns(&ordered_columns);
         let sql = format!(
-            "SELECT {}\n FROM objects {where_clause}\n ORDER BY object_id",
+            "SELECT {}\n FROM objects o LEFT JOIN images i ON i.image_rel_path = o.image_rel_path\n {where_clause}\n ORDER BY o.object_id",
             object_select_clause(needs)
         );
 
@@ -727,6 +729,7 @@ impl ResultsGenerator {
                         alternating_color: false,
                         search_key: search_key.clone(),
                         disabled: false,
+                        any_disabled: false,
                     },
                     Cell {
                         value: CellValue::Class((label, color)),
@@ -734,6 +737,7 @@ impl ResultsGenerator {
                         alternating_color: false,
                         search_key: search_key.clone(),
                         disabled: false,
+                        any_disabled: false,
                     },
                 ];
                 for value in values {
@@ -743,6 +747,7 @@ impl ResultsGenerator {
                         alternating_color: false,
                         search_key: search_key.clone(),
                         disabled: false,
+                        any_disabled: false,
                     });
                 }
                 cells
@@ -777,12 +782,13 @@ impl ResultsGenerator {
         classes: &[Class],
     ) -> Result<(Vec<String>, Vec<Vec<Cell>>, Vec<(String, [u32; 4])>), InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        let dash = |alternating_color: bool| Cell {
+        let dash = |alternating_color: bool, disabled: bool| Cell {
             value: CellValue::String("-".to_string()),
             bg_color: 0,
             alternating_color,
             search_key: None,
-            disabled: false,
+            disabled,
+            any_disabled: false,
         };
 
         let mut partner_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -815,7 +821,7 @@ impl ResultsGenerator {
             let ids: Vec<String> = partner_ids.into_iter().collect();
             let partner_needs = ObjectColumnNeeds::for_columns(metric_columns);
             let partner_sql = format!(
-                "SELECT {} FROM objects WHERE object_id IN ({})",
+                "SELECT {} FROM objects o LEFT JOIN images i ON i.image_rel_path = o.image_rel_path WHERE o.object_id IN ({})",
                 object_select_clause(partner_needs),
                 sql_string_in_list(&ids)
             );
@@ -867,9 +873,9 @@ impl ResultsGenerator {
                             partner_id
                                 .and_then(|id| partner_rows.get(id))
                                 .map(|partner_row| cell_for_column(metric, partner_row, classes))
-                                .unwrap_or_else(|| dash(alternating_color))
+                                .unwrap_or_else(|| dash(alternating_color, object.disabled))
                         } else {
-                            dash(alternating_color)
+                            dash(alternating_color, object.disabled)
                         };
                         cell.alternating_color = alternating_color;
                         cells.push(cell);
@@ -1639,6 +1645,7 @@ impl ResultsGenerator {
                                 alternating_color: false,
                                 search_key: search_key.clone(),
                                 disabled: false,
+                                any_disabled: false,
                             },
                             Cell {
                                 value: CellValue::Float(*value as f32),
@@ -1646,6 +1653,7 @@ impl ResultsGenerator {
                                 alternating_color: false,
                                 search_key,
                                 disabled: false,
+                                any_disabled: false,
                             },
                         ]
                     })
@@ -1696,6 +1704,7 @@ impl ResultsGenerator {
                                         alternating_color: false,
                                         search_key: Some((key.clone(), key)),
                                         disabled: false,
+                                        any_disabled: false,
                                     }
                                 }
                                 // No object fell into this tile at all —
@@ -1707,6 +1716,7 @@ impl ResultsGenerator {
                                     alternating_color: false,
                                     search_key: None,
                                     disabled: false,
+                                    any_disabled: false,
                                 },
                             })
                             .collect()
@@ -1944,6 +1954,7 @@ struct ObjectRow {
     bbox_ymin_px: u32,
     bbox_xmax_px: u32,
     bbox_ymax_px: u32,
+    disabled: bool,
 }
 
 /// Which of `ObjectRow`'s source columns a given column selection actually
@@ -2002,68 +2013,73 @@ impl ObjectColumnNeeds {
 /// to navigate to and highlight it (see `DatabaseResult::row_locations`)
 /// independent of which columns are actually displayed.
 fn object_select_clause(need: ObjectColumnNeeds) -> String {
-    let select_image_name = if need.image_name { "image_name" } else { "''" };
+    let select_image_name = if need.image_name {
+        "o.image_name"
+    } else {
+        "''"
+    };
     let select_object_class_name = if need.class {
-        "CAST(object_class_name AS VARCHAR[])"
+        "CAST(o.object_class_name AS VARCHAR[])"
     } else {
         "CAST(NULL AS VARCHAR[])"
     };
     let select_seg_class_name = if need.class {
-        "seg_class_name"
+        "o.seg_class_name"
     } else {
         "NULL::VARCHAR"
     };
     let select_area_px = if need.area_px {
-        "area_px"
+        "o.area_px"
     } else {
         "0::UBIGINT"
     };
     let select_area_nm2 = if need.area_nm2 {
-        "area_nm2"
+        "o.area_nm2"
     } else {
         "0.0::DOUBLE"
     };
     let select_perimeter_px = if need.perimeter_px {
-        "perimeter_px"
+        "o.perimeter_px"
     } else {
         "0.0::DOUBLE"
     };
     let select_perimeter_nm = if need.perimeter_nm {
-        "perimeter_nm"
+        "o.perimeter_nm"
     } else {
         "0.0::DOUBLE"
     };
     let select_circularity = if need.circularity {
-        "circularity"
+        "o.circularity"
     } else {
         "0.0::DOUBLE"
     };
     let select_solidity = if need.solidity {
-        "solidity"
+        "o.solidity"
     } else {
         "0.0::DOUBLE"
     };
     let select_eccentricity = if need.eccentricity {
-        "eccentricity"
+        "o.eccentricity"
     } else {
         "0.0::DOUBLE"
     };
     let select_coloc_json = if need.coloc {
-        "coloc_json"
+        "o.coloc_json"
     } else {
         "NULL::VARCHAR"
     };
     let select_intensities_json = if need.intensities {
-        "intensities_json"
+        "o.intensities_json"
     } else {
         "NULL::VARCHAR"
     };
     format!(
-        "object_id, {select_image_name}, {select_object_class_name}, {select_seg_class_name},\n\
+        "o.object_id, {select_image_name}, {select_object_class_name}, {select_seg_class_name},\n\
                 {select_area_px}, {select_area_nm2}, {select_perimeter_px}, {select_perimeter_nm},\n\
                 {select_circularity}, {select_solidity}, {select_eccentricity},\n\
                 {select_coloc_json}, {select_intensities_json},\n\
-                image_rel_path, bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px"
+                o.image_rel_path, o.bbox_xmin_px, o.bbox_ymin_px, o.bbox_xmax_px, o.bbox_ymax_px,\n\
+                COALESCE(i.disabled, false)"
     )
 }
 
@@ -2089,6 +2105,7 @@ fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
         bbox_ymin_px: row.get(15)?,
         bbox_xmax_px: row.get(16)?,
         bbox_ymax_px: row.get(17)?,
+        disabled: row.get(18)?,
     })
 }
 
@@ -2209,7 +2226,8 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
         bg_color: 0,
         alternating_color: false,
         search_key: None,
-        disabled: false,
+        disabled: object.disabled,
+        any_disabled: false,
     };
     match column {
         Column::ObjectId => Cell {
@@ -2237,7 +2255,8 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
                 bg_color: color,
                 alternating_color: false,
                 search_key: None,
-                disabled: false,
+                disabled: object.disabled,
+                any_disabled: false,
             }
         }
         Column::Count => Cell {
@@ -2628,8 +2647,11 @@ pub fn color_scale_gradient(schema: &ColorSchema) -> [u32; COLOR_SCALE_GRADIENT_
 /// its own slice of that batch) so the two agree on exactly the same
 /// List/Heatmap shape. `any_disabled` is true when at least one image in
 /// that well/group is disabled — `value` itself never includes a disabled
-/// image's objects (see `get_group_by_plate`), so this is purely a "some of
-/// what could have contributed to this well was excluded" signal for the UI.
+/// image's objects (see `get_group_by_plate`). A well is never itself
+/// rendered as "disabled" though (only individual images are - a well with
+/// a mix of enabled/disabled images still shows its normal heatmap color),
+/// so `any_disabled` is carried through the tuple but intentionally not
+/// written into any `Cell::disabled` here.
 fn plate_groups_to_result(
     groups: Vec<(String, String, String, Option<f64>, bool)>,
     column: &Column,
@@ -2661,7 +2683,14 @@ fn plate_groups_to_result(
                 .map(|(key, _row, _col, value, any_disabled)| {
                     // `key` is the group/well id (e.g. "A1") itself, so
                     // it's its own search key — used by the GUI to
-                    // navigate into that group/well.
+                    // navigate into that group/well. A well itself is
+                    // never "disabled" - only the individual images inside
+                    // it are - so `any_disabled` must not gray/strike this
+                    // row; it only ever excluded a disabled image's
+                    // objects from `value` above. It's still carried into
+                    // `Cell::any_disabled` though, so the GUI can mark the
+                    // well as containing a disabled image without
+                    // recoloring it.
                     let search_key = Some((key.clone(), key.clone()));
                     vec![
                         Cell {
@@ -2669,14 +2698,16 @@ fn plate_groups_to_result(
                             bg_color: 0,
                             alternating_color: false,
                             search_key: search_key.clone(),
-                            disabled: any_disabled,
+                            disabled: false,
+                            any_disabled,
                         },
                         Cell {
                             value: value.map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
                             bg_color: 0,
                             alternating_color: false,
                             search_key,
-                            disabled: any_disabled,
+                            disabled: false,
+                            any_disabled,
                         },
                     ]
                 })
@@ -2748,6 +2779,14 @@ fn plate_groups_to_result(
                 .map(|row| {
                     (0..cols)
                         .map(|col| match values.get(&(row, col)) {
+                            // A well itself is never "disabled" - only the
+                            // individual images inside it are - so a well
+                            // with a mix of enabled/disabled images still
+                            // renders its heatmap color here, same as any
+                            // other well; `any_disabled` only ever excluded
+                            // a disabled image's objects from `value`. It's
+                            // still carried into `Cell::any_disabled` so the
+                            // GUI can badge the well without recoloring it.
                             Some((value, group_prefix, any_disabled)) => Cell {
                                 value: value
                                     .map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
@@ -2756,7 +2795,8 @@ fn plate_groups_to_result(
                                 }),
                                 alternating_color: false,
                                 search_key: Some((group_prefix.clone(), group_prefix.clone())),
-                                disabled: *any_disabled,
+                                disabled: false,
+                                any_disabled: *any_disabled,
                             },
                             // No well at all matched this grid position —
                             // leave it empty rather than showing a
@@ -2767,6 +2807,7 @@ fn plate_groups_to_result(
                                 alternating_color: false,
                                 search_key: None,
                                 disabled: false,
+                                any_disabled: false,
                             },
                         })
                         .collect()
@@ -2834,6 +2875,7 @@ fn well_fields_to_result(
                             alternating_color: false,
                             search_key: search_key.clone(),
                             disabled,
+                            any_disabled: false,
                         },
                         Cell {
                             value: value.map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
@@ -2841,6 +2883,7 @@ fn well_fields_to_result(
                             alternating_color: false,
                             search_key,
                             disabled,
+                            any_disabled: false,
                         },
                     ]
                 })
@@ -2901,8 +2944,8 @@ fn well_fields_to_result(
                 ColorScale::Auto => {
                     let mut min = f64::INFINITY;
                     let mut max = f64::NEG_INFINITY;
-                    for (value, ..) in values.values() {
-                        if let Some(value) = value {
+                    for (value, _, _, disabled) in values.values() {
+                        if let (Some(value), false) = (value, disabled) {
                             min = min.min(*value);
                             max = max.max(*value);
                         }
@@ -2928,6 +2971,7 @@ fn well_fields_to_result(
                                 alternating_color: false,
                                 search_key: Some((image_name.clone(), image_rel_path.clone())),
                                 disabled: *disabled,
+                                any_disabled: false,
                             },
                             // No field occupies this grid position at all -
                             // leave it empty rather than showing a
@@ -2938,6 +2982,7 @@ fn well_fields_to_result(
                                 alternating_color: false,
                                 search_key: None,
                                 disabled: false,
+                                any_disabled: false,
                             },
                         })
                         .collect()
@@ -3143,6 +3188,50 @@ mod tests {
         assert_eq!(result.source_object_count, 2);
         assert_eq!(result.row_names.len(), 2);
         assert_eq!(result.row_locations.len(), 2);
+    }
+
+    /// Every cell in a row belongs to the same source object, so every one
+    /// of them - not just an image-name/path column - must carry that
+    /// object's own image's disabled flag, letting the GUI strike the whole
+    /// row through regardless of which columns are actually shown.
+    #[test]
+    fn get_object_list_flags_every_cell_of_a_disabled_images_row() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+        ]);
+        generator.enable_image("img2.tif", true).unwrap();
+
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::ImageName, Column::ObjectClass, Column::AreaSizePx],
+                with_coloc_details: false,
+                page: no_page(),
+            })
+            .unwrap();
+
+        let img1_row = result
+            .rows
+            .iter()
+            .position(|row| matches!(&row[0].value, CellValue::String(s) if s == "img1.tif"))
+            .expect("img1's row");
+        let img2_row = result
+            .rows
+            .iter()
+            .position(|row| matches!(&row[0].value, CellValue::String(s) if s == "img2.tif"))
+            .expect("img2's row");
+
+        assert!(
+            result.rows[img1_row].iter().all(|cell| !cell.disabled),
+            "img1 is enabled, so none of its cells should be struck through"
+        );
+        assert!(
+            result.rows[img2_row].iter().all(|cell| cell.disabled),
+            "img2 is disabled, so every cell of its row - not just the image name - must be flagged"
+        );
     }
 
     #[test]
@@ -3475,9 +3564,10 @@ mod tests {
     /// A disabled image's objects must not contribute to its well's
     /// aggregate, but the well itself is never dropped - even one made up
     /// only of disabled images still appears (as an empty cell, same as any
-    /// other well with no contributing objects), just flagged via
-    /// `Cell::disabled` so the UI can show the user that value was computed
-    /// while ignoring a disabled image.
+    /// other well with no contributing objects). The well itself is never
+    /// flagged `Cell::disabled` though - only individual images are - so a
+    /// well made up only of disabled images renders the same as any other
+    /// empty well.
     #[test]
     fn get_group_by_plate_ignores_objects_from_a_disabled_image() {
         let generator = open(&[
@@ -3514,8 +3604,8 @@ mod tests {
             "A1 has no disabled images"
         );
         assert!(
-            result.rows[b2_idx][1].disabled,
-            "B2's only image is disabled"
+            !result.rows[b2_idx][1].disabled,
+            "the well itself is never flagged disabled, only individual images are"
         );
         assert!(
             matches!(result.rows[b2_idx][1].value, CellValue::Empty),
@@ -3523,10 +3613,10 @@ mod tests {
         );
     }
 
-    /// The mixed case the disabled flag exists for: a well with both an
-    /// enabled and a disabled image must still average only the enabled
-    /// one's objects, while flagging the well as `disabled` so the UI can
-    /// tell the user at least one of its images was excluded.
+    /// The mixed case: a well with both an enabled and a disabled image
+    /// must still average only the enabled one's objects, but the well
+    /// itself must not be flagged `disabled` - only individual images are,
+    /// so the well keeps its normal heatmap color.
     #[test]
     fn get_group_by_plate_flags_a_well_with_a_mix_of_enabled_and_disabled_images() {
         let generator = open(&[
@@ -3553,12 +3643,41 @@ mod tests {
 
         assert_eq!(result.row_names, vec!["A1".to_string()]);
         assert!(
-            result.rows[0][1].disabled,
-            "A1 has at least one disabled image"
+            !result.rows[0][1].disabled,
+            "the well itself must not be flagged disabled just because one of its images is"
+        );
+        assert!(
+            result.rows[0][1].any_disabled,
+            "the well must still be flagged any_disabled so the GUI can badge it"
         );
         assert!(
             matches!(result.rows[0][1].value, CellValue::Float(v) if v == 10.0),
             "only the enabled image's objects (10) must be averaged, not the disabled one's 1000"
+        );
+
+        let heatmap = generator
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Unset,
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::Heatmap,
+            )
+            .unwrap();
+        let a1_cell = &heatmap.rows[0][0];
+        assert!(
+            !a1_cell.disabled,
+            "the heatmap's well cell must not be flagged disabled either"
+        );
+        assert!(
+            a1_cell.any_disabled,
+            "the heatmap's well cell must carry any_disabled too, for the same corner badge"
         );
     }
 
@@ -4049,6 +4168,39 @@ mod tests {
         assert!(single.rows[1][1].disabled);
     }
 
+    /// A disabled field's own value is still shown (see the test above),
+    /// but must not skew the Auto color range every *other* field's tile is
+    /// colored against - disabling an outlier should change how the
+    /// remaining fields compare to each other, not leave them exactly where
+    /// they were as if nothing happened.
+    #[test]
+    fn get_group_by_well_heatmap_excludes_a_disabled_fields_value_from_the_auto_color_range() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("A1_03.tif", "ClassA", 1, 1000),
+        ]);
+        generator.enable_image("A1_03.tif", true).unwrap();
+
+        let heatmap = generator
+            .get_group_by_well(&well_filter("A1", Column::AreaSizePx), &View::Heatmap)
+            .unwrap();
+
+        // Default 4x4 well grid, no `well_order`: field "01" -> (0, 0),
+        // "02" -> (0, 1), "03" -> (0, 2).
+        let schema = ColorSchema::default();
+        assert_eq!(
+            heatmap.rows[0][0].bg_color,
+            value_to_color(10.0, 10.0, 20.0, &schema),
+            "10 must be colored as the range's own min, ignoring the disabled 1000"
+        );
+        assert_eq!(
+            heatmap.rows[0][1].bg_color,
+            value_to_color(20.0, 10.0, 20.0, &schema),
+            "20 must be colored as the range's own max, ignoring the disabled 1000"
+        );
+    }
+
     #[test]
     fn group_by_plate_multi_agg_matches_group_by_plate_per_aggregation() {
         let generator = open(&[
@@ -4087,8 +4239,8 @@ mod tests {
                 "aggregation {aggregation:?}'s disabled flag disagrees between multi_agg batch and single call",
             );
             assert!(
-                batched_result.rows[0][1].disabled,
-                "A1_03 is disabled, so the well must be flagged"
+                !batched_result.rows[0][1].disabled,
+                "the well itself must not be flagged disabled just because A1_03 is"
             );
         }
         // Sanity on the actual numbers (A1_03's 30 excluded from every

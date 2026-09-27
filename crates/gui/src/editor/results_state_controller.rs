@@ -231,6 +231,9 @@ impl ResultsStateController {
                     state.set_active_well_disabled(false);
                     *manager.current_well.lock().expect("Poisned") = None;
                     *manager.current_image.lock().expect("Poisned") = None;
+                    if mode == ResultsRailMode::Matrix {
+                        manager.update_matrix_view();
+                    }
                 });
 
             // Three drill levels sit below the "All results"/"Plate" base
@@ -280,6 +283,7 @@ impl ResultsStateController {
                     state.set_active_well_disabled(false);
                     *manager.current_well.lock().expect("Poisned") = None;
                     *manager.current_image.lock().expect("Poisned") = None;
+                    manager.update_matrix_view();
                 } else if keep == 3 {
                     state.set_matrix_level(MatrixLevel::Well);
                     state.set_active_well("".into());
@@ -1851,21 +1855,26 @@ impl ResultsStateController {
         // the table properties need are `Rc`-based and can't cross the
         // `invoke_from_event_loop` closure boundary, so they're built below
         // once we're back on the UI thread.
-        // Every `Cell` in a row carries the same `alternating_color` (see
-        // `build_coloc_detail_rows`), so the first cell's flag speaks for
-        // the whole row; an empty row (no columns selected) just isn't
-        // alternated.
-        let row_cells: Vec<(Vec<slint::SharedString>, bool)> = result
+        // Every `Cell` in a row carries the same `alternating_color` and
+        // `disabled` flag (see `build_coloc_detail_rows`/`cell_for_column`),
+        // so the first cell's flags speak for the whole row; an empty row
+        // (no columns selected) just isn't alternated/disabled.
+        let row_cells: Vec<(Vec<slint::SharedString>, bool, bool)> = result
             .rows
             .iter()
             .map(|row| {
                 let alternating = row.first().is_some_and(|cell| cell.alternating_color);
-                (row.iter().map(cell_to_string).collect(), alternating)
+                let disabled = row.first().is_some_and(|cell| cell.disabled);
+                (
+                    row.iter().map(cell_to_string).collect(),
+                    alternating,
+                    disabled,
+                )
             })
             .collect();
         let column_widths = list_column_widths(
             &headers,
-            row_cells.iter().map(|(cells, _)| cells.as_slice()),
+            row_cells.iter().map(|(cells, _, _)| cells.as_slice()),
         );
         *self.list_row_locations.lock().expect("Poisned") = result.row_locations.clone();
         slint::invoke_from_event_loop(move || {
@@ -1873,9 +1882,10 @@ impl ResultsStateController {
                 let state = ui_ready.global::<ResultsState>();
                 let rows: Vec<ResultRow> = row_cells
                     .into_iter()
-                    .map(|(cells, alternating)| ResultRow {
+                    .map(|(cells, alternating, disabled)| ResultRow {
                         cells: ModelRc::new(VecModel::from(cells)),
                         alternating,
+                        disabled,
                     })
                     .collect();
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
@@ -3604,6 +3614,7 @@ fn flatten_grid_cells(result: &DatabaseResult) -> Vec<MatrixCell> {
                         label: label.into(),
                         color: bg_color_to_slint(cell.bg_color),
                         disabled: cell.disabled,
+                        any_disabled: cell.any_disabled,
                     }
                 })
         })
@@ -4442,6 +4453,59 @@ mod tests {
         state.invoke_matrix_back_to_plate();
         state.invoke_matrix_back_to_well();
         state.invoke_object_marker_clicked(0);
+    }
+
+    /// Regression test: disabling an image from the well grid, then
+    /// navigating back to the plate grid via the breadcrumb, must show the
+    /// well's now-updated aggregate (its disabled image's objects excluded)
+    /// - previously `plate_cells` was left holding whatever was cached from
+    /// before the well was even opened, since landing back on
+    /// `MatrixLevel::Plate` via the breadcrumb never re-queried
+    /// `get_group_by_plate`. The well itself must still never be flagged
+    /// `disabled` though - only individual images are - so a well with one
+    /// enabled and one disabled image keeps its normal heatmap color; it
+    /// must instead be flagged `any_disabled`, the small-badge signal the
+    /// plate view uses to mark a well that contains a disabled image
+    /// without recoloring it.
+    #[test]
+    fn breadcrumb_nav_back_to_plate_refreshes_stale_plate_cells() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+
+        state.invoke_plate_cell_clicked("A1".into());
+        let cells = controller.matrix_cells.lock().unwrap();
+        let before = cells.get("A1").unwrap();
+        assert!(!before.disabled, "a well is never itself flagged disabled");
+        assert!(
+            !before.any_disabled,
+            "A1 has no disabled images yet"
+        );
+        let value_before = before.value;
+        drop(cells);
+
+        state.invoke_open_well_clicked("A1".into());
+        state.invoke_well_cell_clicked("A1_01.tif".into());
+        state.invoke_toggle_active_well_disabled();
+
+        // Breadcrumb: ["All results", "Plate", "Well A1"] - index 1 ("Plate")
+        // truncates to the plate level.
+        state.invoke_breadcrumb_nav(1);
+
+        let cells = controller.matrix_cells.lock().unwrap();
+        let after = cells.get("A1").unwrap();
+        assert!(
+            !after.disabled,
+            "the well must still not be flagged disabled after refreshing"
+        );
+        assert!(
+            after.any_disabled,
+            "A1's cached plate cell must reflect that one of its images is now disabled, \
+             so the plate view can badge it"
+        );
+        assert_ne!(
+            after.value, value_before,
+            "A1's cached plate cell must reflect the image just disabled, not stale pre-drill-down data"
+        );
     }
 
     #[test]
