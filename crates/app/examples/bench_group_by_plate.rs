@@ -30,7 +30,7 @@
 
 use duckdb::Connection;
 use evanalyzer_app::result::{
-    Aggregation, Column, ColorSchema, ColorScale, PlaneFilter, PlateFilter, PlateFilterMulti,
+    Aggregation, ColorScale, ColorSchema, Column, PlaneFilter, PlateFilter, PlateFilterMulti,
     ResultsGenerator, View,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
@@ -65,9 +65,7 @@ fn two_selects_merge(conn: &Connection, regex: &str) -> Vec<(String, String, Str
         ))
         .unwrap();
     let mut groups: Vec<(String, String, String, Option<f64>)> = stmt
-        .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, None))
-        })
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, None)))
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
@@ -108,7 +106,10 @@ fn two_selects_merge(conn: &Connection, regex: &str) -> Vec<(String, String, Str
 /// down to (at most) one row per group *before* ever joining - unlike the
 /// production `get_group_by_plate` query, which puts the filter in a
 /// `LEFT JOIN ... ON` against the raw, unfiltered `objects` table.
-fn join_of_aggregates(conn: &Connection, regex: &str) -> Vec<(String, String, String, Option<f64>)> {
+fn join_of_aggregates(
+    conn: &Connection,
+    regex: &str,
+) -> Vec<(String, String, String, Option<f64>)> {
     let sql = format!(
         "SELECT img.group_prefix, img.row, img.col, agg.value\n\
          FROM (\n\
@@ -134,14 +135,18 @@ fn join_of_aggregates(conn: &Connection, regex: &str) -> Vec<(String, String, St
          ORDER BY img.group_prefix"
     );
     let mut stmt = conn.prepare(&sql).unwrap();
-    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap()
+    stmt.query_map([], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    })
+    .unwrap()
+    .collect::<Result<_, _>>()
+    .unwrap()
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: bench_group_by_plate <path.evadb> [--iters N]");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: bench_group_by_plate <path.evadb> [--iters N]");
     let iters = arg_value("--iters", 5).max(1);
 
     let filter = PlateFilter {

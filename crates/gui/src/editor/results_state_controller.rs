@@ -4476,10 +4476,7 @@ mod tests {
         let cells = controller.matrix_cells.lock().unwrap();
         let before = cells.get("A1").unwrap();
         assert!(!before.disabled, "a well is never itself flagged disabled");
-        assert!(
-            !before.any_disabled,
-            "A1 has no disabled images yet"
-        );
+        assert!(!before.any_disabled, "A1 has no disabled images yet");
         let value_before = before.value;
         drop(cells);
 
