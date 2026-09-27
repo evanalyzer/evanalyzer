@@ -20,7 +20,9 @@ use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
 use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningClassifierSettings, ObjectClassLabel, PixelClassLabel,
 };
-use evanalyzer_cfg::settings::images_settings::{ImageEntry, ImageSettings};
+use evanalyzer_cfg::settings::images_settings::{
+    ImageEntry, ImageSettings, TStackHandling, TStackSettings,
+};
 use evanalyzer_cfg::settings::parameter_def::{ParamType as CfgParamType, ParameterDef};
 use evanalyzer_cfg::settings::pipeline_command::CommandMeta;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
@@ -1167,8 +1169,41 @@ impl PipelinesController {
     fn build_preview_project_settings(
         project: &ProjectSettings,
         image_path: PathBuf,
-        image_settings: ImageEntry,
+        mut image_settings: ImageEntry,
     ) -> ProjectSettings {
+        // Preview must only ever analyze the single time frame currently
+        // shown in the viewer - never every t-stack. The viewer forces
+        // `TStackHandling::AllStacks` into the project's global settings on
+        // every channel/z/t interaction (see `update_channel_options_in_project`
+        // in viewport_image_controller.rs) so the *real* run always
+        // processes every frame regardless of whatever the viewer last
+        // happened to show (see `trigger_pipeline_full_run`) - but that
+        // same global setting is what Preview would otherwise inherit
+        // unchanged, silently previewing every frame instead of just the
+        // one being looked at. `job_executor::prepare_t_stack_iterator`
+        // checks the image's own series override before falling back to
+        // the project-wide setting, so both are forced to `SingleStack`
+        // here to guarantee one frame either way, keeping whichever t index
+        // was actually active.
+        let effective_t = image_settings
+            .series
+            .get(&image_settings.selected_series)
+            .and_then(|series| series.t_stack.clone())
+            .or_else(|| project.images.settings.t_stack.clone())
+            .unwrap_or_default();
+        let single_stack_t = TStackSettings {
+            stack_handling: TStackHandling::SingleStack,
+            ..effective_t
+        };
+        if let Some(series) = image_settings
+            .series
+            .get_mut(&image_settings.selected_series)
+        {
+            series.t_stack = Some(single_stack_t.clone());
+        }
+        let mut settings = project.images.settings.clone();
+        settings.t_stack = Some(single_stack_t);
+
         let mut list = indexmap::IndexMap::with_capacity(1);
         list.insert(image_path, image_settings);
         ProjectSettings {
@@ -1179,10 +1214,47 @@ impl PipelinesController {
             images: ImageSettings {
                 root: project.images.root.clone(),
                 list,
-                settings: project.images.settings.clone(),
+                settings,
             },
             pipelines: project.pipelines.clone(),
             tile_merge: project.tile_merge.clone(),
+        }
+    }
+
+    /// Forces a real (non-preview) analysis run to always process every
+    /// t-stack, regardless of whatever `TStackHandling` the viewer last left
+    /// in the project's settings. The viewer writes
+    /// `TStackHandling::AllStacks` into the project's global settings on
+    /// every channel/z/t interaction (see `update_channel_options_in_project`
+    /// in viewport_image_controller.rs) - which happened to make a full run
+    /// already process every frame, but only as an accidental side effect of
+    /// that same write, not because a full run actually asked for it. Forcing
+    /// it explicitly here means a full run's time coverage no longer depends
+    /// on what the viewer happened to be showing (or a future fix to that
+    /// viewer behavior - see `build_preview_project_settings`, which forces
+    /// the opposite, a single frame, the same explicit way). Both the
+    /// project-wide default and any per-image series override are forced,
+    /// since `job_executor::prepare_t_stack_iterator` checks the series
+    /// override first.
+    fn force_all_t_stacks(settings: &mut ProjectSettings) {
+        let playback_speed = settings
+            .images
+            .settings
+            .t_stack
+            .as_ref()
+            .map(|t| t.playback_speed)
+            .unwrap_or_default();
+        settings.images.settings.t_stack = Some(TStackSettings {
+            stack_handling: TStackHandling::AllStacks,
+            playback_speed,
+            t_stack: 0,
+        });
+        for image in settings.images.list.values_mut() {
+            for series in image.series.values_mut() {
+                if let Some(t_stack) = series.t_stack.as_mut() {
+                    t_stack.stack_handling = TStackHandling::AllStacks;
+                }
+            }
         }
     }
 
@@ -1336,8 +1408,11 @@ impl PipelinesController {
             return;
         };
 
+        let mut project_settings = project.settings.clone();
+        Self::force_all_t_stacks(&mut project_settings);
+
         let task: PipelineTask = PipelineTask {
-            project_settings: project.settings.clone(),
+            project_settings,
             project_path: current_project
                 .parent()
                 .unwrap_or(current_project)
@@ -2414,6 +2489,140 @@ mod tests {
             3,
             "preview must keep the selected image's own ROIs"
         );
+    }
+
+    /// Regression test: the viewer writes `TStackHandling::AllStacks` into
+    /// the project's global settings on every channel/z/t interaction (see
+    /// `update_channel_options_in_project` in viewport_image_controller.rs),
+    /// so without this forcing, Preview would silently process every t-stack
+    /// of the selected image instead of just the one shown - see the
+    /// `force_all_t_stacks` tests below for the real run's opposite
+    /// requirement (always every frame).
+    #[test]
+    fn build_preview_project_settings_forces_a_single_t_stack_from_the_global_setting() {
+        let mut project = project_with_images(&[("a.tif", 1)]);
+        project.images.settings.t_stack = Some(TStackSettings {
+            stack_handling: TStackHandling::AllStacks,
+            playback_speed: 2.0,
+            t_stack: 4,
+        });
+        let selected = project
+            .images
+            .list
+            .get(&PathBuf::from("a.tif"))
+            .unwrap()
+            .clone();
+        assert!(
+            selected.series[&0].t_stack.is_none(),
+            "no per-image override seeded - the global setting above is what's in play"
+        );
+
+        let preview = PipelinesController::build_preview_project_settings(
+            &project,
+            PathBuf::from("a.tif"),
+            selected,
+        );
+
+        let global = preview.images.settings.t_stack.as_ref().unwrap();
+        assert_eq!(global.stack_handling, TStackHandling::SingleStack);
+        assert_eq!(global.t_stack, 4, "must keep the frame that was active");
+
+        let (_, entry) = preview.images.list.iter().next().unwrap();
+        let local = entry.series[&0].t_stack.as_ref().unwrap();
+        assert_eq!(
+            local.stack_handling,
+            TStackHandling::SingleStack,
+            "the per-image override job_executor checks first must also be forced, \
+             not just the global fallback"
+        );
+        assert_eq!(local.t_stack, 4);
+    }
+
+    /// A per-image series override (job_executor checks this before the
+    /// global setting) must win over the global setting when picking which
+    /// frame to keep, same precedence `prepare_t_stack_iterator` uses.
+    #[test]
+    fn build_preview_project_settings_prefers_the_images_own_t_stack_override() {
+        let mut project = project_with_images(&[("a.tif", 1)]);
+        project.images.settings.t_stack = Some(TStackSettings {
+            stack_handling: TStackHandling::AllStacks,
+            playback_speed: 1.0,
+            t_stack: 2,
+        });
+        let mut selected = project
+            .images
+            .list
+            .get(&PathBuf::from("a.tif"))
+            .unwrap()
+            .clone();
+        selected.series.get_mut(&0).unwrap().t_stack = Some(TStackSettings {
+            stack_handling: TStackHandling::AllStacks,
+            playback_speed: 1.0,
+            t_stack: 7,
+        });
+
+        let preview = PipelinesController::build_preview_project_settings(
+            &project,
+            PathBuf::from("a.tif"),
+            selected,
+        );
+
+        let (_, entry) = preview.images.list.iter().next().unwrap();
+        let local = entry.series[&0].t_stack.as_ref().unwrap();
+        assert_eq!(local.stack_handling, TStackHandling::SingleStack);
+        assert_eq!(
+            local.t_stack, 7,
+            "the image's own override (7) must win over the global setting (2)"
+        );
+    }
+
+    /// Regression test for the flip side of the same bug: a real run must
+    /// always process every t-stack, regardless of whatever the viewer last
+    /// left in the project's settings - previously this only happened
+    /// because the viewer's `AllStacks` write was never undone, an
+    /// accidental side effect rather than something the real run actually
+    /// asked for.
+    #[test]
+    fn force_all_t_stacks_overrides_a_single_stack_global_setting() {
+        let mut project = project_with_images(&[("a.tif", 1)]);
+        project.images.settings.t_stack = Some(TStackSettings {
+            stack_handling: TStackHandling::SingleStack,
+            playback_speed: 1.5,
+            t_stack: 3,
+        });
+
+        PipelinesController::force_all_t_stacks(&mut project);
+
+        let global = project.images.settings.t_stack.as_ref().unwrap();
+        assert_eq!(global.stack_handling, TStackHandling::AllStacks);
+        assert_eq!(
+            global.playback_speed, 1.5,
+            "unrelated fields like playback speed must survive the force"
+        );
+    }
+
+    #[test]
+    fn force_all_t_stacks_overrides_every_images_own_series_override_too() {
+        let mut project = project_with_images(&[("a.tif", 1), ("b.tif", 1)]);
+        for image in project.images.list.values_mut() {
+            image.series.get_mut(&0).unwrap().t_stack = Some(TStackSettings {
+                stack_handling: TStackHandling::SingleStack,
+                playback_speed: 1.0,
+                t_stack: 5,
+            });
+        }
+
+        PipelinesController::force_all_t_stacks(&mut project);
+
+        for image in project.images.list.values() {
+            let local = image.series[&0].t_stack.as_ref().unwrap();
+            assert_eq!(
+                local.stack_handling,
+                TStackHandling::AllStacks,
+                "job_executor checks the per-image override first, so it must be forced too, \
+                 not just the global setting"
+            );
+        }
     }
 
     #[test]
