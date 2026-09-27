@@ -131,12 +131,6 @@ pub struct ResultsStateController {
     // database.
     list_row_locations: Mutex<Vec<(String, [u32; 4])>>,
     image_list_controller: Arc<ImagesListController>,
-    // The path `result_generator`'s connection was opened from — so
-    // `on_export_start_clicked` can open its *own* fresh connection for the
-    // (potentially long-running) export, rather than holding
-    // `result_generator`'s lock for the whole export and blocking every
-    // other List/Matrix query on the UI thread for as long as it runs.
-    db_path: Mutex<Option<PathBuf>>,
     // Whether the export dialog's defaults have already been seeded for the
     // currently-open database (see `populate_export_defaults`) — reset to
     // `false` on every `open_database` so a fresh database gets fresh
@@ -183,7 +177,6 @@ impl ResultsStateController {
             current_image: Mutex::new(None),
             list_row_locations: Mutex::new(Vec::new()),
             image_list_controller,
-            db_path: Mutex::new(None),
             export_populated: Mutex::new(false),
             export_cancel_flag: Mutex::new(None),
         }
@@ -235,8 +228,12 @@ impl ResultsStateController {
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
+                    state.set_active_well_disabled(false);
                     *manager.current_well.lock().expect("Poisned") = None;
                     *manager.current_image.lock().expect("Poisned") = None;
+                    if mode == ResultsRailMode::Matrix {
+                        manager.update_matrix_view();
+                    }
                 });
 
             // Three drill levels sit below the "All results"/"Plate" base
@@ -269,6 +266,7 @@ impl ResultsStateController {
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
+                    state.set_active_well_disabled(false);
                     *manager.current_well.lock().expect("Poisned") = None;
                     *manager.current_image.lock().expect("Poisned") = None;
                     return;
@@ -282,13 +280,16 @@ impl ResultsStateController {
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
+                    state.set_active_well_disabled(false);
                     *manager.current_well.lock().expect("Poisned") = None;
                     *manager.current_image.lock().expect("Poisned") = None;
+                    manager.update_matrix_view();
                 } else if keep == 3 {
                     state.set_matrix_level(MatrixLevel::Well);
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
+                    state.set_active_well_disabled(false);
                     *manager.current_image.lock().expect("Poisned") = None;
                     if let Some(well_id) = manager.current_well.lock().expect("Poisned").clone() {
                         manager.update_well_view(&well_id);
@@ -694,8 +695,15 @@ impl ResultsStateController {
                     };
                     let state = ui_ready.global::<ResultsState>();
                     state.set_active_well(key);
-                    state.set_active_well_has_value(cell.has_value);
+                    // `exists` (not `has_value`): the user must be able to
+                    // select/open a well or field even when it has no
+                    // number to show (an image with zero detected
+                    // objects) - this drives both the detail card's
+                    // "—"-vs-value fallback and the "Open well/Image"
+                    // button's `enabled`.
+                    state.set_active_well_has_value(cell.exists);
                     state.set_active_well_value(cell.label.clone());
+                    state.set_active_well_disabled(cell.disabled);
                 });
 
             let manager = self.clone();
@@ -737,8 +745,15 @@ impl ResultsStateController {
                     };
                     let state = ui_ready.global::<ResultsState>();
                     state.set_active_well(key);
-                    state.set_active_well_has_value(cell.has_value);
+                    // `exists` (not `has_value`): the user must be able to
+                    // select/open a well or field even when it has no
+                    // number to show (an image with zero detected
+                    // objects) - this drives both the detail card's
+                    // "—"-vs-value fallback and the "Open well/Image"
+                    // button's `enabled`.
+                    state.set_active_well_has_value(cell.exists);
                     state.set_active_well_value(cell.label.clone());
+                    state.set_active_well_disabled(cell.disabled);
                 });
 
             // `well-field-clicked` fires with the clicked cell's key, which
@@ -780,6 +795,81 @@ impl ResultsStateController {
                     manager.update_image_heatmap_view(&rel_path);
                 });
 
+            // Toggles the selected field's image disabled/enabled (see
+            // `ResultsGenerator::enable_image`), then refreshes the well
+            // grid so the heatmap reflects it immediately. A single image's
+            // own aggregate is never affected by its own disabled flag (see
+            // `get_group_by_well`), so `active-well-value`/`-has-value`
+            // don't need updating here - only `-disabled` (drives the
+            // detail card's crossed-out label) does, set synchronously
+            // right away rather than only through the refresh below, since
+            // `set_well_in_slint` (inside `refresh_active_matrix_view`)
+            // always resets `active-well` to "" as part of that refresh via
+            // a queued `invoke_from_event_loop` call - which the headless
+            // test platform never drains, and which would otherwise close
+            // the detail card for a moment even in a real app. The second
+            // `invoke_from_event_loop` below re-queues behind that reset
+            // (Slint runs queued UI updates in the order they were queued)
+            // to restore the selection once it does drain, in a real app.
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ResultsState>()
+                .on_toggle_active_well_disabled(move || {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_toggle_active_well_disabled");
+                        return;
+                    };
+                    let state = ui_ready.global::<ResultsState>();
+                    let image_name = state.get_active_well();
+                    if image_name.is_empty() {
+                        return;
+                    }
+                    let rel_path = manager
+                        .images
+                        .lock()
+                        .expect("Poisened")
+                        .iter()
+                        .find(|image| image.name == image_name.as_str())
+                        .map(|image| image.rel_path.to_string_lossy().into_owned());
+                    let Some(rel_path) = rel_path else {
+                        warn!("Unknown image to toggle: {image_name}");
+                        return;
+                    };
+                    let disable = !state.get_active_well_disabled();
+                    {
+                        let guard = manager.result_generator.lock().expect("Poisned");
+                        let Some(db) = guard.as_ref() else {
+                            warn!("No database opened!");
+                            return;
+                        };
+                        if let Err(err) = db.enable_image(&rel_path, disable) {
+                            error!("Could not toggle image {rel_path}: {err}");
+                            return;
+                        }
+                    }
+                    state.set_active_well_disabled(disable);
+                    manager.refresh_active_matrix_view();
+
+                    let manager = manager.clone();
+                    slint::invoke_from_event_loop(move || {
+                        let Some(ui_ready) = manager.ui.upgrade() else {
+                            warn!(
+                                "Failed to upgrade UI handle re-selecting field after toggling disabled"
+                            );
+                            return;
+                        };
+                        let state = ui_ready.global::<ResultsState>();
+                        let cells = manager.well_cells.lock().expect("Poisned");
+                        if let Some(cell) = cells.get(image_name.as_str()) {
+                            state.set_active_well(image_name.clone());
+                            state.set_active_well_has_value(cell.exists);
+                            state.set_active_well_value(cell.label.clone());
+                            state.set_active_well_disabled(cell.disabled);
+                        }
+                    })
+                    .ok();
+                });
+
             let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
@@ -795,8 +885,15 @@ impl ResultsStateController {
                     };
                     let state = ui_ready.global::<ResultsState>();
                     state.set_active_well(key.clone());
-                    state.set_active_well_has_value(cell.has_value);
+                    // `exists` (not `has_value`): the user must be able to
+                    // select/open a well or field even when it has no
+                    // number to show (an image with zero detected
+                    // objects) - this drives both the detail card's
+                    // "—"-vs-value fallback and the "Open well/Image"
+                    // button's `enabled`.
+                    state.set_active_well_has_value(cell.exists);
                     state.set_active_well_value(cell.label.clone());
+                    state.set_active_well_disabled(cell.disabled);
                     drop(cells);
 
                     // Paint the clicked tile's own bounds as a rectangle
@@ -1179,10 +1276,9 @@ impl ResultsStateController {
 
     pub fn open_database(&self, path: PathBuf) {
         info!("Opening database {:?}", path);
-        let db = result::ResultsGenerator::open_database(path.clone());
+        let db = result::ResultsGenerator::open_database(path);
         match db {
             Ok(results) => {
-                *self.db_path.lock().expect("Poisened") = Some(path);
                 *self.export_populated.lock().expect("Poisened") = false;
                 let mut default_object_classes = Vec::new();
                 match results.get_object_classes() {
@@ -1759,21 +1855,26 @@ impl ResultsStateController {
         // the table properties need are `Rc`-based and can't cross the
         // `invoke_from_event_loop` closure boundary, so they're built below
         // once we're back on the UI thread.
-        // Every `Cell` in a row carries the same `alternating_color` (see
-        // `build_coloc_detail_rows`), so the first cell's flag speaks for
-        // the whole row; an empty row (no columns selected) just isn't
-        // alternated.
-        let row_cells: Vec<(Vec<slint::SharedString>, bool)> = result
+        // Every `Cell` in a row carries the same `alternating_color` and
+        // `disabled` flag (see `build_coloc_detail_rows`/`cell_for_column`),
+        // so the first cell's flags speak for the whole row; an empty row
+        // (no columns selected) just isn't alternated/disabled.
+        let row_cells: Vec<(Vec<slint::SharedString>, bool, bool)> = result
             .rows
             .iter()
             .map(|row| {
                 let alternating = row.first().is_some_and(|cell| cell.alternating_color);
-                (row.iter().map(cell_to_string).collect(), alternating)
+                let disabled = row.first().is_some_and(|cell| cell.disabled);
+                (
+                    row.iter().map(cell_to_string).collect(),
+                    alternating,
+                    disabled,
+                )
             })
             .collect();
         let column_widths = list_column_widths(
             &headers,
-            row_cells.iter().map(|(cells, _)| cells.as_slice()),
+            row_cells.iter().map(|(cells, _, _)| cells.as_slice()),
         );
         *self.list_row_locations.lock().expect("Poisned") = result.row_locations.clone();
         slint::invoke_from_event_loop(move || {
@@ -1781,9 +1882,10 @@ impl ResultsStateController {
                 let state = ui_ready.global::<ResultsState>();
                 let rows: Vec<ResultRow> = row_cells
                     .into_iter()
-                    .map(|(cells, alternating)| ResultRow {
+                    .map(|(cells, alternating, disabled)| ResultRow {
                         cells: ModelRc::new(VecModel::from(cells)),
                         alternating,
+                        disabled,
                     })
                     .collect();
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
@@ -1990,6 +2092,7 @@ impl ResultsStateController {
                 state.set_active_well("".into());
                 state.set_active_well_has_value(false);
                 state.set_active_well_value("".into());
+                state.set_active_well_disabled(false);
                 state.set_active_well_caption(value_caption.into());
                 state.set_plate_rows(rows);
                 state.set_plate_cols(cols);
@@ -2037,6 +2140,7 @@ impl ResultsStateController {
                 state.set_active_well("".into());
                 state.set_active_well_has_value(false);
                 state.set_active_well_value("".into());
+                state.set_active_well_disabled(false);
                 state.set_active_well_caption(value_caption.into());
                 state.set_well_rows(rows);
                 state.set_well_cols(cols);
@@ -2133,6 +2237,7 @@ impl ResultsStateController {
                 state.set_active_well("".into());
                 state.set_active_well_has_value(false);
                 state.set_active_well_value("".into());
+                state.set_active_well_disabled(false);
                 state.set_active_well_caption(value_caption.into());
                 state.set_image_heatmap_rows(rows);
                 state.set_image_heatmap_cols(cols);
@@ -2956,27 +3061,38 @@ impl ResultsStateController {
         })
     }
 
-    // Runs `export` on a background thread against a *fresh* database
-    // connection (see `db_path`'s doc comment for why not
-    // `result_generator`), reporting progress/completion/error back to
-    // `ExportDialogState` as it goes.
+    // Runs `export` on a background thread against its *own* connection to
+    // the same already-open database, so the (potentially long-running)
+    // export doesn't hold `result_generator`'s lock for its whole duration
+    // and block every other List/Matrix query on the UI thread meanwhile.
+    // That second connection is `result_generator`'s own connection cloned
+    // via `ResultsGenerator::try_clone` (a new connection to the same
+    // already-open DuckDB database, not a second file open) - opening the
+    // same path a second time via `open_database` was the original
+    // approach, but on Windows the OS enforces exclusive-by-default file
+    // locking even for a second handle from the same process, so the app
+    // ended up locking itself out of its own database on every export.
     fn run_export(self: &Arc<Self>, export: ResultExport) {
-        let Some(path) = self.db_path.lock().expect("Poisened").clone() else {
-            self.push_export_error("No database is open.".to_string());
-            return;
+        let cloned = match self.result_generator.lock().expect("Poisened").as_ref() {
+            Some(database) => database.try_clone(),
+            None => {
+                self.push_export_error("No database is open.".to_string());
+                return;
+            }
+        };
+        let database = match cloned {
+            Ok(database) => database,
+            Err(err) => {
+                self.push_export_error(format!(
+                    "Could not open a database connection for export: {err}"
+                ));
+                return;
+            }
         };
         let cancel = Arc::new(AtomicBool::new(false));
         *self.export_cancel_flag.lock().expect("Poisened") = Some(cancel.clone());
         let manager = self.clone();
         std::thread::spawn(move || {
-            let database = match ResultsGenerator::open_database(path) {
-                Ok(database) => database,
-                Err(err) => {
-                    manager.push_export_error(format!("Could not open database: {err}"));
-                    *manager.export_cancel_flag.lock().expect("Poisened") = None;
-                    return;
-                }
-            };
             let manager_for_progress = manager.clone();
             let result = export.start_export(&database, &cancel, &mut |message, current, total| {
                 manager_for_progress.push_export_progress(message.to_string(), current, total);
@@ -3466,8 +3582,16 @@ fn flatten_grid_cells(result: &DatabaseResult) -> Vec<MatrixCell> {
                 .iter()
                 .zip(row_cells.iter())
                 .map(move |(col_key, cell)| {
+                    // `exists` (a real well/field sits here, so it should
+                    // be clickable/openable) is broader than `has_value`
+                    // (there's a real number to show/color by) - an image
+                    // with zero detected objects still has a `search_key`
+                    // (see `get_group_by_plate`/`get_group_by_well`'s
+                    // Heatmap arms) even though its `CellValue` is `Empty`.
+                    let exists = cell.search_key.is_some();
                     let (has_value, value, label) = match &cell.value {
                         CellValue::Float(v) => (true, *v, format!("{v:.2}")),
+                        _ if exists => (false, 0.0, "—".to_string()),
                         _ => (false, 0.0, String::new()),
                     };
                     // Prefer the cell's own search key — the well id
@@ -3486,8 +3610,11 @@ fn flatten_grid_cells(result: &DatabaseResult) -> Vec<MatrixCell> {
                         key: key.into(),
                         value,
                         has_value,
+                        exists,
                         label: label.into(),
                         color: bg_color_to_slint(cell.bg_color),
+                        disabled: cell.disabled,
+                        any_disabled: cell.any_disabled,
                     }
                 })
         })
@@ -3729,8 +3856,8 @@ mod tests {
     // `on_start_clicked` with no output folder chosen must surface a
     // validation error rather than silently doing nothing or panicking
     // (there's no database open in this test either, so this also exercises
-    // that `read_export_settings` fails fast before ever touching
-    // `db_path`).
+    // that `read_export_settings` fails fast before `run_export` ever
+    // touches `result_generator`).
     #[test]
     fn attach_callbacks_export_start_without_output_dir_reports_an_error() {
         let (ui, results_ui) = test_ui_windows();
@@ -3961,7 +4088,7 @@ mod tests {
         drop(list_filter);
 
         assert!(controller.matrix_filter.lock().unwrap().is_some());
-        assert!(controller.db_path.lock().unwrap().is_some());
+        assert!(controller.result_generator.lock().unwrap().is_some());
         assert!(!*controller.export_populated.lock().unwrap());
 
         // `refresh_list`/`update_matrix_view` both ran as part of opening -
@@ -4326,6 +4453,115 @@ mod tests {
         state.invoke_matrix_back_to_plate();
         state.invoke_matrix_back_to_well();
         state.invoke_object_marker_clicked(0);
+    }
+
+    /// Regression test: disabling an image from the well grid, then
+    /// navigating back to the plate grid via the breadcrumb, must show the
+    /// well's now-updated aggregate (its disabled image's objects excluded)
+    /// - previously `plate_cells` was left holding whatever was cached from
+    /// before the well was even opened, since landing back on
+    /// `MatrixLevel::Plate` via the breadcrumb never re-queried
+    /// `get_group_by_plate`. The well itself must still never be flagged
+    /// `disabled` though - only individual images are - so a well with one
+    /// enabled and one disabled image keeps its normal heatmap color; it
+    /// must instead be flagged `any_disabled`, the small-badge signal the
+    /// plate view uses to mark a well that contains a disabled image
+    /// without recoloring it.
+    #[test]
+    fn breadcrumb_nav_back_to_plate_refreshes_stale_plate_cells() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+
+        state.invoke_plate_cell_clicked("A1".into());
+        let cells = controller.matrix_cells.lock().unwrap();
+        let before = cells.get("A1").unwrap();
+        assert!(!before.disabled, "a well is never itself flagged disabled");
+        assert!(
+            !before.any_disabled,
+            "A1 has no disabled images yet"
+        );
+        let value_before = before.value;
+        drop(cells);
+
+        state.invoke_open_well_clicked("A1".into());
+        state.invoke_well_cell_clicked("A1_01.tif".into());
+        state.invoke_toggle_active_well_disabled();
+
+        // Breadcrumb: ["All results", "Plate", "Well A1"] - index 1 ("Plate")
+        // truncates to the plate level.
+        state.invoke_breadcrumb_nav(1);
+
+        let cells = controller.matrix_cells.lock().unwrap();
+        let after = cells.get("A1").unwrap();
+        assert!(
+            !after.disabled,
+            "the well must still not be flagged disabled after refreshing"
+        );
+        assert!(
+            after.any_disabled,
+            "A1's cached plate cell must reflect that one of its images is now disabled, \
+             so the plate view can badge it"
+        );
+        assert_ne!(
+            after.value, value_before,
+            "A1's cached plate cell must reflect the image just disabled, not stale pre-drill-down data"
+        );
+    }
+
+    #[test]
+    fn toggle_active_well_disabled_flips_the_database_and_refreshes_the_well_grid() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+
+        state.invoke_plate_cell_clicked("A1".into());
+        state.invoke_open_well_clicked("A1".into());
+        state.invoke_well_cell_clicked("A1_01.tif".into());
+        assert_eq!(state.get_active_well(), "A1_01.tif");
+        assert!(!state.get_active_well_disabled());
+
+        state.invoke_toggle_active_well_disabled();
+        assert!(
+            state.get_active_well_disabled(),
+            "the detail card must reflect the new disabled state without a re-click"
+        );
+        assert_eq!(
+            state.get_active_well(),
+            "A1_01.tif",
+            "the same field must stay selected across the refresh the toggle triggers"
+        );
+        let db = controller.result_generator.lock().unwrap();
+        let images = db.as_ref().unwrap().get_images().unwrap();
+        drop(db);
+        assert!(
+            images
+                .iter()
+                .find(|image| image.name == "A1_01.tif")
+                .unwrap()
+                .disabled,
+            "the underlying database must actually be updated"
+        );
+
+        // Toggling again flips it back.
+        state.invoke_toggle_active_well_disabled();
+        assert!(!state.get_active_well_disabled());
+        let db = controller.result_generator.lock().unwrap();
+        let images = db.as_ref().unwrap().get_images().unwrap();
+        drop(db);
+        assert!(
+            !images
+                .iter()
+                .find(|image| image.name == "A1_01.tif")
+                .unwrap()
+                .disabled
+        );
+    }
+
+    #[test]
+    fn toggle_active_well_disabled_with_nothing_selected_does_not_panic() {
+        let (_ui, results_ui, _controller) = controller_with_open_database();
+        results_ui
+            .global::<ResultsState>()
+            .invoke_toggle_active_well_disabled();
     }
 
     #[test]

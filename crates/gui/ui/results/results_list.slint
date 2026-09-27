@@ -188,6 +188,7 @@ export component ResultsListView inherits Rectangle {
                         width: header-layout.width;
 
                         background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
+                        opacity: row.disabled ? 0.55 : 1.0;
 
                         property <bool> row-visible: self.y + self.height >= -body-list.viewport-y - 3 * self.height
                             && self.y <= -body-list.viewport-y + body-list.height + 3 * self.height;
@@ -238,6 +239,14 @@ export component ResultsListView inherits Rectangle {
                                 }
                             }
                             Rectangle { }
+                        }
+
+                        if row.disabled: Rectangle {
+                            y: parent.height / 2 - 1px;
+                            x: 0;
+                            width: parent.width;
+                            height: 1px;
+                            background: Theme.text-mute;
                         }
                     }
                 }

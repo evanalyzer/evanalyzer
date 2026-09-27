@@ -24,9 +24,31 @@ export struct BreadcrumbItem {
 export struct MatrixCell {
     key: string,       // e.g. "D5" (well) or "img_03" (field)
     value: float,
+    // True only when this cell has a real number to show/color by (there
+    // was at least one object to aggregate). `exists` below is the
+    // click/selectability signal - a well or field can `exist` (a real
+    // image sits there) without `has-value` (that image had zero objects).
     has-value: bool,
+    // True when a real well/field sits at this grid position at all - an
+    // image with zero detected objects still `exists` and is still
+    // clickable/openable, just with no number to show (see `label`).
+    // `false` only for a grid position with no corresponding image/well.
+    exists: bool,
     label: string,
     color: color,
+    // True when this cell's own single image is disabled (well-view field
+    // tiles only) - its value is still shown (computed while ignoring that
+    // image's objects), just struck through so the user can tell. A
+    // plate-view well cell is never itself `disabled`, even if one of its
+    // images is - see `any-disabled` below for that case.
+    disabled: bool,
+    // True when at least one image behind this cell is disabled, without
+    // this cell itself being disabled - e.g. a plate-view well that
+    // contains one disabled field among several enabled ones. Shown as a
+    // small corner badge rather than graying/striking the cell out, since
+    // the cell's own value/color is still a real, uncompromised aggregate
+    // of its *other* images.
+    any-disabled: bool,
 }
 
 export struct ObjectMarker {
@@ -44,6 +66,7 @@ export struct ObjectMarker {
 export struct ResultRow {
     cells: [string],
     alternating: bool,
+    disabled: bool,
 }
 
 export struct ChartScatterPoint {
@@ -281,6 +304,9 @@ export global ResultsState {
     in-out property <bool> active-well-has-value: false;
     in-out property <string> active-well-value: "";
     in-out property <string> active-well-caption: "";
+    // True when the selected well/field's value was computed while
+    // ignoring at least one disabled image - see `MatrixCell.disabled`.
+    in-out property <bool> active-well-disabled: false;
     in-out property <[MatrixCell]> well-fields: [];
     in-out property <int> well-rows: 4;
     in-out property <int> well-cols: 4;
@@ -332,6 +358,10 @@ export global ResultsState {
     callback open-well-clicked(string);
     callback well-cell-clicked(string);
     callback well-field-clicked(string);
+    // Toggles the currently selected well-level field's image between
+    // disabled/enabled (see `MatrixCell.disabled`/`active-well-disabled`),
+    // then refreshes the well grid so its heatmap reflects the change.
+    callback toggle-active-well-disabled();
     callback image-heatmap-cell-clicked(string);
     callback object-marker-clicked(int);
     callback matrix-back-to-plate();

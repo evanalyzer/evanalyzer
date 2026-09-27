@@ -49,6 +49,7 @@ struct TemplateFilter {
 /// runs it right away if the project is clean, or stashes it and prompts the
 /// user (Save / Discard / Cancel) if it isn't.
 enum PendingAction {
+    New,
     OpenProject(PathBuf),
     ImportLegacy(PathBuf),
     OpenProjectTemplate(PathBuf),
@@ -99,6 +100,47 @@ impl ProjectController {
             template_filter: Mutex::new(TemplateFilter::default()),
             pending_action: Mutex::new(None),
         }
+    }
+
+    /// "File > New": replaces the current project with a fresh, blank,
+    /// unsaved one and resets every panel to match - same full reset as
+    /// [`Self::open_new_project`] (image list, settings, classification,
+    /// pipelines, results files), just starting from
+    /// `ProjectWithRuntime::default()` instead of reading a file. Left
+    /// clean (`clear_dirty`) rather than dirty: an untouched blank project
+    /// has nothing to lose by closing without saving, same as a fresh
+    /// document in most editors reads as unmodified until you actually type
+    /// something into it.
+    ///
+    /// Unlike `open_new_project`, this never calls
+    /// `image_list_controller.set_new_image_root` - a blank project's image
+    /// root is empty, and running that path's "does this root still exist"
+    /// check against an empty path would pop the Missing Images dialog for
+    /// no reason.
+    pub fn create_new_project(self: Arc<Self>) {
+        self.app_state.new_project();
+
+        self.image_list_controller.sync_image_list_to_slint();
+        self.project_settings_controller
+            .sync_project_settings_to_slint();
+        self.classification_controller
+            .sync_classification_to_slint();
+        self.pipelines_controller.sync_pipelines_to_slint();
+        self.results_list_controller.sync_results_files_to_slint();
+        // A brand-new project has no unsaved changes yet - also updates the
+        // window title to the "untitled" state (see `clear_dirty`).
+        self.app_state.clear_dirty();
+
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                ui_ready
+                    .global::<ImagesListState>()
+                    .set_act_image_root_dir("".into());
+            }
+        })
+        .ok();
+        info!("New project created!")
     }
 
     /// Initializes and opens a new project based on the provided image path.
@@ -312,6 +354,13 @@ impl ProjectController {
     pub fn attach_callbacks(self: &Arc<Self>) {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
+            // New file - guarded the same as Open/Import/Quit, since it
+            // discards the current project's unsaved changes too.
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>().on_new_file_clicked(move || {
+                manager.guard_discard(PendingAction::New);
+            });
+
             // Open file
             let manager = Arc::clone(self);
             ui.global::<ToolbarState>().on_open_file_clicked(move || {
@@ -705,6 +754,10 @@ impl ProjectController {
     /// background thread, `Quit` dispatches onto the UI event loop.
     fn run_pending_action(self: &Arc<Self>, action: PendingAction) {
         match action {
+            PendingAction::New => {
+                let manager = self.clone();
+                std::thread::spawn(move || manager.create_new_project());
+            }
             PendingAction::OpenProject(path) => {
                 let manager = self.clone();
                 std::thread::spawn(move || manager.open_new_project(&path));
@@ -1223,6 +1276,58 @@ mod tests {
 
         assert!(ui_state.get_project().tmp_settings.current_image.is_none());
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    // -- create_new_project ("File > New") ---------------------------------------
+
+    #[test]
+    fn create_new_project_replaces_the_project_with_a_blank_one_and_clears_dirty() {
+        let (ui_state, controller) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.meta.name = "Old Project".to_string();
+            project.tmp_settings.current_image = Some(PathBuf::from("/some/old/image.tif"));
+        }
+        ui_state.mark_dirty();
+
+        controller.clone().create_new_project();
+
+        let project = ui_state.get_project();
+        assert_eq!(
+            project.meta.name,
+            evanalyzer_cfg::settings::project_settings::ProjectSettings::default()
+                .meta
+                .name,
+            "the old project's settings must not survive"
+        );
+        assert!(project.tmp_settings.current_image.is_none());
+        drop(project);
+        assert!(
+            !ui_state.is_dirty(),
+            "an untouched brand-new project has nothing unsaved yet"
+        );
+    }
+
+    #[test]
+    fn new_file_clicked_is_guarded_by_unsaved_changes_the_same_as_open_and_quit() {
+        let (ui_state, controller) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.meta.name = "Old Project".to_string();
+        }
+        ui_state.mark_dirty();
+
+        controller.guard_discard(PendingAction::New);
+
+        assert!(
+            controller.pending_action.lock().unwrap().is_some(),
+            "a dirty project must stash New instead of running it immediately"
+        );
+        assert_eq!(
+            ui_state.get_project().meta.name,
+            "Old Project",
+            "the guard must not have run New yet"
+        );
     }
 
     // -- import_legacy_project_file ----------------------------------------------

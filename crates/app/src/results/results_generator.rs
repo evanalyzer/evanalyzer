@@ -256,6 +256,10 @@ pub struct Cell {
     pub alternating_color: bool,
     /// Optional search (display name, key) (Group name of plate and image_rel_path in well view)
     pub search_key: Option<(String, String)>,
+    /// True if this cell's value came from a disabled image
+    pub disabled: bool,
+    /// True if at least one image that contributed to is disabled
+    pub any_disabled: bool,
 }
 
 #[derive(Clone)]
@@ -290,6 +294,25 @@ impl ResultsGenerator {
         let database = Connection::open(&path).map_err(to_io_err)?;
         Ok(Self {
             database,
+            classes_cache: RefCell::new(None),
+            coloc_classes_cache: RefCell::new(None),
+        })
+    }
+
+    /// A second, independent connection to the same already-open database -
+    /// for handing to a background thread (e.g. a potentially long-running
+    /// export) that shouldn't have to either hold this `ResultsGenerator`'s
+    /// caller's lock for its own duration, or reopen the underlying file at
+    /// the OS level. Reopening the same path with a fresh `open_database`
+    /// call instead of cloning was the original approach: it works on
+    /// Linux/macOS, but not Windows, where the OS enforces exclusive-by-
+    /// default file locking even for a second handle opened by the same
+    /// process - the app ended up locking itself out of its own database
+    /// on every export.
+    pub fn try_clone(&self) -> Result<Self, InternalErrors> {
+        let to_io_err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        Ok(Self {
+            database: self.database.try_clone().map_err(to_io_err)?,
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
         })
@@ -474,7 +497,7 @@ impl ResultsGenerator {
         // objects even though only `LIST_PAGE_SIZE` rows ever reach the GUI.
         let needs = ObjectColumnNeeds::for_columns(&ordered_columns);
         let sql = format!(
-            "SELECT {}\n FROM objects {where_clause}\n ORDER BY object_id",
+            "SELECT {}\n FROM objects o LEFT JOIN images i ON i.image_rel_path = o.image_rel_path\n {where_clause}\n ORDER BY o.object_id",
             object_select_clause(needs)
         );
 
@@ -548,12 +571,6 @@ impl ResultsGenerator {
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = self.get_object_classes()?;
-        // Fixed, selection-order-independent column order — same reasoning
-        // as `get_object_list`'s own `ordered_columns.sort()`: `filter.columns`
-        // reflects whatever order the caller happens to track selections in
-        // (e.g. the GUI's toggle-on/toggle-off `Vec`), which shifts around
-        // as columns are (de)selected and would otherwise reorder the
-        // output out from under the user.
         let mut ordered_columns = filter.columns.clone();
         ordered_columns.sort();
 
@@ -711,12 +728,16 @@ impl ResultsGenerator {
                         bg_color: 0,
                         alternating_color: false,
                         search_key: search_key.clone(),
+                        disabled: false,
+                        any_disabled: false,
                     },
                     Cell {
                         value: CellValue::Class((label, color)),
                         bg_color: color,
                         alternating_color: false,
                         search_key: search_key.clone(),
+                        disabled: false,
+                        any_disabled: false,
                     },
                 ];
                 for value in values {
@@ -725,6 +746,8 @@ impl ResultsGenerator {
                         bg_color: 0,
                         alternating_color: false,
                         search_key: search_key.clone(),
+                        disabled: false,
+                        any_disabled: false,
                     });
                 }
                 cells
@@ -759,11 +782,13 @@ impl ResultsGenerator {
         classes: &[Class],
     ) -> Result<(Vec<String>, Vec<Vec<Cell>>, Vec<(String, [u32; 4])>), InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        let dash = |alternating_color: bool| Cell {
+        let dash = |alternating_color: bool, disabled: bool| Cell {
             value: CellValue::String("-".to_string()),
             bg_color: 0,
             alternating_color,
             search_key: None,
+            disabled,
+            any_disabled: false,
         };
 
         let mut partner_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -796,7 +821,7 @@ impl ResultsGenerator {
             let ids: Vec<String> = partner_ids.into_iter().collect();
             let partner_needs = ObjectColumnNeeds::for_columns(metric_columns);
             let partner_sql = format!(
-                "SELECT {} FROM objects WHERE object_id IN ({})",
+                "SELECT {} FROM objects o LEFT JOIN images i ON i.image_rel_path = o.image_rel_path WHERE o.object_id IN ({})",
                 object_select_clause(partner_needs),
                 sql_string_in_list(&ids)
             );
@@ -848,9 +873,9 @@ impl ResultsGenerator {
                             partner_id
                                 .and_then(|id| partner_rows.get(id))
                                 .map(|partner_row| cell_for_column(metric, partner_row, classes))
-                                .unwrap_or_else(|| dash(alternating_color))
+                                .unwrap_or_else(|| dash(alternating_color, object.disabled))
                         } else {
-                            dash(alternating_color)
+                            dash(alternating_color, object.disabled)
                         };
                         cell.alternating_color = alternating_color;
                         cells.push(cell);
@@ -897,35 +922,80 @@ impl ResultsGenerator {
             filter.grouping_regex.as_str()
         };
 
-        let mut conditions = vec![
-            format!("z_stack = {}", filter.plane.z_stack),
-            format!("t_stack = {}", filter.plane.t_stack),
+        let mut object_conditions = vec![
+            format!("o.z_stack = {}", filter.plane.z_stack),
+            format!("o.t_stack = {}", filter.plane.t_stack),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            conditions.push(format!(
-                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+            object_conditions.push(format!(
+                "list_has_any(CAST(o.object_class_id AS INTEGER[]), {})",
                 sql_int_array_literal(&[id])
             ));
         }
-        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+        let object_where = object_conditions.join(" AND ");
+        // `column_aggregate_expr`'s bare column names (e.g. "area_px") need
+        // qualifying against `objects o` now that this SELECT also has
+        // `images i` in scope; `Column::Count`'s "*" needs no such prefix.
+        let value_expr_sql = if value_expr == "*" {
+            value_expr
+        } else {
+            format!("o.{value_expr}")
+        };
 
+        // Two nested queries rather than one flat `images LEFT JOIN
+        // objects`: a flat join would put the z/t-stack + class filter in
+        // the `ON` clause (it has to, to keep an image with zero matching
+        // objects instead of dropping its row), which forces DuckDB to
+        // build the join over every one of `objects`' rows before it can
+        // apply that filter. Benchmarked on a real ~1.8k-image/5.6M-object
+        // database, that flat join took ~165ms/call; filtering+aggregating
+        // `objects` down to (at most) one row per group *first*, in its own
+        // subquery, then `LEFT JOIN`ing that tiny result onto the group list
+        // from `images`, took ~40ms - see `examples/bench_group_by_plate.rs`.
+        //
+        // A disabled image's objects are always excluded from `value` (the
+        // aggregate), but the image itself is never dropped: every well
+        // still appears (even one made up only of disabled images, via
+        // `img` never filtering on `disabled`), and `any_disabled` -
+        // `bool_or(disabled)` per well - tells the caller whether at least
+        // one of that well's images was excluded from `value`, so the UI can
+        // mark the well without hiding it.
         let sql = format!(
-            "SELECT\n\
-                regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
-                regexp_extract(image_name, '{regex}', 2) AS row,\n\
-                regexp_extract(image_name, '{regex}', 3) AS col,\n\
-                {agg_fn}({value_expr}) AS value\n\
-             FROM objects\n\
-             {where_clause}\n\
-             GROUP BY group_prefix, row, col\n\
-             ORDER BY group_prefix",
+            "SELECT img.group_prefix, img.row, img.col, agg.value, img.any_disabled\n\
+             FROM (\n\
+                 SELECT\n\
+                     regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
+                     regexp_extract(image_name, '{regex}', 2) AS row,\n\
+                     regexp_extract(image_name, '{regex}', 3) AS col,\n\
+                     bool_or(disabled) AS any_disabled\n\
+                 FROM images\n\
+                 GROUP BY group_prefix, row, col\n\
+             ) img\n\
+             LEFT JOIN (\n\
+                 SELECT\n\
+                     regexp_extract(o.image_name, '{regex}', 1) AS group_prefix,\n\
+                     regexp_extract(o.image_name, '{regex}', 2) AS row,\n\
+                     regexp_extract(o.image_name, '{regex}', 3) AS col,\n\
+                     {agg_fn}({value_expr_sql}) AS value\n\
+                 FROM objects o\n\
+                 JOIN images i ON i.image_rel_path = o.image_rel_path\n\
+                 WHERE NOT i.disabled AND {object_where}\n\
+                 GROUP BY group_prefix, row, col\n\
+             ) agg USING (group_prefix, row, col)\n\
+             ORDER BY img.group_prefix",
             regex = regex.replace('\'', "''"),
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let groups: Vec<(String, String, String, Option<f64>)> = stmt
+        let groups: Vec<(String, String, String, Option<f64>, bool)> = stmt
             .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
             })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
@@ -969,14 +1039,20 @@ impl ResultsGenerator {
         for column in &filter.column {
             for aggregation in &filter.aggregation {
                 let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
+                // Qualified against `objects o` - see `get_group_by_plate`.
+                let value_expr_sql = if value_expr == "*" {
+                    value_expr
+                } else {
+                    format!("o.{value_expr}")
+                };
                 value_exprs.push(format!(
-                    "{agg_fn}({value_expr}) AS value_{}",
+                    "{agg_fn}({value_expr_sql}) AS value_{}",
                     value_exprs.len()
                 ));
             }
         }
         let n = value_exprs.len();
-        let value_exprs_sql = value_exprs.join(",\n                ");
+        let value_exprs_sql = value_exprs.join(",\n                    ");
 
         let regex = if filter.grouping_regex.trim().is_empty() {
             DEFAULT_GROUPING_REGEX
@@ -987,32 +1063,53 @@ impl ResultsGenerator {
 
         let mut results = Vec::with_capacity(filter.object_class.len() * n);
         for object_class in &filter.object_class {
-            let mut conditions = vec![
-                format!("z_stack = {}", filter.plane.z_stack),
-                format!("t_stack = {}", filter.plane.t_stack),
+            let mut object_conditions = vec![
+                format!("o.z_stack = {}", filter.plane.z_stack),
+                format!("o.t_stack = {}", filter.plane.t_stack),
             ];
             if let ObjectClass::Valid(id) = object_class {
-                conditions.push(format!(
-                    "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+                object_conditions.push(format!(
+                    "list_has_any(CAST(o.object_class_id AS INTEGER[]), {})",
                     sql_int_array_literal(&[*id])
                 ));
             }
-            let where_clause = format!("WHERE {}", conditions.join(" AND "));
+            let object_where = object_conditions.join(" AND ");
+            let agg_value_cols = (0..n)
+                .map(|i| format!("agg.value_{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
 
+            // Same "filter+aggregate `objects` before joining" shape as
+            // `get_group_by_plate` - see its comment for why (benchmarked
+            // ~4x faster than a flat `images LEFT JOIN objects` on a real
+            // multi-million-object database) and for `any_disabled`.
             let sql = format!(
-                "SELECT\n\
-                    regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
-                    regexp_extract(image_name, '{regex}', 2) AS row,\n\
-                    regexp_extract(image_name, '{regex}', 3) AS col,\n\
-                    {value_exprs_sql}\n\
-                 FROM objects\n\
-                 {where_clause}\n\
-                 GROUP BY group_prefix, row, col\n\
-                 ORDER BY group_prefix"
+                "SELECT img.group_prefix, img.row, img.col, {agg_value_cols}, img.any_disabled\n\
+                 FROM (\n\
+                     SELECT\n\
+                         regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
+                         regexp_extract(image_name, '{regex}', 2) AS row,\n\
+                         regexp_extract(image_name, '{regex}', 3) AS col,\n\
+                         bool_or(disabled) AS any_disabled\n\
+                     FROM images\n\
+                     GROUP BY group_prefix, row, col\n\
+                 ) img\n\
+                 LEFT JOIN (\n\
+                     SELECT\n\
+                         regexp_extract(o.image_name, '{regex}', 1) AS group_prefix,\n\
+                         regexp_extract(o.image_name, '{regex}', 2) AS row,\n\
+                         regexp_extract(o.image_name, '{regex}', 3) AS col,\n\
+                         {value_exprs_sql}\n\
+                     FROM objects o\n\
+                     JOIN images i ON i.image_rel_path = o.image_rel_path\n\
+                     WHERE NOT i.disabled AND {object_where}\n\
+                     GROUP BY group_prefix, row, col\n\
+                 ) agg USING (group_prefix, row, col)\n\
+                 ORDER BY img.group_prefix"
             );
 
             let mut stmt = self.database.prepare(&sql).map_err(err)?;
-            let raw: Vec<(String, String, String, Vec<Option<f64>>)> = stmt
+            let raw: Vec<(String, String, String, Vec<Option<f64>>, bool)> = stmt
                 .query_map([], |row| {
                     let group_prefix: String = row.get(0)?;
                     let group_row: String = row.get(1)?;
@@ -1021,7 +1118,8 @@ impl ResultsGenerator {
                     for i in 0..n {
                         values.push(row.get::<_, Option<f64>>(3 + i)?);
                     }
-                    Ok((group_prefix, group_row, group_col, values))
+                    let any_disabled: bool = row.get(3 + n)?;
+                    Ok((group_prefix, group_row, group_col, values, any_disabled))
                 })
                 .map_err(err)?
                 .collect::<Result<Vec<_>, _>>()
@@ -1030,9 +1128,17 @@ impl ResultsGenerator {
             let mut combo = 0;
             for column in &filter.column {
                 for _aggregation in &filter.aggregation {
-                    let groups: Vec<(String, String, String, Option<f64>)> = raw
+                    let groups: Vec<(String, String, String, Option<f64>, bool)> = raw
                         .iter()
-                        .map(|(g, r, c, values)| (g.clone(), r.clone(), c.clone(), values[combo]))
+                        .map(|(g, r, c, values, any_disabled)| {
+                            (
+                                g.clone(),
+                                r.clone(),
+                                c.clone(),
+                                values[combo],
+                                *any_disabled,
+                            )
+                        })
                         .collect();
                     results.push(plate_groups_to_result(
                         groups,
@@ -1080,43 +1186,63 @@ impl ResultsGenerator {
         };
         let regex = regex.replace('\'', "''");
 
-        let mut conditions = vec![
+        let mut object_conditions = vec![
             format!("z_stack = {}", filter.plane.z_stack),
             format!("t_stack = {}", filter.plane.t_stack),
-            format!(
-                "regexp_extract(image_name, '{regex}', 1) = '{}'",
-                filter.group_name.replace('\'', "''")
-            ),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            conditions.push(format!(
+            object_conditions.push(format!(
                 "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
                 sql_int_array_literal(&[id])
             ));
         }
-        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+        let object_where = object_conditions.join(" AND ");
 
+        // Driven from `images` (one row per field, `image_rel_path` is its
+        // primary key - no fan-out, unlike the plate view's regex-bucketed
+        // groups) so a field with zero matching objects still gets a tile.
+        // `objects` is filtered and aggregated down to one row per image
+        // *before* the join, same reasoning as `get_group_by_plate`. A
+        // disabled image's field is shown like any other (its own value is
+        // still its own real aggregate - "disabled" only matters once
+        // several images get combined into one statistic, which never
+        // happens at this single-image granularity), just flagged via
+        // `i.disabled` so the UI can mark it as excluded from any
+        // *plate*-level statistic.
         let sql = format!(
             "SELECT\n\
-                regexp_extract(image_name, '{regex}', 4) AS idx,\n\
-                image_rel_path,\n\
-                image_name,\n\
-                {agg_fn}({value_expr}) AS value\n\
-             FROM objects\n\
-             {where_clause}\n\
-             GROUP BY idx, image_rel_path, image_name\n\
-             ORDER BY idx"
+                regexp_extract(i.image_name, '{regex}', 4) AS idx,\n\
+                i.image_rel_path,\n\
+                i.image_name,\n\
+                agg.value,\n\
+                i.disabled\n\
+             FROM images i\n\
+             LEFT JOIN (\n\
+                 SELECT image_rel_path, {agg_fn}({value_expr}) AS value\n\
+                 FROM objects\n\
+                 WHERE {object_where}\n\
+                 GROUP BY image_rel_path\n\
+             ) agg ON agg.image_rel_path = i.image_rel_path\n\
+             WHERE regexp_extract(i.image_name, '{regex}', 1) = '{group_name}'\n\
+             ORDER BY idx",
+            group_name = filter.group_name.replace('\'', "''"),
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        // (idx, image_rel_path, image_name, value) — `image_rel_path` and
-        // `image_name` are carried through into `Cell::search_key` on every
-        // cell for this field so the GUI can select/open the underlying
-        // image from a well-view tile (see `ImageEntry`, which the GUI
-        // matches images against by `rel_path`).
-        let fields: Vec<(String, String, String, Option<f64>)> = stmt
+        // (idx, image_rel_path, image_name, value, disabled) —
+        // `image_rel_path` and `image_name` are carried through into
+        // `Cell::search_key` on every cell for this field so the GUI can
+        // select/open the underlying image from a well-view tile (see
+        // `ImageEntry`, which the GUI matches images against by `rel_path`).
+        let fields: Vec<(String, String, String, Option<f64>, bool)> = stmt
             .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
             })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
@@ -1161,33 +1287,42 @@ impl ResultsGenerator {
         };
         let regex = regex.replace('\'', "''");
 
-        let mut conditions = vec![
+        let mut object_conditions = vec![
             format!("z_stack = {}", filter.plane.z_stack),
             format!("t_stack = {}", filter.plane.t_stack),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            conditions.push(format!(
+            object_conditions.push(format!(
                 "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
                 sql_int_array_literal(&[id])
             ));
         }
-        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+        let object_where = object_conditions.join(" AND ");
 
+        // Same shape as `get_group_by_well` (one row per field/image,
+        // objects filtered+aggregated before the join, disabled images
+        // shown - not dropped - and flagged via `i.disabled`), just without
+        // the single-well filter - every well's fields in one query.
         let sql = format!(
             "SELECT\n\
-                regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
-                regexp_extract(image_name, '{regex}', 4) AS idx,\n\
-                image_rel_path,\n\
-                image_name,\n\
-                {agg_fn}({value_expr}) AS value\n\
-             FROM objects\n\
-             {where_clause}\n\
-             GROUP BY group_prefix, idx, image_rel_path, image_name\n\
+                regexp_extract(i.image_name, '{regex}', 1) AS group_prefix,\n\
+                regexp_extract(i.image_name, '{regex}', 4) AS idx,\n\
+                i.image_rel_path,\n\
+                i.image_name,\n\
+                agg.value,\n\
+                i.disabled\n\
+             FROM images i\n\
+             LEFT JOIN (\n\
+                 SELECT image_rel_path, {agg_fn}({value_expr}) AS value\n\
+                 FROM objects\n\
+                 WHERE {object_where}\n\
+                 GROUP BY image_rel_path\n\
+             ) agg ON agg.image_rel_path = i.image_rel_path\n\
              ORDER BY group_prefix, idx"
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let mut fields_by_well: HashMap<String, Vec<(String, String, String, Option<f64>)>> =
+        let mut fields_by_well: HashMap<String, Vec<(String, String, String, Option<f64>, bool)>> =
             HashMap::new();
         let rows = stmt
             .query_map([], |row| {
@@ -1197,17 +1332,19 @@ impl ResultsGenerator {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, Option<f64>>(4)?,
+                    row.get::<_, bool>(5)?,
                 ))
             })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
-        for (group_prefix, idx, image_rel_path, image_name, value) in rows {
+        for (group_prefix, idx, image_rel_path, image_name, value, disabled) in rows {
             fields_by_well.entry(group_prefix).or_default().push((
                 idx,
                 image_rel_path,
                 image_name,
                 value,
+                disabled,
             ));
         }
 
@@ -1272,35 +1409,49 @@ impl ResultsGenerator {
 
         let mut results = Vec::with_capacity(filter.object_class.len() * n);
         for object_class in &filter.object_class {
-            let mut conditions = vec![
+            let mut object_conditions = vec![
                 format!("z_stack = {}", filter.plane.z_stack),
                 format!("t_stack = {}", filter.plane.t_stack),
             ];
             if let ObjectClass::Valid(id) = object_class {
-                conditions.push(format!(
+                object_conditions.push(format!(
                     "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
                     sql_int_array_literal(&[*id])
                 ));
             }
-            let where_clause = format!("WHERE {}", conditions.join(" AND "));
+            let object_where = object_conditions.join(" AND ");
+            let agg_value_cols = (0..n)
+                .map(|i| format!("agg.value_{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
 
+            // Same shape as `get_wells_for_plate` (one row per field/image,
+            // objects filtered+aggregated before the join, disabled images
+            // shown - not dropped - and flagged via `i.disabled`), batched
+            // across every column x aggregation combo like
+            // `get_group_by_plate_multi`.
             let sql = format!(
                 "SELECT\n\
-                    regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
-                    regexp_extract(image_name, '{regex}', 4) AS idx,\n\
-                    image_rel_path,\n\
-                    image_name,\n\
-                    {value_exprs_sql}\n\
-                 FROM objects\n\
-                 {where_clause}\n\
-                 GROUP BY group_prefix, idx, image_rel_path, image_name\n\
+                    regexp_extract(i.image_name, '{regex}', 1) AS group_prefix,\n\
+                    regexp_extract(i.image_name, '{regex}', 4) AS idx,\n\
+                    i.image_rel_path,\n\
+                    i.image_name,\n\
+                    {agg_value_cols},\n\
+                    i.disabled\n\
+                 FROM images i\n\
+                 LEFT JOIN (\n\
+                     SELECT image_rel_path, {value_exprs_sql}\n\
+                     FROM objects\n\
+                     WHERE {object_where}\n\
+                     GROUP BY image_rel_path\n\
+                 ) agg ON agg.image_rel_path = i.image_rel_path\n\
                  ORDER BY group_prefix, idx"
             );
 
             let mut stmt = self.database.prepare(&sql).map_err(err)?;
             let mut fields_by_well: HashMap<
                 String,
-                Vec<(String, String, String, Vec<Option<f64>>)>,
+                Vec<(String, String, String, Vec<Option<f64>>, bool)>,
             > = HashMap::new();
             let rows = stmt
                 .query_map([], |row| {
@@ -1312,17 +1463,26 @@ impl ResultsGenerator {
                     for i in 0..n {
                         values.push(row.get::<_, Option<f64>>(4 + i)?);
                     }
-                    Ok((group_prefix, idx, image_rel_path, image_name, values))
+                    let disabled: bool = row.get(4 + n)?;
+                    Ok((
+                        group_prefix,
+                        idx,
+                        image_rel_path,
+                        image_name,
+                        values,
+                        disabled,
+                    ))
                 })
                 .map_err(err)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(err)?;
-            for (group_prefix, idx, image_rel_path, image_name, values) in rows {
+            for (group_prefix, idx, image_rel_path, image_name, values, disabled) in rows {
                 fields_by_well.entry(group_prefix).or_default().push((
                     idx,
                     image_rel_path,
                     image_name,
                     values,
+                    disabled,
                 ));
             }
 
@@ -1332,11 +1492,17 @@ impl ResultsGenerator {
                     let by_well: HashMap<String, DatabaseResult> = fields_by_well
                         .iter()
                         .map(|(well_id, fields)| {
-                            let per_combo_fields: Vec<(String, String, String, Option<f64>)> =
+                            let per_combo_fields: Vec<(String, String, String, Option<f64>, bool)> =
                                 fields
                                     .iter()
-                                    .map(|(idx, rel_path, name, values)| {
-                                        (idx.clone(), rel_path.clone(), name.clone(), values[combo])
+                                    .map(|(idx, rel_path, name, values, disabled)| {
+                                        (
+                                            idx.clone(),
+                                            rel_path.clone(),
+                                            name.clone(),
+                                            values[combo],
+                                            *disabled,
+                                        )
                                     })
                                     .collect();
                             let result = well_fields_to_result(
@@ -1478,12 +1644,16 @@ impl ResultsGenerator {
                                 bg_color: 0,
                                 alternating_color: false,
                                 search_key: search_key.clone(),
+                                disabled: false,
+                                any_disabled: false,
                             },
                             Cell {
                                 value: CellValue::Float(*value as f32),
                                 bg_color: 0,
                                 alternating_color: false,
                                 search_key,
+                                disabled: false,
+                                any_disabled: false,
                             },
                         ]
                     })
@@ -1533,6 +1703,8 @@ impl ResultsGenerator {
                                         ),
                                         alternating_color: false,
                                         search_key: Some((key.clone(), key)),
+                                        disabled: false,
+                                        any_disabled: false,
                                     }
                                 }
                                 // No object fell into this tile at all —
@@ -1543,6 +1715,8 @@ impl ResultsGenerator {
                                     bg_color: 0,
                                     alternating_color: false,
                                     search_key: None,
+                                    disabled: false,
+                                    any_disabled: false,
                                 },
                             })
                             .collect()
@@ -1583,6 +1757,23 @@ impl ResultsGenerator {
             .collect::<Result<Vec<_>, _>>()
             .map_err(err);
         map
+    }
+
+    /// Enables or disables `image_rel_path` (the `images` table's primary
+    /// key) for statistics: a disabled image's own value is still shown
+    /// everywhere it appears, but is excluded from any aggregate combining
+    /// it with other images (see `get_group_by_plate`'s `value`/
+    /// `any_disabled` and `Cell::disabled`). A no-op if `image_rel_path`
+    /// doesn't match any row.
+    pub fn enable_image(&self, image_rel_path: &str, disable: bool) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        self.database
+            .execute(
+                "UPDATE images SET disabled = ? WHERE image_rel_path = ?",
+                duckdb::params![disable, image_rel_path],
+            )
+            .map_err(err)?;
+        Ok(())
     }
 
     /// Snapshot of the `classes` table. Cached after the first call for this
@@ -1736,6 +1927,1134 @@ impl ResultsGenerator {
     }
 }
 
+/// One row of the `objects` table, as fetched by `get_list`'s hand-written
+/// SQL — only the columns needed to fill in any `Column` variant (see
+/// `cell_for_column`), not every column the table has.
+struct ObjectRow {
+    object_id: String,
+    image_name: String,
+    object_class_name: Vec<String>,
+    seg_class_name: Option<String>,
+    area_px: u64,
+    area_nm2: f64,
+    perimeter_px: f64,
+    perimeter_nm: f64,
+    circularity: f64,
+    solidity: f64,
+    eccentricity: f64,
+    coloc_json: String,
+    intensities_json: String,
+    // Always fetched (unlike every field above, gated by `ObjectColumnNeeds`
+    // on whether its `Column` is actually selected/displayed) - needed by
+    // the GUI to navigate to and highlight this object in its source image
+    // (see `DatabaseResult::row_locations`) regardless of which columns the
+    // user chose to show.
+    image_rel_path: String,
+    bbox_xmin_px: u32,
+    bbox_ymin_px: u32,
+    bbox_xmax_px: u32,
+    bbox_ymax_px: u32,
+    disabled: bool,
+}
+
+/// Which of `ObjectRow`'s source columns a given column selection actually
+/// needs — shared by `get_list`'s main fetch (needs from `ordered_columns`)
+/// and its coloc-detail partner fetch (needs from just `metric_columns`,
+/// see `Column::with_coloc_details` on `ListFilter`), so both build their
+/// `SELECT` list and parse rows the exact same (bug-for-bug consistent) way.
+#[derive(Default, Clone, Copy)]
+struct ObjectColumnNeeds {
+    image_name: bool,
+    class: bool,
+    area_px: bool,
+    area_nm2: bool,
+    perimeter_px: bool,
+    perimeter_nm: bool,
+    circularity: bool,
+    solidity: bool,
+    eccentricity: bool,
+    coloc: bool,
+    intensities: bool,
+}
+
+impl ObjectColumnNeeds {
+    fn for_columns(columns: &[Column]) -> Self {
+        Self {
+            image_name: columns.contains(&Column::ImageName),
+            class: columns.contains(&Column::ObjectClass),
+            area_px: columns.contains(&Column::AreaSizePx),
+            area_nm2: columns.contains(&Column::AreaSizeNm),
+            perimeter_px: columns.contains(&Column::PerimeterPx),
+            perimeter_nm: columns.contains(&Column::PerimeterNm),
+            circularity: columns.contains(&Column::Circularity),
+            solidity: columns.contains(&Column::Solidity),
+            eccentricity: columns.contains(&Column::Eccentricity),
+            coloc: columns.iter().any(|c| matches!(c, Column::ColocCount(_))),
+            intensities: columns.iter().any(|c| {
+                matches!(
+                    c,
+                    Column::IntensityAvg(_)
+                        | Column::IntensitySum(_)
+                        | Column::IntensityMin(_)
+                        | Column::IntensityMax(_)
+                )
+            }),
+        }
+    }
+}
+
+/// The comma-joined `SELECT` column list `get_list` queries `objects`
+/// with — a column not in `need` becomes a cheap constant instead of a real
+/// column reference (see the column-pruning comment on `get_list`), so
+/// `map_object_row` below can always read the same fixed positions
+/// regardless of which are real. `image_rel_path`/the four `bbox_*_px`
+/// columns are the exception: small fixed-width columns, always selected
+/// for real regardless of `need`, since the GUI needs an object's location
+/// to navigate to and highlight it (see `DatabaseResult::row_locations`)
+/// independent of which columns are actually displayed.
+fn object_select_clause(need: ObjectColumnNeeds) -> String {
+    let select_image_name = if need.image_name {
+        "o.image_name"
+    } else {
+        "''"
+    };
+    let select_object_class_name = if need.class {
+        "CAST(o.object_class_name AS VARCHAR[])"
+    } else {
+        "CAST(NULL AS VARCHAR[])"
+    };
+    let select_seg_class_name = if need.class {
+        "o.seg_class_name"
+    } else {
+        "NULL::VARCHAR"
+    };
+    let select_area_px = if need.area_px {
+        "o.area_px"
+    } else {
+        "0::UBIGINT"
+    };
+    let select_area_nm2 = if need.area_nm2 {
+        "o.area_nm2"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_perimeter_px = if need.perimeter_px {
+        "o.perimeter_px"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_perimeter_nm = if need.perimeter_nm {
+        "o.perimeter_nm"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_circularity = if need.circularity {
+        "o.circularity"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_solidity = if need.solidity {
+        "o.solidity"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_eccentricity = if need.eccentricity {
+        "o.eccentricity"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_coloc_json = if need.coloc {
+        "o.coloc_json"
+    } else {
+        "NULL::VARCHAR"
+    };
+    let select_intensities_json = if need.intensities {
+        "o.intensities_json"
+    } else {
+        "NULL::VARCHAR"
+    };
+    format!(
+        "o.object_id, {select_image_name}, {select_object_class_name}, {select_seg_class_name},\n\
+                {select_area_px}, {select_area_nm2}, {select_perimeter_px}, {select_perimeter_nm},\n\
+                {select_circularity}, {select_solidity}, {select_eccentricity},\n\
+                {select_coloc_json}, {select_intensities_json},\n\
+                o.image_rel_path, o.bbox_xmin_px, o.bbox_ymin_px, o.bbox_xmax_px, o.bbox_ymax_px,\n\
+                COALESCE(i.disabled, false)"
+    )
+}
+
+/// Inverse of `object_select_clause`'s fixed column position order —
+/// shared so the main and partner fetches in `get_list` can never drift.
+fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
+    Ok(ObjectRow {
+        object_id: row.get(0)?,
+        image_name: row.get(1)?,
+        object_class_name: extract_string_list(row.get::<_, Value>(2)?),
+        seg_class_name: row.get(3)?,
+        area_px: row.get(4)?,
+        area_nm2: row.get(5)?,
+        perimeter_px: row.get(6)?,
+        perimeter_nm: row.get(7)?,
+        circularity: row.get(8)?,
+        solidity: row.get(9)?,
+        eccentricity: row.get(10)?,
+        coloc_json: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
+        intensities_json: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
+        image_rel_path: row.get(13)?,
+        bbox_xmin_px: row.get(14)?,
+        bbox_ymin_px: row.get(15)?,
+        bbox_xmax_px: row.get(16)?,
+        bbox_ymax_px: row.get(17)?,
+        disabled: row.get(18)?,
+    })
+}
+
+/// `coloc_json`'s key for `class` (see `coloc_to_json` in evanalyzer_core's
+/// duckdb.rs) — shared by `coloc_count_for_class` and `get_list`'s
+/// coloc-detail partner resolution so both agree on the same lookup.
+fn coloc_class_key(class: ObjectClass) -> String {
+    match class {
+        ObjectClass::Valid(n) => n.to_string(),
+        ObjectClass::Unset => "unset".to_string(),
+    }
+}
+
+/// `DatabaseResult::row_locations`' entry for `object` — its source image
+/// (by rel path) and pixel bounding box, for the GUI to navigate to and
+/// highlight it.
+fn object_location(object: &ObjectRow) -> (String, [u32; 4]) {
+    (
+        object.image_rel_path.clone(),
+        [
+            object.bbox_xmin_px,
+            object.bbox_ymin_px,
+            object.bbox_xmax_px,
+            object.bbox_ymax_px,
+        ],
+    )
+}
+
+/// Whether `column` names a per-object value that can be meaningfully
+/// resolved on a *different* object — i.e. a coloc partner's own value for
+/// that same column, per `ListFilter::with_coloc_details`. Includes
+/// `ObjectId` deliberately (even though it's identity, not a measurement):
+/// without it there'd be no way to tell *which* partner object a fanned-out
+/// coloc-detail row is actually about, only which class it belongs to.
+/// `ImageName`/`ObjectClass`/`ColocCount` stay excluded — a coloc partner is
+/// always in the same image as its source object (so `ImageName` would
+/// just repeat the source row's own value), the partner's class is already
+/// implied by which `coloc_class_columns` combination produced the row, and
+/// resolving `ColocCount` on the partner would mean its *own* colocalization
+/// counts, not this relationship.
+fn is_resolvable_metric(column: &Column) -> bool {
+    matches!(
+        column,
+        Column::ObjectId
+            | Column::AreaSizePx
+            | Column::AreaSizeNm
+            | Column::PerimeterPx
+            | Column::PerimeterNm
+            | Column::Circularity
+            | Column::Solidity
+            | Column::Eccentricity
+            | Column::IntensityAvg(_)
+            | Column::IntensitySum(_)
+            | Column::IntensityMin(_)
+            | Column::IntensityMax(_)
+    )
+}
+
+/// Display label for a `coloc_json`/`object_class_name`-adjacent class,
+/// e.g. for a coloc-detail column header — the class's registered name, or
+/// `"class {n}"` if `n` isn't (or no longer is) a recognized id.
+pub(crate) fn class_display_label(class: ObjectClass, classes: &[Class]) -> String {
+    match class {
+        ObjectClass::Valid(n) => classes
+            .iter()
+            .find(|c| c.id == ObjectClass::Valid(n))
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("class {n}")),
+        ObjectClass::Unset => "unset".to_string(),
+    }
+}
+
+/// Escapes and comma-joins string literals for a SQL `IN (...)` list.
+///
+/// `pub(super)`: also used by `results_charts.rs`'s boxplot query, which
+/// needs raw SQL access this crate keeps otherwise private to this module.
+pub(super) fn sql_string_in_list(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|v| format!("'{}'", v.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Comma-joins integers into a DuckDB list literal, e.g. `[1, 2]`, for
+/// `list_has_any(...)`. `pub(super)`: see `sql_string_in_list`.
+pub(super) fn sql_int_array_literal(values: &[u32]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// Converts a DuckDB list/array value (as returned for a `VARCHAR[]`
+/// column) into a `Vec<String>`, dropping any non-text elements.
+fn extract_string_list(value: Value) -> Vec<String> {
+    match value {
+        Value::List(items) | Value::Array(items) => items
+            .into_iter()
+            .filter_map(|item| match item {
+                Value::Text(s) => Some(s),
+                _ => None,
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
+fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Cell {
+    // Only the class badge carries a background color today; every other
+    // column renders on the table's normal row background.
+    let no_bg = Cell {
+        value: CellValue::String(String::new()),
+        bg_color: 0,
+        alternating_color: false,
+        search_key: None,
+        disabled: object.disabled,
+        any_disabled: false,
+    };
+    match column {
+        Column::ObjectId => Cell {
+            value: CellValue::String(object.object_id.clone()),
+            ..no_bg
+        },
+        Column::ImageName => Cell {
+            value: CellValue::String(object.image_name.clone()),
+            ..no_bg
+        },
+        Column::ObjectClass => {
+            let label = if object.object_class_name.is_empty() {
+                object.seg_class_name.clone().unwrap_or_default()
+            } else {
+                object.object_class_name.join(", ")
+            };
+            let color = object
+                .object_class_name
+                .first()
+                .and_then(|name| classes.iter().find(|class| &class.name == name))
+                .map(|class| class.color)
+                .unwrap_or(0);
+            Cell {
+                value: CellValue::Class((label, color)),
+                bg_color: color,
+                alternating_color: false,
+                search_key: None,
+                disabled: object.disabled,
+                any_disabled: false,
+            }
+        }
+        Column::Count => Cell {
+            value: CellValue::Integer(1),
+            ..no_bg
+        },
+        Column::AreaSizePx => Cell {
+            value: CellValue::Integer(object.area_px as i32),
+            ..no_bg
+        },
+        Column::AreaSizeNm => Cell {
+            value: CellValue::Float(object.area_nm2 as f32),
+            ..no_bg
+        },
+        Column::PerimeterPx => Cell {
+            value: CellValue::Float(object.perimeter_px as f32),
+            ..no_bg
+        },
+        Column::PerimeterNm => Cell {
+            value: CellValue::Float(object.perimeter_nm as f32),
+            ..no_bg
+        },
+        Column::Circularity => Cell {
+            value: CellValue::Float(object.circularity as f32),
+            ..no_bg
+        },
+        Column::Solidity => Cell {
+            value: CellValue::Float(object.solidity as f32),
+            ..no_bg
+        },
+        Column::Eccentricity => Cell {
+            value: CellValue::Float(object.eccentricity as f32),
+            ..no_bg
+        },
+        Column::ColocCount(class) => Cell {
+            value: CellValue::Integer(coloc_count_for_class(&object.coloc_json, *class)),
+            ..no_bg
+        },
+        Column::IntensityAvg(channel) => Cell {
+            value: CellValue::Float(intensity_stat(
+                &object.intensities_json,
+                *channel,
+                "mean_scaled",
+            )),
+            ..no_bg
+        },
+        Column::IntensitySum(channel) => Cell {
+            value: CellValue::Float(intensity_stat(
+                &object.intensities_json,
+                *channel,
+                "sum_scaled",
+            )),
+            ..no_bg
+        },
+        Column::IntensityMin(channel) => Cell {
+            value: CellValue::Float(intensity_stat(
+                &object.intensities_json,
+                *channel,
+                "min_scaled",
+            )),
+            ..no_bg
+        },
+        Column::IntensityMax(channel) => Cell {
+            value: CellValue::Float(intensity_stat(
+                &object.intensities_json,
+                *channel,
+                "max_scaled",
+            )),
+            ..no_bg
+        },
+    }
+}
+
+/// Number of `class`-colocalizing partners a object has, from the raw
+/// `{"<class_id>": [<object ids>], ...}` shape `coloc_json` stores (see
+/// `coloc_to_json` in evanalyzer_core's duckdb.rs) — keyed by the target
+/// class's numeric id, not its name. `0` if `class` never shows up as a key
+/// at all (no colocalization with that class recorded for this object).
+fn coloc_count_for_class(coloc_json: &str, class: ObjectClass) -> i32 {
+    let Ok(serde_json::Value::Object(partners)) = serde_json::from_str(coloc_json) else {
+        return 0;
+    };
+    let key = match class {
+        ObjectClass::Valid(n) => n.to_string(),
+        ObjectClass::Unset => "unset".to_string(),
+    };
+    partners
+        .get(&key)
+        .and_then(|v| v.as_array())
+        .map_or(0, |ids| ids.len() as i32)
+}
+
+/// One channel's stat out of the raw `{"<channel>": {"mean_raw": ..., ...},
+/// ...}` shape `intensities_json` stores (see `intensities_to_json` in
+/// evanalyzer_core, whose stat key names this mirrors exactly).
+fn intensity_stat(intensities_json: &str, channel: u32, stat: &str) -> f32 {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(intensities_json) else {
+        return 0.0;
+    };
+    value
+        .get(channel.to_string())
+        .and_then(|channel| channel.get(stat))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0) as f32
+}
+
+/// SQL scalar expression for a `Column`, to be wrapped in an aggregate
+/// function by `get_group_by_plate`/`get_group_by_well`/`get_image_heatmap`
+/// — also `results_charts.rs`'s histogram/scatter/boxplot queries (hence
+/// `pub(super)`), which aggregate nothing themselves but still need a bare
+/// per-object value expression to bucket/plot/box.
+/// Plain numeric `objects` columns are a direct column reference;
+/// `ColocCount` is a `json_array_length` extraction (see
+/// `coloc_count_for_class`, which does the same lookup per-row in Rust for
+/// `get_list`). The per-channel intensity columns still need their own
+/// JSON-extraction SQL (see `intensity_stat`, which — like `coloc_count_for_class`
+/// before this — only handles this per-row in Rust today, not as a groupable
+/// SQL expression), left for a follow-up.
+pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalErrors> {
+    Ok(match column {
+        Column::AreaSizePx => "area_px".to_string(),
+        Column::AreaSizeNm => "area_nm2".to_string(),
+        Column::PerimeterPx => "perimeter_px".to_string(),
+        Column::PerimeterNm => "perimeter_nm".to_string(),
+        Column::Circularity => "circularity".to_string(),
+        Column::Solidity => "solidity".to_string(),
+        Column::Eccentricity => "eccentricity".to_string(),
+        // Same shape as `coloc_partner_count_expr` in evanalyzer_core's
+        // duckdb.rs: `coloc_json` is a native `JSON` column, keyed by class
+        // id (see `coloc_to_json`), so `->` always receives well-formed
+        // JSON — no string-literal-cast guard needed here.
+        Column::ColocCount(ObjectClass::Valid(class_id)) => {
+            format!("COALESCE(json_array_length(coloc_json -> '{class_id}'), 0)")
+        }
+        Column::ColocCount(ObjectClass::Unset) => {
+            "COALESCE(json_array_length(coloc_json -> 'unset'), 0)".to_string()
+        }
+        // Handled by `aggregate_sql` before this function is ever called
+        // with `Column::Count` — `COUNT(*)` doesn't fit the "aggregate
+        // function wraps a per-row scalar expression" shape every other
+        // arm here does, since it counts rows rather than reading a column
+        // off them. Kept here (rather than left unreachable) only so this
+        // match stays exhaustive.
+        Column::Count
+        | Column::ObjectId
+        | Column::ImageName
+        | Column::ObjectClass
+        | Column::IntensityAvg(_)
+        | Column::IntensitySum(_)
+        | Column::IntensityMin(_)
+        | Column::IntensityMax(_) => {
+            // No classes list handy here (this is a plain error-message
+            // helper, not a `ResultsGenerator` method) — `as_key` already
+            // falls back to the raw numeric id for `ColocCount` when it
+            // can't resolve a name, which is fine for an error message.
+            return Err(InternalErrors::InvalidArgument(format!(
+                "column {} cannot be aggregated for the plate view yet",
+                column.as_key(&[])
+            )));
+        }
+    })
+}
+
+fn aggregation_sql_fn(aggregation: &Aggregation) -> &'static str {
+    match aggregation {
+        Aggregation::Avg => "AVG",
+        Aggregation::Min => "MIN",
+        Aggregation::Max => "MAX",
+        Aggregation::Stddev => "STDDEV_SAMP",
+        Aggregation::Sum => "SUM",
+        Aggregation::Median => "MEDIAN",
+        Aggregation::Skewness => "SKEWNESS",
+    }
+}
+
+/// The `{agg_fn}({value_expr})` pair `get_group_by_plate`/`get_group_by_well`/
+/// `get_image_heatmap` plug into their `SELECT`. `Column::Count` ("number of
+/// objects", not a per-object measurement) is special-cased to a flat
+/// `COUNT(*)`, ignoring `aggregation` entirely — averaging or summing a count
+/// across an already-single-valued group wouldn't mean anything the count
+/// itself doesn't already say more plainly. Every other column defers to the
+/// existing `aggregation_sql_fn`/`column_aggregate_expr`.
+fn aggregate_sql(
+    column: &Column,
+    aggregation: &Aggregation,
+) -> Result<(&'static str, String), InternalErrors> {
+    if matches!(column, Column::Count) {
+        return Ok(("COUNT", "*".to_string()));
+    }
+    Ok((
+        aggregation_sql_fn(aggregation),
+        column_aggregate_expr(column)?,
+    ))
+}
+
+// Approximate 5-stop reproduction of the matplotlib "viridis" colormap
+// (dark purple -> teal -> yellow).
+const VIRIDIS_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0x44, 0x01, 0x54)),
+    (0.25, (0x3b, 0x52, 0x8b)),
+    (0.5, (0x21, 0x90, 0x8d)),
+    (0.75, (0x5d, 0xc9, 0x63)),
+    (1.0, (0xfd, 0xe7, 0x25)),
+];
+
+// Excel's built-in "Red - Yellow - Green" 3-Color Scale conditional format —
+// red at the high end, green at the low end (`t=0` is `min`, `t=1` is `max`,
+// see `value_to_color`), matching how Excel's own scale reads by default.
+const EXCEL_STOPS: [(f32, (u8, u8, u8)); 3] = [
+    (0.0, (0x63, 0xbe, 0x7b)),
+    (0.5, (0xff, 0xeb, 0x84)),
+    (1.0, (0xf8, 0x69, 0x6b)),
+];
+
+// Approximate 5-stop reproductions of well-known scientific colormaps —
+// same reasoning/precision level as `VIRIDIS_STOPS` above: recognizable as
+// the named colormap, not a pixel-exact reproduction of it.
+
+// matplotlib "plasma" (dark blue-purple -> magenta -> orange -> yellow).
+const PLASMA_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0x0d, 0x08, 0x87)),
+    (0.25, (0x7e, 0x03, 0xa8)),
+    (0.5, (0xcc, 0x47, 0x78)),
+    (0.75, (0xf8, 0x94, 0x41)),
+    (1.0, (0xf0, 0xf9, 0x21)),
+];
+
+// matplotlib "inferno" (black -> purple -> red -> orange -> pale yellow).
+const INFERNO_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0x00, 0x00, 0x04)),
+    (0.25, (0x57, 0x10, 0x6e)),
+    (0.5, (0xbc, 0x37, 0x54)),
+    (0.75, (0xf9, 0x8c, 0x0a)),
+    (1.0, (0xfc, 0xff, 0xa4)),
+];
+
+// matplotlib "cividis" (colorblind-friendly dark blue -> gray -> yellow).
+const CIVIDIS_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0x00, 0x20, 0x4d)),
+    (0.25, (0x41, 0x4d, 0x6b)),
+    (0.5, (0x7c, 0x7b, 0x78)),
+    (0.75, (0xbc, 0xaf, 0x6f)),
+    (1.0, (0xff, 0xea, 0x46)),
+];
+
+// matplotlib "coolwarm" (diverging blue -> near-white -> red).
+const COOLWARM_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0x3b, 0x4c, 0xc0)),
+    (0.25, (0x88, 0xab, 0xfd)),
+    (0.5, (0xdd, 0xdd, 0xdd)),
+    (0.75, (0xf7, 0xa8, 0x89)),
+    (1.0, (0xb4, 0x04, 0x26)),
+];
+
+// ColorBrewer "RdBu" diverging (dark red -> near-white -> dark blue).
+const RED_BLUE_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0x67, 0x00, 0x1f)),
+    (0.25, (0xd6, 0x60, 0x4d)),
+    (0.5, (0xf7, 0xf7, 0xf7)),
+    (0.75, (0x43, 0x93, 0xc3)),
+    (1.0, (0x05, 0x30, 0x61)),
+];
+
+// ColorBrewer "YlGnBu" sequential (pale yellow -> green -> blue -> dark navy).
+const YLGNBU_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0xff, 0xff, 0xd9)),
+    (0.25, (0x7f, 0xcd, 0xbb)),
+    (0.5, (0x41, 0xb6, 0xc4)),
+    (0.75, (0x22, 0x5e, 0xa8)),
+    (1.0, (0x08, 0x1d, 0x58)),
+];
+
+// cmocean "haline" (dark indigo -> teal -> green -> pale yellow-green),
+// used for ocean salinity.
+const HALINE_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0x29, 0x18, 0x6b)),
+    (0.25, (0x21, 0x6b, 0x7a)),
+    (0.5, (0x2e, 0x9c, 0x82)),
+    (0.75, (0x8f, 0xcb, 0x6c)),
+    (1.0, (0xf6, 0xed, 0x4c)),
+];
+
+// cmocean "algae" (pale yellow-green -> mid green -> near-black dark green),
+// used for algae/chlorophyll concentration.
+const ALGAE_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0xd9, 0xf0, 0xa3)),
+    (0.25, (0x78, 0xc6, 0x79)),
+    (0.5, (0x31, 0xa3, 0x54)),
+    (0.75, (0x00, 0x68, 0x37)),
+    (1.0, (0x00, 0x44, 0x1b)),
+];
+
+// cmocean "thermal" (dark navy-black -> purple -> red -> orange -> pale
+// yellow), used for ocean temperature.
+const THERMAL_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0x04, 0x23, 0x33)),
+    (0.25, (0x52, 0x27, 0x6b)),
+    (0.5, (0xa8, 0x32, 0x7d)),
+    (0.75, (0xe2, 0x72, 0x4f)),
+    (1.0, (0xf2, 0xf1, 0x8d)),
+];
+
+/// Every standard plate size, smallest first — `best_matching_dimensions`
+/// relies on this order to find the smallest one that fits.
+const ALL_PLATE_DIMENSIONS: [PlateDimensions; 7] = [
+    PlateDimensions::PLate2x3,
+    PlateDimensions::Plate3x4,
+    PlateDimensions::Plate4x6,
+    PlateDimensions::Plate6x8,
+    PlateDimensions::Plate8x12,
+    PlateDimensions::Plate16x24,
+    PlateDimensions::Plate32x48,
+];
+
+/// The smallest standard plate size whose row/column count covers every well
+/// this query actually found (`max_row`/`max_col`, both 0-based). Falls back
+/// to the largest known size if even that doesn't fit (a plate bigger than
+/// any standard format, or a `grouping_regex` extracting something that
+/// isn't really a well id).
+fn best_matching_dimensions(max_row: Option<usize>, max_col: Option<usize>) -> PlateDimensions {
+    let needed_rows = max_row.map_or(1, |row| row + 1);
+    let needed_cols = max_col.map_or(1, |col| col + 1);
+    ALL_PLATE_DIMENSIONS
+        .into_iter()
+        .find(|dimensions| {
+            let (rows, cols) = dimensions.dimensions();
+            rows >= needed_rows && cols >= needed_cols
+        })
+        .unwrap_or(PlateDimensions::Plate32x48)
+}
+
+/// Parses a well's row letters ("A", "B", ..., "Z", "AA", "AB", ...) into a
+/// 0-based row index, using the same bijective base-26 scheme spreadsheet
+/// column letters use. `None` if `letters` isn't purely alphabetic (e.g. the
+/// `grouping_regex` didn't actually match a well id).
+fn row_letter_to_index(letters: &str) -> Option<usize> {
+    if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let mut index: usize = 0;
+    for c in letters.chars() {
+        let digit = (c.to_ascii_uppercase() as u8 - b'A') as usize + 1;
+        index = index * 26 + digit;
+    }
+    Some(index - 1)
+}
+
+/// Inverse of [`row_letter_to_index`].
+fn row_index_to_letter(index: usize) -> String {
+    let mut n = index + 1;
+    let mut letters = Vec::new();
+    while n > 0 {
+        let rem = (n - 1) % 26;
+        letters.push((b'A' + rem as u8) as char);
+        n = (n - 1) / 26;
+    }
+    letters.iter().rev().collect()
+}
+
+/// Parses a well's column number ("1", "2", ...) into a 0-based column
+/// index. `None` if `digits` isn't a positive integer.
+fn col_number_to_index(digits: &str) -> Option<usize> {
+    digits.parse::<usize>().ok()?.checked_sub(1)
+}
+
+/// Number of colors `color_scale_gradient` samples a schema at — enough for
+/// the GUI's legend bar to look like a smooth gradient when it just splits
+/// the stops evenly across a `HorizontalLayout`.
+pub const COLOR_SCALE_GRADIENT_STOPS: usize = 12;
+
+/// Samples `value_to_color` at `COLOR_SCALE_GRADIENT_STOPS` evenly spaced
+/// points across `[0, 1]`, in `0xRRGGBB`. Lets the GUI's legend bar render
+/// the exact gradient a heatmap's cells are colored with, instead of
+/// reimplementing the schema's interpolation a second time in Slint.
+pub fn color_scale_gradient(schema: &ColorSchema) -> [u32; COLOR_SCALE_GRADIENT_STOPS] {
+    let mut stops = [0u32; COLOR_SCALE_GRADIENT_STOPS];
+    for (i, stop) in stops.iter_mut().enumerate() {
+        let t = i as f64 / (COLOR_SCALE_GRADIENT_STOPS - 1) as f64;
+        *stop = value_to_color(t, 0.0, 1.0, schema);
+    }
+    stops
+}
+
+/// Turns raw `(group_prefix, row, col, value, any_disabled)` plate-group
+/// rows into a `DatabaseResult` — shared by `get_group_by_plate` (one
+/// aggregation per call) and `get_group_by_plate_multi_agg` (every requested
+/// aggregation in one batched query, calling this once per aggregation over
+/// its own slice of that batch) so the two agree on exactly the same
+/// List/Heatmap shape. `any_disabled` is true when at least one image in
+/// that well/group is disabled — `value` itself never includes a disabled
+/// image's objects (see `get_group_by_plate`). A well is never itself
+/// rendered as "disabled" though (only individual images are - a well with
+/// a mix of enabled/disabled images still shows its normal heatmap color),
+/// so `any_disabled` is carried through the tuple but intentionally not
+/// written into any `Cell::disabled` here.
+fn plate_groups_to_result(
+    groups: Vec<(String, String, String, Option<f64>, bool)>,
+    column: &Column,
+    classes: &[Class],
+    matrix_dimension: Option<PlateDimensions>,
+    color_schema: &ColorSchema,
+    color_scale: &ColorScale,
+    view: &View,
+) -> DatabaseResult {
+    match view {
+        View::List => {
+            let mut min = f64::INFINITY;
+            let mut max = f64::NEG_INFINITY;
+            for (_, _, _, value, _) in &groups {
+                if let Some(value) = value {
+                    min = min.min(*value);
+                    max = max.max(*value);
+                }
+            }
+            if !min.is_finite() || !max.is_finite() {
+                min = 0.0;
+                max = 0.0;
+            }
+
+            let column_names = vec!["group".to_string(), column.display_label(classes)];
+            let row_names = groups.iter().map(|(key, ..)| key.clone()).collect();
+            let rows: Vec<Vec<Cell>> = groups
+                .into_iter()
+                .map(|(key, _row, _col, value, any_disabled)| {
+                    // `key` is the group/well id (e.g. "A1") itself, so
+                    // it's its own search key — used by the GUI to
+                    // navigate into that group/well. A well itself is
+                    // never "disabled" - only the individual images inside
+                    // it are - so `any_disabled` must not gray/strike this
+                    // row; it only ever excluded a disabled image's
+                    // objects from `value` above. It's still carried into
+                    // `Cell::any_disabled` though, so the GUI can mark the
+                    // well as containing a disabled image without
+                    // recoloring it.
+                    let search_key = Some((key.clone(), key.clone()));
+                    vec![
+                        Cell {
+                            value: CellValue::String(key),
+                            bg_color: 0,
+                            alternating_color: false,
+                            search_key: search_key.clone(),
+                            disabled: false,
+                            any_disabled,
+                        },
+                        Cell {
+                            value: value.map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
+                            bg_color: 0,
+                            alternating_color: false,
+                            search_key,
+                            disabled: false,
+                            any_disabled,
+                        },
+                    ]
+                })
+                .collect();
+            let source_object_count = rows.len();
+            DatabaseResult {
+                column_names,
+                row_names,
+                rows,
+                min: min as f32,
+                max: max as f32,
+                source_object_count,
+                row_locations: Vec::new(),
+            }
+        }
+        View::Heatmap => {
+            // Real 0-based (row, col) well coordinates ("A" -> 0, "1" ->
+            // 0, ...), not just distinct-and-sorted keys — needed so the
+            // grid always lines up with a real plate's row/column
+            // numbering (see `matrix_dimension` below) instead of
+            // silently compressing when a row or column has no objects
+            // at all. `group_prefix` (e.g. "A1") rides along per cell so
+            // it can be returned as `Cell::search_key` below. Every well
+            // with valid coordinates is inserted regardless of whether it
+            // has a value, so a well made up only of disabled images still
+            // reports `any_disabled` even though its cell renders empty.
+            let mut values: HashMap<(usize, usize), (Option<f64>, String, bool)> = HashMap::new();
+            let mut max_row = None;
+            let mut max_col = None;
+            for (group_prefix, row, col, value, any_disabled) in &groups {
+                let (Some(row), Some(col)) = (row_letter_to_index(row), col_number_to_index(col))
+                else {
+                    continue;
+                };
+                max_row = Some(max_row.map_or(row, |m: usize| m.max(row)));
+                max_col = Some(max_col.map_or(col, |m: usize| m.max(col)));
+                values.insert((row, col), (*value, group_prefix.clone(), *any_disabled));
+            }
+
+            // Given: use it exactly, so the caller can request e.g. a
+            // 384-well layout even if this particular plate only has
+            // objects in a handful of wells. Not given: the smallest
+            // standard plate size that still fits every well this query
+            // actually found.
+            let dimensions =
+                matrix_dimension.unwrap_or_else(|| best_matching_dimensions(max_row, max_col));
+            let (rows, cols) = dimensions.dimensions();
+
+            let (range_min, range_max) = match color_scale {
+                ColorScale::Manual(min, max) => (*min as f64, *max as f64),
+                ColorScale::Auto => {
+                    let mut min = f64::INFINITY;
+                    let mut max = f64::NEG_INFINITY;
+                    for (value, _, _) in values.values() {
+                        if let Some(value) = value {
+                            min = min.min(*value);
+                            max = max.max(*value);
+                        }
+                    }
+                    if min.is_finite() && max.is_finite() {
+                        (min, max)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                }
+            };
+
+            let grid_rows: Vec<Vec<Cell>> = (0..rows)
+                .map(|row| {
+                    (0..cols)
+                        .map(|col| match values.get(&(row, col)) {
+                            // A well itself is never "disabled" - only the
+                            // individual images inside it are - so a well
+                            // with a mix of enabled/disabled images still
+                            // renders its heatmap color here, same as any
+                            // other well; `any_disabled` only ever excluded
+                            // a disabled image's objects from `value`. It's
+                            // still carried into `Cell::any_disabled` so the
+                            // GUI can badge the well without recoloring it.
+                            Some((value, group_prefix, any_disabled)) => Cell {
+                                value: value
+                                    .map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
+                                bg_color: value.map_or(0, |v| {
+                                    value_to_color(v, range_min, range_max, color_schema)
+                                }),
+                                alternating_color: false,
+                                search_key: Some((group_prefix.clone(), group_prefix.clone())),
+                                disabled: false,
+                                any_disabled: *any_disabled,
+                            },
+                            // No well at all matched this grid position —
+                            // leave it empty rather than showing a
+                            // misleading 0 or a value from some other well.
+                            None => Cell {
+                                value: CellValue::Empty,
+                                bg_color: 0,
+                                alternating_color: false,
+                                search_key: None,
+                                disabled: false,
+                                any_disabled: false,
+                            },
+                        })
+                        .collect()
+                })
+                .collect();
+
+            let source_object_count = grid_rows.len();
+            DatabaseResult {
+                column_names: (1..=cols).map(|col| col.to_string()).collect(),
+                row_names: (0..rows).map(row_index_to_letter).collect(),
+                rows: grid_rows,
+                // Same range the cells were colored against above, so the
+                // GUI's color bar always matches what's actually painted
+                // rather than recomputing (and potentially disagreeing
+                // with) it from the returned cells.
+                min: range_min as f32,
+                max: range_max as f32,
+                source_object_count,
+                row_locations: Vec::new(),
+            }
+        }
+    }
+}
+
+/// Turns one well's raw `(idx, image_rel_path, image_name, value)` field
+/// rows into a `DatabaseResult` — shared by `get_group_by_well` (one well
+/// per call) and `get_wells_for_plate` (every well in one batched query,
+/// calling this once per well over its slice of that batch) so the two
+/// agree on exactly the same List/Heatmap shape.
+fn well_fields_to_result(
+    fields: Vec<(String, String, String, Option<f64>, bool)>,
+    column: &Column,
+    classes: &[Class],
+    well_size: Option<WellSize>,
+    well_order: &Option<Vec<u32>>,
+    color_schema: &ColorSchema,
+    color_scale: &ColorScale,
+    view: &View,
+) -> DatabaseResult {
+    match view {
+        View::List => {
+            let mut min = f64::INFINITY;
+            let mut max = f64::NEG_INFINITY;
+            for (_, _, _, value, _) in &fields {
+                if let Some(value) = value {
+                    min = min.min(*value);
+                    max = max.max(*value);
+                }
+            }
+            if !min.is_finite() || !max.is_finite() {
+                min = 0.0;
+                max = 0.0;
+            }
+
+            let column_names = vec!["field".to_string(), column.display_label(classes)];
+            let row_names = fields.iter().map(|(idx, ..)| idx.clone()).collect();
+            let rows: Vec<Vec<Cell>> = fields
+                .into_iter()
+                .map(|(idx, image_rel_path, image_name, value, disabled)| {
+                    let search_key = Some((image_name, image_rel_path));
+                    vec![
+                        Cell {
+                            value: CellValue::String(idx),
+                            bg_color: 0,
+                            alternating_color: false,
+                            search_key: search_key.clone(),
+                            disabled,
+                            any_disabled: false,
+                        },
+                        Cell {
+                            value: value.map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
+                            bg_color: 0,
+                            alternating_color: false,
+                            search_key,
+                            disabled,
+                            any_disabled: false,
+                        },
+                    ]
+                })
+                .collect();
+            let source_object_count = rows.len();
+            DatabaseResult {
+                column_names,
+                row_names,
+                rows,
+                min: min as f32,
+                max: max as f32,
+                source_object_count,
+                row_locations: Vec::new(),
+            }
+        }
+        View::Heatmap => {
+            // No `well_order` (see the doc comment on
+            // `WellFilter::well_order`): a field's `idx` (1-based) is its
+            // position directly, in row-major reading order — idx 1 -> (0,
+            // 0), idx 2 -> (0, 1), .... Given a `well_order`, it's a lookup
+            // table instead: the value at `well_order[position]` names
+            // which field idx sits at that (row-major) grid position,
+            // letting a well be laid out in a non-trivial (e.g. snake)
+            // acquisition pattern.
+            let well_size = well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
+            let (rows, cols) = (well_size.rows, well_size.cols);
+
+            // Every field gets a grid position regardless of whether it has
+            // a value, same reasoning as `plate_groups_to_result`'s Heatmap
+            // arm - a field genuinely has no objects is a different thing
+            // from "no field at all sits here", and only the latter should
+            // render as if the tile doesn't exist.
+            let mut values: HashMap<usize, (Option<f64>, String, String, bool)> = HashMap::new();
+            for (idx_str, image_rel_path, image_name, value, disabled) in &fields {
+                let Ok(idx) = idx_str.parse::<u32>() else {
+                    continue;
+                };
+                let position = match well_order {
+                    Some(order) => order.iter().position(|&field_idx| field_idx == idx),
+                    None => idx.checked_sub(1).map(|p| p as usize),
+                };
+                let Some(position) = position else {
+                    continue;
+                };
+                values.insert(
+                    position,
+                    (
+                        *value,
+                        image_name.clone(),
+                        image_rel_path.clone(),
+                        *disabled,
+                    ),
+                );
+            }
+
+            let (range_min, range_max) = match color_scale {
+                ColorScale::Manual(min, max) => (*min as f64, *max as f64),
+                ColorScale::Auto => {
+                    let mut min = f64::INFINITY;
+                    let mut max = f64::NEG_INFINITY;
+                    for (value, _, _, disabled) in values.values() {
+                        if let (Some(value), false) = (value, disabled) {
+                            min = min.min(*value);
+                            max = max.max(*value);
+                        }
+                    }
+                    if min.is_finite() && max.is_finite() {
+                        (min, max)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                }
+            };
+
+            let grid_rows: Vec<Vec<Cell>> = (0..rows)
+                .map(|row| {
+                    (0..cols)
+                        .map(|col| match values.get(&(row * cols + col)) {
+                            Some((value, image_name, image_rel_path, disabled)) => Cell {
+                                value: value
+                                    .map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
+                                bg_color: value.map_or(0, |v| {
+                                    value_to_color(v, range_min, range_max, color_schema)
+                                }),
+                                alternating_color: false,
+                                search_key: Some((image_name.clone(), image_rel_path.clone())),
+                                disabled: *disabled,
+                                any_disabled: false,
+                            },
+                            // No field occupies this grid position at all -
+                            // leave it empty rather than showing a
+                            // misleading 0 or another field's value.
+                            None => Cell {
+                                value: CellValue::Empty,
+                                bg_color: 0,
+                                alternating_color: false,
+                                search_key: None,
+                                disabled: false,
+                                any_disabled: false,
+                            },
+                        })
+                        .collect()
+                })
+                .collect();
+
+            let source_object_count = grid_rows.len();
+            DatabaseResult {
+                column_names: (1..=cols).map(|col| col.to_string()).collect(),
+                row_names: (1..=rows).map(|row| row.to_string()).collect(),
+                rows: grid_rows,
+                min: range_min as f32,
+                max: range_max as f32,
+                source_object_count,
+                row_locations: Vec::new(),
+            }
+        }
+    }
+}
+
+/// Maps `value` (within `[min, max]`) to a `0xRRGGBB` color under the
+/// selected `ColorSchema` — the same packing `evanalyzer_cfg`'s `Class.color`
+/// and `crates/gui/src/helper/color_generators.rs` already use, so the GUI
+/// can unpack a heatmap cell's `bg_color` the same way it already does for
+/// class colors.
+fn value_to_color(value: f64, min: f64, max: f64, schema: &ColorSchema) -> u32 {
+    let t = if max > min {
+        ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
+    } else {
+        0.5
+    };
+    match schema {
+        ColorSchema::Viridis => lerp_palette(&VIRIDIS_STOPS, t),
+        ColorSchema::Excel => lerp_palette(&EXCEL_STOPS, t),
+        ColorSchema::Plasma => lerp_palette(&PLASMA_STOPS, t),
+        ColorSchema::Inferno => lerp_palette(&INFERNO_STOPS, t),
+        ColorSchema::Cividis => lerp_palette(&CIVIDIS_STOPS, t),
+        ColorSchema::Coolwarm => lerp_palette(&COOLWARM_STOPS, t),
+        ColorSchema::RedBlue => lerp_palette(&RED_BLUE_STOPS, t),
+        ColorSchema::YlGnBu => lerp_palette(&YLGNBU_STOPS, t),
+        ColorSchema::Haline => lerp_palette(&HALINE_STOPS, t),
+        ColorSchema::Algae => lerp_palette(&ALGAE_STOPS, t),
+        ColorSchema::Thermal => lerp_palette(&THERMAL_STOPS, t),
+    }
+}
+
+fn lerp_palette(stops: &[(f32, (u8, u8, u8))], t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    for pair in stops.windows(2) {
+        let (t0, c0) = pair[0];
+        let (t1, c1) = pair[1];
+        if t >= t0 && t <= t1 {
+            let local_t = (t - t0) / (t1 - t0).max(f32::EPSILON);
+            return pack_rgb(
+                lerp_u8(c0.0, c1.0, local_t),
+                lerp_u8(c0.1, c1.1, local_t),
+                lerp_u8(c0.2, c1.2, local_t),
+            );
+        }
+    }
+    let (_, last) = *stops.last().expect("palette must have at least one stop");
+    pack_rgb(last.0, last.1, last.2)
+}
+
+fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
+    (a as f32 + (b as f32 - a as f32) * t).round() as u8
+}
+
+fn pack_rgb(r: u8, g: u8, b: u8) -> u32 {
+    ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1869,6 +3188,50 @@ mod tests {
         assert_eq!(result.source_object_count, 2);
         assert_eq!(result.row_names.len(), 2);
         assert_eq!(result.row_locations.len(), 2);
+    }
+
+    /// Every cell in a row belongs to the same source object, so every one
+    /// of them - not just an image-name/path column - must carry that
+    /// object's own image's disabled flag, letting the GUI strike the whole
+    /// row through regardless of which columns are actually shown.
+    #[test]
+    fn get_object_list_flags_every_cell_of_a_disabled_images_row() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+        ]);
+        generator.enable_image("img2.tif", true).unwrap();
+
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::ImageName, Column::ObjectClass, Column::AreaSizePx],
+                with_coloc_details: false,
+                page: no_page(),
+            })
+            .unwrap();
+
+        let img1_row = result
+            .rows
+            .iter()
+            .position(|row| matches!(&row[0].value, CellValue::String(s) if s == "img1.tif"))
+            .expect("img1's row");
+        let img2_row = result
+            .rows
+            .iter()
+            .position(|row| matches!(&row[0].value, CellValue::String(s) if s == "img2.tif"))
+            .expect("img2's row");
+
+        assert!(
+            result.rows[img1_row].iter().all(|cell| !cell.disabled),
+            "img1 is enabled, so none of its cells should be struck through"
+        );
+        assert!(
+            result.rows[img2_row].iter().all(|cell| cell.disabled),
+            "img2 is disabled, so every cell of its row - not just the image name - must be flagged"
+        );
     }
 
     #[test]
@@ -2121,6 +3484,203 @@ mod tests {
         assert_eq!(cell_f64(&result.rows[b2_idx][1]), 100.0);
     }
 
+    /// An image that was analyzed but produced zero objects (e.g. an empty
+    /// well) must still show up as its own group rather than being silently
+    /// absent from the matrix, since "absent" and "present but empty" mean
+    /// different things in a plate view. The row survives *and* its value
+    /// cell is `CellValue::Empty` (not a misleading `0.0`), same convention
+    /// as `Heatmap` and as the export's own "None"-for-empty-cell text.
+    #[test]
+    fn get_group_by_plate_includes_a_well_with_no_objects_as_an_empty_group() {
+        let generator = open(&[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)]);
+        generator
+            .database
+            .execute(
+                "INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks) \
+                 VALUES ('B2_01.tif', 'B2_01.tif', 100, 100, 1, 1, 1)",
+                [],
+            )
+            .unwrap();
+
+        let result = generator
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Unset,
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::List,
+            )
+            .unwrap();
+
+        assert_eq!(result.row_names.len(), 2, "B2 must still appear");
+        let b2_idx = result
+            .row_names
+            .iter()
+            .position(|n| n == "B2")
+            .expect("B2 group");
+        assert!(
+            matches!(result.rows[b2_idx][1].value, CellValue::Empty),
+            "a well with no objects has no average to show"
+        );
+
+        // The Heatmap view must place a real, selectable (empty) tile at
+        // B2's grid position - not skip it as if no well were there at all.
+        let heatmap = generator
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Unset,
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::Heatmap,
+            )
+            .unwrap();
+        // A1 -> (row 0, col 0), B2 -> (row 1, col 1).
+        assert!(
+            matches!(heatmap.rows[1][1].value, CellValue::Empty),
+            "B2 has no objects, so no number to show"
+        );
+        assert!(
+            heatmap.rows[1][1].search_key.is_some(),
+            "B2 must still be a real, clickable well"
+        );
+        assert!(
+            heatmap.rows[1][2].search_key.is_none(),
+            "position (1, 2) has no well at all and must stay non-clickable"
+        );
+    }
+
+    /// A disabled image's objects must not contribute to its well's
+    /// aggregate, but the well itself is never dropped - even one made up
+    /// only of disabled images still appears (as an empty cell, same as any
+    /// other well with no contributing objects). The well itself is never
+    /// flagged `Cell::disabled` though - only individual images are - so a
+    /// well made up only of disabled images renders the same as any other
+    /// empty well.
+    #[test]
+    fn get_group_by_plate_ignores_objects_from_a_disabled_image() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 100),
+        ]);
+        generator.enable_image("B2_01.tif", true).unwrap();
+
+        let result = generator
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Unset,
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::List,
+            )
+            .unwrap();
+
+        assert_eq!(
+            result.row_names,
+            vec!["A1".to_string(), "B2".to_string()],
+            "B2 must still appear even though every one of its images is disabled"
+        );
+        let a1_idx = result.row_names.iter().position(|n| n == "A1").unwrap();
+        let b2_idx = result.row_names.iter().position(|n| n == "B2").unwrap();
+        assert!(
+            !result.rows[a1_idx][1].disabled,
+            "A1 has no disabled images"
+        );
+        assert!(
+            !result.rows[b2_idx][1].disabled,
+            "the well itself is never flagged disabled, only individual images are"
+        );
+        assert!(
+            matches!(result.rows[b2_idx][1].value, CellValue::Empty),
+            "B2's disabled image must not contribute to the average, leaving no value to show"
+        );
+    }
+
+    /// The mixed case: a well with both an enabled and a disabled image
+    /// must still average only the enabled one's objects, but the well
+    /// itself must not be flagged `disabled` - only individual images are,
+    /// so the well keeps its normal heatmap color.
+    #[test]
+    fn get_group_by_plate_flags_a_well_with_a_mix_of_enabled_and_disabled_images() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 1000),
+        ]);
+        generator.enable_image("A1_02.tif", true).unwrap();
+
+        let result = generator
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Unset,
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::List,
+            )
+            .unwrap();
+
+        assert_eq!(result.row_names, vec!["A1".to_string()]);
+        assert!(
+            !result.rows[0][1].disabled,
+            "the well itself must not be flagged disabled just because one of its images is"
+        );
+        assert!(
+            result.rows[0][1].any_disabled,
+            "the well must still be flagged any_disabled so the GUI can badge it"
+        );
+        assert!(
+            matches!(result.rows[0][1].value, CellValue::Float(v) if v == 10.0),
+            "only the enabled image's objects (10) must be averaged, not the disabled one's 1000"
+        );
+
+        let heatmap = generator
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Unset,
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::Heatmap,
+            )
+            .unwrap();
+        let a1_cell = &heatmap.rows[0][0];
+        assert!(
+            !a1_cell.disabled,
+            "the heatmap's well cell must not be flagged disabled either"
+        );
+        assert!(
+            a1_cell.any_disabled,
+            "the heatmap's well cell must carry any_disabled too, for the same corner badge"
+        );
+    }
+
     // -- get_images ---------------------------------------------------------
 
     #[test]
@@ -2133,6 +3693,51 @@ mod tests {
         let names: Vec<String> = images.iter().map(|i| i.name.clone()).collect();
         assert_eq!(names, vec!["a.tif".to_string(), "b.tif".to_string()]);
         assert!(images.iter().all(|i| !i.disabled));
+    }
+
+    #[test]
+    fn enable_image_toggles_the_disabled_flag() {
+        let generator = open(&[ObjectSpec::new("a.tif", "ClassA", 1, 10)]);
+        assert!(!generator.get_images().unwrap()[0].disabled);
+
+        generator.enable_image("a.tif", true).unwrap();
+        assert!(generator.get_images().unwrap()[0].disabled);
+
+        generator.enable_image("a.tif", false).unwrap();
+        assert!(!generator.get_images().unwrap()[0].disabled);
+    }
+
+    #[test]
+    fn enable_image_on_an_unknown_path_is_a_no_op() {
+        let generator = open(&[ObjectSpec::new("a.tif", "ClassA", 1, 10)]);
+        generator.enable_image("does-not-exist.tif", true).unwrap();
+        assert!(!generator.get_images().unwrap()[0].disabled);
+    }
+
+    /// `try_clone` is the fix for a real Windows bug: exporting used to
+    /// reopen the `.evadb` file by path on a background thread while the
+    /// original `ResultsGenerator` connection was still open, which Windows
+    /// (unlike Linux/macOS) refuses - "used by another process", reporting
+    /// the app's own PID. `try_clone` gets a second, independent connection
+    /// to the *same already-open* database instead of reopening the file,
+    /// so this pins down that both connections stay live and see the same
+    /// data at the same time - the exact scenario a background export needs.
+    #[test]
+    fn try_clone_gives_an_independent_connection_to_the_same_live_database() {
+        let generator = open(&[ObjectSpec::new("a.tif", "ClassA", 1, 10)]);
+        let cloned = generator.try_clone().expect("clone connection");
+
+        // Both connections are usable at the same time...
+        assert_eq!(generator.get_images().unwrap().len(), 1);
+        assert_eq!(cloned.get_images().unwrap().len(), 1);
+
+        // ...and see the same underlying data, not two separate files: a
+        // write through one is visible through the other.
+        cloned.enable_image("a.tif", true).unwrap();
+        assert!(
+            generator.get_images().unwrap()[0].disabled,
+            "the clone must share the original's already-open database, not a second file"
+        );
     }
 
     // -- Column key/label round trips --------------------------------------
@@ -2479,6 +4084,123 @@ mod tests {
         }
     }
 
+    /// Mirrors `get_group_by_plate_includes_a_well_with_no_objects_as_an_empty_group`
+    /// one level down: a field (image) with zero objects must still get its
+    /// own tile in the well view instead of silently vanishing.
+    #[test]
+    fn get_group_by_well_includes_a_field_with_no_objects_as_an_empty_tile() {
+        let generator = open(&[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)]);
+        generator
+            .database
+            .execute(
+                "INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks) \
+                 VALUES ('A1_02.tif', 'A1_02.tif', 100, 100, 1, 1, 1)",
+                [],
+            )
+            .unwrap();
+
+        let list = generator
+            .get_group_by_well(&well_filter("A1", Column::AreaSizePx), &View::List)
+            .unwrap();
+
+        assert_eq!(list.row_names, vec!["01".to_string(), "02".to_string()]);
+        assert_eq!(float_cell(&list.rows[0][1]), 10.0);
+        assert!(
+            matches!(list.rows[1][1].value, CellValue::Empty),
+            "field with no objects has no average to show"
+        );
+
+        // The Heatmap view must place a real, selectable (empty) tile at
+        // field 02's grid position - not skip it as if no field were
+        // there at all (that's reserved for a position no field occupies).
+        let heatmap = generator
+            .get_group_by_well(&well_filter("A1", Column::AreaSizePx), &View::Heatmap)
+            .unwrap();
+        // Default 4x4 well, no `well_order`: idx 1 -> position 0 (row 0,
+        // col 0), idx 2 -> position 1 (row 0, col 1).
+        assert!(
+            matches!(heatmap.rows[0][1].value, CellValue::Empty),
+            "field 02 has no objects, so no number to show"
+        );
+        assert!(
+            heatmap.rows[0][1].search_key.is_some(),
+            "field 02 must still be a real, clickable tile"
+        );
+        assert!(
+            heatmap.rows[0][2].search_key.is_none(),
+            "position (0, 2) has no field at all and must stay non-clickable"
+        );
+    }
+
+    /// A disabled image's *own* field must still show its real value (a
+    /// single image's own aggregate is never affected by its own disabled
+    /// flag - only a value that combines several images, like the plate
+    /// view's well average, excludes it), just flagged via `Cell::disabled`.
+    /// Mirrors `get_group_by_plate_flags_a_well_with_a_mix_of_enabled_and_disabled_images`
+    /// one level down.
+    #[test]
+    fn get_wells_for_plate_flags_but_keeps_a_disabled_images_field() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+        ]);
+        generator.enable_image("A1_02.tif", true).unwrap();
+
+        let batched = generator
+            .get_wells_for_plate(&wells_batch_filter(Column::AreaSizePx), &View::List)
+            .unwrap();
+        assert_eq!(
+            batched["A1"].row_names,
+            vec!["01".to_string(), "02".to_string()],
+            "the disabled field must still appear"
+        );
+        assert!(!batched["A1"].rows[0][1].disabled, "field 01 is enabled");
+        assert!(batched["A1"].rows[1][1].disabled, "field 02 is disabled");
+        assert!(
+            matches!(batched["A1"].rows[1][1].value, CellValue::Float(v) if v == 20.0),
+            "a disabled image's own field still shows its own real value"
+        );
+
+        let single = generator
+            .get_group_by_well(&well_filter("A1", Column::AreaSizePx), &View::List)
+            .unwrap();
+        assert_eq!(single.row_names, vec!["01".to_string(), "02".to_string()]);
+        assert!(single.rows[1][1].disabled);
+    }
+
+    /// A disabled field's own value is still shown (see the test above),
+    /// but must not skew the Auto color range every *other* field's tile is
+    /// colored against - disabling an outlier should change how the
+    /// remaining fields compare to each other, not leave them exactly where
+    /// they were as if nothing happened.
+    #[test]
+    fn get_group_by_well_heatmap_excludes_a_disabled_fields_value_from_the_auto_color_range() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("A1_03.tif", "ClassA", 1, 1000),
+        ]);
+        generator.enable_image("A1_03.tif", true).unwrap();
+
+        let heatmap = generator
+            .get_group_by_well(&well_filter("A1", Column::AreaSizePx), &View::Heatmap)
+            .unwrap();
+
+        // Default 4x4 well grid, no `well_order`: field "01" -> (0, 0),
+        // "02" -> (0, 1), "03" -> (0, 2).
+        let schema = ColorSchema::default();
+        assert_eq!(
+            heatmap.rows[0][0].bg_color,
+            value_to_color(10.0, 10.0, 20.0, &schema),
+            "10 must be colored as the range's own min, ignoring the disabled 1000"
+        );
+        assert_eq!(
+            heatmap.rows[0][1].bg_color,
+            value_to_color(20.0, 10.0, 20.0, &schema),
+            "20 must be colored as the range's own max, ignoring the disabled 1000"
+        );
+    }
+
     #[test]
     fn group_by_plate_multi_agg_matches_group_by_plate_per_aggregation() {
         let generator = open(&[
@@ -2486,6 +4208,7 @@ mod tests {
             ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
             ObjectSpec::new("A1_03.tif", "ClassA", 1, 30),
         ]);
+        generator.enable_image("A1_03.tif", true).unwrap();
         let aggregations = vec![Aggregation::Avg, Aggregation::Min, Aggregation::Max];
         let multi_filter = PlateFilterMulti {
             plane: plane(),
@@ -2511,11 +4234,20 @@ mod tests {
                 float_cell(&single.rows[0][1]),
                 "aggregation {aggregation:?} disagrees between multi_agg batch and single call",
             );
+            assert_eq!(
+                batched_result.rows[0][1].disabled, single.rows[0][1].disabled,
+                "aggregation {aggregation:?}'s disabled flag disagrees between multi_agg batch and single call",
+            );
+            assert!(
+                !batched_result.rows[0][1].disabled,
+                "the well itself must not be flagged disabled just because A1_03 is"
+            );
         }
-        // Sanity on the actual numbers, not just internal agreement.
-        assert_eq!(float_cell(&multi[0].rows[0][1]), 20.0); // avg
-        assert_eq!(float_cell(&multi[1].rows[0][1]), 10.0); // min
-        assert_eq!(float_cell(&multi[2].rows[0][1]), 30.0); // max
+        // Sanity on the actual numbers (A1_03's 30 excluded from every
+        // aggregate since it's disabled), not just internal agreement.
+        assert_eq!(float_cell(&multi[0].rows[0][1]), 15.0); // avg(10, 20)
+        assert_eq!(float_cell(&multi[1].rows[0][1]), 10.0); // min(10, 20)
+        assert_eq!(float_cell(&multi[2].rows[0][1]), 20.0); // max(10, 20)
     }
 
     #[test]
@@ -2524,6 +4256,7 @@ mod tests {
             ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
             ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
         ]);
+        generator.enable_image("A1_02.tif", true).unwrap();
         let aggregations = vec![Aggregation::Avg, Aggregation::Sum];
         let multi_filter = WellsBatchFilterMulti {
             plane: plane(),
@@ -2553,9 +4286,18 @@ mod tests {
                         float_cell(&s_row[1]),
                         "well {well_id}, aggregation {aggregation:?}",
                     );
+                    assert_eq!(
+                        b_row[1].disabled, s_row[1].disabled,
+                        "well {well_id}, aggregation {aggregation:?}",
+                    );
                 }
             }
         }
+        // A1_02 (field "02") is disabled - its own field still shows its
+        // own value (20), and only field "01" (value 10) is unflagged.
+        assert!(!multi[0]["A1"].rows[0][1].disabled);
+        assert!(multi[0]["A1"].rows[1][1].disabled);
+        assert_eq!(float_cell(&multi[0]["A1"].rows[1][1]), 20.0);
     }
 
     #[test]
@@ -2955,1074 +4697,4 @@ mod tests {
         };
         assert_eq!(cell_f64(&result.rows[0][1]), 42.0);
     }
-}
-
-/// One row of the `objects` table, as fetched by `get_list`'s hand-written
-/// SQL — only the columns needed to fill in any `Column` variant (see
-/// `cell_for_column`), not every column the table has.
-struct ObjectRow {
-    object_id: String,
-    image_name: String,
-    object_class_name: Vec<String>,
-    seg_class_name: Option<String>,
-    area_px: u64,
-    area_nm2: f64,
-    perimeter_px: f64,
-    perimeter_nm: f64,
-    circularity: f64,
-    solidity: f64,
-    eccentricity: f64,
-    coloc_json: String,
-    intensities_json: String,
-    // Always fetched (unlike every field above, gated by `ObjectColumnNeeds`
-    // on whether its `Column` is actually selected/displayed) - needed by
-    // the GUI to navigate to and highlight this object in its source image
-    // (see `DatabaseResult::row_locations`) regardless of which columns the
-    // user chose to show.
-    image_rel_path: String,
-    bbox_xmin_px: u32,
-    bbox_ymin_px: u32,
-    bbox_xmax_px: u32,
-    bbox_ymax_px: u32,
-}
-
-/// Which of `ObjectRow`'s source columns a given column selection actually
-/// needs — shared by `get_list`'s main fetch (needs from `ordered_columns`)
-/// and its coloc-detail partner fetch (needs from just `metric_columns`,
-/// see `Column::with_coloc_details` on `ListFilter`), so both build their
-/// `SELECT` list and parse rows the exact same (bug-for-bug consistent) way.
-#[derive(Default, Clone, Copy)]
-struct ObjectColumnNeeds {
-    image_name: bool,
-    class: bool,
-    area_px: bool,
-    area_nm2: bool,
-    perimeter_px: bool,
-    perimeter_nm: bool,
-    circularity: bool,
-    solidity: bool,
-    eccentricity: bool,
-    coloc: bool,
-    intensities: bool,
-}
-
-impl ObjectColumnNeeds {
-    fn for_columns(columns: &[Column]) -> Self {
-        Self {
-            image_name: columns.contains(&Column::ImageName),
-            class: columns.contains(&Column::ObjectClass),
-            area_px: columns.contains(&Column::AreaSizePx),
-            area_nm2: columns.contains(&Column::AreaSizeNm),
-            perimeter_px: columns.contains(&Column::PerimeterPx),
-            perimeter_nm: columns.contains(&Column::PerimeterNm),
-            circularity: columns.contains(&Column::Circularity),
-            solidity: columns.contains(&Column::Solidity),
-            eccentricity: columns.contains(&Column::Eccentricity),
-            coloc: columns.iter().any(|c| matches!(c, Column::ColocCount(_))),
-            intensities: columns.iter().any(|c| {
-                matches!(
-                    c,
-                    Column::IntensityAvg(_)
-                        | Column::IntensitySum(_)
-                        | Column::IntensityMin(_)
-                        | Column::IntensityMax(_)
-                )
-            }),
-        }
-    }
-}
-
-/// The comma-joined `SELECT` column list `get_list` queries `objects`
-/// with — a column not in `need` becomes a cheap constant instead of a real
-/// column reference (see the column-pruning comment on `get_list`), so
-/// `map_object_row` below can always read the same fixed positions
-/// regardless of which are real. `image_rel_path`/the four `bbox_*_px`
-/// columns are the exception: small fixed-width columns, always selected
-/// for real regardless of `need`, since the GUI needs an object's location
-/// to navigate to and highlight it (see `DatabaseResult::row_locations`)
-/// independent of which columns are actually displayed.
-fn object_select_clause(need: ObjectColumnNeeds) -> String {
-    let select_image_name = if need.image_name { "image_name" } else { "''" };
-    let select_object_class_name = if need.class {
-        "CAST(object_class_name AS VARCHAR[])"
-    } else {
-        "CAST(NULL AS VARCHAR[])"
-    };
-    let select_seg_class_name = if need.class {
-        "seg_class_name"
-    } else {
-        "NULL::VARCHAR"
-    };
-    let select_area_px = if need.area_px {
-        "area_px"
-    } else {
-        "0::UBIGINT"
-    };
-    let select_area_nm2 = if need.area_nm2 {
-        "area_nm2"
-    } else {
-        "0.0::DOUBLE"
-    };
-    let select_perimeter_px = if need.perimeter_px {
-        "perimeter_px"
-    } else {
-        "0.0::DOUBLE"
-    };
-    let select_perimeter_nm = if need.perimeter_nm {
-        "perimeter_nm"
-    } else {
-        "0.0::DOUBLE"
-    };
-    let select_circularity = if need.circularity {
-        "circularity"
-    } else {
-        "0.0::DOUBLE"
-    };
-    let select_solidity = if need.solidity {
-        "solidity"
-    } else {
-        "0.0::DOUBLE"
-    };
-    let select_eccentricity = if need.eccentricity {
-        "eccentricity"
-    } else {
-        "0.0::DOUBLE"
-    };
-    let select_coloc_json = if need.coloc {
-        "coloc_json"
-    } else {
-        "NULL::VARCHAR"
-    };
-    let select_intensities_json = if need.intensities {
-        "intensities_json"
-    } else {
-        "NULL::VARCHAR"
-    };
-    format!(
-        "object_id, {select_image_name}, {select_object_class_name}, {select_seg_class_name},\n\
-                {select_area_px}, {select_area_nm2}, {select_perimeter_px}, {select_perimeter_nm},\n\
-                {select_circularity}, {select_solidity}, {select_eccentricity},\n\
-                {select_coloc_json}, {select_intensities_json},\n\
-                image_rel_path, bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px"
-    )
-}
-
-/// Inverse of `object_select_clause`'s fixed column position order —
-/// shared so the main and partner fetches in `get_list` can never drift.
-fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
-    Ok(ObjectRow {
-        object_id: row.get(0)?,
-        image_name: row.get(1)?,
-        object_class_name: extract_string_list(row.get::<_, Value>(2)?),
-        seg_class_name: row.get(3)?,
-        area_px: row.get(4)?,
-        area_nm2: row.get(5)?,
-        perimeter_px: row.get(6)?,
-        perimeter_nm: row.get(7)?,
-        circularity: row.get(8)?,
-        solidity: row.get(9)?,
-        eccentricity: row.get(10)?,
-        coloc_json: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
-        intensities_json: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
-        image_rel_path: row.get(13)?,
-        bbox_xmin_px: row.get(14)?,
-        bbox_ymin_px: row.get(15)?,
-        bbox_xmax_px: row.get(16)?,
-        bbox_ymax_px: row.get(17)?,
-    })
-}
-
-/// `coloc_json`'s key for `class` (see `coloc_to_json` in evanalyzer_core's
-/// duckdb.rs) — shared by `coloc_count_for_class` and `get_list`'s
-/// coloc-detail partner resolution so both agree on the same lookup.
-fn coloc_class_key(class: ObjectClass) -> String {
-    match class {
-        ObjectClass::Valid(n) => n.to_string(),
-        ObjectClass::Unset => "unset".to_string(),
-    }
-}
-
-/// `DatabaseResult::row_locations`' entry for `object` — its source image
-/// (by rel path) and pixel bounding box, for the GUI to navigate to and
-/// highlight it.
-fn object_location(object: &ObjectRow) -> (String, [u32; 4]) {
-    (
-        object.image_rel_path.clone(),
-        [
-            object.bbox_xmin_px,
-            object.bbox_ymin_px,
-            object.bbox_xmax_px,
-            object.bbox_ymax_px,
-        ],
-    )
-}
-
-/// Whether `column` names a per-object value that can be meaningfully
-/// resolved on a *different* object — i.e. a coloc partner's own value for
-/// that same column, per `ListFilter::with_coloc_details`. Includes
-/// `ObjectId` deliberately (even though it's identity, not a measurement):
-/// without it there'd be no way to tell *which* partner object a fanned-out
-/// coloc-detail row is actually about, only which class it belongs to.
-/// `ImageName`/`ObjectClass`/`ColocCount` stay excluded — a coloc partner is
-/// always in the same image as its source object (so `ImageName` would
-/// just repeat the source row's own value), the partner's class is already
-/// implied by which `coloc_class_columns` combination produced the row, and
-/// resolving `ColocCount` on the partner would mean its *own* colocalization
-/// counts, not this relationship.
-fn is_resolvable_metric(column: &Column) -> bool {
-    matches!(
-        column,
-        Column::ObjectId
-            | Column::AreaSizePx
-            | Column::AreaSizeNm
-            | Column::PerimeterPx
-            | Column::PerimeterNm
-            | Column::Circularity
-            | Column::Solidity
-            | Column::Eccentricity
-            | Column::IntensityAvg(_)
-            | Column::IntensitySum(_)
-            | Column::IntensityMin(_)
-            | Column::IntensityMax(_)
-    )
-}
-
-/// Display label for a `coloc_json`/`object_class_name`-adjacent class,
-/// e.g. for a coloc-detail column header — the class's registered name, or
-/// `"class {n}"` if `n` isn't (or no longer is) a recognized id.
-pub(crate) fn class_display_label(class: ObjectClass, classes: &[Class]) -> String {
-    match class {
-        ObjectClass::Valid(n) => classes
-            .iter()
-            .find(|c| c.id == ObjectClass::Valid(n))
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| format!("class {n}")),
-        ObjectClass::Unset => "unset".to_string(),
-    }
-}
-
-/// Escapes and comma-joins string literals for a SQL `IN (...)` list.
-///
-/// `pub(super)`: also used by `results_charts.rs`'s boxplot query, which
-/// needs raw SQL access this crate keeps otherwise private to this module.
-pub(super) fn sql_string_in_list(values: &[String]) -> String {
-    values
-        .iter()
-        .map(|v| format!("'{}'", v.replace('\'', "''")))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Comma-joins integers into a DuckDB list literal, e.g. `[1, 2]`, for
-/// `list_has_any(...)`. `pub(super)`: see `sql_string_in_list`.
-pub(super) fn sql_int_array_literal(values: &[u32]) -> String {
-    format!(
-        "[{}]",
-        values
-            .iter()
-            .map(|v| v.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-
-/// Converts a DuckDB list/array value (as returned for a `VARCHAR[]`
-/// column) into a `Vec<String>`, dropping any non-text elements.
-fn extract_string_list(value: Value) -> Vec<String> {
-    match value {
-        Value::List(items) | Value::Array(items) => items
-            .into_iter()
-            .filter_map(|item| match item {
-                Value::Text(s) => Some(s),
-                _ => None,
-            })
-            .collect(),
-        _ => vec![],
-    }
-}
-
-fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Cell {
-    // Only the class badge carries a background color today; every other
-    // column renders on the table's normal row background.
-    let no_bg = Cell {
-        value: CellValue::String(String::new()),
-        bg_color: 0,
-        alternating_color: false,
-        search_key: None,
-    };
-    match column {
-        Column::ObjectId => Cell {
-            value: CellValue::String(object.object_id.clone()),
-            ..no_bg
-        },
-        Column::ImageName => Cell {
-            value: CellValue::String(object.image_name.clone()),
-            ..no_bg
-        },
-        Column::ObjectClass => {
-            let label = if object.object_class_name.is_empty() {
-                object.seg_class_name.clone().unwrap_or_default()
-            } else {
-                object.object_class_name.join(", ")
-            };
-            let color = object
-                .object_class_name
-                .first()
-                .and_then(|name| classes.iter().find(|class| &class.name == name))
-                .map(|class| class.color)
-                .unwrap_or(0);
-            Cell {
-                value: CellValue::Class((label, color)),
-                bg_color: color,
-                alternating_color: false,
-                search_key: None,
-            }
-        }
-        Column::Count => Cell {
-            value: CellValue::Integer(1),
-            ..no_bg
-        },
-        Column::AreaSizePx => Cell {
-            value: CellValue::Integer(object.area_px as i32),
-            ..no_bg
-        },
-        Column::AreaSizeNm => Cell {
-            value: CellValue::Float(object.area_nm2 as f32),
-            ..no_bg
-        },
-        Column::PerimeterPx => Cell {
-            value: CellValue::Float(object.perimeter_px as f32),
-            ..no_bg
-        },
-        Column::PerimeterNm => Cell {
-            value: CellValue::Float(object.perimeter_nm as f32),
-            ..no_bg
-        },
-        Column::Circularity => Cell {
-            value: CellValue::Float(object.circularity as f32),
-            ..no_bg
-        },
-        Column::Solidity => Cell {
-            value: CellValue::Float(object.solidity as f32),
-            ..no_bg
-        },
-        Column::Eccentricity => Cell {
-            value: CellValue::Float(object.eccentricity as f32),
-            ..no_bg
-        },
-        Column::ColocCount(class) => Cell {
-            value: CellValue::Integer(coloc_count_for_class(&object.coloc_json, *class)),
-            ..no_bg
-        },
-        Column::IntensityAvg(channel) => Cell {
-            value: CellValue::Float(intensity_stat(
-                &object.intensities_json,
-                *channel,
-                "mean_scaled",
-            )),
-            ..no_bg
-        },
-        Column::IntensitySum(channel) => Cell {
-            value: CellValue::Float(intensity_stat(
-                &object.intensities_json,
-                *channel,
-                "sum_scaled",
-            )),
-            ..no_bg
-        },
-        Column::IntensityMin(channel) => Cell {
-            value: CellValue::Float(intensity_stat(
-                &object.intensities_json,
-                *channel,
-                "min_scaled",
-            )),
-            ..no_bg
-        },
-        Column::IntensityMax(channel) => Cell {
-            value: CellValue::Float(intensity_stat(
-                &object.intensities_json,
-                *channel,
-                "max_scaled",
-            )),
-            ..no_bg
-        },
-    }
-}
-
-/// Number of `class`-colocalizing partners a object has, from the raw
-/// `{"<class_id>": [<object ids>], ...}` shape `coloc_json` stores (see
-/// `coloc_to_json` in evanalyzer_core's duckdb.rs) — keyed by the target
-/// class's numeric id, not its name. `0` if `class` never shows up as a key
-/// at all (no colocalization with that class recorded for this object).
-fn coloc_count_for_class(coloc_json: &str, class: ObjectClass) -> i32 {
-    let Ok(serde_json::Value::Object(partners)) = serde_json::from_str(coloc_json) else {
-        return 0;
-    };
-    let key = match class {
-        ObjectClass::Valid(n) => n.to_string(),
-        ObjectClass::Unset => "unset".to_string(),
-    };
-    partners
-        .get(&key)
-        .and_then(|v| v.as_array())
-        .map_or(0, |ids| ids.len() as i32)
-}
-
-/// One channel's stat out of the raw `{"<channel>": {"mean_raw": ..., ...},
-/// ...}` shape `intensities_json` stores (see `intensities_to_json` in
-/// evanalyzer_core, whose stat key names this mirrors exactly).
-fn intensity_stat(intensities_json: &str, channel: u32, stat: &str) -> f32 {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(intensities_json) else {
-        return 0.0;
-    };
-    value
-        .get(channel.to_string())
-        .and_then(|channel| channel.get(stat))
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0) as f32
-}
-
-/// SQL scalar expression for a `Column`, to be wrapped in an aggregate
-/// function by `get_group_by_plate`/`get_group_by_well`/`get_image_heatmap`
-/// — also `results_charts.rs`'s histogram/scatter/boxplot queries (hence
-/// `pub(super)`), which aggregate nothing themselves but still need a bare
-/// per-object value expression to bucket/plot/box.
-/// Plain numeric `objects` columns are a direct column reference;
-/// `ColocCount` is a `json_array_length` extraction (see
-/// `coloc_count_for_class`, which does the same lookup per-row in Rust for
-/// `get_list`). The per-channel intensity columns still need their own
-/// JSON-extraction SQL (see `intensity_stat`, which — like `coloc_count_for_class`
-/// before this — only handles this per-row in Rust today, not as a groupable
-/// SQL expression), left for a follow-up.
-pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalErrors> {
-    Ok(match column {
-        Column::AreaSizePx => "area_px".to_string(),
-        Column::AreaSizeNm => "area_nm2".to_string(),
-        Column::PerimeterPx => "perimeter_px".to_string(),
-        Column::PerimeterNm => "perimeter_nm".to_string(),
-        Column::Circularity => "circularity".to_string(),
-        Column::Solidity => "solidity".to_string(),
-        Column::Eccentricity => "eccentricity".to_string(),
-        // Same shape as `coloc_partner_count_expr` in evanalyzer_core's
-        // duckdb.rs: `coloc_json` is a native `JSON` column, keyed by class
-        // id (see `coloc_to_json`), so `->` always receives well-formed
-        // JSON — no string-literal-cast guard needed here.
-        Column::ColocCount(ObjectClass::Valid(class_id)) => {
-            format!("COALESCE(json_array_length(coloc_json -> '{class_id}'), 0)")
-        }
-        Column::ColocCount(ObjectClass::Unset) => {
-            "COALESCE(json_array_length(coloc_json -> 'unset'), 0)".to_string()
-        }
-        // Handled by `aggregate_sql` before this function is ever called
-        // with `Column::Count` — `COUNT(*)` doesn't fit the "aggregate
-        // function wraps a per-row scalar expression" shape every other
-        // arm here does, since it counts rows rather than reading a column
-        // off them. Kept here (rather than left unreachable) only so this
-        // match stays exhaustive.
-        Column::Count
-        | Column::ObjectId
-        | Column::ImageName
-        | Column::ObjectClass
-        | Column::IntensityAvg(_)
-        | Column::IntensitySum(_)
-        | Column::IntensityMin(_)
-        | Column::IntensityMax(_) => {
-            // No classes list handy here (this is a plain error-message
-            // helper, not a `ResultsGenerator` method) — `as_key` already
-            // falls back to the raw numeric id for `ColocCount` when it
-            // can't resolve a name, which is fine for an error message.
-            return Err(InternalErrors::InvalidArgument(format!(
-                "column {} cannot be aggregated for the plate view yet",
-                column.as_key(&[])
-            )));
-        }
-    })
-}
-
-fn aggregation_sql_fn(aggregation: &Aggregation) -> &'static str {
-    match aggregation {
-        Aggregation::Avg => "AVG",
-        Aggregation::Min => "MIN",
-        Aggregation::Max => "MAX",
-        Aggregation::Stddev => "STDDEV_SAMP",
-        Aggregation::Sum => "SUM",
-        Aggregation::Median => "MEDIAN",
-        Aggregation::Skewness => "SKEWNESS",
-    }
-}
-
-/// The `{agg_fn}({value_expr})` pair `get_group_by_plate`/`get_group_by_well`/
-/// `get_image_heatmap` plug into their `SELECT`. `Column::Count` ("number of
-/// objects", not a per-object measurement) is special-cased to a flat
-/// `COUNT(*)`, ignoring `aggregation` entirely — averaging or summing a count
-/// across an already-single-valued group wouldn't mean anything the count
-/// itself doesn't already say more plainly. Every other column defers to the
-/// existing `aggregation_sql_fn`/`column_aggregate_expr`.
-fn aggregate_sql(
-    column: &Column,
-    aggregation: &Aggregation,
-) -> Result<(&'static str, String), InternalErrors> {
-    if matches!(column, Column::Count) {
-        return Ok(("COUNT", "*".to_string()));
-    }
-    Ok((
-        aggregation_sql_fn(aggregation),
-        column_aggregate_expr(column)?,
-    ))
-}
-
-// Approximate 5-stop reproduction of the matplotlib "viridis" colormap
-// (dark purple -> teal -> yellow).
-const VIRIDIS_STOPS: [(f32, (u8, u8, u8)); 5] = [
-    (0.0, (0x44, 0x01, 0x54)),
-    (0.25, (0x3b, 0x52, 0x8b)),
-    (0.5, (0x21, 0x90, 0x8d)),
-    (0.75, (0x5d, 0xc9, 0x63)),
-    (1.0, (0xfd, 0xe7, 0x25)),
-];
-
-// Excel's built-in "Red - Yellow - Green" 3-Color Scale conditional format —
-// red at the high end, green at the low end (`t=0` is `min`, `t=1` is `max`,
-// see `value_to_color`), matching how Excel's own scale reads by default.
-const EXCEL_STOPS: [(f32, (u8, u8, u8)); 3] = [
-    (0.0, (0x63, 0xbe, 0x7b)),
-    (0.5, (0xff, 0xeb, 0x84)),
-    (1.0, (0xf8, 0x69, 0x6b)),
-];
-
-// Approximate 5-stop reproductions of well-known scientific colormaps —
-// same reasoning/precision level as `VIRIDIS_STOPS` above: recognizable as
-// the named colormap, not a pixel-exact reproduction of it.
-
-// matplotlib "plasma" (dark blue-purple -> magenta -> orange -> yellow).
-const PLASMA_STOPS: [(f32, (u8, u8, u8)); 5] = [
-    (0.0, (0x0d, 0x08, 0x87)),
-    (0.25, (0x7e, 0x03, 0xa8)),
-    (0.5, (0xcc, 0x47, 0x78)),
-    (0.75, (0xf8, 0x94, 0x41)),
-    (1.0, (0xf0, 0xf9, 0x21)),
-];
-
-// matplotlib "inferno" (black -> purple -> red -> orange -> pale yellow).
-const INFERNO_STOPS: [(f32, (u8, u8, u8)); 5] = [
-    (0.0, (0x00, 0x00, 0x04)),
-    (0.25, (0x57, 0x10, 0x6e)),
-    (0.5, (0xbc, 0x37, 0x54)),
-    (0.75, (0xf9, 0x8c, 0x0a)),
-    (1.0, (0xfc, 0xff, 0xa4)),
-];
-
-// matplotlib "cividis" (colorblind-friendly dark blue -> gray -> yellow).
-const CIVIDIS_STOPS: [(f32, (u8, u8, u8)); 5] = [
-    (0.0, (0x00, 0x20, 0x4d)),
-    (0.25, (0x41, 0x4d, 0x6b)),
-    (0.5, (0x7c, 0x7b, 0x78)),
-    (0.75, (0xbc, 0xaf, 0x6f)),
-    (1.0, (0xff, 0xea, 0x46)),
-];
-
-// matplotlib "coolwarm" (diverging blue -> near-white -> red).
-const COOLWARM_STOPS: [(f32, (u8, u8, u8)); 5] = [
-    (0.0, (0x3b, 0x4c, 0xc0)),
-    (0.25, (0x88, 0xab, 0xfd)),
-    (0.5, (0xdd, 0xdd, 0xdd)),
-    (0.75, (0xf7, 0xa8, 0x89)),
-    (1.0, (0xb4, 0x04, 0x26)),
-];
-
-// ColorBrewer "RdBu" diverging (dark red -> near-white -> dark blue).
-const RED_BLUE_STOPS: [(f32, (u8, u8, u8)); 5] = [
-    (0.0, (0x67, 0x00, 0x1f)),
-    (0.25, (0xd6, 0x60, 0x4d)),
-    (0.5, (0xf7, 0xf7, 0xf7)),
-    (0.75, (0x43, 0x93, 0xc3)),
-    (1.0, (0x05, 0x30, 0x61)),
-];
-
-// ColorBrewer "YlGnBu" sequential (pale yellow -> green -> blue -> dark navy).
-const YLGNBU_STOPS: [(f32, (u8, u8, u8)); 5] = [
-    (0.0, (0xff, 0xff, 0xd9)),
-    (0.25, (0x7f, 0xcd, 0xbb)),
-    (0.5, (0x41, 0xb6, 0xc4)),
-    (0.75, (0x22, 0x5e, 0xa8)),
-    (1.0, (0x08, 0x1d, 0x58)),
-];
-
-// cmocean "haline" (dark indigo -> teal -> green -> pale yellow-green),
-// used for ocean salinity.
-const HALINE_STOPS: [(f32, (u8, u8, u8)); 5] = [
-    (0.0, (0x29, 0x18, 0x6b)),
-    (0.25, (0x21, 0x6b, 0x7a)),
-    (0.5, (0x2e, 0x9c, 0x82)),
-    (0.75, (0x8f, 0xcb, 0x6c)),
-    (1.0, (0xf6, 0xed, 0x4c)),
-];
-
-// cmocean "algae" (pale yellow-green -> mid green -> near-black dark green),
-// used for algae/chlorophyll concentration.
-const ALGAE_STOPS: [(f32, (u8, u8, u8)); 5] = [
-    (0.0, (0xd9, 0xf0, 0xa3)),
-    (0.25, (0x78, 0xc6, 0x79)),
-    (0.5, (0x31, 0xa3, 0x54)),
-    (0.75, (0x00, 0x68, 0x37)),
-    (1.0, (0x00, 0x44, 0x1b)),
-];
-
-// cmocean "thermal" (dark navy-black -> purple -> red -> orange -> pale
-// yellow), used for ocean temperature.
-const THERMAL_STOPS: [(f32, (u8, u8, u8)); 5] = [
-    (0.0, (0x04, 0x23, 0x33)),
-    (0.25, (0x52, 0x27, 0x6b)),
-    (0.5, (0xa8, 0x32, 0x7d)),
-    (0.75, (0xe2, 0x72, 0x4f)),
-    (1.0, (0xf2, 0xf1, 0x8d)),
-];
-
-/// Every standard plate size, smallest first — `best_matching_dimensions`
-/// relies on this order to find the smallest one that fits.
-const ALL_PLATE_DIMENSIONS: [PlateDimensions; 7] = [
-    PlateDimensions::PLate2x3,
-    PlateDimensions::Plate3x4,
-    PlateDimensions::Plate4x6,
-    PlateDimensions::Plate6x8,
-    PlateDimensions::Plate8x12,
-    PlateDimensions::Plate16x24,
-    PlateDimensions::Plate32x48,
-];
-
-/// The smallest standard plate size whose row/column count covers every well
-/// this query actually found (`max_row`/`max_col`, both 0-based). Falls back
-/// to the largest known size if even that doesn't fit (a plate bigger than
-/// any standard format, or a `grouping_regex` extracting something that
-/// isn't really a well id).
-fn best_matching_dimensions(max_row: Option<usize>, max_col: Option<usize>) -> PlateDimensions {
-    let needed_rows = max_row.map_or(1, |row| row + 1);
-    let needed_cols = max_col.map_or(1, |col| col + 1);
-    ALL_PLATE_DIMENSIONS
-        .into_iter()
-        .find(|dimensions| {
-            let (rows, cols) = dimensions.dimensions();
-            rows >= needed_rows && cols >= needed_cols
-        })
-        .unwrap_or(PlateDimensions::Plate32x48)
-}
-
-/// Parses a well's row letters ("A", "B", ..., "Z", "AA", "AB", ...) into a
-/// 0-based row index, using the same bijective base-26 scheme spreadsheet
-/// column letters use. `None` if `letters` isn't purely alphabetic (e.g. the
-/// `grouping_regex` didn't actually match a well id).
-fn row_letter_to_index(letters: &str) -> Option<usize> {
-    if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
-        return None;
-    }
-    let mut index: usize = 0;
-    for c in letters.chars() {
-        let digit = (c.to_ascii_uppercase() as u8 - b'A') as usize + 1;
-        index = index * 26 + digit;
-    }
-    Some(index - 1)
-}
-
-/// Inverse of [`row_letter_to_index`].
-fn row_index_to_letter(index: usize) -> String {
-    let mut n = index + 1;
-    let mut letters = Vec::new();
-    while n > 0 {
-        let rem = (n - 1) % 26;
-        letters.push((b'A' + rem as u8) as char);
-        n = (n - 1) / 26;
-    }
-    letters.iter().rev().collect()
-}
-
-/// Parses a well's column number ("1", "2", ...) into a 0-based column
-/// index. `None` if `digits` isn't a positive integer.
-fn col_number_to_index(digits: &str) -> Option<usize> {
-    digits.parse::<usize>().ok()?.checked_sub(1)
-}
-
-/// Number of colors `color_scale_gradient` samples a schema at — enough for
-/// the GUI's legend bar to look like a smooth gradient when it just splits
-/// the stops evenly across a `HorizontalLayout`.
-pub const COLOR_SCALE_GRADIENT_STOPS: usize = 12;
-
-/// Samples `value_to_color` at `COLOR_SCALE_GRADIENT_STOPS` evenly spaced
-/// points across `[0, 1]`, in `0xRRGGBB`. Lets the GUI's legend bar render
-/// the exact gradient a heatmap's cells are colored with, instead of
-/// reimplementing the schema's interpolation a second time in Slint.
-pub fn color_scale_gradient(schema: &ColorSchema) -> [u32; COLOR_SCALE_GRADIENT_STOPS] {
-    let mut stops = [0u32; COLOR_SCALE_GRADIENT_STOPS];
-    for (i, stop) in stops.iter_mut().enumerate() {
-        let t = i as f64 / (COLOR_SCALE_GRADIENT_STOPS - 1) as f64;
-        *stop = value_to_color(t, 0.0, 1.0, schema);
-    }
-    stops
-}
-
-/// Turns raw `(group_prefix, row, col, value)` plate-group rows into a
-/// `DatabaseResult` — shared by `get_group_by_plate` (one aggregation per
-/// call) and `get_group_by_plate_multi_agg` (every requested aggregation in
-/// one batched query, calling this once per aggregation over its own slice
-/// of that batch) so the two agree on exactly the same List/Heatmap shape.
-fn plate_groups_to_result(
-    groups: Vec<(String, String, String, Option<f64>)>,
-    column: &Column,
-    classes: &[Class],
-    matrix_dimension: Option<PlateDimensions>,
-    color_schema: &ColorSchema,
-    color_scale: &ColorScale,
-    view: &View,
-) -> DatabaseResult {
-    match view {
-        View::List => {
-            let mut min = f64::INFINITY;
-            let mut max = f64::NEG_INFINITY;
-            for (_, _, _, value) in &groups {
-                if let Some(value) = value {
-                    min = min.min(*value);
-                    max = max.max(*value);
-                }
-            }
-            if !min.is_finite() || !max.is_finite() {
-                min = 0.0;
-                max = 0.0;
-            }
-
-            let column_names = vec!["group".to_string(), column.display_label(classes)];
-            let row_names = groups.iter().map(|(key, ..)| key.clone()).collect();
-            let rows: Vec<Vec<Cell>> = groups
-                .into_iter()
-                .map(|(key, _row, _col, value)| {
-                    // `key` is the group/well id (e.g. "A1") itself, so
-                    // it's its own search key — used by the GUI to
-                    // navigate into that group/well.
-                    let search_key = Some((key.clone(), key.clone()));
-                    vec![
-                        Cell {
-                            value: CellValue::String(key),
-                            bg_color: 0,
-                            alternating_color: false,
-                            search_key: search_key.clone(),
-                        },
-                        Cell {
-                            value: CellValue::Float(value.unwrap_or(0.0) as f32),
-                            bg_color: 0,
-                            alternating_color: false,
-                            search_key,
-                        },
-                    ]
-                })
-                .collect();
-            let source_object_count = rows.len();
-            DatabaseResult {
-                column_names,
-                row_names,
-                rows,
-                min: min as f32,
-                max: max as f32,
-                source_object_count,
-                row_locations: Vec::new(),
-            }
-        }
-        View::Heatmap => {
-            // Real 0-based (row, col) well coordinates ("A" -> 0, "1" ->
-            // 0, ...), not just distinct-and-sorted keys — needed so the
-            // grid always lines up with a real plate's row/column
-            // numbering (see `matrix_dimension` below) instead of
-            // silently compressing when a row or column has no objects
-            // at all. `group_prefix` (e.g. "A1") rides along per cell so
-            // it can be returned as `Cell::search_key` below.
-            let mut values: HashMap<(usize, usize), (f64, String)> = HashMap::new();
-            let mut max_row = None;
-            let mut max_col = None;
-            for (group_prefix, row, col, value) in &groups {
-                let (Some(row), Some(col)) = (row_letter_to_index(row), col_number_to_index(col))
-                else {
-                    continue;
-                };
-                max_row = Some(max_row.map_or(row, |m: usize| m.max(row)));
-                max_col = Some(max_col.map_or(col, |m: usize| m.max(col)));
-                if let Some(value) = value {
-                    values.insert((row, col), (*value, group_prefix.clone()));
-                }
-            }
-
-            // Given: use it exactly, so the caller can request e.g. a
-            // 384-well layout even if this particular plate only has
-            // objects in a handful of wells. Not given: the smallest
-            // standard plate size that still fits every well this query
-            // actually found.
-            let dimensions =
-                matrix_dimension.unwrap_or_else(|| best_matching_dimensions(max_row, max_col));
-            let (rows, cols) = dimensions.dimensions();
-
-            let (range_min, range_max) = match color_scale {
-                ColorScale::Manual(min, max) => (*min as f64, *max as f64),
-                ColorScale::Auto => {
-                    let mut min = f64::INFINITY;
-                    let mut max = f64::NEG_INFINITY;
-                    for (value, _) in values.values() {
-                        min = min.min(*value);
-                        max = max.max(*value);
-                    }
-                    if min.is_finite() && max.is_finite() {
-                        (min, max)
-                    } else {
-                        (0.0, 0.0)
-                    }
-                }
-            };
-
-            let grid_rows: Vec<Vec<Cell>> = (0..rows)
-                .map(|row| {
-                    (0..cols)
-                        .map(|col| match values.get(&(row, col)) {
-                            Some((value, group_prefix)) => Cell {
-                                value: CellValue::Float(*value as f32),
-                                bg_color: value_to_color(
-                                    *value,
-                                    range_min,
-                                    range_max,
-                                    color_schema,
-                                ),
-                                alternating_color: false,
-                                search_key: Some((group_prefix.clone(), group_prefix.clone())),
-                            },
-                            // No object matched this well at all — leave
-                            // it empty rather than showing a misleading 0
-                            // or a value from some other well.
-                            None => Cell {
-                                value: CellValue::Empty,
-                                bg_color: 0,
-                                alternating_color: false,
-                                search_key: None,
-                            },
-                        })
-                        .collect()
-                })
-                .collect();
-
-            let source_object_count = grid_rows.len();
-            DatabaseResult {
-                column_names: (1..=cols).map(|col| col.to_string()).collect(),
-                row_names: (0..rows).map(row_index_to_letter).collect(),
-                rows: grid_rows,
-                // Same range the cells were colored against above, so the
-                // GUI's color bar always matches what's actually painted
-                // rather than recomputing (and potentially disagreeing
-                // with) it from the returned cells.
-                min: range_min as f32,
-                max: range_max as f32,
-                source_object_count,
-                row_locations: Vec::new(),
-            }
-        }
-    }
-}
-
-/// Turns one well's raw `(idx, image_rel_path, image_name, value)` field
-/// rows into a `DatabaseResult` — shared by `get_group_by_well` (one well
-/// per call) and `get_wells_for_plate` (every well in one batched query,
-/// calling this once per well over its slice of that batch) so the two
-/// agree on exactly the same List/Heatmap shape.
-fn well_fields_to_result(
-    fields: Vec<(String, String, String, Option<f64>)>,
-    column: &Column,
-    classes: &[Class],
-    well_size: Option<WellSize>,
-    well_order: &Option<Vec<u32>>,
-    color_schema: &ColorSchema,
-    color_scale: &ColorScale,
-    view: &View,
-) -> DatabaseResult {
-    match view {
-        View::List => {
-            let mut min = f64::INFINITY;
-            let mut max = f64::NEG_INFINITY;
-            for (_, _, _, value) in &fields {
-                if let Some(value) = value {
-                    min = min.min(*value);
-                    max = max.max(*value);
-                }
-            }
-            if !min.is_finite() || !max.is_finite() {
-                min = 0.0;
-                max = 0.0;
-            }
-
-            let column_names = vec!["field".to_string(), column.display_label(classes)];
-            let row_names = fields.iter().map(|(idx, ..)| idx.clone()).collect();
-            let rows: Vec<Vec<Cell>> = fields
-                .into_iter()
-                .map(|(idx, image_rel_path, image_name, value)| {
-                    let search_key = Some((image_name, image_rel_path));
-                    vec![
-                        Cell {
-                            value: CellValue::String(idx),
-                            bg_color: 0,
-                            alternating_color: false,
-                            search_key: search_key.clone(),
-                        },
-                        Cell {
-                            value: CellValue::Float(value.unwrap_or(0.0) as f32),
-                            bg_color: 0,
-                            alternating_color: false,
-                            search_key,
-                        },
-                    ]
-                })
-                .collect();
-            let source_object_count = rows.len();
-            DatabaseResult {
-                column_names,
-                row_names,
-                rows,
-                min: min as f32,
-                max: max as f32,
-                source_object_count,
-                row_locations: Vec::new(),
-            }
-        }
-        View::Heatmap => {
-            // No `well_order` (see the doc comment on
-            // `WellFilter::well_order`): a field's `idx` (1-based) is its
-            // position directly, in row-major reading order — idx 1 -> (0,
-            // 0), idx 2 -> (0, 1), .... Given a `well_order`, it's a lookup
-            // table instead: the value at `well_order[position]` names
-            // which field idx sits at that (row-major) grid position,
-            // letting a well be laid out in a non-trivial (e.g. snake)
-            // acquisition pattern.
-            let well_size = well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
-            let (rows, cols) = (well_size.rows, well_size.cols);
-
-            let mut values: HashMap<usize, (f64, String, String)> = HashMap::new();
-            for (idx_str, image_rel_path, image_name, value) in &fields {
-                let Ok(idx) = idx_str.parse::<u32>() else {
-                    continue;
-                };
-                let position = match well_order {
-                    Some(order) => order.iter().position(|&field_idx| field_idx == idx),
-                    None => idx.checked_sub(1).map(|p| p as usize),
-                };
-                let Some(position) = position else {
-                    continue;
-                };
-                if let Some(value) = value {
-                    values.insert(
-                        position,
-                        (*value, image_name.clone(), image_rel_path.clone()),
-                    );
-                }
-            }
-
-            let (range_min, range_max) = match color_scale {
-                ColorScale::Manual(min, max) => (*min as f64, *max as f64),
-                ColorScale::Auto => {
-                    let mut min = f64::INFINITY;
-                    let mut max = f64::NEG_INFINITY;
-                    for (value, ..) in values.values() {
-                        min = min.min(*value);
-                        max = max.max(*value);
-                    }
-                    if min.is_finite() && max.is_finite() {
-                        (min, max)
-                    } else {
-                        (0.0, 0.0)
-                    }
-                }
-            };
-
-            let grid_rows: Vec<Vec<Cell>> = (0..rows)
-                .map(|row| {
-                    (0..cols)
-                        .map(|col| match values.get(&(row * cols + col)) {
-                            Some((value, image_name, image_rel_path)) => Cell {
-                                value: CellValue::Float(*value as f32),
-                                bg_color: value_to_color(
-                                    *value,
-                                    range_min,
-                                    range_max,
-                                    color_schema,
-                                ),
-                                alternating_color: false,
-                                search_key: Some((image_name.clone(), image_rel_path.clone())),
-                            },
-                            // No field occupies this grid position — leave
-                            // it empty rather than showing a misleading 0
-                            // or another field's value.
-                            None => Cell {
-                                value: CellValue::Empty,
-                                bg_color: 0,
-                                alternating_color: false,
-                                search_key: None,
-                            },
-                        })
-                        .collect()
-                })
-                .collect();
-
-            let source_object_count = grid_rows.len();
-            DatabaseResult {
-                column_names: (1..=cols).map(|col| col.to_string()).collect(),
-                row_names: (1..=rows).map(|row| row.to_string()).collect(),
-                rows: grid_rows,
-                min: range_min as f32,
-                max: range_max as f32,
-                source_object_count,
-                row_locations: Vec::new(),
-            }
-        }
-    }
-}
-
-/// Maps `value` (within `[min, max]`) to a `0xRRGGBB` color under the
-/// selected `ColorSchema` — the same packing `evanalyzer_cfg`'s `Class.color`
-/// and `crates/gui/src/helper/color_generators.rs` already use, so the GUI
-/// can unpack a heatmap cell's `bg_color` the same way it already does for
-/// class colors.
-fn value_to_color(value: f64, min: f64, max: f64, schema: &ColorSchema) -> u32 {
-    let t = if max > min {
-        ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
-    } else {
-        0.5
-    };
-    match schema {
-        ColorSchema::Viridis => lerp_palette(&VIRIDIS_STOPS, t),
-        ColorSchema::Excel => lerp_palette(&EXCEL_STOPS, t),
-        ColorSchema::Plasma => lerp_palette(&PLASMA_STOPS, t),
-        ColorSchema::Inferno => lerp_palette(&INFERNO_STOPS, t),
-        ColorSchema::Cividis => lerp_palette(&CIVIDIS_STOPS, t),
-        ColorSchema::Coolwarm => lerp_palette(&COOLWARM_STOPS, t),
-        ColorSchema::RedBlue => lerp_palette(&RED_BLUE_STOPS, t),
-        ColorSchema::YlGnBu => lerp_palette(&YLGNBU_STOPS, t),
-        ColorSchema::Haline => lerp_palette(&HALINE_STOPS, t),
-        ColorSchema::Algae => lerp_palette(&ALGAE_STOPS, t),
-        ColorSchema::Thermal => lerp_palette(&THERMAL_STOPS, t),
-    }
-}
-
-fn lerp_palette(stops: &[(f32, (u8, u8, u8))], t: f32) -> u32 {
-    let t = t.clamp(0.0, 1.0);
-    for pair in stops.windows(2) {
-        let (t0, c0) = pair[0];
-        let (t1, c1) = pair[1];
-        if t >= t0 && t <= t1 {
-            let local_t = (t - t0) / (t1 - t0).max(f32::EPSILON);
-            return pack_rgb(
-                lerp_u8(c0.0, c1.0, local_t),
-                lerp_u8(c0.1, c1.1, local_t),
-                lerp_u8(c0.2, c1.2, local_t),
-            );
-        }
-    }
-    let (_, last) = *stops.last().expect("palette must have at least one stop");
-    pack_rgb(last.0, last.1, last.2)
-}
-
-fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
-    (a as f32 + (b as f32 - a as f32) * t).round() as u8
-}
-
-fn pack_rgb(r: u8, g: u8, b: u8) -> u32 {
-    ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
 }
