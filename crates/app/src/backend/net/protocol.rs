@@ -1,10 +1,10 @@
 //! Messages exchanged between client and server, and the conversions between
 //! in-memory types and their wire form (pixels split off into frame blobs).
 
-use evanalyzer_app::ai_learning::TrainingItems;
-use evanalyzer_app::backend::{AnalysisRequest, TileRequest, TrainingRequest};
-use evanalyzer_app::images::{ImageChannel, ImageMeta, RawImageInfo, image_from_raw, image_to_raw};
-use evanalyzer_app::job::{JobOutput, PreviewRequest, ProgressEvent};
+use crate::ai_learning::TrainingItems;
+use crate::backend::{AnalysisRequest, TileRequest, TrainingRequest};
+use crate::images::{ImageChannel, ImageMeta, RawImageInfo, image_from_raw, image_to_raw};
+use crate::job::{JobOutput, PreviewRequest, ProgressEvent};
 use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use serde::{Deserialize, Serialize};
@@ -195,7 +195,7 @@ pub(crate) fn event_to_wire(event: ProgressEvent) -> (WireProgressEvent, Vec<Vec
             channel_idx,
         } => {
             let mut blobs = Vec::new();
-            let mut push = |img: &evanalyzer_app::images::ImageContainer| {
+            let mut push = |img: &crate::images::ImageContainer| {
                 let (info, bytes) = image_to_raw(img);
                 blobs.push(bytes);
                 info
@@ -344,7 +344,7 @@ pub(crate) fn channels_from_wire(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_app::images::{ImageContainer, ManagedImage, Point2d};
+    use crate::images::{ImageContainer, ManagedImage, Point2d};
     use evanalyzer_cfg::core_types::ImagePlane;
 
     fn gray(values: Vec<f32>) -> ImageContainer {

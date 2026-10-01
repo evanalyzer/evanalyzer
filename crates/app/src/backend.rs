@@ -8,7 +8,8 @@
 //! remote backend can send it as is. Project state, undo, results queries and
 //! exports are deliberately *not* part of this: they always stay local.
 
-mod local;
+pub mod local;
+pub mod net;
 
 pub use local::{LocalBackend, ReaderPool};
 

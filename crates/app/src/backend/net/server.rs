@@ -8,15 +8,15 @@
 //! server read any image and write results anywhere this process may, so the
 //! token must be treated like a password.
 
-use crate::conn::{self, HANDSHAKE_MESSAGE_SIZE, MAX_MESSAGE_SIZE};
-use crate::frame::{self, Frame};
-use crate::protocol::{
+use super::conn::{self, HANDSHAKE_MESSAGE_SIZE, MAX_MESSAGE_SIZE};
+use super::frame::{self, Frame};
+use super::protocol::{
     APP_VERSION, ClientMsg, PROTOCOL_VERSION, Reply, Request, ServerMsg, WireError,
     channels_to_wire, event_to_wire,
 };
-use evanalyzer_app::ai_learning::StartTrainingError;
-use evanalyzer_app::backend::{Backend, ImageSource};
-use evanalyzer_app::job::{CancelHandle, StartPreviewError};
+use crate::ai_learning::StartTrainingError;
+use crate::backend::{Backend, ImageSource};
+use crate::job::{CancelHandle, StartPreviewError};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -297,7 +297,7 @@ impl Session {
         }
     }
 
-    fn stream_job(&self, id: u64, job: evanalyzer_app::job::RunningJob) {
+    fn stream_job(&self, id: u64, job: crate::job::RunningJob) {
         // Registered before replying, so a cancel sent right after
         // "started" can't arrive before it is known.
         self.running.lock().unwrap().insert(id, job.cancel_handle());

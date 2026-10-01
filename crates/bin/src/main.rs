@@ -35,13 +35,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let token = match token {
             Some(token) => token,
             None => {
-                let token = evanalyzer_net::generate_token()?;
+                let token = evanalyzer_app::net::generate_token()?;
                 eprintln!("No token given - generated one for this session:\n\n  {token}\n");
                 eprintln!("Clients connect with EVANALYZER_REMOTE_TOKEN set to this value.");
                 token
             }
         };
-        let server = evanalyzer_net::Server::bind(&listen, token)?;
+        let server = evanalyzer_app::net::Server::bind(&listen, token)?;
         eprintln!(
             "EVAnalyzer server listening on ws://{}",
             server.local_addr()?
@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .remote_token
                 .as_deref()
                 .ok_or("--remote needs a token: set EVANALYZER_REMOTE_TOKEN (or --remote-token)")?;
-            match evanalyzer_net::RemoteBackend::connect(url, token) {
+            match evanalyzer_app::net::RemoteBackend::connect(url, token) {
                 Ok(remote) => Arc::new(remote),
                 Err(e) => {
                     eprintln!("Error: {e}");

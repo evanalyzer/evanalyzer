@@ -2766,6 +2766,7 @@ dependencies = [
  "duckdb",
  "evanalyzer_cfg",
  "evanalyzer_core",
+ "getrandom 0.3.4",
  "human-sort",
  "image",
  "indexmap",
@@ -2779,6 +2780,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tempfile",
+ "tungstenite",
 ]
 
 [[package]]
@@ -2792,7 +2794,6 @@ dependencies = [
  "evanalyzer_cli",
  "evanalyzer_gui",
  "evanalyzer_llm",
- "evanalyzer_net",
  "log",
 ]
 
@@ -2909,21 +2910,6 @@ dependencies = [
  "schemars",
  "serde_json",
  "tokenizers 0.23.2",
-]
-
-[[package]]
-name = "evanalyzer_net"
-version = "0.1.0"
-dependencies = [
- "evanalyzer_app",
- "evanalyzer_cfg",
- "getrandom 0.3.4",
- "kornia-image",
- "log",
- "serde",
- "serde_json",
- "tempfile",
- "tungstenite",
 ]
 
 [[package]]

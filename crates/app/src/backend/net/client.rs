@@ -5,18 +5,16 @@
 //! Images and results are referenced by path, so client and server must see
 //! the same files under the same paths (shared storage).
 
-use crate::conn::{self, MAX_MESSAGE_SIZE};
-use crate::frame::{self, Frame};
-use crate::protocol::{
+use crate::ai_learning::{RunningTraining, StartTrainingError, TrainedClassifier};
+use crate::backend::net::conn::{self, MAX_MESSAGE_SIZE};
+use crate::backend::net::frame::{self, Frame};
+use crate::backend::net::protocol::{
     APP_VERSION, ClientMsg, PROTOCOL_VERSION, Reply, Request, ServerMsg, channels_from_wire,
     event_from_wire,
 };
-use evanalyzer_app::ai_learning::{RunningTraining, StartTrainingError, TrainedClassifier};
-use evanalyzer_app::backend::{
-    AnalysisRequest, Backend, ImageSource, TileRequest, TrainingRequest,
-};
-use evanalyzer_app::images::{ImageChannel, ImageMeta};
-use evanalyzer_app::job::{CancelHandle, PreviewRequest, RunningJob, StartPreviewError};
+use crate::backend::{AnalysisRequest, Backend, ImageSource, TileRequest, TrainingRequest};
+use crate::images::{ImageChannel, ImageMeta};
+use crate::job::{CancelHandle, PreviewRequest, RunningJob, StartPreviewError};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::collections::HashMap;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -33,6 +31,129 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct RemoteBackend {
     inner: Arc<Inner>,
+}
+
+impl Backend for RemoteBackend {
+    fn start_analysis(&self, req: AnalysisRequest) -> Result<RunningJob, InternalErrors> {
+        let inner = &self.inner;
+        let (id, rx) = inner.request(Request::StartAnalysis(req))?;
+        match inner.recv(&rx)?.msg {
+            Reply::JobStarted {
+                output_path,
+                parallelism,
+            } => Ok(inner.running_job(id, rx, output_path, parallelism)),
+            Reply::Failed(e) => {
+                inner.finish(id);
+                Err(e.into_internal())
+            }
+            _ => {
+                inner.finish(id);
+                Err(unexpected_reply())
+            }
+        }
+    }
+
+    fn start_preview(&self, req: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
+        let inner = &self.inner;
+        let (id, rx) = inner.request(Request::StartPreview(req))?;
+        let reply = inner.recv(&rx)?.msg;
+        if !matches!(reply, Reply::JobStarted { .. }) {
+            inner.finish(id);
+        }
+        match reply {
+            Reply::JobStarted {
+                output_path,
+                parallelism,
+            } => Ok(inner.running_job(id, rx, output_path, parallelism)),
+            Reply::PreviewTooManyTiles { tiles } => Err(StartPreviewError::TooManyTiles { tiles }),
+            Reply::Failed(e) => Err(StartPreviewError::Failed(e.into_internal())),
+            _ => Err(StartPreviewError::Failed(unexpected_reply())),
+        }
+    }
+
+    fn start_training(&self, req: TrainingRequest) -> Result<RunningTraining, StartTrainingError> {
+        let inner = &self.inner;
+        let (id, rx) = inner
+            .request(Request::StartTraining(req))
+            .map_err(StartTrainingError::Failed)?;
+        let reply = inner.recv(&rx).map_err(StartTrainingError::Failed)?.msg;
+        let items = match reply {
+            Reply::TrainingStarted { items } => items,
+            other => {
+                inner.finish(id);
+                return Err(match other {
+                    Reply::NoTrainingData => StartTrainingError::NoTrainingData,
+                    Reply::Failed(e) => StartTrainingError::Failed(e.into_internal()),
+                    _ => StartTrainingError::Failed(unexpected_reply()),
+                });
+            }
+        };
+
+        let (events_tx, events_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let pump = Arc::clone(inner);
+        std::thread::spawn(move || {
+            let result = loop {
+                match pump.recv(&rx) {
+                    Ok(Frame {
+                        msg: Reply::TrainingEvent(event),
+                        ..
+                    }) => {
+                        let _ = events_tx.send(event);
+                    }
+                    Ok(Frame {
+                        msg: Reply::TrainingDone(Ok(())),
+                        blobs,
+                    }) => {
+                        break match blobs.first() {
+                            Some(model) => TrainedClassifier::from_bytes(model),
+                            None => Err(InternalErrors::Internal(
+                                "server sent no trained model".into(),
+                            )),
+                        };
+                    }
+                    Ok(Frame {
+                        msg: Reply::TrainingDone(Err(e)) | Reply::Failed(e),
+                        ..
+                    }) => break Err(e.into_internal()),
+                    Ok(_) => break Err(unexpected_reply()),
+                    Err(e) => break Err(e),
+                }
+            };
+            pump.finish(id);
+            drop(events_tx);
+            let _ = done_tx.send(result);
+        });
+        let disconnected = inner.disconnected();
+        Ok(RunningTraining::from_parts(
+            events_rx,
+            inner.cancel_handle(id),
+            items,
+            Box::new(move || done_rx.recv().unwrap_or(Err(disconnected))),
+        ))
+    }
+
+    fn open_image(&self, path: &Path) -> Result<Arc<dyn ImageSource>, InternalErrors> {
+        let inner = &self.inner;
+        let (id, rx) = inner.request(Request::OpenImage {
+            path: path.to_path_buf(),
+        })?;
+        let reply = inner.recv(&rx);
+        inner.finish(id);
+        match reply?.msg {
+            Reply::ImageOpened { handle, meta } => Ok(Arc::new(RemoteImageSource {
+                inner: Arc::clone(inner),
+                handle,
+                meta,
+            })),
+            Reply::Failed(e) => Err(e.into_internal()),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn description(&self) -> String {
+        self.inner.url.clone()
+    }
 }
 
 struct Inner {
@@ -270,129 +391,6 @@ impl Inner {
 
 fn unexpected_reply() -> InternalErrors {
     InternalErrors::Internal("unexpected reply from server".into())
-}
-
-impl Backend for RemoteBackend {
-    fn start_analysis(&self, req: AnalysisRequest) -> Result<RunningJob, InternalErrors> {
-        let inner = &self.inner;
-        let (id, rx) = inner.request(Request::StartAnalysis(req))?;
-        match inner.recv(&rx)?.msg {
-            Reply::JobStarted {
-                output_path,
-                parallelism,
-            } => Ok(inner.running_job(id, rx, output_path, parallelism)),
-            Reply::Failed(e) => {
-                inner.finish(id);
-                Err(e.into_internal())
-            }
-            _ => {
-                inner.finish(id);
-                Err(unexpected_reply())
-            }
-        }
-    }
-
-    fn start_preview(&self, req: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
-        let inner = &self.inner;
-        let (id, rx) = inner.request(Request::StartPreview(req))?;
-        let reply = inner.recv(&rx)?.msg;
-        if !matches!(reply, Reply::JobStarted { .. }) {
-            inner.finish(id);
-        }
-        match reply {
-            Reply::JobStarted {
-                output_path,
-                parallelism,
-            } => Ok(inner.running_job(id, rx, output_path, parallelism)),
-            Reply::PreviewTooManyTiles { tiles } => Err(StartPreviewError::TooManyTiles { tiles }),
-            Reply::Failed(e) => Err(StartPreviewError::Failed(e.into_internal())),
-            _ => Err(StartPreviewError::Failed(unexpected_reply())),
-        }
-    }
-
-    fn start_training(&self, req: TrainingRequest) -> Result<RunningTraining, StartTrainingError> {
-        let inner = &self.inner;
-        let (id, rx) = inner
-            .request(Request::StartTraining(req))
-            .map_err(StartTrainingError::Failed)?;
-        let reply = inner.recv(&rx).map_err(StartTrainingError::Failed)?.msg;
-        let items = match reply {
-            Reply::TrainingStarted { items } => items,
-            other => {
-                inner.finish(id);
-                return Err(match other {
-                    Reply::NoTrainingData => StartTrainingError::NoTrainingData,
-                    Reply::Failed(e) => StartTrainingError::Failed(e.into_internal()),
-                    _ => StartTrainingError::Failed(unexpected_reply()),
-                });
-            }
-        };
-
-        let (events_tx, events_rx) = mpsc::channel();
-        let (done_tx, done_rx) = mpsc::channel();
-        let pump = Arc::clone(inner);
-        std::thread::spawn(move || {
-            let result = loop {
-                match pump.recv(&rx) {
-                    Ok(Frame {
-                        msg: Reply::TrainingEvent(event),
-                        ..
-                    }) => {
-                        let _ = events_tx.send(event);
-                    }
-                    Ok(Frame {
-                        msg: Reply::TrainingDone(Ok(())),
-                        blobs,
-                    }) => {
-                        break match blobs.first() {
-                            Some(model) => TrainedClassifier::from_bytes(model),
-                            None => Err(InternalErrors::Internal(
-                                "server sent no trained model".into(),
-                            )),
-                        };
-                    }
-                    Ok(Frame {
-                        msg: Reply::TrainingDone(Err(e)) | Reply::Failed(e),
-                        ..
-                    }) => break Err(e.into_internal()),
-                    Ok(_) => break Err(unexpected_reply()),
-                    Err(e) => break Err(e),
-                }
-            };
-            pump.finish(id);
-            drop(events_tx);
-            let _ = done_tx.send(result);
-        });
-        let disconnected = inner.disconnected();
-        Ok(RunningTraining::from_parts(
-            events_rx,
-            inner.cancel_handle(id),
-            items,
-            Box::new(move || done_rx.recv().unwrap_or(Err(disconnected))),
-        ))
-    }
-
-    fn open_image(&self, path: &Path) -> Result<Arc<dyn ImageSource>, InternalErrors> {
-        let inner = &self.inner;
-        let (id, rx) = inner.request(Request::OpenImage {
-            path: path.to_path_buf(),
-        })?;
-        let reply = inner.recv(&rx);
-        inner.finish(id);
-        match reply?.msg {
-            Reply::ImageOpened { handle, meta } => Ok(Arc::new(RemoteImageSource {
-                inner: Arc::clone(inner),
-                handle,
-                meta,
-            })),
-            Reply::Failed(e) => Err(e.into_internal()),
-            _ => Err(unexpected_reply()),
-        }
-    }
-
-    fn description(&self) -> String {
-        self.inner.url.clone()
-    }
 }
 
 /// An image opened on the server; tiles are fetched on demand.

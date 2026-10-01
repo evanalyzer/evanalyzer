@@ -27,12 +27,15 @@ rust_xlsxwriter = { workspace = true , features = ["constant_memory"] }
 dirs = { workspace = true }
 image = { workspace = true }
 duckdb = { workspace = true }
+tungstenite = { workspace = true }
+getrandom = { workspace = true }
 
 
 [dev-dependencies]
 tempfile = { workspace = true }
 duckdb = { workspace = true, features = ["bundled"] }
 calamine = "0.36.1"
+kornia-image = { workspace = true }
 
 [lib]
 name = "evanalyzer_app"
