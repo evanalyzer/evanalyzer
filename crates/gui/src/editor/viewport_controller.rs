@@ -3,7 +3,7 @@ use crate::editor::viewport_task::{DrawingTask, TaskDispatch};
 use crate::helper::color_generators::get_colors_from_class;
 use crate::{AppWindow, HistogramData, HistogramState, PipelinesPanelState, UiState};
 use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_core::ImageContainer;
+use evanalyzer_app::images::ImageContainer;
 use slint::{Color, ComponentHandle, VecModel};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
@@ -1191,7 +1191,7 @@ mod dispatch_slot_tests {
 mod breakpoint_state_tests {
     use super::*;
     use crate::editor::test_support::test_ui_state;
-    use evanalyzer_core::ManagedImage;
+    use evanalyzer_app::images::ManagedImage;
     use kornia_apriltag::utils::Point2d;
     use kornia_image::allocator::CpuAllocator;
     use kornia_image::{Image, ImageSize};

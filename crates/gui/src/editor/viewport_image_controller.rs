@@ -8,11 +8,11 @@ use crate::{
     ViewportState as ViewportSlintState,
 };
 use evanalyzer_app::extensions::project_ext::ProjectExt;
+use evanalyzer_app::images::ImageContainer;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::{
     TStackHandling, TStackSettings, ZStackHandling, ZStackSettings,
 };
-use evanalyzer_core::ImageContainer;
 use log::warn;
 use slint::{ComponentHandle, Model, Timer, TimerMode};
 use std::collections::BTreeMap;

@@ -2792,7 +2792,6 @@ dependencies = [
  "duckdb",
  "evanalyzer_app",
  "evanalyzer_cfg",
- "evanalyzer_core",
  "evanalyzer_gui_slint",
  "i-slint-backend-testing",
  "indexmap",
