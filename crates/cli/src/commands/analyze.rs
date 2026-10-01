@@ -4,7 +4,6 @@ use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::ProgressEvent;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
@@ -33,43 +32,34 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
     println!("Images:    {image_count}");
     println!("Pipelines: {enabled_pipelines} enabled");
 
-    let job = evanalyzer_core::generate_analyze_job_from_project_settings(
+    let start = Instant::now();
+    let job = evanalyzer_app::job::start_analysis(
         project.settings.clone(),
         project_dir,
         args.job_name.clone(),
+        args.threads,
     )?;
-    let output_path = job.output_path.clone();
-
-    // Caps parallelism to available RAM as well as CPU cores, so a low-memory
-    // machine doesn't try to run as many concurrent workers as it has cores.
-    // The per-worker estimate is sized to the images actually being
-    // analyzed, not a flat guess - see `estimate_ram_per_worker_bytes`.
-    let threads = args.threads.unwrap_or_else(|| {
-        evanalyzer_core::recommended_parallelism(job.estimate_ram_per_worker_bytes())
-    });
+    let output_path = job.output_path().clone();
     println!("Output:    {}", output_path.display());
-    println!("Running with {threads} parallel thread(s) (Ctrl+C to cancel)...\n");
+    println!(
+        "Running with {} parallel thread(s) (Ctrl+C to cancel)...\n",
+        job.parallelism()
+    );
 
-    let start = Instant::now();
-    let (handle, rx, cancel) = job.run_async(threads);
-
+    let cancel = job.cancel_handle();
     if let Err(e) = ctrlc::set_handler(move || {
         eprintln!("\nCancelling... (waiting for in-flight images to finish)");
-        cancel.store(true, Ordering::SeqCst);
+        cancel.cancel();
     }) {
         eprintln!("Warning: could not install Ctrl+C handler: {e}");
     }
 
     let mut failed = 0usize;
     let mut total = image_count;
-    for event in rx {
+    for event in job.events() {
         apply_progress_event(event, &mut total, &mut failed);
     }
-
-    let result = handle
-        .join()
-        .map_err(|_| InternalErrors::Internal("Pipeline worker thread panicked".into()))?;
-    result?;
+    job.wait()?;
 
     println!(
         "Done: {total} image(s) analyzed in {:.1?} ({failed} failed)",

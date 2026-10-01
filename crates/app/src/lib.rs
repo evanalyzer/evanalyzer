@@ -4,6 +4,7 @@ pub mod crash_log;
 pub mod export;
 pub mod extensions;
 pub mod frontend;
+pub mod job;
 mod project_owner;
 mod results;
 pub mod settings;

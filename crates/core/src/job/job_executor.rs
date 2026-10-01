@@ -321,6 +321,10 @@ impl<'a> JobExecutor {
                             .ok();
                         Ok(())
                     }
+                    // A cancel is not a failure of this image - pass it on
+                    // unwrapped so callers can tell "cancelled by user" from
+                    // a real error, same as the multi-image branch below.
+                    Err(InternalErrors::Cancelled) => Err(InternalErrors::Cancelled),
                     Err(e) => {
                         progress
                             .send(ProgressEvent::ImageFailed {
@@ -2652,6 +2656,29 @@ mod full_run_integration_tests {
             "a pre-cancelled run must not process any image"
         );
         assert!(out_objects.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn run_on_a_single_image_reports_cancelled_unwrapped() {
+        // The single-image branch used to wrap every error, `Cancelled`
+        // included, into `Internal("<path>: Cancelled")` - so cancelling a
+        // preview showed up as a failure instead of "cancelled by user".
+        let job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let result = job.run(1, tx, Arc::new(AtomicBool::new(true)));
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        assert!(
+            matches!(result, Err(InternalErrors::Cancelled)),
+            "{result:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageFailed { .. })),
+            "a cancelled image must not be reported as failed"
+        );
     }
 
     #[test]

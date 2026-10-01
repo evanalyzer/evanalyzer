@@ -43,7 +43,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::{Condvar, Mutex, atomic::AtomicBool};
+use std::sync::{Condvar, Mutex};
 
 /// Quiet period (in ms) the user must pause editing before an auto preview
 /// runs. Resets on every parameter change. See `pipeline_settings_changed`.
@@ -66,7 +66,7 @@ pub struct PipelinesController {
     pub(crate) viewport_controller: Arc<ViewportController>,
     pub(crate) template_controller: Arc<TemplateController>,
     pub(crate) task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>,
-    pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<evanalyzer_app::job::CancelHandle>>>,
     /// Currently active breakpoint: (pipeline_id, step_id, mode).  `None` = no breakpoint.
     pub(crate) breakpoint: Arc<Mutex<Option<(u32, i32, evanalyzer_core::BreakpointMode)>>>,
 
@@ -500,8 +500,8 @@ impl PipelinesController {
             // Running dialog: cancel analysis
             let manager = self.clone();
             ui.global::<PipelineRunningState>().on_cancel(move || {
-                if let Some(flag) = manager.pipeline_cancel_flag.lock().unwrap().as_ref() {
-                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                if let Some(cancel) = manager.pipeline_cancel_flag.lock().unwrap().as_ref() {
+                    cancel.cancel();
                 }
             });
 

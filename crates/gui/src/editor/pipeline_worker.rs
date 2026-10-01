@@ -7,8 +7,10 @@ use crate::{
         viewport_controller::ViewportController,
     },
 };
+use evanalyzer_app::job::{
+    self, MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, PreviewViewport, StartPreviewError,
+};
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use log::{error, info};
 use slint::ComponentHandle;
 use std::sync::{Arc, Condvar, Mutex};
@@ -59,76 +61,47 @@ impl PipelineWorker {
         loop {
             let task = wait_for_task(task_request.clone());
             let is_preview = task.preview;
-            // `out_objects` is only `Some` for a preview run - it's the in-memory
-            // store `MemoryExporter::export` fills in once the job's whole-image
-            // phase (TileMerge included) finishes for an image, which is the
-            // *actual* final, correctly-merged object set. The per-tile
-            // `TileCompleted` events below stream in each tile's own objects
-            // *before* tile-merge has run, purely for fast incremental preview
-            // feedback - `out_objects` is read back once the job completes to
-            // replace that pre-merge snapshot with the real result.
-            let (job, out_objects): (
-                Result<evanalyzer_core::JobExecutor, InternalErrors>,
-                Option<Arc<Mutex<Vec<ObjectMetricSettings>>>>,
-            ) = if is_preview {
-                match evanalyzer_core::generate_preview_job_from_project_settings(
-                    task.project_settings,
-                    task.project_path,
-                ) {
-                    Ok((job, out_objects)) => (Ok(job), Some(out_objects)),
-                    Err(e) => (Err(e), None),
-                }
-            } else {
-                (
-                    evanalyzer_core::generate_analyze_job_from_project_settings(
-                        task.project_settings,
-                        task.project_path,
-                        task.job_name,
-                    ),
-                    None,
-                )
-            };
 
-            info!("Started pipeline worker task");
-
-            let Ok(mut job_exec) = job else {
-                error!("Could not execute job!");
-                continue;
-            };
-
-            // For preview runs, restrict processing to tiles that are currently
-            // visible in the viewport so the user sees results immediately.
-            if is_preview {
-                let vp = self
-                    .viewport_controller
-                    .viewport_state
-                    .read()
-                    .expect("Failed to acquire read lock on viewport state");
-                job_exec.preview_tile_settings = Some(evanalyzer_core::PreviewTileSettings {
-                    offset_x: vp.offset_x,
-                    offset_y: vp.offset_y,
-                    viewport_width: vp.viewport_width,
-                    viewport_height: vp.viewport_height,
-                    zoom: vp.zoom,
-                    process_all_tiles: false,
-                });
-                drop(vp);
-
-                // Reject previews that would cover too much of a whole-slide image at
-                // once: at low zoom the viewport can span hundreds of tiles, each
-                // potentially producing huge numbers of ROIs that the viewport renderer
-                // and object list can't handle responsively. Tell the user to zoom in
-                // instead of silently grinding through it.
-                const MAX_PREVIEW_VISIBLE_TILES: usize = 4;
-                match job_exec.count_preview_visible_tiles() {
-                    Ok(n) if n > MAX_PREVIEW_VISIBLE_TILES => {
-                        info!(
-                            "Preview rejected: viewport covers {n} tiles (max {MAX_PREVIEW_VISIBLE_TILES})"
-                        );
+            let job = if is_preview {
+                // Restrict processing to tiles currently visible in the viewport
+                // so the user sees results immediately.
+                let viewport = {
+                    let vp = self
+                        .viewport_controller
+                        .viewport_state
+                        .read()
+                        .expect("Failed to acquire read lock on viewport state");
+                    PreviewViewport {
+                        offset_x: vp.offset_x,
+                        offset_y: vp.offset_y,
+                        viewport_width: vp.viewport_width,
+                        viewport_height: vp.viewport_height,
+                        zoom: vp.zoom,
+                    }
+                };
+                let breakpoint = task
+                    .breakpoint
+                    .map(|(pipeline_id, pipeline_step_id, mode)| {
+                        evanalyzer_core::BreakpointSettings {
+                            pipeline_id,
+                            pipeline_step_id,
+                            mode,
+                        }
+                    });
+                match job::start_preview(PreviewRequest {
+                    settings: task.project_settings,
+                    project_path: task.project_path,
+                    viewport,
+                    breakpoint,
+                }) {
+                    Ok(job) => job,
+                    Err(StartPreviewError::TooManyTiles { tiles }) => {
+                        // Tell the user to zoom in instead of silently grinding
+                        // through hundreds of tiles.
                         self.pipeline_controller.disable_auto_preview();
                         let ui_handle = self.app_state.ui_handle.clone();
                         let message = format!(
-                            "Zoomed out too far to preview live: the visible area covers {n} tiles \
+                            "Zoomed out too far to preview live: the visible area covers {tiles} tiles \
                              (max {MAX_PREVIEW_VISIBLE_TILES}). Zoom in, then run the preview again. \
                              Auto preview has been turned off."
                         );
@@ -142,40 +115,36 @@ impl PipelineWorker {
                         });
                         continue;
                     }
-                    Err(e) => {
-                        error!("Failed to count visible preview tiles: {e:?}");
+                    Err(StartPreviewError::Failed(e)) => {
+                        error!("Could not execute job: {e:?}");
+                        continue;
                     }
-                    _ => {}
                 }
-
-                if let Some((pipeline_id, step_id, mode)) = task.breakpoint {
-                    job_exec.breakpoint = Some(evanalyzer_core::BreakpointSettings {
-                        pipeline_id,
-                        pipeline_step_id: step_id,
-                        mode,
-                    });
-                } else {
-                    job_exec.breakpoint = None;
+            } else {
+                match job::start_analysis(
+                    task.project_settings,
+                    task.project_path,
+                    task.job_name,
+                    None,
+                ) {
+                    Ok(job) => job,
+                    Err(e) => {
+                        error!("Could not execute job: {e:?}");
+                        continue;
+                    }
                 }
-            }
+            };
 
             info!("Pipeline job started ...");
 
-            // Caps parallelism to available RAM as well as CPU cores, so a low-memory
-            // machine doesn't try to run as many concurrent workers as it has cores.
-            // The per-worker estimate is sized to the images actually being
-            // analyzed, not a flat guess - see `estimate_ram_per_worker_bytes`.
-            let ram_per_worker = job_exec.estimate_ram_per_worker_bytes();
-            let parallelism = evanalyzer_core::recommended_parallelism(ram_per_worker);
-            let (handle, rx, cancel_flag) = job_exec.run_async(parallelism);
             *self
                 .pipeline_controller
                 .pipeline_cancel_flag
                 .lock()
-                .unwrap() = Some(cancel_flag);
+                .unwrap() = Some(job.cancel_handle());
             let mut last_ui_update = std::time::Instant::now();
             let mut pipeline_start: Option<std::time::Instant> = None;
-            for event in rx {
+            for event in job.events() {
                 match event {
                     evanalyzer_core::ProgressEvent::TilesScheduled { total_tiles } => {
                         let ui_handle = self.app_state.ui_handle.clone();
@@ -344,22 +313,10 @@ impl PipelineWorker {
                     }
                 }
             }
-            // A panic inside the spawned job thread (e.g. a malformed tile at
-            // the image edge) used to re-panic here via `.expect()`, which
-            // killed this worker thread too and left the UI stuck showing
-            // "running" forever, since the status-update code below never
-            // ran. Treat it as a normal job error instead so the user sees
-            // it and the worker survives to run the next job.
-            let job_result = match handle.join() {
-                Ok(result) => result,
-                Err(panic_payload) => {
-                    let msg = crate::helper::worker_supervisor::panic_message(&panic_payload);
-                    error!("Pipeline job thread panicked: {msg}");
-                    Err(InternalErrors::Internal(format!(
-                        "Pipeline worker crashed: {msg}"
-                    )))
-                }
-            };
+            // A panic inside the job thread comes back as a normal error
+            // (see `RunningJob::wait`), so the user sees it and this worker
+            // survives to run the next job.
+            let job_result = job.wait();
             let (status_message, is_error) = match job_result {
                 Err(InternalErrors::Cancelled) => {
                     info!("Pipeline cancelled by user");
@@ -369,20 +326,14 @@ impl PipelineWorker {
                     error!("Pipeline job error: {e:?}");
                     (format!("Error: {e}"), true)
                 }
-                Ok(()) => {
+                Ok(output) => {
                     info!("Pipeline completed successfully");
                     if is_preview {
-                        // Replace the incrementally-streamed per-tile ROIs (each
-                        // tile's own objects, sent via `TileCompleted` *before* the
-                        // whole-image phase's `TileMerge` ran) with the actual
-                        // final, merged result now that the job has finished -
-                        // otherwise cross-tile fragments stay displayed as two
-                        // separate objects even though the backend merged them.
-                        if let Some(out_objects) = &out_objects {
-                            let final_objects = out_objects
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .clone();
+                        // Replace the incrementally-streamed per-tile ROIs with
+                        // the final, tile-merged result - otherwise cross-tile
+                        // fragments stay displayed as two separate objects even
+                        // though the backend merged them.
+                        if let Some(final_objects) = output.preview_objects {
                             let mut project = self_handle.app_state.get_project_write();
                             project.tmp_settings.preview_objects.clear();
                             project.tmp_settings.preview_objects.extend(final_objects);
