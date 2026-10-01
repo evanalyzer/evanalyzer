@@ -1,5 +1,5 @@
 use crate::ai_learning::model::SavedClassifier;
-use crate::ai_learning::training_job::{self, TrainingImage, TrainingProgressEvent};
+use crate::ai_learning::training_job::{self, TrainingImage};
 use crate::ai_learning::utils::{
     bbox_overlaps_tile, masked_pixels_in_tile, resolve_z_projection, tile_grid,
 };
@@ -16,6 +16,7 @@ use crate::pipeline::pipeline::PipelineImageMeta;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
 use crate::resources::MAX_TILE_SIZE;
+use evanalyzer_cfg::core_types::TrainingProgressEvent;
 use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
 use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
 use evanalyzer_cfg::settings::ai_learning_pixel_settings::PreprocessingSteps;

@@ -79,4 +79,4 @@ pub use crate::ai_learning::training::object::ObjectTrainingJob;
 #[cfg(feature = "ai")]
 pub use crate::ai_learning::training::pixel::PixelTrainingJob;
 #[cfg(feature = "ai")]
-pub use crate::ai_learning::training_job::{TrainingImage, TrainingProgressEvent, TrainingStats};
+pub use crate::ai_learning::training_job::TrainingImage;

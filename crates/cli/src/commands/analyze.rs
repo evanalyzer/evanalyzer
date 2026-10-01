@@ -1,7 +1,7 @@
 use crate::args::AnalyzeArgs;
 use evanalyzer_app::extensions::project_ext::{ProjectExt, load_project};
+use evanalyzer_app::job::ProgressEvent;
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_core::ProgressEvent;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;

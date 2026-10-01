@@ -1,6 +1,7 @@
 use crate::Object;
 use crate::ai_learning::model::SavedClassifier;
-use crate::ai_learning::training_job::{self, TrainingProgressEvent};
+use crate::ai_learning::training_job;
+use evanalyzer_cfg::core_types::TrainingProgressEvent;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::ai_learning_object_settings::{
     AiLearningObjectFeatureSettings, ObjectMetric,

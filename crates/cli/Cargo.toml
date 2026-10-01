@@ -7,7 +7,6 @@ license = { workspace = true }
 publish = { workspace = true }
 
 [dependencies]
-evanalyzer_core = { workspace = true }
 evanalyzer_app = { workspace = true }
 evanalyzer_cfg = { workspace = true }
 clap = { workspace = true, features = ["derive"] }

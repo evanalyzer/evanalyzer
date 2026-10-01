@@ -61,6 +61,8 @@ pub mod core_types {
     pub use crate::types::classes::ObjectClass;
     pub use crate::types::classes::SegmentationClass;
     pub use crate::types::errors::*;
+    pub use crate::types::events::TrainingProgressEvent;
+    pub use crate::types::events::TrainingStats;
     pub use crate::types::ids::ImageAddress;
     pub use crate::types::ids::MemoryId;
     pub use crate::types::ids::MemorySlot;

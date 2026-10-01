@@ -3,10 +3,9 @@ use evanalyzer_app::ai_learning::{
     PixelTrainingParams, StartTrainingError, TrainingItems, save_trained_model, start_training,
 };
 use evanalyzer_app::extensions::project_ext::load_project;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent};
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
-use evanalyzer_core::TrainingProgressEvent;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -349,7 +348,7 @@ mod tests {
         });
         print_training_progress(TrainingProgressEvent::Training);
         print_training_progress(TrainingProgressEvent::Finished {
-            stats: evanalyzer_core::TrainingStats::RandomForest {
+            stats: evanalyzer_cfg::core_types::TrainingStats::RandomForest {
                 n_trees: 10,
                 n_samples: 100,
             },

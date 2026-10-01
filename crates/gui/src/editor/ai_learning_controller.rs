@@ -8,6 +8,7 @@ use crate::{
 use evanalyzer_app::ai_learning::{self, PixelTrainingParams};
 use evanalyzer_app::job::CancelHandle;
 use evanalyzer_cfg::core_types::ObjectClass;
+use evanalyzer_cfg::core_types::TrainingProgressEvent;
 use evanalyzer_cfg::settings::ai_learning_object_settings::{
     AiLearningObjectFeatureSettings, ObjectMetric,
 };
@@ -29,7 +30,6 @@ use evanalyzer_cfg::settings::pipeline_command_settings::{
     StructureTensorSettings,
 };
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
-use evanalyzer_core::TrainingProgressEvent;
 use log::{info, warn};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::path::{Path, PathBuf};
@@ -505,7 +505,7 @@ impl AiLearningController {
             // backend stats) so the final banner below can report it - see
             // `describe_training_progress`'s doc comment for why `Finished`
             // doesn't update the live banner itself.
-            let mut stats: Option<evanalyzer_core::TrainingStats> = None;
+            let mut stats: Option<evanalyzer_cfg::core_types::TrainingStats> = None;
             for event in training.events() {
                 if let TrainingProgressEvent::Finished { stats: s } = event {
                     stats = Some(s);
@@ -1338,8 +1338,8 @@ fn describe_training_progress(event: &TrainingProgressEvent) -> Option<String> {
 
 /// Formats `TrainingStats` for the dialog's post-training banner - one line
 /// per backend, since each carries different numbers.
-fn format_training_stats(stats: &evanalyzer_core::TrainingStats) -> String {
-    use evanalyzer_core::TrainingStats;
+fn format_training_stats(stats: &evanalyzer_cfg::core_types::TrainingStats) -> String {
+    use evanalyzer_cfg::core_types::TrainingStats;
     match stats {
         TrainingStats::RandomForest { n_trees, n_samples } => {
             format!("{n_trees} tree(s), trained on {n_samples} sample(s).")

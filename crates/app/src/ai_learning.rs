@@ -8,7 +8,9 @@
 
 use crate::job::{CancelHandle, join_job};
 use evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS;
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, SegmentationClass};
+use evanalyzer_cfg::core_types::{
+    InternalErrors, ObjectClass, SegmentationClass, TrainingProgressEvent,
+};
 use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningClassifierSettings, AiLearningSettings, ObjectClassLabel, PixelClassLabel,
 };
@@ -16,8 +18,7 @@ use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use evanalyzer_core::{
-    ObjectTrainingJob, PixelTrainingJob, SavedClassifier, TrainingImage, TrainingProgressEvent,
-    save_classifier_to_file,
+    ObjectTrainingJob, PixelTrainingJob, SavedClassifier, TrainingImage, save_classifier_to_file,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

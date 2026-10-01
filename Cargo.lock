@@ -2741,7 +2741,6 @@ dependencies = [
  "duckdb",
  "evanalyzer_app",
  "evanalyzer_cfg",
- "evanalyzer_core",
  "serde_json",
  "tempfile",
 ]

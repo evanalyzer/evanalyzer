@@ -4,8 +4,7 @@
 //! Both the GUI and the CLI go through here instead of building jobs from
 //! `evanalyzer_core` themselves, so job setup (parallelism, preview tile
 //! limits, breakpoints, panic handling) can't drift between the two. Front
-//! ends only consume the resulting [`ProgressEvent`](evanalyzer_core::ProgressEvent)
-//! stream and present it.
+//! ends only consume the resulting [`ProgressEvent`] stream and present it.
 //!
 //! [`CancelHandle`] and `join_job` are shared with classifier training
 //! ([`crate::ai_learning::start_training`]).
@@ -14,6 +13,7 @@ mod preview;
 mod running_job;
 
 pub use analysis::start_analysis;
+pub use evanalyzer_core::ProgressEvent;
 pub use preview::{
     MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, PreviewViewport, StartPreviewError, start_preview,
 };
