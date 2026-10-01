@@ -28,10 +28,12 @@ ignore = [
     # <crate>` after bumping `burn` or `slint` to check whether it's still
     # in the tree before re-adding an ignore for it.
 
-    # bincode 2.0.1 (RUSTSEC-2025-0141, "Bincode is unmaintained") - pulled
-    # in by burn-core (the `ai` feature's ML framework), not used directly:
-    # evanalyzer_core::ai_learning::model.rs deliberately serializes as JSON
-    # instead, specifically because bincode's development had ceased.
+    # bincode (RUSTSEC-2025-0141, "Bincode is unmaintained"; informational,
+    # covers every version, nothing to upgrade to) - not used by evanalyzer's
+    # own crates (models are JSON, tile scratch files are postcard), but still
+    # pulled in by burn-core 2.0.1 (the `ai` feature's ML framework) and by
+    # our bioformats-rs fork 1.3.3 (its Memoizer cache). Remove this ignore
+    # once both have migrated away.
     "RUSTSEC-2025-0141",
 
     # paste 1.0.15 (RUSTSEC-2024-0436, "no longer maintained") - pulled in
