@@ -885,7 +885,8 @@ pub(crate) fn histogram_to_svg_fast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_core::{ImagePlane, ManagedImage};
+    use evanalyzer_cfg::core_types::ImagePlane;
+    use evanalyzer_core::ManagedImage;
     use kornia_apriltag::utils::Point2d;
     use kornia_image::allocator::CpuAllocator;
     use kornia_image::{Image, ImageSize};

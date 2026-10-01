@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+pub use evanalyzer_cfg::core_types::{ImagePlane, ImageTile};
 use std::collections::BTreeMap;
 
 #[derive(Default, Clone)]
@@ -51,21 +51,4 @@ pub struct ImageMeta {
     pub name: String,
     pub objective: Objective,
     pub series: BTreeMap<i32, ImageInfo>, // Image series
-}
-
-#[derive(Default, Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ImagePlane {
-    pub z: i32,
-    pub c: i32,
-    pub t: i32,
-}
-
-#[derive(
-    Default, Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd,
-)]
-pub struct ImageTile {
-    pub offset_x: usize,
-    pub offset_y: usize,
-    pub width: usize,
-    pub height: usize,
 }

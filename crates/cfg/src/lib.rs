@@ -71,6 +71,9 @@ pub mod core_types {
     pub use crate::types::ids::ObjectId;
     pub use crate::types::ids::PipelineId;
     pub use crate::types::ids::TrackId;
+    pub use crate::types::image::ImagePlane;
+    pub use crate::types::image::ImageTile;
+    pub use crate::types::image::ZProjection;
     pub use crate::types::units::PixelUnits;
     pub use crate::types::units::SizeUnits;
 }

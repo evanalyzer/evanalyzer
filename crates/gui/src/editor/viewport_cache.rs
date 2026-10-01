@@ -3,10 +3,9 @@ use crate::editor::viewport_controller::ViewportState;
 use clru::{CLruCache, WeightScale};
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{ImageTile, ZProjection};
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
-use evanalyzer_core::{
-    ImageChannel, ImageContainer, ImageReader, ImageTile, ManagedImage, PyramidInfo, ZProjection,
-};
+use evanalyzer_core::{ImageChannel, ImageContainer, ImageReader, ManagedImage, PyramidInfo};
 use kornia_image::allocator::CpuAllocator;
 use kornia_image::{Image, InterpolationMode};
 use kornia_imgproc::resize;
@@ -697,7 +696,7 @@ pub fn to_z_projection(z_handling: ZStackHandling) -> ZProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_core::ImagePlane;
+    use evanalyzer_cfg::core_types::ImagePlane;
     use kornia_apriltag::utils::Point2d;
     use kornia_image::ImageSize;
 

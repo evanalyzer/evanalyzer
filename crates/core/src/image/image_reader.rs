@@ -2,7 +2,7 @@ use crate::converters::wavelength_to_rgb_float;
 use crate::image::image_meta::{ImageMeta, ImagePlane, ImageTile};
 use crate::image::image_ome_parser::{build_image_meta, effective_size_c};
 use bioformats::common::reader::FormatReader;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
 use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
 use kornia_tensor::CpuAllocator;
@@ -42,16 +42,6 @@ pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &[
     "avi", "cif", "arf", "sld",
 ];
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ZProjection {
-    #[default]
-    None,
-    MaxIntensity,
-    MinIntensity,
-    AvgIntensity,
-    SumIntensity,
-    TakeTheMiddle,
-}
 #[derive(Clone)]
 pub struct ManagedImage<T, const C: usize> {
     pub data: Image<T, C, CpuAllocator>,

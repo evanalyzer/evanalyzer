@@ -29,15 +29,15 @@ pub use crate::image::ImageChannel;
 pub use crate::image::ImageContainer;
 pub use crate::image::ImageInfo;
 pub use crate::image::ImageMeta;
-pub use crate::image::ImagePlane;
 pub use crate::image::ImageReader;
-pub use crate::image::ImageTile;
 pub use crate::image::ImageTypeMarker;
 pub use crate::image::ManagedImage;
 pub use crate::image::PyramidInfo;
 pub use crate::image::ReadMode;
 pub use crate::image::SUPPORTED_IMAGE_FORMATS;
-pub use crate::image::ZProjection;
+pub use evanalyzer_cfg::core_types::ImagePlane;
+pub use evanalyzer_cfg::core_types::ImageTile;
+pub use evanalyzer_cfg::core_types::ZProjection;
 
 // Object
 pub use crate::object::Intensity;
