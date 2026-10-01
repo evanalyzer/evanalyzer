@@ -49,10 +49,9 @@ env_logger = "0.11"
 fast-uuid-v7 = "0.1.9"
 image = "0.25.10"
 indexmap = "2.14.2"
-kornia-apriltag = "0.1.10"
-kornia-image = "0.1.14"
-kornia-imgproc = "0.1.14"
-kornia-tensor = { version = "0.1.14" }
+kornia-image = "0.2.0"
+kornia-imgproc = "0.2.0"
+kornia-tensor = { version = "0.2.0" }
 slint = { version = "1.18", default-features = false }
 slint-build = { version = "1.18"}
 log = "0.4.34"

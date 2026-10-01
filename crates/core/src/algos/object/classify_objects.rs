@@ -488,6 +488,7 @@ mod tests {
     use bitvec::vec;
 
     use super::*;
+    use crate::image::Point2d;
     use crate::{
         ImageContainer, ImagePlane, ManagedImage,
         image::PixelSizes,
@@ -498,9 +499,7 @@ mod tests {
         },
     };
     use bitvec::prelude::*;
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
     use std::path::PathBuf;
 
     #[test]
@@ -518,7 +517,7 @@ mod tests {
             width: 1,
             height: 1,
         };
-        let img = Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32], CpuAllocator).unwrap();
+        let img = Image::<f32, 1>::new(size, vec![0.0f32]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },

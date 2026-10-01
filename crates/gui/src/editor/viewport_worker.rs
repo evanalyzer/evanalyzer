@@ -886,9 +886,8 @@ pub(crate) fn histogram_to_svg_fast(
 mod tests {
     use super::*;
     use evanalyzer_app::images::ManagedImage;
+    use evanalyzer_app::images::Point2d;
     use evanalyzer_cfg::core_types::ImagePlane;
-    use kornia_apriltag::utils::Point2d;
-    use kornia_image::allocator::CpuAllocator;
     use kornia_image::{Image, ImageSize};
 
     // -- hsv_to_rgb8 ------------------------------------------------------------
@@ -962,13 +961,12 @@ mod tests {
 
     fn gray_container(pixels: Vec<f32>) -> ImageContainer {
         let len = pixels.len();
-        let image = Image::<f32, 1, CpuAllocator>::new(
+        let image = Image::<f32, 1>::new(
             ImageSize {
                 width: len,
                 height: 1,
             },
             pixels,
-            CpuAllocator,
         )
         .unwrap();
         ImageContainer::F32Gray(ManagedImage {

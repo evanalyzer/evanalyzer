@@ -11,7 +11,6 @@ use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, Pipeline
 use crate::image::{ImageContainer, ManagedImage};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use std::f32::NAN;
 use std::sync::Arc;
@@ -132,20 +131,16 @@ impl RankFilter {
     /// Generic processing function to handle 1 or 3 channels
     fn process_image<const C: usize>(
         &self,
-        img: &Image<f32, C, CpuAllocator>,
-    ) -> Result<Image<f32, C, CpuAllocator>, InternalErrors> {
+        img: &Image<f32, C>,
+    ) -> Result<Image<f32, C>, InternalErrors> {
         let (line_radii, k_radius, n_points) = get_kernel_geometry(self.radius);
         let k_height = (2 * k_radius + 1) as usize;
 
         let (width, height) = (img.width(), img.height());
         let src_data = img.as_slice();
 
-        let mut out_image = Image::<f32, C, CpuAllocator>::new(
-            img.size(),
-            vec![0.0f32; width * height * C],
-            CpuAllocator,
-        )
-        .map_err(InternalErrors::from_kornia)?;
+        let mut out_image = Image::<f32, C>::new(img.size(), vec![0.0f32; width * height * C])
+            .map_err(InternalErrors::from_kornia)?;
         let out_slice = out_image.as_slice_mut();
 
         let cache_width = width + (2 * k_radius as usize);
@@ -279,8 +274,7 @@ mod tests {
         let mut data = vec![0.0f32; width * height];
         data[12] = 9.0; // The center pixel (2,2)
 
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
+        let image = Image::<f32, 1>::new(ImageSize { width, height }, data)?;
 
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
@@ -361,13 +355,12 @@ mod tests {
         let mut data = vec![0.0f32; 3 * 3 * 3];
         data[4] = 9.0;
 
-        let image = Image::<f32, 3, CpuAllocator>::new(
+        let image = Image::<f32, 3>::new(
             ImageSize {
                 width: 3,
                 height: 3,
             },
             data,
-            CpuAllocator,
         )?;
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
@@ -412,13 +405,12 @@ mod tests {
     #[test]
     fn test_rank_filter_format_mismatch() {
         // 1. Create an unsupported U32 image
-        let img = Image::<u32, 1, CpuAllocator>::from_size_val(
+        let img = Image::<u32, 1>::from_size_val(
             ImageSize {
                 width: 3,
                 height: 3,
             },
             0,
-            CpuAllocator,
         )
         .unwrap();
 
@@ -458,13 +450,12 @@ mod tests {
         let mut data = vec![5.0f32; 9];
         data[4] = 1.0; // Outlier at center (1,1)
 
-        let image = Image::<f32, 1, CpuAllocator>::new(
+        let image = Image::<f32, 1>::new(
             ImageSize {
                 width: 3,
                 height: 3,
             },
             data,
-            CpuAllocator,
         )?;
 
         let mut ctx = PipelineContext::new_from_image(

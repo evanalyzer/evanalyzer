@@ -525,6 +525,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::image::Point2d;
     use crate::{
         ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::PixelSizes,
@@ -535,9 +536,7 @@ mod tests {
     };
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     const CENTER_CLASS: ObjectClass = ObjectClass::Valid(1);
     const MASK_CLASS: ObjectClass = ObjectClass::Valid(2);
@@ -548,9 +547,7 @@ mod tests {
 
     fn make_ctx(width: usize, height: usize) -> PipelineContext {
         let size = ImageSize { width, height };
-        let img =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; width * height], CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 1>::new(size, vec![0.0f32; width * height]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -593,12 +590,7 @@ mod tests {
             width: tile_w,
             height: tile_h,
         };
-        let img = Image::<f32, 1, CpuAllocator>::new(
-            tile_size,
-            vec![0.0f32; tile_w * tile_h],
-            CpuAllocator,
-        )
-        .unwrap();
+        let img = Image::<f32, 1>::new(tile_size, vec![0.0f32; tile_w * tile_h]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: off_x, y: off_y },
@@ -691,13 +683,12 @@ mod tests {
         let mut ctx = make_ctx(10, 10);
         let mut cache = GlobalPipelineCache::default();
 
-        let channel_img = Image::<f32, 1, CpuAllocator>::new(
+        let channel_img = Image::<f32, 1>::new(
             ImageSize {
                 width: 10,
                 height: 10,
             },
             vec![VALUE; 100],
-            CpuAllocator,
         )
         .unwrap();
         cache.add_to_channel_cache(
@@ -759,13 +750,12 @@ mod tests {
         // one tile's worth of pixels) - intensity sampling must still only sum over
         // the pixels it actually has, silently skipping the rest of the now-larger
         // region rather than panicking.
-        let channel_img = Image::<f32, 1, CpuAllocator>::new(
+        let channel_img = Image::<f32, 1>::new(
             ImageSize {
                 width: tile_w,
                 height: tile_h,
             },
             vec![7.0f32; tile_w * tile_h],
-            CpuAllocator,
         )
         .unwrap();
         cache.add_to_channel_cache(

@@ -1,4 +1,12 @@
 pub use evanalyzer_cfg::core_types::{ImagePlane, ImageTile};
+
+/// Pixel position in an image - e.g. a tile's top-left corner within the
+/// full image (`ManagedImage::tile_offset`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Point2d {
+    pub x: usize,
+    pub y: usize,
+}
 use std::collections::BTreeMap;
 
 #[derive(Default, Clone)]

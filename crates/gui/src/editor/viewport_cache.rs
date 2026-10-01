@@ -6,7 +6,6 @@ use evanalyzer_app::images::{ImageChannel, ImageContainer, ManagedImage, Pyramid
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::core_types::{ImageTile, ZProjection};
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
-use kornia_image::allocator::CpuAllocator;
 use kornia_image::{Image, InterpolationMode};
 use kornia_imgproc::resize;
 use log::error;
@@ -630,14 +629,11 @@ pub(crate) fn scale_image(
         .map(|channel| {
             let resized_container = match &*channel.image {
                 ImageContainer::F32Gray(img) => {
-                    let mut dst = Image::<f32, 1, CpuAllocator>::new(
-                        new_size,
-                        vec![0.0; new_size.width * new_size.height],
-                        CpuAllocator,
-                    )
-                    .map_err(InternalErrors::from_kornia)?;
+                    let mut dst =
+                        Image::<f32, 1>::new(new_size, vec![0.0; new_size.width * new_size.height])
+                            .map_err(InternalErrors::from_kornia)?;
 
-                    resize::resize_native(img, &mut dst, InterpolationMode::Nearest)
+                    resize::resize(img, &mut dst, InterpolationMode::Nearest)
                         .map_err(InternalErrors::from_kornia)?;
                     Ok::<ImageContainer, InternalErrors>(ImageContainer::F32Gray(ManagedImage {
                         data: dst,
@@ -646,14 +642,13 @@ pub(crate) fn scale_image(
                     }))
                 }
                 ImageContainer::F32Rgb(img) => {
-                    let mut dst = Image::<f32, 3, CpuAllocator>::new(
+                    let mut dst = Image::<f32, 3>::new(
                         new_size,
                         vec![0.0; new_size.width * new_size.height * 3],
-                        CpuAllocator,
                     )
                     .map_err(InternalErrors::from_kornia)?;
 
-                    resize::resize_native(img, &mut dst, InterpolationMode::Nearest)
+                    resize::resize(img, &mut dst, InterpolationMode::Nearest)
                         .map_err(InternalErrors::from_kornia)?;
 
                     Ok::<ImageContainer, InternalErrors>(ImageContainer::F32Rgb(ManagedImage {
@@ -694,8 +689,8 @@ pub fn to_z_projection(z_handling: ZStackHandling) -> ZProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_app::images::Point2d;
     use evanalyzer_cfg::core_types::ImagePlane;
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::ImageSize;
 
     fn key(series: i32, level: i32, t: i32, x: usize, y: usize, w: usize, h: usize) -> TileKey {
@@ -715,13 +710,12 @@ mod tests {
     /// A tile with a real, size-proportional weight (w*h*4 bytes for a single
     /// F32Gray channel), so capacity/eviction behaves like production.
     fn weighted_tile(w: usize, h: usize) -> Arc<CachedTile> {
-        let image = Image::<f32, 1, CpuAllocator>::new(
+        let image = Image::<f32, 1>::new(
             ImageSize {
                 width: w,
                 height: h,
             },
             vec![0.0f32; w * h],
-            CpuAllocator,
         )
         .unwrap();
         let container = ImageContainer::F32Gray(ManagedImage {

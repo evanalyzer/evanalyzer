@@ -12,7 +12,9 @@ use std::sync::Arc;
 /// transport converts to/from its own wire types (in `evanalyzer_cfg`)
 /// inside this crate, so front ends never see the difference. Reading them
 /// goes through [`crate::ReaderPool`].
-pub use evanalyzer_core::{ImageChannel, ImageContainer, ImageMeta, ManagedImage, PyramidInfo};
+pub use evanalyzer_core::{
+    ImageChannel, ImageContainer, ImageMeta, ManagedImage, Point2d, PyramidInfo,
+};
 
 /// Builds a manually annotated object from a painted `mask` (covering
 /// `bbox` = `[x1, y1, x2, y2]` in full-image pixels), measuring its

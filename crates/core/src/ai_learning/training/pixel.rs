@@ -363,12 +363,9 @@ mod tests {
     use evanalyzer_cfg::settings::ai_learning_settings::RandomForestSettings;
     use evanalyzer_cfg::settings::meta_data::MetaData;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     fn gray_context(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
-        let img =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, values, CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 1>::new(ImageSize { width, height }, values).unwrap();
         PipelineContext::new_from_image_test(img).unwrap()
     }
 

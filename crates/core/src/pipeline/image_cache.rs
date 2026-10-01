@@ -1,10 +1,9 @@
 use clru::{CLruCache, CLruCacheConfig, WeightScale};
 use log::{info, warn};
 
+use crate::image::Point2d;
 use crate::{ImageContainer, ImagePlane, ManagedImage, pipeline::pipeline_cache::CacheAddress};
-use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
-use kornia_tensor::CpuAllocator;
 use std::{
     collections::{HashMap, hash_map::RandomState},
     fs::{self, File},
@@ -430,7 +429,7 @@ impl ImageCache {
             TAG_F32_GRAY => {
                 let data = read_pod_vec(&mut r, width * height, 0f32)?;
                 Ok(ImageContainer::F32Gray(ManagedImage {
-                    data: Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)
+                    data: Image::<f32, 1>::new(size, data)
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
                     tile_offset,
                     plane,
@@ -439,7 +438,7 @@ impl ImageCache {
             TAG_F32_RGB => {
                 let data = read_pod_vec(&mut r, width * height * 3, 0f32)?;
                 Ok(ImageContainer::F32Rgb(ManagedImage {
-                    data: Image::<f32, 3, CpuAllocator>::new(size, data, CpuAllocator)
+                    data: Image::<f32, 3>::new(size, data)
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
                     tile_offset,
                     plane,
@@ -448,7 +447,7 @@ impl ImageCache {
             TAG_U32 => {
                 let data = read_pod_vec(&mut r, width * height, 0u32)?;
                 Ok(ImageContainer::U32(ManagedImage {
-                    data: Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator)
+                    data: Image::<u32, 1>::new(size, data)
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
                     tile_offset,
                     plane,
@@ -601,12 +600,7 @@ mod tests {
 
     fn gray_container(width: usize, height: usize, data: Vec<f32>) -> Arc<ImageContainer> {
         Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::new(
-                ImageSize { width, height },
-                data,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::new(ImageSize { width, height }, data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }))

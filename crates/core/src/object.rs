@@ -1482,11 +1482,10 @@ mod tests {
         // synthesized object (e.g. colocalization intersections, Voronoi regions)
         // sample channel pixel 0 regardless of its actual tile-local position.
         use crate::image::ManagedImage;
+        use crate::image::Point2d;
         use crate::pipeline::pipeline_cache::GlobalPipelineCache;
         use crate::{ImageContainer, ImagePlane};
-        use kornia_apriltag::utils::Point2d;
         use kornia_image::{Image, ImageSize};
-        use kornia_tensor::CpuAllocator;
         use std::sync::Arc;
 
         let tile_size = ImageSize {
@@ -1502,12 +1501,7 @@ mod tests {
         intensity[0] = 10.0; // local (0,0)
         intensity[5 * 15 + 7] = 99.0; // local (7,5)
         let channel = Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
-                tile_size,
-                &intensity,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::from_size_slice(tile_size, &intensity).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
@@ -1553,11 +1547,10 @@ mod tests {
         // channel slice miles out of bounds, panicking. Now those pixels must simply be
         // skipped rather than sampled.
         use crate::image::ManagedImage;
+        use crate::image::Point2d;
         use crate::pipeline::pipeline_cache::GlobalPipelineCache;
         use crate::{ImageContainer, ImagePlane};
-        use kornia_apriltag::utils::Point2d;
         use kornia_image::{Image, ImageSize};
-        use kornia_tensor::CpuAllocator;
         use std::sync::Arc;
 
         let tile_size = ImageSize {
@@ -1571,12 +1564,7 @@ mod tests {
         let mut intensity = vec![7.0f32; 15 * 20];
         intensity[5 * 15 + 7] = 99.0; // tile-local (7,5)
         let channel = Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
-                tile_size,
-                &intensity,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::from_size_slice(tile_size, &intensity).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));

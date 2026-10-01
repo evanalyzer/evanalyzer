@@ -1,11 +1,9 @@
 use crate::extlibs::libmorphology::{Kernel, Separable};
-use kornia_image::{Image, ImageError, ImageSize, allocator::ImageAllocator};
+use kornia_image::{Image, ImageError, ImageSize};
 use kornia_imgproc::padding::{Padding2D, PaddingMode, spatial_padding};
-use kornia_tensor::CpuAllocator;
 use rayon::prelude::*;
 
-//use kornia_image::{Image, ImageError, ImageSize, allocator::ImageAllocator};
-//use kornia_tensor::CpuAllocator;
+//use kornia_image::{Image, ImageError, ImageSize};
 //use rayon::prelude::*;
 
 /// Dilate an image using a [`Kernel`].
@@ -24,14 +22,9 @@ use rayon::prelude::*;
 /// # Returns
 ///
 /// Ok(()) on success, or [`ImageError`] if shapes don't match.
-pub fn dilate<
-    T: Copy + Default + Send + Sync + PartialOrd,
-    const C: usize,
-    A1: ImageAllocator,
-    A2: ImageAllocator,
->(
-    src: &Image<T, C, A1>,
-    dst: &mut Image<T, C, A2>,
+pub fn dilate<T: Copy + Default + Send + Sync + PartialOrd, const C: usize>(
+    src: &Image<T, C>,
+    dst: &mut Image<T, C>,
     kernel: &Kernel,
     padding_mode: PaddingMode,
     constant_value: [T; C],
@@ -67,7 +60,7 @@ pub fn dilate<
         height: height + 2 * pad_h,
     };
     let padded_buffer = vec![T::default(); padded_size.width * padded_size.height * C];
-    let mut padded = Image::new(padded_size, padded_buffer, CpuAllocator)?;
+    let mut padded = Image::new(padded_size, padded_buffer)?;
 
     let padding = Padding2D {
         top: pad_h,
@@ -126,14 +119,9 @@ pub fn dilate<
 /// # Returns
 ///
 /// Ok(()) on success, or [`ImageError`] if shapes don't match.
-pub fn erode<
-    T: Copy + Default + Send + Sync + PartialOrd,
-    const C: usize,
-    A1: ImageAllocator,
-    A2: ImageAllocator,
->(
-    src: &Image<T, C, A1>,
-    dst: &mut Image<T, C, A2>,
+pub fn erode<T: Copy + Default + Send + Sync + PartialOrd, const C: usize>(
+    src: &Image<T, C>,
+    dst: &mut Image<T, C>,
     kernel: &Kernel,
     padding_mode: PaddingMode,
     constant_value: [T; C],
@@ -169,7 +157,7 @@ pub fn erode<
         height: height + 2 * pad_h,
     };
     let padded_buffer = vec![T::default(); padded_size.width * padded_size.height * C];
-    let mut padded = Image::new(padded_size, padded_buffer, CpuAllocator)?;
+    let mut padded = Image::new(padded_size, padded_buffer)?;
 
     let padding = Padding2D {
         top: pad_h,
@@ -227,14 +215,9 @@ pub fn erode<
 /// buffer, then a k-tall vertical pass over that buffer (O(k) per pixel,
 /// O(2k) total). `better(candidate, current)` picks the window's extremum:
 /// `a > b` for dilate, `a < b` for erode.
-fn box_separable<
-    T: Copy + Default + Send + Sync + PartialOrd,
-    const C: usize,
-    A1: ImageAllocator,
-    A2: ImageAllocator,
->(
-    src: &Image<T, C, A1>,
-    dst: &mut Image<T, C, A2>,
+fn box_separable<T: Copy + Default + Send + Sync + PartialOrd, const C: usize>(
+    src: &Image<T, C>,
+    dst: &mut Image<T, C>,
     kernel: &Kernel,
     padding_mode: PaddingMode,
     constant_value: [T; C],
@@ -260,7 +243,7 @@ fn box_separable<
         height: height + 2 * pad_h,
     };
     let padded_buffer = vec![T::default(); padded_size.width * padded_size.height * C];
-    let mut padded = Image::new(padded_size, padded_buffer, CpuAllocator)?;
+    let mut padded = Image::new(padded_size, padded_buffer)?;
     let padding = Padding2D {
         top: pad_h,
         bottom: pad_h,
@@ -325,14 +308,9 @@ fn box_separable<
 /// erode) - unlike a box, the two 1D passes are independent, not chained.
 /// `better(candidate, current)` picks the window's extremum, matching the
 /// combine direction: `a > b` for dilate, `a < b` for erode.
-fn cross_separable<
-    T: Copy + Default + Send + Sync + PartialOrd,
-    const C: usize,
-    A1: ImageAllocator,
-    A2: ImageAllocator,
->(
-    src: &Image<T, C, A1>,
-    dst: &mut Image<T, C, A2>,
+fn cross_separable<T: Copy + Default + Send + Sync + PartialOrd, const C: usize>(
+    src: &Image<T, C>,
+    dst: &mut Image<T, C>,
     kernel: &Kernel,
     padding_mode: PaddingMode,
     constant_value: [T; C],
@@ -358,7 +336,7 @@ fn cross_separable<
         height: height + 2 * pad_h,
     };
     let padded_buffer = vec![T::default(); padded_size.width * padded_size.height * C];
-    let mut padded = Image::new(padded_size, padded_buffer, CpuAllocator)?;
+    let mut padded = Image::new(padded_size, padded_buffer)?;
     let padding = Padding2D {
         top: pad_h,
         bottom: pad_h,
@@ -440,14 +418,9 @@ fn cross_separable<
 /// # Returns
 ///
 /// Ok(()) on success, or [`ImageError`] if shapes don't match.
-pub fn open<
-    T: Copy + Default + Send + Sync + PartialOrd,
-    const C: usize,
-    A1: ImageAllocator,
-    A2: ImageAllocator,
->(
-    src: &Image<T, C, A1>,
-    dst: &mut Image<T, C, A2>,
+pub fn open<T: Copy + Default + Send + Sync + PartialOrd, const C: usize>(
+    src: &Image<T, C>,
+    dst: &mut Image<T, C>,
     kernel: &Kernel,
     padding_mode: PaddingMode,
     constant_value: [T; C],
@@ -473,14 +446,9 @@ pub fn open<
 /// # Returns
 ///
 /// Ok(()) on success, or [`ImageError`] if shapes don't match.
-pub fn close<
-    T: Copy + Default + Send + Sync + PartialOrd,
-    const C: usize,
-    A1: ImageAllocator,
-    A2: ImageAllocator,
->(
-    src: &Image<T, C, A1>,
-    dst: &mut Image<T, C, A2>,
+pub fn close<T: Copy + Default + Send + Sync + PartialOrd, const C: usize>(
+    src: &Image<T, C>,
+    dst: &mut Image<T, C>,
     kernel: &Kernel,
     padding_mode: PaddingMode,
     constant_value: [T; C],
@@ -493,7 +461,6 @@ pub fn close<
 
 #[cfg(test)]
 mod tests {
-    use kornia_tensor::CpuAllocator;
 
     use crate::extlibs::libmorphology::KernelShape;
 
@@ -549,8 +516,8 @@ mod tests {
             height: 3,
         };
         let data = vec![0u8, 0, 0, 0, 255, 0, 0, 0, 0];
-        let src = Image::new(size, data, CpuAllocator)?;
-        let mut dst = Image::new(size, vec![0u8; 9], CpuAllocator)?;
+        let src = Image::new(size, data)?;
+        let mut dst = Image::new(size, vec![0u8; 9])?;
 
         let kernel = Kernel::new(KernelShape::Box { size: 3 });
         dilate(&src, &mut dst, &kernel, PaddingMode::Constant, [0])?;
@@ -569,8 +536,8 @@ mod tests {
             width: 3,
             height: 3,
         };
-        let src = Image::new(size, vec![255u8; 9], CpuAllocator)?;
-        let mut dst = Image::new(size, vec![0u8; 9], CpuAllocator)?;
+        let src = Image::new(size, vec![255u8; 9])?;
+        let mut dst = Image::new(size, vec![0u8; 9])?;
 
         let kernel = Kernel::new(KernelShape::Box { size: 3 });
         erode(&src, &mut dst, &kernel, PaddingMode::Constant, [0])?;
@@ -593,8 +560,8 @@ mod tests {
         let mut data = vec![0u8; 25];
         data[6] = 255;
 
-        let src = Image::new(size, data, CpuAllocator)?;
-        let mut dst = Image::new(size, vec![0u8; 25], CpuAllocator)?;
+        let src = Image::new(size, data)?;
+        let mut dst = Image::new(size, vec![0u8; 25])?;
 
         let kernel = Kernel::new(KernelShape::Box { size: 3 });
         open(&src, &mut dst, &kernel, PaddingMode::Constant, [0])?;
@@ -621,8 +588,8 @@ mod tests {
         }
         data[12] = 0;
 
-        let src = Image::new(size, data, CpuAllocator)?;
-        let mut dst = Image::new(size, vec![0u8; 25], CpuAllocator)?;
+        let src = Image::new(size, data)?;
+        let mut dst = Image::new(size, vec![0u8; 25])?;
 
         let kernel = Kernel::new(KernelShape::Box { size: 3 });
         close(&src, &mut dst, &kernel, PaddingMode::Constant, [0])?;
@@ -671,7 +638,7 @@ mod tests {
         for &(width, height) in &sizes {
             let size = ImageSize { width, height };
             let data = pattern_u8(width, height);
-            let src = Image::<u8, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap();
+            let src = Image::<u8, 1>::new(size, data).unwrap();
 
             for &k in &kernel_sizes {
                 // Kernel must fit inside the (padded) image; skip combinations
@@ -685,14 +652,8 @@ mod tests {
                     let shape_name = format!("{shape:?}");
 
                     for &padding_mode in &padding_modes {
-                        let blank = || {
-                            Image::<u8, 1, CpuAllocator>::new(
-                                size,
-                                vec![0u8; width * height],
-                                CpuAllocator,
-                            )
-                            .unwrap()
-                        };
+                        let blank =
+                            || Image::<u8, 1>::new(size, vec![0u8; width * height]).unwrap();
                         let ctx = format!(
                             "{shape_name} k={k} size={width}x{height} padding={padding_mode:?}"
                         );
@@ -731,19 +692,13 @@ mod tests {
         let data: Vec<f32> = (0..size.width * size.height * 3)
             .map(|i| ((i * 53 + 7) % 101) as f32 / 100.0)
             .collect();
-        let src = Image::<f32, 3, CpuAllocator>::new(size, data, CpuAllocator).unwrap();
+        let src = Image::<f32, 3>::new(size, data).unwrap();
 
         for shape in [KernelShape::Box { size: 5 }, KernelShape::Cross { size: 5 }] {
             let kernel = Kernel::new(shape.clone());
             let naive_kernel = force_naive(&kernel);
-            let blank = || {
-                Image::<f32, 3, CpuAllocator>::new(
-                    size,
-                    vec![0.0; size.width * size.height * 3],
-                    CpuAllocator,
-                )
-                .unwrap()
-            };
+            let blank =
+                || Image::<f32, 3>::new(size, vec![0.0; size.width * size.height * 3]).unwrap();
 
             let mut fast = blank();
             let mut naive = blank();
@@ -791,8 +746,8 @@ mod tests {
         let mut data = vec![0u8; 49];
         data[3 * 7 + 3] = 255; // isolated single-pixel noise at the center
 
-        let src = Image::new(size, data, CpuAllocator)?;
-        let mut dst = Image::new(size, vec![0u8; 49], CpuAllocator)?;
+        let src = Image::new(size, data)?;
+        let mut dst = Image::new(size, vec![0u8; 49])?;
         let kernel = Kernel::new(KernelShape::Cross { size: 3 });
         open(&src, &mut dst, &kernel, PaddingMode::Constant, [0])?;
         assert!(
@@ -808,8 +763,8 @@ mod tests {
         }
         data[3 * 7 + 3] = 0; // hole in the center of a filled square
 
-        let src = Image::new(size, data, CpuAllocator)?;
-        let mut dst = Image::new(size, vec![0u8; 49], CpuAllocator)?;
+        let src = Image::new(size, data)?;
+        let mut dst = Image::new(size, vec![0u8; 49])?;
         close(&src, &mut dst, &kernel, PaddingMode::Constant, [0])?;
         assert_eq!(
             dst.as_slice()[3 * 7 + 3],

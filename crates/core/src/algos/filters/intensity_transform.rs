@@ -14,7 +14,6 @@ use crate::{
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use ndarray::{ArrayView3, ArrayViewMut3};
 use std::sync::Arc;
@@ -105,8 +104,8 @@ impl ImageAlgorithm for IntensityTransformation {
 impl IntensityTransformation {
     fn process_f32_image<const C: usize>(
         &self,
-        input: &Image<f32, C, CpuAllocator>,
-        output: &mut Image<f32, C, CpuAllocator>,
+        input: &Image<f32, C>,
+        output: &mut Image<f32, C>,
     ) -> Result<(), InternalErrors> {
         match self.mode {
             IntensityTransformMode::Automatic => self.equalize_hist_f32(input, output),
@@ -117,8 +116,8 @@ impl IntensityTransformation {
     /// Manual Contrast/Brightness: result = contrast * pixel + brightness
     fn apply_manual_f32<const C: usize>(
         &self,
-        input: &Image<f32, C, CpuAllocator>,
-        output: &mut Image<f32, C, CpuAllocator>,
+        input: &Image<f32, C>,
+        output: &mut Image<f32, C>,
     ) -> Result<(), InternalErrors> {
         let (h, w) = (input.size().height, input.size().width);
         let in_view = ArrayView3::from_shape((h, w, C), input.as_slice())?;
@@ -139,8 +138,8 @@ impl IntensityTransformation {
     /// Histogram Equalization for Float Images
     fn equalize_hist_f32<const C: usize>(
         &self,
-        input: &Image<f32, C, CpuAllocator>,
-        output: &mut Image<f32, C, CpuAllocator>,
+        input: &Image<f32, C>,
+        output: &mut Image<f32, C>,
     ) -> Result<(), InternalErrors> {
         let (h, w) = (input.size().height, input.size().width);
         let total_pixels = (h * w) as f32;
@@ -187,9 +186,9 @@ mod tests {
     use kornia_image::{Image, ImageSize};
 
     // Helper to create a dummy context
-    fn setup_test_image(width: usize, height: usize, val: f32) -> Image<f32, 1, CpuAllocator> {
+    fn setup_test_image(width: usize, height: usize, val: f32) -> Image<f32, 1> {
         let size = ImageSize { width, height };
-        Image::<f32, 1, CpuAllocator>::from_size_val(size, val, CpuAllocator).unwrap()
+        Image::<f32, 1>::from_size_val(size, val).unwrap()
     }
 
     // --- execute() (the real Arc::make_mut/ctx.swap() path) ---
@@ -218,13 +217,12 @@ mod tests {
 
     #[test]
     fn execute_applies_the_manual_transform_to_rgb_through_the_real_scratch_pad_swap_path() {
-        let img = Image::<f32, 3, CpuAllocator>::from_size_val(
+        let img = Image::<f32, 3>::from_size_val(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             0.5,
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
@@ -248,13 +246,12 @@ mod tests {
 
     #[test]
     fn execute_returns_format_mismatch_for_an_unsupported_image_type() {
-        let img = Image::<u32, 1, CpuAllocator>::from_size_val(
+        let img = Image::<u32, 1>::from_size_val(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             0,
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();
@@ -328,8 +325,7 @@ mod tests {
             width: 4,
             height: 1,
         };
-        let mut img =
-            Image::<f32, 1, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
+        let mut img = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
 
         // Create a very skewed image: [0.1, 0.1, 0.1, 1.0]
         {
@@ -339,8 +335,7 @@ mod tests {
             slice[2] = 0.1;
             slice[3] = 1.0;
         }
-        let mut out =
-            Image::<f32, 1, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
+        let mut out = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
 
         let algo = IntensityTransformation {
             mode: IntensityTransformMode::Automatic,

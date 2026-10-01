@@ -545,13 +545,12 @@ mod tests {
 
     fn dummy_ctx() -> crate::pipeline::pipeline_context::PipelineContext {
         crate::pipeline::pipeline_context::PipelineContext::new_from_image_test(
-            kornia_image::Image::<f32, 1, kornia_tensor::CpuAllocator>::new(
+            kornia_image::Image::<f32, 1>::new(
                 kornia_image::ImageSize {
                     width: 1,
                     height: 1,
                 },
                 vec![0.0f32],
-                kornia_tensor::CpuAllocator,
             )
             .unwrap(),
         )

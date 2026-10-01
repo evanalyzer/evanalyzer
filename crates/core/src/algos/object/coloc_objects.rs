@@ -464,6 +464,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::image::Point2d;
     use crate::{
         ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::PixelSizes,
@@ -474,16 +475,14 @@ mod tests {
     };
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     fn make_ctx() -> PipelineContext {
         let size = ImageSize {
             width: 1,
             height: 1,
         };
-        let img = Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32], CpuAllocator).unwrap();
+        let img = Image::<f32, 1>::new(size, vec![0.0f32]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -848,8 +847,7 @@ mod tests {
         };
 
         // ctx's own image content is irrelevant to intensity sampling; only its size/tile_offset matter.
-        let ctx_image =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; 100], CpuAllocator).unwrap();
+        let ctx_image = Image::<f32, 1>::new(size, vec![0.0f32; 100]).unwrap();
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
             PipelineImageMeta {
@@ -879,8 +877,7 @@ mod tests {
 
         let mut cache = GlobalPipelineCache::default();
         // Constant-value channel so the expected sum/avg/min/max are trivial to compute.
-        let channel_img =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![VALUE; 100], CpuAllocator).unwrap();
+        let channel_img = Image::<f32, 1>::new(size, vec![VALUE; 100]).unwrap();
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: channel_img,

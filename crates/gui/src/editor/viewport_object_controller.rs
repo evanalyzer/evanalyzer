@@ -471,12 +471,11 @@ mod tests {
     use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project};
     use crate::editor::viewport_cache::{ReadContext, ViewportCache};
     use bitvec::prelude::*;
+    use evanalyzer_app::images::Point2d;
     use evanalyzer_app::images::{ImageChannel, ManagedImage};
     use evanalyzer_cfg::core_types::ObjectId;
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::Image;
-    use kornia_image::allocator::CpuAllocator;
 
     fn make_controller() -> (
         Arc<UiState>,
@@ -582,8 +581,7 @@ mod tests {
             width: 20,
             height: 20,
         };
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![0.5f32; 20 * 20], CpuAllocator).unwrap();
+        let image = Image::<f32, 1>::new(size, vec![0.5f32; 20 * 20]).unwrap();
         let container = ImageContainer::F32Gray(ManagedImage {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },

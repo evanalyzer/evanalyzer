@@ -1357,7 +1357,6 @@ mod tests {
         pipeline::pipeline_cache::CacheAddress,
     };
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
     use std::sync::Arc;
 
     #[test]
@@ -1367,7 +1366,7 @@ mod tests {
             height: 2,
         };
         let input_data = vec![0.1, 0.5, 0.9, 0.0, 1.0, 0.4];
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, input_data)?;
         input_img.print_window();
 
         let settings = vec![
@@ -1530,7 +1529,7 @@ mod tests {
             };
         }
 
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, input_data)?;
         let settings = vec![ThresholdEntry {
             method: ThresholdMethod::Li,
             min_threshold: 0.0,
@@ -1641,7 +1640,7 @@ mod tests {
                 };
             }
 
-            let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+            let input_img = Image::<f32, 1>::new(size, input_data)?;
             let settings = vec![ThresholdEntry {
                 method,
                 min_threshold: 0.0,
@@ -1794,8 +1793,7 @@ mod tests {
         };
 
         let run = |middle_class: OtsuMiddleClass| -> Result<f32, Box<dyn std::error::Error>> {
-            let input_img =
-                Image::<f32, 1, CpuAllocator>::new(size, input_data.clone(), CpuAllocator)?;
+            let input_img = Image::<f32, 1>::new(size, input_data.clone())?;
             let settings = vec![ThresholdEntry {
                 method: ThresholdMethod::Otsu {
                     classes: OtsuClasses::Three { middle_class },
@@ -2016,7 +2014,7 @@ mod tests {
             width: input_data.len(),
             height: 1,
         };
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, input_data)?;
 
         let settings = vec![ThresholdEntry {
             method: ThresholdMethod::RobustBackground {
@@ -2079,7 +2077,7 @@ mod tests {
             width: input_data.len(),
             height: 1,
         };
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, input_data)?;
 
         let settings = vec![ThresholdEntry {
             method: ThresholdMethod::Otsu {
@@ -2248,7 +2246,7 @@ mod tests {
             width: N,
             height: 1,
         };
-        let image = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?;
+        let image = Image::<f32, 1>::new(size, data)?;
         let mut ctx = PipelineContext::new_from_image_test(image)?;
         ctx.image_meta.nr_of_bits = 16;
 
@@ -2287,18 +2285,12 @@ mod tests {
 
     /// Builds a 2x2 constant-value gray image, standing in for the pipeline's
     /// current (e.g. blurred) image.
-    fn constant_gray_image(
-        value: f32,
-    ) -> Result<Image<f32, 1, CpuAllocator>, Box<dyn std::error::Error>> {
+    fn constant_gray_image(value: f32) -> Result<Image<f32, 1>, Box<dyn std::error::Error>> {
         let size = ImageSize {
             width: 2,
             height: 2,
         };
-        Ok(Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![value; 4],
-            CpuAllocator,
-        )?)
+        Ok(Image::<f32, 1>::new(size, vec![value; 4])?)
     }
 
     /// A single `Mean`-thresholded entry over the full relative range, with
@@ -2360,8 +2352,7 @@ mod tests {
             width: 4,
             height: 1,
         };
-        let raw_image =
-            Image::<f32, 1, CpuAllocator>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0], CpuAllocator)?;
+        let raw_image = Image::<f32, 1>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0])?;
         let mut cache = GlobalPipelineCache::default();
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_gray_from_image_test(raw_image)),
@@ -2408,11 +2399,7 @@ mod tests {
             width: 4,
             height: 1,
         };
-        let snapshot_image = Image::<f32, 1, CpuAllocator>::new(
-            snapshot_size,
-            vec![0.0, 0.0, 0.0, 1.0],
-            CpuAllocator,
-        )?;
+        let snapshot_image = Image::<f32, 1>::new(snapshot_size, vec![0.0, 0.0, 0.0, 1.0])?;
         let memory_id = MemoryId::PipelineContext(7);
         let mut cache = GlobalPipelineCache::default();
         cache.image_cache.insert(
@@ -2463,8 +2450,7 @@ mod tests {
             width: 1,
             height: 1,
         };
-        let rgb_image =
-            Image::<f32, 3, CpuAllocator>::new(rgb_size, vec![0.1, 0.2, 0.3], CpuAllocator)?;
+        let rgb_image = Image::<f32, 3>::new(rgb_size, vec![0.1, 0.2, 0.3])?;
         let mut cache = GlobalPipelineCache::default();
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_rgb_from_image_test(rgb_image)),
@@ -2496,8 +2482,7 @@ mod tests {
             width: 4,
             height: 1,
         };
-        let raw_image =
-            Image::<f32, 1, CpuAllocator>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0], CpuAllocator)?;
+        let raw_image = Image::<f32, 1>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0])?;
         let mut cache = GlobalPipelineCache::default();
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_gray_from_image_test(raw_image)),

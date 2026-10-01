@@ -17,7 +17,6 @@ use crate::{
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_imgproc::padding::PaddingMode;
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 
 /// The specific morphological transformation to perform.
@@ -178,8 +177,8 @@ impl MorphologicalCommand {
     /// Morphology for Floating Point (Intensity images)
     fn apply_morph_f32<const C: usize>(
         &self,
-        input: &Image<f32, C, CpuAllocator>,
-        output: &mut Image<f32, C, CpuAllocator>,
+        input: &Image<f32, C>,
+        output: &mut Image<f32, C>,
     ) -> Result<(), InternalErrors> {
         let kernel = self.get_kernel();
         let pad_val: [f32; C] = [0.0; C];
@@ -208,8 +207,8 @@ impl MorphologicalCommand {
     /// Morphology for Unsigned Integers (Label/Mask images)
     fn apply_morph_u32(
         &self,
-        input: &Image<u32, 1, CpuAllocator>,
-        output: &mut Image<u32, 1, CpuAllocator>,
+        input: &Image<u32, 1>,
+        output: &mut Image<u32, 1>,
     ) -> Result<(), InternalErrors> {
         let kernel = self.get_kernel();
         let pad_val: [u32; 1] = [0];
@@ -252,7 +251,7 @@ mod tests {
             width: 5,
             height: 5,
         };
-        let mut img = Image::<f32, 1, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator)?;
+        let mut img = Image::<f32, 1>::from_size_val(size, 0.0)?;
         img.set_pixel(2, 2, 0, 1.0)?;
 
         // 2. Setup the Command (3x3 Box Dilation)
@@ -310,7 +309,7 @@ mod tests {
         };
 
         // Input: Black image with one pixel of ID '7'
-        let mut img = Image::<u32, 1, CpuAllocator>::from_size_val(size, 0, CpuAllocator)?;
+        let mut img = Image::<u32, 1>::from_size_val(size, 0)?;
         img.set_pixel(2, 2, 0, 7)?;
 
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
@@ -344,7 +343,7 @@ mod tests {
             width: 5,
             height: 5,
         };
-        let mut img = Image::<u32, 1, CpuAllocator>::from_size_val(size, 0, CpuAllocator).unwrap();
+        let mut img = Image::<u32, 1>::from_size_val(size, 0).unwrap();
         img.set_pixel(2, 2, 0, 7).unwrap();
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
         ctx.segmentation_map = Some(img);
@@ -415,7 +414,7 @@ mod tests {
         let mut data = vec![0.0f32; 3 * 3 * 3];
         data[(1 * 3 + 1) * 3 + 0] = 1.0; // Center pixel, Red channel
 
-        let img = Image::<f32, 3, _>::from_size_slice(size, &data, CpuAllocator)?;
+        let img = Image::<f32, 3>::from_size_slice(size, &data)?;
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
         let mut cache = GlobalPipelineCache::default();
 
@@ -463,7 +462,7 @@ mod tests {
             height: 1,
         };
         let data = vec![0u32; 1];
-        let img = Image::<u32, 1, _>::from_size_slice(size, &data, CpuAllocator).unwrap();
+        let img = Image::<u32, 1>::from_size_slice(size, &data).unwrap();
 
         // Setup context with a U32 image
         let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();
@@ -481,13 +480,12 @@ mod tests {
     }
 
     // Helper to create a 3x3 image with a center spike
-    fn create_spike_image() -> Image<f32, 1, CpuAllocator> {
+    fn create_spike_image() -> Image<f32, 1> {
         let size = ImageSize {
             width: 3,
             height: 3,
         };
-        let mut img =
-            Image::<f32, 1, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
+        let mut img = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
         img.set_pixel(1, 1, 0, 1.0).unwrap();
         img
     }

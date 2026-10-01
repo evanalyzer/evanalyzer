@@ -568,13 +568,10 @@ mod tests {
     use super::*;
     use crate::{ImageContainer, image::PixelSizes, pipeline::pipeline::PipelineImageMeta};
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
     use std::path::PathBuf;
 
     fn ctx_from_gray(width: usize, height: usize, data: Vec<f32>) -> PipelineContext {
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
-                .unwrap();
+        let image = Image::<f32, 1>::new(ImageSize { width, height }, data).unwrap();
         PipelineContext::new_from_image(
             PathBuf::default(),
             PipelineImageMeta {
@@ -668,9 +665,7 @@ mod tests {
             }
         }
 
-        let image =
-            Image::<f32, 3, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
-                .unwrap();
+        let image = Image::<f32, 3>::new(ImageSize { width, height }, data).unwrap();
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
             PipelineImageMeta {

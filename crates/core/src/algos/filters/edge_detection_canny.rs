@@ -12,7 +12,6 @@ use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_imgproc::filter::gaussian_blur;
 use kornia_imgproc::filter::spatial_gradient_float;
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use std::f32::consts::PI;
 use std::sync::Arc;
@@ -102,11 +101,11 @@ impl ImageAlgorithm for EdgeDetectionCanny {
         .map_err(InternalErrors::from_kornia)?;
 
         // Gradient Calculation (Sobel)
-        let mut grad_x: kornia_image::Image<f32, 1, CpuAllocator> =
-            kornia_image::Image::from_size_val(input.size(), 0.0, CpuAllocator)
+        let mut grad_x: kornia_image::Image<f32, 1> =
+            kornia_image::Image::from_size_val(input.size(), 0.0)
                 .expect("Failed to allocate scratch buffer");
-        let mut grad_y: kornia_image::Image<f32, 1, CpuAllocator> =
-            kornia_image::Image::from_size_val(input.size(), 0.0, CpuAllocator)
+        let mut grad_y: kornia_image::Image<f32, 1> =
+            kornia_image::Image::from_size_val(input.size(), 0.0)
                 .expect("Failed to allocate scratch buffer");
         spatial_gradient_float(&output, &mut grad_x, &mut grad_y)
             .map_err(InternalErrors::from_kornia)?;
@@ -266,7 +265,7 @@ fn calculate_sigma(kernel_size: usize) -> f32 {
 mod tests {
     use super::*;
     // Assuming these exist based on your code
-    // use crate::image::{ImageContainer, PipelineContext, CpuAllocator};
+    // use crate::image::{ImageContainer, PipelineContext};
 
     #[test]
     fn test_canny_edge_detection_synthetic_square() {
@@ -283,12 +282,9 @@ mod tests {
             }
         }
 
-        let input_img = kornia_image::Image::<f32, 1, CpuAllocator>::new(
-            kornia_image::ImageSize { width, height },
-            data,
-            CpuAllocator,
-        )
-        .unwrap();
+        let input_img =
+            kornia_image::Image::<f32, 1>::new(kornia_image::ImageSize { width, height }, data)
+                .unwrap();
 
         // Initialize Context
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
@@ -334,13 +330,12 @@ mod tests {
 
     #[test]
     fn zero_width_image_returns_error_instead_of_panicking() {
-        let input_img = kornia_image::Image::<f32, 1, CpuAllocator>::new(
+        let input_img = kornia_image::Image::<f32, 1>::new(
             kornia_image::ImageSize {
                 width: 0,
                 height: 5,
             },
             vec![],
-            CpuAllocator,
         )
         .unwrap();
 
@@ -361,13 +356,12 @@ mod tests {
 
     #[test]
     fn zero_height_image_returns_error_instead_of_panicking() {
-        let input_img = kornia_image::Image::<f32, 1, CpuAllocator>::new(
+        let input_img = kornia_image::Image::<f32, 1>::new(
             kornia_image::ImageSize {
                 width: 5,
                 height: 0,
             },
             vec![],
-            CpuAllocator,
         )
         .unwrap();
 

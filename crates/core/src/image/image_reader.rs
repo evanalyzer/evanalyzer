@@ -1,11 +1,10 @@
 use crate::converters::wavelength_to_rgb_float;
+use crate::image::Point2d;
 use crate::image::image_meta::{ImageMeta, ImagePlane, ImageTile};
 use crate::image::image_ome_parser::{build_image_meta, effective_size_c};
 use bioformats::common::reader::FormatReader;
 use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
-use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
-use kornia_tensor::CpuAllocator;
 use log::info;
 use rayon::prelude::*;
 use std::ops::RangeInclusive;
@@ -44,7 +43,7 @@ pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &[
 
 #[derive(Clone)]
 pub struct ManagedImage<T, const C: usize> {
-    pub data: Image<T, C, CpuAllocator>,
+    pub data: Image<T, C>,
     /// The x/y offset from the top left of the tile which was loaded
     pub tile_offset: Point2d,
     /// Image plane info this image was extracted from
@@ -58,7 +57,7 @@ pub struct ManagedImage<T, const C: usize> {
 }
 
 impl<T, const C: usize> Deref for ManagedImage<T, C> {
-    type Target = Image<T, C, CpuAllocator>;
+    type Target = Image<T, C>;
 
     fn deref(&self) -> &Self::Target {
         &self.data
@@ -107,7 +106,7 @@ impl ImageContainer {
     pub fn clone_empty(&self) -> Self {
         match self {
             ImageContainer::F32Gray(img) => {
-                let new_img = kornia_image::Image::from_size_val(img.size(), 0.0, CpuAllocator)
+                let new_img = kornia_image::Image::from_size_val(img.size(), 0.0)
                     .expect("Failed to allocate scratch buffer");
                 ImageContainer::F32Gray(ManagedImage {
                     data: new_img,
@@ -116,7 +115,7 @@ impl ImageContainer {
                 })
             }
             ImageContainer::F32Rgb(img) => {
-                let new_img = kornia_image::Image::from_size_val(img.size(), 0.0, CpuAllocator)
+                let new_img = kornia_image::Image::from_size_val(img.size(), 0.0)
                     .expect("Failed to allocate scratch buffer");
                 ImageContainer::F32Rgb(ManagedImage {
                     data: new_img,
@@ -125,7 +124,7 @@ impl ImageContainer {
                 })
             }
             ImageContainer::U32(img) => {
-                let new_img = kornia_image::Image::from_size_val(img.size(), 0u32, CpuAllocator)
+                let new_img = kornia_image::Image::from_size_val(img.size(), 0u32)
                     .expect("Failed to allocate scratch buffer");
                 ImageContainer::U32(ManagedImage {
                     data: new_img,
@@ -908,8 +907,8 @@ fn decode_image(
 
     // Convert to korina-rs image tensor
     if color_channels >= 3 {
-        let img = Image::<f32, 3, CpuAllocator>::new(image_size, final_data, CpuAllocator)
-            .map_err(InternalErrors::from_kornia)?;
+        let img =
+            Image::<f32, 3>::new(image_size, final_data).map_err(InternalErrors::from_kornia)?;
         Ok(ImageContainer::F32Rgb(ManagedImage {
             data: img,
             tile_offset: Point2d {
@@ -919,8 +918,8 @@ fn decode_image(
             plane: Some(plane),
         }))
     } else {
-        let img = Image::<f32, 1, CpuAllocator>::new(image_size, final_data, CpuAllocator)
-            .map_err(InternalErrors::from_kornia)?;
+        let img =
+            Image::<f32, 1>::new(image_size, final_data).map_err(InternalErrors::from_kornia)?;
         Ok(ImageContainer::F32Gray(ManagedImage {
             data: img,
             tile_offset: Point2d {
@@ -1963,12 +1962,7 @@ mod tests {
             height: 3,
         };
         let source = ImageContainer::U32(ManagedImage {
-            data: Image::<u32, 1, CpuAllocator>::new(
-                size,
-                vec![7u32; size.width * size.height],
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<u32, 1>::new(size, vec![7u32; size.width * size.height]).unwrap(),
             tile_offset: Point2d { x: 1, y: 2 },
             plane: None,
         });
@@ -2000,12 +1994,7 @@ mod tests {
         };
         let plane = Some(ImagePlane { z: 1, c: 2, t: 3 });
         let container = ImageContainer::U32(ManagedImage {
-            data: Image::<u32, 1, CpuAllocator>::new(
-                size,
-                vec![7u32; size.width * size.height],
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<u32, 1>::new(size, vec![7u32; size.width * size.height]).unwrap(),
             tile_offset: Point2d { x: 5, y: 6 },
             plane,
         });

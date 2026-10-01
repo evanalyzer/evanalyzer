@@ -117,20 +117,18 @@ impl ImageAlgorithm for GaussianBlur {
 mod tests {
     use super::*;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     #[test]
     fn test_blur_execution() {
         // 1. Create a simple 5x5 grayscale image with a white dot in the middle
         let mut image_data = vec![0.0f32; 25];
         image_data[12] = 1.0; // Central pixel is white
-        let input_img = Image::<f32, 1, CpuAllocator>::from_size_slice(
+        let input_img = Image::<f32, 1>::from_size_slice(
             ImageSize {
                 width: 5,
                 height: 5,
             },
             &image_data,
-            CpuAllocator,
         )
         .expect("Failed to create test image");
 
@@ -183,13 +181,12 @@ mod tests {
         image_data[37] = 1.0; // G
         image_data[38] = 1.0; // B
 
-        let input_img = Image::<f32, 3, CpuAllocator>::from_size_slice(
+        let input_img = Image::<f32, 3>::from_size_slice(
             ImageSize {
                 width: 5,
                 height: 5,
             },
             &image_data,
-            CpuAllocator,
         )
         .expect("Failed to create RGB test image");
 
@@ -238,13 +235,12 @@ mod tests {
     fn test_blur_format_mismatch_error() {
         // Create a 5x5 U32 image (Unsupported type for Gaussian Blur)
         let image_data = vec![0u32; 25];
-        let input_img = Image::<u32, 1, CpuAllocator>::from_size_slice(
+        let input_img = Image::<u32, 1>::from_size_slice(
             ImageSize {
                 width: 5,
                 height: 5,
             },
             &image_data,
-            CpuAllocator,
         )
         .expect("Failed to create U32 test image");
 

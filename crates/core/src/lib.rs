@@ -32,6 +32,7 @@ pub use crate::image::ImageMeta;
 pub use crate::image::ImageReader;
 pub use crate::image::ImageTypeMarker;
 pub use crate::image::ManagedImage;
+pub use crate::image::Point2d;
 pub use crate::image::PyramidInfo;
 pub use crate::image::ReadMode;
 pub use crate::image::SUPPORTED_IMAGE_FORMATS;

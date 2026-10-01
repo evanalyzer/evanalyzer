@@ -262,7 +262,6 @@ mod tests {
     use super::*;
     use crate::{F32Gray, image::ImageDebugExt};
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     #[test]
     fn test_ccl_equivalence_and_8_connectivity() {
@@ -295,8 +294,7 @@ mod tests {
         data[0 * 10 + 8] = 2;
 
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
-        ctx.segmentation_map =
-            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+        ctx.segmentation_map = Some(Image::<u32, 1>::new(size, data).unwrap());
 
         ctx.get_segmentation_map().unwrap().print_window();
 
@@ -380,8 +378,7 @@ mod tests {
 
         // Setup Context
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
-        ctx.segmentation_map =
-            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+        ctx.segmentation_map = Some(Image::<u32, 1>::new(size, data).unwrap());
 
         println!("--- Input Mask ---");
         ctx.get_segmentation_map().unwrap().print_window();
@@ -477,8 +474,7 @@ mod tests {
         data[6 * w + 3] = 3; // Touching (6,2)
 
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
-        ctx.segmentation_map =
-            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+        ctx.segmentation_map = Some(Image::<u32, 1>::new(size, data).unwrap());
 
         println!("--- Input Mask ---");
         ctx.get_segmentation_map().unwrap().print_window();
@@ -536,8 +532,7 @@ mod tests {
         data[6 * w + 6] = 1;
 
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
-        ctx.segmentation_map =
-            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+        ctx.segmentation_map = Some(Image::<u32, 1>::new(size, data).unwrap());
 
         let mut cache = GlobalPipelineCache::default();
         let labeling = ConnectedComponents { min_size: 4 };
@@ -594,14 +589,12 @@ mod tests {
         // in the same pipeline (e.g. a prior ConnectedComponents/Watershed
         // run): every pixel already carries a nonzero ID, including ones
         // that are background in the CURRENT segmentation.
-        ctx.instance_map =
-            Some(Image::<u32, 1, CpuAllocator>::new(size, vec![7u32; 16], CpuAllocator).unwrap());
+        ctx.instance_map = Some(Image::<u32, 1>::new(size, vec![7u32; 16]).unwrap());
 
         // Current segmentation: only pixel (1,1) [index 5] is foreground.
         let mut seg_data = vec![0u32; 16];
         seg_data[5] = 1;
-        ctx.segmentation_map =
-            Some(Image::<u32, 1, CpuAllocator>::new(size, seg_data, CpuAllocator).unwrap());
+        ctx.segmentation_map = Some(Image::<u32, 1>::new(size, seg_data).unwrap());
 
         let mut cache = GlobalPipelineCache::default();
         ConnectedComponents { min_size: 0 }
@@ -645,8 +638,7 @@ mod tests {
 
         let mut seg_data = vec![0u32; 16];
         seg_data[5] = 1;
-        ctx.segmentation_map =
-            Some(Image::<u32, 1, CpuAllocator>::new(size, seg_data, CpuAllocator).unwrap());
+        ctx.segmentation_map = Some(Image::<u32, 1>::new(size, seg_data).unwrap());
 
         let mut cache = GlobalPipelineCache::default();
         ConnectedComponents { min_size: 0 }

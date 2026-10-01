@@ -216,6 +216,7 @@ mod tests {
     use crate::ai_learning::model::{
         CURRENT_SAVED_CLASSIFIER_VERSION, SavedClassifier, save_to_file,
     };
+    use crate::image::Point2d;
     use crate::object::ObjectInit;
     use crate::{ImageContainer, ImagePlane, ManagedImage};
     use bitvec::prelude::*;
@@ -226,9 +227,7 @@ mod tests {
         RandomForestSettings,
     };
     use evanalyzer_cfg::settings::meta_data::MetaData;
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     fn reliable_rf_settings() -> RandomForestSettings {
         RandomForestSettings {
@@ -298,7 +297,7 @@ mod tests {
             width: 1,
             height: 1,
         };
-        let img = Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32], CpuAllocator).unwrap();
+        let img = Image::<f32, 1>::new(size, vec![0.0f32]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },

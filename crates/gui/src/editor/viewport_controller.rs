@@ -1192,8 +1192,7 @@ mod breakpoint_state_tests {
     use super::*;
     use crate::editor::test_support::test_ui_state;
     use evanalyzer_app::images::ManagedImage;
-    use kornia_apriltag::utils::Point2d;
-    use kornia_image::allocator::CpuAllocator;
+    use evanalyzer_app::images::Point2d;
     use kornia_image::{Image, ImageSize};
 
     fn make_controller() -> ViewportController {
@@ -1205,8 +1204,7 @@ mod breakpoint_state_tests {
             width: 2,
             height: 2,
         };
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; 4], CpuAllocator).unwrap();
+        let image = Image::<f32, 1>::new(size, vec![0.0f32; 4]).unwrap();
         ImageContainer::F32Gray(ManagedImage {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },

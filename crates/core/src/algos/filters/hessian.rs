@@ -12,7 +12,6 @@ use crate::image::{ImageContainer, ManagedImage, PixelSizes};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use std::sync::Arc;
 
@@ -123,9 +122,9 @@ impl ImageAlgorithm for Hessian {
 }
 
 fn process_f32_gray(
-    img: &Image<f32, 1, CpuAllocator>,
+    img: &Image<f32, 1>,
     mode: HessianMode,
-) -> Result<Image<f32, 1, CpuAllocator>, InternalErrors> {
+) -> Result<Image<f32, 1>, InternalErrors> {
     let size = img.size();
     // `spatial_gradient_float` panics inside kornia itself (chunks_mut(0))
     // for a zero-width image, before it ever gets a chance to return the
@@ -139,10 +138,8 @@ fn process_f32_gray(
     }
 
     // Calculate first order gradients
-    let mut dx =
-        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
-    let mut dy =
-        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
+    let mut dx = Image::from_size_val(size, 0.0).map_err(InternalErrors::from_kornia)?;
+    let mut dy = Image::from_size_val(size, 0.0).map_err(InternalErrors::from_kornia)?;
 
     // kornia's spatial_gradient usually provides first order
     kornia_imgproc::filter::spatial_gradient_float(img, &mut dx, &mut dy)
@@ -150,28 +147,23 @@ fn process_f32_gray(
 
     // Calculate second order gradients (Hessian Matrix components)
     // Ixx = d/dx of dx
-    let mut dxx =
-        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
-    let mut dummy =
-        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
+    let mut dxx = Image::from_size_val(size, 0.0).map_err(InternalErrors::from_kornia)?;
+    let mut dummy = Image::from_size_val(size, 0.0).map_err(InternalErrors::from_kornia)?;
     kornia_imgproc::filter::spatial_gradient_float(&dx, &mut dxx, &mut dummy)
         .map_err(InternalErrors::from_kornia)?;
 
     // Iyy = d/dy of dy
-    let mut dyy =
-        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
+    let mut dyy = Image::from_size_val(size, 0.0).map_err(InternalErrors::from_kornia)?;
     kornia_imgproc::filter::spatial_gradient_float(&dy, &mut dummy, &mut dyy)
         .map_err(InternalErrors::from_kornia)?;
 
     // Ixy = d/dy of dx (Mixed partial derivative)
-    let mut dxy =
-        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
+    let mut dxy = Image::from_size_val(size, 0.0).map_err(InternalErrors::from_kornia)?;
     kornia_imgproc::filter::spatial_gradient_float(&dx, &mut dummy, &mut dxy)
         .map_err(InternalErrors::from_kornia)?;
 
     // Compute Feature Maps
-    let mut output =
-        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
+    let mut output = Image::from_size_val(size, 0.0).map_err(InternalErrors::from_kornia)?;
     let out_slice = output.as_slice_mut();
     let s_xx = dxx.as_slice();
     let s_yy = dyy.as_slice();
@@ -227,7 +219,6 @@ mod tests {
                 height: 10,
             },
             data,
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
@@ -249,13 +240,12 @@ mod tests {
     #[test]
     fn test_hessian_format_mismatch_error() {
         // 1. Setup: Create a 5x5 RGB image (Unsupported)
-        let img = Image::<f32, 3, CpuAllocator>::from_size_val(
+        let img = Image::<f32, 3>::from_size_val(
             kornia_image::ImageSize {
                 width: 5,
                 height: 5,
             },
             0.0,
-            CpuAllocator,
         )
         .unwrap();
 
@@ -317,7 +307,6 @@ mod tests {
                 height: 7,
             },
             data,
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
@@ -359,13 +348,12 @@ mod tests {
 
     #[test]
     fn zero_width_image_returns_error_instead_of_panicking() {
-        let img = Image::<f32, 1, CpuAllocator>::new(
+        let img = Image::<f32, 1>::new(
             kornia_image::ImageSize {
                 width: 0,
                 height: 5,
             },
             vec![],
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();

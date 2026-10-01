@@ -240,15 +240,14 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image::Point2d;
     use crate::{
         ManagedImage, Object,
         algos::{ExecutionScope, ExtractObjects, Voronoi},
         pipeline::pipeline_cache::GlobalImageMeta,
     };
     use evanalyzer_cfg::core_types::{CitationMetadata, ImageAddress, ObjectClass, SizeUnits};
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     /// Test-only stand-in for real segmentation (Threshold + ConnectedComponents):
     /// stamps one rectangular object - at tile-local coordinates - directly into
@@ -276,10 +275,8 @@ mod tests {
                     inst[y * w + x] = 1;
                 }
             }
-            ctx.segmentation_map =
-                Some(Image::<u32, 1, CpuAllocator>::new(size, seg, CpuAllocator).unwrap());
-            ctx.instance_map =
-                Some(Image::<u32, 1, CpuAllocator>::new(size, inst, CpuAllocator).unwrap());
+            ctx.segmentation_map = Some(Image::<u32, 1>::new(size, seg).unwrap());
+            ctx.instance_map = Some(Image::<u32, 1>::new(size, inst).unwrap());
             Ok(())
         }
 
@@ -340,13 +337,12 @@ mod tests {
 
             let mut cache = GlobalPipelineCache::default();
             cache.image_meta = meta;
-            let channel = Image::<f32, 1, CpuAllocator>::new(
+            let channel = Image::<f32, 1>::new(
                 ImageSize {
                     width: tile_size.0,
                     height: tile_size.1,
                 },
                 vec![2.0f32; tile_size.0 * tile_size.1],
-                CpuAllocator,
             )
             .unwrap();
             cache.add_to_channel_cache(
@@ -532,7 +528,7 @@ mod tests {
             height: 4,
         };
         let channel_image = Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::new(size, vec![2.0f32; 16], CpuAllocator).unwrap(),
+            data: Image::<f32, 1>::new(size, vec![2.0f32; 16]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }));
@@ -589,7 +585,7 @@ mod tests {
             height: 2,
         };
         let channel_image = Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::new(size, vec![1.0f32; 4], CpuAllocator).unwrap(),
+            data: Image::<f32, 1>::new(size, vec![1.0f32; 4]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }));
@@ -667,8 +663,7 @@ mod tests {
             height: 4,
         };
         let rgb_image = Arc::new(ImageContainer::F32Rgb(ManagedImage {
-            data: Image::<f32, 3, CpuAllocator>::new(size, vec![0.5f32; 16 * 3], CpuAllocator)
-                .unwrap(),
+            data: Image::<f32, 3>::new(size, vec![0.5f32; 16 * 3]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }));

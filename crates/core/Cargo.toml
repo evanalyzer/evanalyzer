@@ -12,7 +12,6 @@ evanalyzer_cfg = { workspace = true }
 kornia-tensor ={ workspace = true }
 kornia-image = { workspace = true }
 kornia-imgproc = { workspace = true }
-kornia-apriltag = { workspace = true }
 # Pinned transitive dep (image -> zune-jpeg -> zune-core), not used directly.
 # zune-core 0.5.2 broke its `warn!`/`error!` fallback macros (they expand to
 # nothing instead of `()`), which fails to compile wherever zune-jpeg calls

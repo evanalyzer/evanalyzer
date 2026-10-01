@@ -2702,13 +2702,12 @@ mod tile_merge_end_to_end_tests {
         ConnectedComponents, Connectivity, ExtractObjects, Threshold, ThresholdEntry,
         ThresholdMethod, ThresholdValueSource,
     };
+    use crate::image::Point2d;
     use crate::image::{ImageContainer, ManagedImage};
     use crate::pipeline::image_cache::ImageCache;
     use crate::pipeline::pipeline::CorePipelineSettings;
     use evanalyzer_cfg::core_types::{ObjectClass, PixelUnits, SegmentationClass, SizeUnits};
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::Image;
-    use kornia_tensor::CpuAllocator;
 
     fn threshold_connected_components_extract_pipeline() -> Pipeline {
         let mut pipeline = Pipeline::new(
@@ -2746,13 +2745,12 @@ mod tile_merge_end_to_end_tests {
         full_width: usize,
         full_height: usize,
     ) -> GlobalPipelineCache {
-        let image = Image::<f32, 1, CpuAllocator>::new(
+        let image = Image::<f32, 1>::new(
             ImageSize {
                 width: tile_width,
                 height: tile_height,
             },
             data,
-            CpuAllocator,
         )
         .unwrap();
         let container = Arc::new(ImageContainer::F32Gray(ManagedImage {

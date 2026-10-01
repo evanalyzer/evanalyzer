@@ -15,7 +15,6 @@ use crate::{
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use ndarray::{ArrayView3, ArrayViewMut3};
 use std::sync::Arc;
@@ -104,8 +103,8 @@ fn get_1d_kernel(kernel_size: usize) -> Vec<f32> {
 }
 
 fn apply_laplacian<const C: usize>(
-    input: &Image<f32, C, CpuAllocator>,
-    output: &mut Image<f32, C, CpuAllocator>,
+    input: &Image<f32, C>,
+    output: &mut Image<f32, C>,
     kernel_size: usize,
 ) -> Result<(), InternalErrors> {
     let (h, w) = (input.size().height, input.size().width);
@@ -178,10 +177,8 @@ mod tests {
             width: 5,
             height: 5,
         };
-        let mut input =
-            Image::<f32, 1, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
-        let mut output =
-            Image::<f32, 1, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
+        let mut input = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
+        let mut output = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
 
         // 2. Set the center pixel to 1.0 (an "impulse")
         // Kornia layout is HWC, so index is [row, col, channel]
@@ -217,9 +214,8 @@ mod tests {
             width: 3,
             height: 3,
         };
-        let input = Image::<f32, 3, CpuAllocator>::from_size_val(size, 1.0, CpuAllocator).unwrap();
-        let mut output =
-            Image::<f32, 3, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
+        let input = Image::<f32, 3>::from_size_val(size, 1.0).unwrap();
+        let mut output = Image::<f32, 3>::from_size_val(size, 0.0).unwrap();
 
         // A flat image (all pixels 1.0) should result in 0.0 Laplacian
         let cmd = Laplacian { kernel_size: 1 };
@@ -239,10 +235,8 @@ mod tests {
             width: 7,
             height: 7,
         };
-        let mut input =
-            Image::<f32, 1, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
-        let mut output =
-            Image::<f32, 1, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
+        let mut input = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
+        let mut output = Image::<f32, 1>::from_size_val(size, 0.0).unwrap();
 
         // Set center to 10.0
         {
@@ -267,10 +261,8 @@ mod tests {
             height: 3,
         };
         // Create an RGB impulse at the center
-        let mut input =
-            Image::<f32, 3, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
-        let mut output =
-            Image::<f32, 3, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
+        let mut input = Image::<f32, 3>::from_size_val(size, 0.0).unwrap();
+        let mut output = Image::<f32, 3>::from_size_val(size, 0.0).unwrap();
 
         {
             let mut view = ArrayViewMut3::from_shape((3, 3, 3), input.as_slice_mut()).unwrap();

@@ -244,6 +244,7 @@ impl ImageAlgorithm for ObjectMath {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image::Point2d;
     use crate::{
         ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::PixelSizes,
@@ -254,19 +255,12 @@ mod tests {
         },
     };
     use bitvec::prelude::*;
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     const ID_A: u128 = 100_000;
 
     fn make_ctx(size: ImageSize) -> PipelineContext {
-        let img = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![0.0f32; size.width * size.height],
-            CpuAllocator,
-        )
-        .unwrap();
+        let img = Image::<f32, 1>::new(size, vec![0.0f32; size.width * size.height]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -303,12 +297,7 @@ mod tests {
         value: f32,
     ) -> PipelineContext {
         let ctx = make_ctx(size);
-        let img = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![value; size.width * size.height],
-            CpuAllocator,
-        )
-        .unwrap();
+        let img = Image::<f32, 1>::new(size, vec![value; size.width * size.height]).unwrap();
         cache.image_meta = GlobalImageMeta {
             full_image_width: size,
             is_rgb: false,

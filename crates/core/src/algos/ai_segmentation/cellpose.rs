@@ -560,7 +560,6 @@ mod tests {
     use super::*;
     use crate::algos::ai_segmentation::test_support::trace_and_save_model;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     fn cellpose(min_object_size: i32) -> Cellpose {
         Cellpose {
@@ -574,9 +573,7 @@ mod tests {
     }
 
     fn gray_ctx(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
-        let img =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, values, CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 1>::new(ImageSize { width, height }, values).unwrap();
         PipelineContext::new_from_image_test(img).unwrap()
     }
 

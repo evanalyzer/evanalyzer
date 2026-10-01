@@ -1,12 +1,11 @@
+use crate::image::Point2d;
 use crate::{
     ImageTile,
     image::{ImageContainer, PixelSizes},
     pipeline::{image_cache::ImageCache, object_cache::ObjectCache, pipeline::PipelineImageMeta},
 };
 use evanalyzer_cfg::core_types::MemoryId;
-use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
-use kornia_tensor::CpuAllocator;
 use std::{path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -126,13 +125,12 @@ impl GlobalPipelineCache {
         match cache_slot {
             CacheAddress::Scratchpad => match self.image_meta.is_rgb {
                 true => Some(Arc::new(ImageContainer::F32Rgb(crate::ManagedImage {
-                    data: Image::<f32, 3, CpuAllocator>::new(
+                    data: Image::<f32, 3>::new(
                         kornia_image::ImageSize {
                             width: image_tile_info.width,
                             height: image_tile_info.height,
                         },
                         vec![0f32; image_tile_info.width * image_tile_info.height * 3],
-                        CpuAllocator,
                     )
                     .expect("Could not allocate memory for image scratchpad"),
                     tile_offset: Point2d {
@@ -142,13 +140,12 @@ impl GlobalPipelineCache {
                     plane: None,
                 }))),
                 false => Some(Arc::new(ImageContainer::F32Gray(crate::ManagedImage {
-                    data: Image::<f32, 1, CpuAllocator>::new(
+                    data: Image::<f32, 1>::new(
                         kornia_image::ImageSize {
                             width: image_tile_info.width,
                             height: image_tile_info.height,
                         },
                         vec![0f32; image_tile_info.width * image_tile_info.height],
-                        CpuAllocator,
                     )
                     .expect("Could not allocate memory for image scratchpad"),
                     tile_offset: Point2d {
@@ -293,18 +290,12 @@ pub fn sample_channel_pixel(is_rgb: bool, slice: &[f32], sample: usize) -> f32 {
 mod cache_tests {
     use super::*;
     use crate::ManagedImage;
-    use kornia_apriltag::utils::Point2d;
+    use crate::image::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     fn gray_container(width: usize, height: usize, data: Vec<f32>) -> Arc<ImageContainer> {
         Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::new(
-                ImageSize { width, height },
-                data,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::new(ImageSize { width, height }, data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }))
@@ -312,12 +303,7 @@ mod cache_tests {
 
     fn rgb_container(width: usize, height: usize, data: Vec<f32>) -> Arc<ImageContainer> {
         Arc::new(ImageContainer::F32Rgb(ManagedImage {
-            data: Image::<f32, 3, CpuAllocator>::new(
-                ImageSize { width, height },
-                data,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 3>::new(ImageSize { width, height }, data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }))
@@ -325,12 +311,7 @@ mod cache_tests {
 
     fn u32_container(width: usize, height: usize, data: Vec<u32>) -> Arc<ImageContainer> {
         Arc::new(ImageContainer::U32(ManagedImage {
-            data: Image::<u32, 1, CpuAllocator>::new(
-                ImageSize { width, height },
-                data,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<u32, 1>::new(ImageSize { width, height }, data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }))
