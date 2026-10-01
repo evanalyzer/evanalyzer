@@ -7,8 +7,8 @@ license = { workspace = true }
 publish = { workspace = true }
 
 [dependencies]
-# TODO(remote-control): still needed for classifier files, diagnostics and the
-# image viewer - remove once those go through evanalyzer_app.
+# Image viewer only (ImageReader, ImageContainer, tiles, Object::from_mask).
+# TODO(remote-control): remove once image access goes through evanalyzer_app.
 evanalyzer_core = { workspace = true }
 evanalyzer_app = { workspace = true }
 evanalyzer_cfg = { workspace = true }
