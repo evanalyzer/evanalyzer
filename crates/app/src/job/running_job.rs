@@ -11,13 +11,18 @@ use std::{
     thread::JoinHandle,
 };
 
-/// Cloneable handle to request cancellation of a [`RunningJob`] from another
-/// thread (a Cancel button, a Ctrl+C handler). The job stops after in-flight
-/// work finishes and [`RunningJob::wait`] returns `InternalErrors::Cancelled`.
+/// Cloneable handle to request cancellation of a [`RunningJob`] or
+/// [`RunningTraining`](crate::ai_learning::RunningTraining) from another thread (a Cancel
+/// button, a Ctrl+C handler). The job stops after in-flight work finishes and
+/// its `wait` returns `InternalErrors::Cancelled`.
 #[derive(Clone, Debug)]
 pub struct CancelHandle(Arc<AtomicBool>);
 
 impl CancelHandle {
+    pub(crate) fn new(flag: Arc<AtomicBool>) -> Self {
+        Self(flag)
+    }
+
     pub fn cancel(&self) {
         self.0.store(true, Ordering::SeqCst);
     }
@@ -59,7 +64,7 @@ impl RunningJob {
         Self {
             handle,
             events,
-            cancel: CancelHandle(cancel),
+            cancel: CancelHandle::new(cancel),
             output_path,
             parallelism,
             preview_objects,
@@ -92,19 +97,27 @@ impl RunningJob {
     /// edge) is returned as `InternalErrors::Internal` instead of being
     /// re-raised, so the calling worker survives to run the next job.
     pub fn wait(self) -> Result<JobOutput, InternalErrors> {
-        match self.handle.join() {
-            Ok(result) => result?,
-            Err(payload) => {
-                return Err(InternalErrors::Internal(format!(
-                    "Pipeline worker crashed: {}",
-                    panic_message(&payload)
-                )));
-            }
-        }
+        join_job(self.handle, "Pipeline worker")?;
         let preview_objects = self
             .preview_objects
             .map(|objects| objects.lock().unwrap_or_else(|e| e.into_inner()).clone());
         Ok(JobOutput { preview_objects })
+    }
+}
+
+/// Joins a job thread, returning a panic inside it as
+/// `InternalErrors::Internal("<what> crashed: <panic message>")` instead of
+/// re-raising it in the caller.
+pub(crate) fn join_job<T>(
+    handle: JoinHandle<Result<T, InternalErrors>>,
+    what: &str,
+) -> Result<T, InternalErrors> {
+    match handle.join() {
+        Ok(result) => result,
+        Err(payload) => Err(InternalErrors::Internal(format!(
+            "{what} crashed: {}",
+            panic_message(&payload)
+        ))),
     }
 }
 
@@ -124,11 +137,31 @@ mod tests {
 
     #[test]
     fn cancel_handle_clones_share_one_flag() {
-        let handle = CancelHandle(Arc::new(AtomicBool::new(false)));
+        let handle = CancelHandle::new(Arc::new(AtomicBool::new(false)));
         let clone = handle.clone();
         assert!(!handle.is_cancelled());
         clone.cancel();
         assert!(handle.is_cancelled());
+    }
+
+    #[test]
+    fn join_job_returns_a_panic_as_an_internal_error_naming_the_job() {
+        let handle = std::thread::spawn(|| -> Result<(), InternalErrors> { panic!("boom") });
+        match join_job(handle, "Test worker") {
+            Err(InternalErrors::Internal(msg)) => assert_eq!(msg, "Test worker crashed: boom"),
+            other => panic!("expected an Internal error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn join_job_passes_through_the_threads_own_result() {
+        let ok = std::thread::spawn(|| Ok::<_, InternalErrors>(7));
+        assert_eq!(join_job(ok, "Test worker").unwrap(), 7);
+        let cancelled = std::thread::spawn(|| Err::<(), _>(InternalErrors::Cancelled));
+        assert!(matches!(
+            join_job(cancelled, "Test worker"),
+            Err(InternalErrors::Cancelled)
+        ));
     }
 
     #[test]

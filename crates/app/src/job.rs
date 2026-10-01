@@ -6,6 +6,9 @@
 //! limits, breakpoints, panic handling) can't drift between the two. Front
 //! ends only consume the resulting [`ProgressEvent`](evanalyzer_core::ProgressEvent)
 //! stream and present it.
+//!
+//! [`CancelHandle`] and `join_job` are shared with classifier training
+//! ([`crate::ai_learning::start_training`]).
 mod analysis;
 mod preview;
 mod running_job;
@@ -14,6 +17,7 @@ pub use analysis::start_analysis;
 pub use preview::{
     MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, PreviewViewport, StartPreviewError, start_preview,
 };
+pub(crate) use running_job::join_job;
 pub use running_job::{CancelHandle, JobOutput, RunningJob};
 
 #[cfg(test)]

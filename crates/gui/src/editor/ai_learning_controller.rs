@@ -5,7 +5,8 @@ use crate::{
     DialogType, FeatureRowSlint, GlobalAppState, ObjectMetricRowSlint, TrainingImageRowSlint,
     TrainingObjectRowSlint,
 };
-use evanalyzer_app::ai_learning::{PixelTrainingParams, TrainingJob};
+use evanalyzer_app::ai_learning::{self, PixelTrainingParams};
+use evanalyzer_app::job::CancelHandle;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::ai_learning_object_settings::{
     AiLearningObjectFeatureSettings, ObjectMetric,
@@ -69,7 +70,7 @@ pub struct AiLearningController {
     /// The in-flight training job's cancel flag, if any - set right before
     /// spawning the background thread in `train`, read by the Cancel
     /// button's handler. Mirrors `PipelinesController::pipeline_cancel_flag`.
-    training_cancel_flag: std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
+    training_cancel_flag: std::sync::Mutex<Option<CancelHandle>>,
 }
 
 impl AiLearningController {
@@ -158,8 +159,8 @@ impl AiLearningController {
         let manager = self.clone();
         ui.global::<AiLearningState>()
             .on_cancel_training_clicked(move || {
-                if let Some(flag) = manager.training_cancel_flag.lock().unwrap().as_ref() {
-                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                if let Some(cancel) = manager.training_cancel_flag.lock().unwrap().as_ref() {
+                    cancel.cancel();
                 }
             });
 
@@ -411,7 +412,7 @@ impl AiLearningController {
 
     /// Builds an `AiLearningSettings` from the dialog's state, gathers
     /// training data from the project (every object with an assigned class -
-    /// see `evanalyzer_app::ai_learning::build_training_job`'s doc comment;
+    /// see `evanalyzer_app::ai_learning::start_training`'s doc comment;
     /// `training_images`/`training_objects` aren't needed here since labels
     /// already live on the project's objects via `assign_object_class`, not
     /// in Slint-only state), then runs training on a background thread and
@@ -481,29 +482,14 @@ impl AiLearningController {
             ..Default::default()
         };
 
-        let job = match evanalyzer_app::ai_learning::build_training_job(
-            &project_settings,
-            ai_settings,
-            pixel_params,
-        ) {
-            Ok(job) => job,
-            Err(e) => {
-                self.set_training_status(&e.to_string(), true);
-                return;
-            }
-        };
-
-        let has_training_data = match &job {
-            TrainingJob::Pixel(j) => !j.images.is_empty(),
-            TrainingJob::Object(j) => !j.objects.is_empty(),
-        };
-        if !has_training_data {
-            self.set_training_status(
-                "No labeled training data found - assign a class to at least one object before training.",
-                true,
-            );
-            return;
-        }
+        let training =
+            match ai_learning::start_training(&project_settings, ai_settings, pixel_params) {
+                Ok(training) => training,
+                Err(e) => {
+                    self.set_training_status(&e.to_string(), true);
+                    return;
+                }
+            };
 
         // Every pre-flight check passed - hand off to the background worker.
         // The dialog is never closed here (or on completion below) so the
@@ -511,18 +497,16 @@ impl AiLearningController {
         info!("Starting classifier training ('{model_name}')");
         self.set_training_status("Training started...", false);
         self.set_training_in_progress(true);
+        *self.training_cancel_flag.lock().unwrap() = Some(training.cancel_handle());
         let manager = self.clone();
         std::thread::spawn(move || {
-            let (handle, rx, cancel) = job.run_async();
-            *manager.training_cancel_flag.lock().unwrap() = Some(cancel);
-
-            // Captured here (rather than re-derived after `handle.join()`,
+            // Captured here (rather than re-derived after `wait()`,
             // which only returns the `SavedClassifier`/error, not the
             // backend stats) so the final banner below can report it - see
             // `describe_training_progress`'s doc comment for why `Finished`
             // doesn't update the live banner itself.
             let mut stats: Option<evanalyzer_core::TrainingStats> = None;
-            for event in rx {
+            for event in training.events() {
                 if let TrainingProgressEvent::Finished { stats: s } = event {
                     stats = Some(s);
                     continue;
@@ -532,15 +516,7 @@ impl AiLearningController {
                 }
             }
 
-            let result = match handle.join() {
-                Ok(result) => result,
-                Err(panic_payload) => {
-                    let msg = crate::helper::worker_supervisor::panic_message(&panic_payload);
-                    Err(evanalyzer_cfg::core_types::InternalErrors::Internal(
-                        format!("Training worker crashed: {msg}"),
-                    ))
-                }
-            };
+            let result = training.wait();
 
             let (message, is_error) = match result {
                 Ok(classifier) => {

@@ -6,6 +6,7 @@
 //! `evanalyzer_core::generate_analyze_job_from_project_settings` is the
 //! single bridge pipeline execution goes through.
 
+use crate::job::{CancelHandle, join_job};
 use evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, SegmentationClass};
 use evanalyzer_cfg::settings::ai_learning_settings::{
@@ -21,7 +22,7 @@ use evanalyzer_core::{
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::thread::JoinHandle;
 
 /// Extra parameters `PixelTrainingJob` needs that aren't part of the portable
@@ -44,26 +45,22 @@ impl Default for PixelTrainingParams {
     }
 }
 
-/// A runnable training job for either classifier mode, so callers don't need
-/// to match on `AiLearningClassifierSettings` themselves to call `run`/`run_async`.
-pub enum TrainingJob {
+/// A built training job for either classifier mode, so the rest of this
+/// module doesn't need to match on `AiLearningClassifierSettings` itself.
+enum TrainingJob {
     Pixel(PixelTrainingJob),
     Object(ObjectTrainingJob),
 }
 
 impl TrainingJob {
-    pub fn run(
-        &self,
-        progress: Sender<TrainingProgressEvent>,
-        cancel: Arc<AtomicBool>,
-    ) -> Result<SavedClassifier, InternalErrors> {
+    fn items(&self) -> TrainingItems {
         match self {
-            TrainingJob::Pixel(job) => job.run(progress, cancel),
-            TrainingJob::Object(job) => job.run(progress, cancel),
+            TrainingJob::Pixel(job) => TrainingItems::Images(job.images.len()),
+            TrainingJob::Object(job) => TrainingItems::Objects(job.objects.len()),
         }
     }
 
-    pub fn run_async(
+    fn run_async(
         self,
     ) -> (
         JoinHandle<Result<SavedClassifier, InternalErrors>>,
@@ -95,7 +92,7 @@ impl TrainingJob {
 /// already does this numeric passthrough the other way), so labeled objects
 /// are bridged into `SegmentationClass(id)` here rather than needing a
 /// second, parallel pixel-labeling UI.
-pub fn build_training_job(
+fn build_training_job(
     project: &ProjectSettings,
     settings: AiLearningSettings,
     pixel_params: PixelTrainingParams,
@@ -116,6 +113,107 @@ pub fn build_training_job(
             Ok(TrainingJob::Object(ObjectTrainingJob { settings, objects }))
         }
     }
+}
+
+/// What a training run learns from: labeled images (pixel classifier) or
+/// labeled objects (object classifier), with how many of them were found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrainingItems {
+    Images(usize),
+    Objects(usize),
+}
+
+impl TrainingItems {
+    pub fn count(&self) -> usize {
+        match self {
+            TrainingItems::Images(n) | TrainingItems::Objects(n) => *n,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum StartTrainingError {
+    NoTrainingData,
+    Failed(InternalErrors),
+}
+
+impl std::fmt::Display for StartTrainingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartTrainingError::NoTrainingData => write!(
+                f,
+                "No labeled training data found - assign a class to at least one object before training."
+            ),
+            StartTrainingError::Failed(internal_errors) => write!(f, "{internal_errors}"),
+        }
+    }
+}
+
+impl std::error::Error for StartTrainingError {}
+
+/// A classifier training run on its own thread. Drain
+/// [`events`](Self::events) until it closes, then call [`wait`](Self::wait)
+/// for the trained model - saving it is up to the caller
+/// ([`save_trained_model`]).
+pub struct RunningTraining {
+    handle: JoinHandle<Result<SavedClassifier, InternalErrors>>,
+    events: Receiver<TrainingProgressEvent>,
+    cancel: CancelHandle,
+    items: TrainingItems,
+}
+
+impl RunningTraining {
+    /// Progress events, in order. The channel closes once the training
+    /// thread exits, so `for event in training.events()` ends by itself.
+    pub fn events(&self) -> &Receiver<TrainingProgressEvent> {
+        &self.events
+    }
+
+    pub fn cancel_handle(&self) -> CancelHandle {
+        self.cancel.clone()
+    }
+
+    pub fn items(&self) -> TrainingItems {
+        self.items
+    }
+
+    /// Blocks until training finishes. A panic in the training thread is
+    /// returned as `InternalErrors::Internal`, a cancel as
+    /// `InternalErrors::Cancelled`.
+    pub fn wait(self) -> Result<SavedClassifier, InternalErrors> {
+        join_job(self.handle, "Training worker")
+    }
+}
+
+/// Gathers the project's labeled training data for `settings`' classifier
+/// mode (see [`build_training_job`]) and starts training on it. Fails up
+/// front with [`StartTrainingError::NoTrainingData`] instead of starting a
+/// run that can only fail later with a less helpful "cannot train on zero
+/// samples".
+pub fn start_training(
+    project: &ProjectSettings,
+    settings: AiLearningSettings,
+    pixel_params: PixelTrainingParams,
+) -> Result<RunningTraining, StartTrainingError> {
+    let job = build_training_job(project, settings, pixel_params);
+    let ret = match job {
+        Ok(job) => {
+            let items = job.items();
+            if items.count() == 0 {
+                return Err(StartTrainingError::NoTrainingData);
+            }
+
+            let (handle, events, cancel) = job.run_async();
+            Ok(RunningTraining {
+                handle,
+                events,
+                cancel: CancelHandle::new(cancel),
+                items,
+            })
+        }
+        Err(error) => Err(StartTrainingError::Failed(error)),
+    };
+    ret
 }
 
 /// `project.images.list` is keyed by path *relative* to `project.images.root`
@@ -305,6 +403,10 @@ pub fn save_trained_model(
 mod tests {
     use super::*;
     use evanalyzer_cfg::core_types::{ObjectId, SegmentationClass};
+    use evanalyzer_cfg::settings::ai_learning_object_settings::{
+        AiLearningObjectFeatureSettings, ObjectMetric,
+    };
+    use evanalyzer_cfg::settings::ai_learning_settings::AiLearningBackendSettings;
     use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
     use std::collections::HashSet;
@@ -730,5 +832,93 @@ mod tests {
     fn model_output_path_uses_the_models_subfolder_and_evamodel_extension() {
         let path = model_output_path(Path::new("/proj"), "my-model");
         assert_eq!(path, PathBuf::from("/proj/models/my-model.evamodel"));
+    }
+
+    // -- start_training ---------------------------------------------------
+
+    fn two_class_object_settings() -> AiLearningSettings {
+        AiLearningSettings {
+            schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
+            meta: Default::default(),
+            backend: AiLearningBackendSettings::RandomForest(Default::default()),
+            classifier: AiLearningClassifierSettings::Object {
+                feature_spec: AiLearningObjectFeatureSettings {
+                    metrics: vec![ObjectMetric::Area],
+                },
+                class_labels: vec![
+                    ObjectClassLabel {
+                        class: ObjectClass::Valid(1),
+                        name: "A".into(),
+                    },
+                    ObjectClassLabel {
+                        class: ObjectClass::Valid(2),
+                        name: "B".into(),
+                    },
+                ],
+            },
+        }
+    }
+
+    /// Object training reads only already-computed metrics, so no image
+    /// files are needed.
+    fn project_with_labeled_objects(classes: &[u32]) -> ProjectSettings {
+        let mut series = SeriesSettings::default();
+        for (i, class) in classes.iter().enumerate() {
+            series.objects.push(ObjectMetricSettings {
+                area: 10 + 1000 * i,
+                object_class: [ObjectClass::Valid(*class)].into(),
+                ..Default::default()
+            });
+        }
+        let mut entry = ImageEntry::default();
+        entry.series.insert(0, series);
+        let mut project = ProjectSettings::default();
+        project.images.list.insert(PathBuf::from("img.tif"), entry);
+        project
+    }
+
+    #[test]
+    fn start_training_without_labeled_objects_fails_up_front() {
+        let result = start_training(
+            &ProjectSettings::default(),
+            two_class_object_settings(),
+            PixelTrainingParams::default(),
+        );
+        assert!(matches!(result, Err(StartTrainingError::NoTrainingData)));
+    }
+
+    #[test]
+    fn start_training_reports_its_items_and_trains_a_model() {
+        let training = start_training(
+            &project_with_labeled_objects(&[1, 2]),
+            two_class_object_settings(),
+            PixelTrainingParams::default(),
+        )
+        .unwrap();
+        assert_eq!(training.items(), TrainingItems::Objects(2));
+
+        let events: Vec<_> = training.events().iter().collect();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TrainingProgressEvent::Finished { .. }))
+        );
+        training.wait().expect("two labeled objects should train");
+    }
+
+    #[test]
+    fn training_cancelled_right_away_never_surfaces_a_different_error() {
+        let training = start_training(
+            &project_with_labeled_objects(&[1, 2]),
+            two_class_object_settings(),
+            PixelTrainingParams::default(),
+        )
+        .unwrap();
+        training.cancel_handle().cancel();
+        for _ in training.events() {}
+        match training.wait() {
+            Ok(_) | Err(InternalErrors::Cancelled) => {}
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
     }
 }

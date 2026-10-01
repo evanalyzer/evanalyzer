@@ -1,6 +1,6 @@
 use crate::args::{TrainClassifierArgs, ZStackHandlingArg};
 use evanalyzer_app::ai_learning::{
-    PixelTrainingParams, TrainingJob, build_training_job, save_trained_model,
+    PixelTrainingParams, StartTrainingError, TrainingItems, save_trained_model, start_training,
 };
 use evanalyzer_app::extensions::project_ext::load_project;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -9,7 +9,6 @@ use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use evanalyzer_core::TrainingProgressEvent;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 pub fn run(args: TrainClassifierArgs) -> Result<(), InternalErrors> {
@@ -52,38 +51,33 @@ pub fn run(args: TrainClassifierArgs) -> Result<(), InternalErrors> {
         z_stack_handling: to_z_stack_handling(args.z_stack_handling),
     };
 
-    let job = build_training_job(&project.settings, settings, pixel_params)?;
-    let (item_kind, item_count) = match &job {
-        TrainingJob::Pixel(j) => ("labeled image(s)", j.images.len()),
-        TrainingJob::Object(j) => ("labeled object(s)", j.objects.len()),
+    let training =
+        start_training(&project.settings, settings, pixel_params).map_err(|e| match e {
+            StartTrainingError::NoTrainingData => InternalErrors::InvalidArgument(e.to_string()),
+            StartTrainingError::Failed(e) => e,
+        })?;
+    let (item_kind, item_count) = match training.items() {
+        TrainingItems::Images(n) => ("labeled image(s)", n),
+        TrainingItems::Objects(n) => ("labeled object(s)", n),
     };
-    if item_count == 0 {
-        return Err(InternalErrors::InvalidArgument(
-            "No labeled training data found in the project - assign a class to at least one object first".into(),
-        ));
-    }
 
     println!("Project:   {}", args.project.display());
     println!("Settings:  {}", args.settings.display());
     println!("Training:  {item_count} {item_kind}");
 
     let start = Instant::now();
-    let (handle, rx, cancel) = job.run_async();
-
+    let cancel = training.cancel_handle();
     if let Err(e) = ctrlc::set_handler(move || {
         eprintln!("\nCancelling...");
-        cancel.store(true, Ordering::SeqCst);
+        cancel.cancel();
     }) {
         eprintln!("Warning: could not install Ctrl+C handler: {e}");
     }
 
-    for event in rx {
+    for event in training.events() {
         print_training_progress(event);
     }
-
-    let classifier = handle
-        .join()
-        .map_err(|_| InternalErrors::Internal("Training worker thread panicked".into()))??;
+    let classifier = training.wait()?;
 
     let output_path = save_trained_model(&classifier, &project_dir, &model_name)?;
 
