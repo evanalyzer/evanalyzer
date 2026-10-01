@@ -18,7 +18,8 @@ use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use evanalyzer_core::{
-    ObjectTrainingJob, PixelTrainingJob, SavedClassifier, TrainingImage, save_classifier_to_file,
+    ObjectTrainingJob, PixelTrainingJob, SavedClassifier, TrainingImage, load_classifier_from_file,
+    save_classifier_to_file,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -152,6 +153,10 @@ impl std::fmt::Display for StartTrainingError {
 
 impl std::error::Error for StartTrainingError {}
 
+/// A trained classifier, ready for [`save_trained_model`]. Opaque so front
+/// ends never depend on `evanalyzer_core`'s model representation.
+pub struct TrainedClassifier(SavedClassifier);
+
 /// A classifier training run on its own thread. Drain
 /// [`events`](Self::events) until it closes, then call [`wait`](Self::wait)
 /// for the trained model - saving it is up to the caller
@@ -181,8 +186,8 @@ impl RunningTraining {
     /// Blocks until training finishes. A panic in the training thread is
     /// returned as `InternalErrors::Internal`, a cancel as
     /// `InternalErrors::Cancelled`.
-    pub fn wait(self) -> Result<SavedClassifier, InternalErrors> {
-        join_job(self.handle, "Training worker")
+    pub fn wait(self) -> Result<TrainedClassifier, InternalErrors> {
+        join_job(self.handle, "Training worker").map(TrainedClassifier)
     }
 }
 
@@ -391,13 +396,21 @@ pub fn model_output_path(project_dir: &Path, model_name: &str) -> PathBuf {
 /// Persists a trained classifier under `<project_dir>/models/<model_name>`,
 /// creating the `models` directory if needed. Returns the path written to.
 pub fn save_trained_model(
-    classifier: &SavedClassifier,
+    classifier: &TrainedClassifier,
     project_dir: &Path,
     model_name: &str,
 ) -> Result<PathBuf, InternalErrors> {
     let path = model_output_path(project_dir, model_name);
-    save_classifier_to_file(classifier, &path)?;
+    save_classifier_to_file(&classifier.0, &path)?;
     Ok(path)
+}
+
+/// Reads only the settings (metadata, backend, classes, features) a saved
+/// model file was trained with - all front ends need for info dialogs,
+/// class-mapping rows and "retrain from existing model", without exposing
+/// the fitted model itself.
+pub fn load_classifier_settings(path: &Path) -> Result<AiLearningSettings, InternalErrors> {
+    load_classifier_from_file(path).map(|saved| saved.settings)
 }
 
 #[cfg(test)]
@@ -921,5 +934,34 @@ mod tests {
             Ok(_) | Err(InternalErrors::Cancelled) => {}
             Err(e) => panic!("unexpected error: {e:?}"),
         }
+    }
+
+    #[test]
+    fn a_saved_model_reads_back_the_settings_it_was_trained_with() {
+        let settings = two_class_object_settings();
+        let training = start_training(
+            &project_with_labeled_objects(&[1, 2]),
+            settings.clone(),
+            PixelTrainingParams::default(),
+        )
+        .unwrap();
+        for _ in training.events() {}
+        let classifier = training.wait().expect("two labeled objects should train");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = save_trained_model(&classifier, dir.path(), "model").unwrap();
+
+        // `AiLearningSettings` has no `PartialEq`; its serialized form is
+        // what the model file stores anyway.
+        assert_eq!(
+            serde_json::to_value(load_classifier_settings(&path).unwrap()).unwrap(),
+            serde_json::to_value(&settings).unwrap()
+        );
+    }
+
+    #[test]
+    fn load_classifier_settings_reports_a_missing_file_as_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_classifier_settings(&dir.path().join("missing.model")).is_err());
     }
 }

@@ -338,8 +338,8 @@ impl AiLearningController {
             return;
         };
 
-        let saved = match evanalyzer_core::load_classifier_from_file(&path) {
-            Ok(saved) => saved,
+        let loaded = match ai_learning::load_classifier_settings(&path) {
+            Ok(loaded) => loaded,
             Err(e) => {
                 self.set_training_status(
                     &format!("Could not load '{}': {e}", path.display()),
@@ -352,17 +352,17 @@ impl AiLearningController {
         let state = ui.global::<AiLearningState>();
         let mut settings = state.get_settings();
         settings.loaded_model_path = path.to_string_lossy().to_string().into();
-        settings.model_name = if saved.settings.meta.name.trim().is_empty() {
+        settings.model_name = if loaded.meta.name.trim().is_empty() {
             path.file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default()
                 .into()
         } else {
-            saved.settings.meta.name.clone().into()
+            loaded.meta.name.clone().into()
         };
-        apply_loaded_backend_settings(&mut settings, &saved.settings.backend);
+        apply_loaded_backend_settings(&mut settings, &loaded.backend);
 
-        match &saved.settings.classifier {
+        match &loaded.classifier {
             AiLearningClassifierSettings::Pixel { feature_spec, .. } => {
                 settings.mode = 0;
                 let rows: Vec<FeatureRowSlint> = feature_spec

@@ -8,6 +8,7 @@ pub mod job;
 mod project_owner;
 mod results;
 pub mod settings;
+pub mod system;
 pub mod templates;
 
 pub use frontend::Frontend;

@@ -10,6 +10,7 @@ use crate::{
     PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
+use evanalyzer_app::ai_learning::load_classifier_settings;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
@@ -18,7 +19,7 @@ use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::core_types::SegmentationClass;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
 use evanalyzer_cfg::settings::ai_learning_settings::{
-    AiLearningClassifierSettings, ObjectClassLabel, PixelClassLabel,
+    AiLearningClassifierSettings, AiLearningSettings, ObjectClassLabel, PixelClassLabel,
 };
 use evanalyzer_cfg::settings::images_settings::{
     ImageEntry, ImageSettings, TStackHandling, TStackSettings,
@@ -1555,10 +1556,10 @@ impl PipelinesController {
             }
         };
 
-        let (title, message) = match evanalyzer_core::load_classifier_from_file(&model_path) {
-            Ok(saved) => (
+        let (title, message) = match load_classifier_settings(&model_path) {
+            Ok(settings) => (
                 "AI Classifier Model".to_string(),
-                format_classifier_model_info(&saved),
+                format_classifier_model_info(&settings),
             ),
             Err(e) => (
                 "Could not load model".to_string(),
@@ -2296,8 +2297,8 @@ fn load_pixel_classifier_class_labels(model_path: &Path) -> Option<Vec<PixelClas
     if model_path.as_os_str().is_empty() {
         return None;
     }
-    let saved = evanalyzer_core::load_classifier_from_file(model_path).ok()?;
-    let AiLearningClassifierSettings::Pixel { class_labels, .. } = saved.settings.classifier else {
+    let settings = load_classifier_settings(model_path).ok()?;
+    let AiLearningClassifierSettings::Pixel { class_labels, .. } = settings.classifier else {
         return None;
     };
     Some(class_labels)
@@ -2340,9 +2341,8 @@ fn load_ai_object_classifier_class_labels(model_path: &Path) -> Option<Vec<Objec
     if model_path.as_os_str().is_empty() {
         return None;
     }
-    let saved = evanalyzer_core::load_classifier_from_file(model_path).ok()?;
-    let AiLearningClassifierSettings::Object { class_labels, .. } = saved.settings.classifier
-    else {
+    let settings = load_classifier_settings(model_path).ok()?;
+    let AiLearningClassifierSettings::Object { class_labels, .. } = settings.classifier else {
         return None;
     };
     Some(class_labels)
@@ -2379,10 +2379,10 @@ fn reconcile_ai_object_classifier_mapping(settings: &mut AiObjectClassifierSetti
         .collect();
 }
 
-/// Formats a `SavedClassifier`'s metadata + declared classes for the
+/// Formats a saved model's metadata + declared classes for the
 /// PixelClassifier/AiObjectClassifier step's info dialog.
-fn format_classifier_model_info(saved: &evanalyzer_core::SavedClassifier) -> String {
-    let meta = &saved.settings.meta;
+fn format_classifier_model_info(settings: &AiLearningSettings) -> String {
+    let meta = &settings.meta;
     let mut out = format!("{}\n", meta.name);
     if !meta.short_description.is_empty() {
         out.push_str(&format!("{}\n", meta.short_description));
@@ -2393,7 +2393,7 @@ fn format_classifier_model_info(saved: &evanalyzer_core::SavedClassifier) -> Str
     if !meta.authors.is_empty() {
         out.push_str(&format!("\nAuthor: {}\n", meta.authors.join(", ")));
     }
-    match &saved.settings.classifier {
+    match &settings.classifier {
         AiLearningClassifierSettings::Pixel { class_labels, .. } => {
             out.push_str("\nClasses:\n");
             for label in class_labels {
@@ -2837,25 +2837,15 @@ mod tests {
     fn saved_classifier_with(
         classifier: AiLearningClassifierSettings,
         meta: evanalyzer_cfg::settings::meta_data::MetaData,
-    ) -> evanalyzer_core::SavedClassifier {
+    ) -> AiLearningSettings {
         use evanalyzer_cfg::settings::ai_learning_settings::{
-            AiLearningBackendSettings, AiLearningSettings, RandomForestSettings,
+            AiLearningBackendSettings, RandomForestSettings,
         };
-        let model = evanalyzer_core::ai_learning::model::random_forest::fit_random_forest(
-            &[vec![0.0], vec![1.0]],
-            &[0, 1],
-            &RandomForestSettings::default(),
-        )
-        .expect("fitting a two-row random forest never fails");
-        evanalyzer_core::SavedClassifier {
-            version: evanalyzer_core::ai_learning::model::CURRENT_SAVED_CLASSIFIER_VERSION,
-            classifier: model,
-            settings: AiLearningSettings {
-                schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-                meta,
-                backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
-                classifier,
-            },
+        AiLearningSettings {
+            schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
+            meta,
+            backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
+            classifier,
         }
     }
 

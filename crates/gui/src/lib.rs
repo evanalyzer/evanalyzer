@@ -391,7 +391,7 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
 /// hundreds of ms), and nobody looks at the About dialog in the first instant
 /// after launch, so there's no reason to make the window wait on it.
 fn load_about_dialog_information(ui: &AppWindow) {
-    let (cpu_cores, total_ram_bytes) = evanalyzer_core::cpu_ram_diagnostics();
+    let (cpu_cores, total_ram_bytes) = evanalyzer_app::system::cpu_ram_diagnostics();
     let info = ui.global::<AppInfoState>();
     info.set_version(env!("CARGO_PKG_VERSION").into());
     info.set_cpu_cores(cpu_cores as i32);
@@ -424,7 +424,7 @@ fn load_about_dialog_information(ui: &AppWindow) {
 
     let ui_weak = ui.as_weak();
     std::thread::spawn(move || {
-        let cuda_available = evanalyzer_core::cuda_is_available();
+        let cuda_available = evanalyzer_app::system::cuda_is_available();
         slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<AppInfoState>()
