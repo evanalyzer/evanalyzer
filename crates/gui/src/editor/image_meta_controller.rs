@@ -129,8 +129,7 @@ impl ImageMetaController {
             return Ok(());
         };
 
-        let reader = self.app_state.get_or_create_reader(&path)?;
-        let image_meta = reader.get_image_meta().clone();
+        let image_meta = self.app_state.get_image_meta(&path)?;
         let ui_weak = self.ui.clone();
 
         if let Err(e) = slint::invoke_from_event_loop(move || {
@@ -427,7 +426,7 @@ mod tests {
             ImageMetaController::new(slint::Weak::default(), ui_state, viewport_controller);
 
         // `project_with_one_image()`'s "img.tif" doesn't exist on disk -
-        // `get_or_create_reader` must surface that as an `Err`, not panic.
+        // `get_image_meta` must surface that as an `Err`, not panic.
         assert!(controller.sync_image_meta_to_slint().is_err());
     }
 }

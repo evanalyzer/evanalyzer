@@ -2,10 +2,10 @@
 
 pub use evanalyzer_gui_slint::*;
 
+use evanalyzer_app::images::ImageMeta;
 use evanalyzer_app::{AppHandle, Frontend, ProjectOwner, ProjectWithRuntime, ReaderPool};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
-use evanalyzer_core::ImageReader;
 use slint::ComponentHandle;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -210,12 +210,10 @@ impl UiState {
         .ok();
     }
 
-    /// Returns or creates a cached image reader for the given path.
-    pub fn get_or_create_reader(
-        &self,
-        new_path: &PathBuf,
-    ) -> Result<Arc<ImageReader>, InternalErrors> {
-        self.app.get_or_create_reader(new_path)
+    /// Returns the metadata of the image at the given path, opening (and
+    /// caching) its readers if needed.
+    pub fn get_image_meta(&self, new_path: &PathBuf) -> Result<ImageMeta, InternalErrors> {
+        self.app.get_image_meta(new_path)
     }
 
     /// Returns or creates a cached pool of readers for the given path, for

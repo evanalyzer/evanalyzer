@@ -1,14 +1,16 @@
 // app/src/project_owner.rs
 
 use evanalyzer_cfg::{
-    core_types::{InternalErrors, ObjectClass, ObjectId},
+    core_types::{ImageTile, InternalErrors, ObjectClass, ObjectId, ZProjection},
     settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
 };
-use evanalyzer_core::{ImageReader, ReadMode, recommended_reader_pool_size};
+use evanalyzer_core::{
+    ImageChannel, ImageMeta, ImageReader, ReadMode, recommended_reader_pool_size,
+};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::{
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, RangeInclusive},
     path::PathBuf,
     sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
@@ -174,8 +176,8 @@ impl ProjectOwner {
 /// channels/Z-slices can be read truly in parallel instead of serializing
 /// through one reader's internal `Mutex` (see `evanalyzer_core::ImageReader`)
 /// - one reader is safe, not concurrent. This is also `AppHandle`'s *only*
-/// reader cache - `get_or_create_reader` is a thin wrapper returning
-/// `pool[0]`, not a separate cache - see that method's doc comment for why.
+/// reader cache - `get_image_meta` reads from `pool[0]`, not a separate
+/// cache - see that method's doc comment for why.
 ///
 /// Built as the primary reader (unavoidable - channel count can only be
 /// learned from a full parse) plus exactly `channel_count - 1` more, capped
@@ -211,8 +213,33 @@ pub struct ReaderPool {
 }
 
 impl ReaderPool {
-    pub fn readers(&self) -> &[Arc<ImageReader>] {
-        &self.readers
+    /// The image's metadata (series, pyramid levels, channels), parsed once
+    /// when the pool was built.
+    pub fn meta(&self) -> &ImageMeta {
+        self.readers[0].get_image_meta()
+    }
+
+    /// Reads one tile of every channel of `series` at `resolution_idx`,
+    /// spreading the channels/Z-slices across the pool's readers.
+    pub fn read_tile(
+        &self,
+        series: i32,
+        resolution_idx: i32,
+        z_projection: ZProjection,
+        z_range: &Option<RangeInclusive<i32>>,
+        t_stack: i32,
+        tile: &ImageTile,
+    ) -> Result<Vec<ImageChannel>, InternalErrors> {
+        ImageReader::read_image_tile_combined_pooled(
+            &self.readers,
+            series,
+            resolution_idx,
+            z_projection,
+            z_range,
+            t_stack,
+            None,
+            tile,
+        )
     }
 }
 
@@ -224,8 +251,8 @@ pub struct AppHandle {
     project: Arc<RwLock<ProjectWithRuntime>>,
 
     /// Per-handle reader pool cache - the only reader cache `AppHandle` has,
-    /// used both by callers that want a single reader (`get_or_create_reader`
-    /// returns `pool[0]`) and callers that read multiple channels/Z-slices in
+    /// used both by callers that only want metadata (`get_image_meta` reads
+    /// `pool[0]`) and callers that read multiple channels/Z-slices in
     /// parallel (`get_or_create_reader_pool`, see [`ReaderPool`]). A single
     /// shared cache guarantees a given image path is only ever parsed once
     /// per selection, however many callers ask for it concurrently.
@@ -277,24 +304,21 @@ impl AppHandle {
         Ok((warnings, legacy_image_folder))
     }
 
-    /// Returns or creates an image reader for the given path. Thin wrapper
-    /// around [`Self::get_or_create_reader_pool`], returning `pool[0]` -
-    /// see that method's doc comment and [`ReaderPool`]'s for why this isn't
-    /// a separate cache: a single caller needing just one reader still goes
-    /// through the same single build/cache as pool callers, so a given path
-    /// is never parsed more than once per selection regardless of how many
-    /// callers ask for it, and simultaneously.
-    pub fn get_or_create_reader(
-        &self,
-        new_path: &PathBuf,
-    ) -> Result<Arc<ImageReader>, InternalErrors> {
+    /// Returns the metadata of the image at `new_path`. Thin wrapper around
+    /// [`Self::get_or_create_reader_pool`] - see that method's doc comment
+    /// and [`ReaderPool`]'s for why this isn't a separate cache: a caller
+    /// needing only metadata still goes through the same single build/cache
+    /// as pool callers, so a given path is never parsed more than once per
+    /// selection regardless of how many callers ask for it, and
+    /// simultaneously.
+    pub fn get_image_meta(&self, new_path: &PathBuf) -> Result<ImageMeta, InternalErrors> {
         let pool = self.get_or_create_reader_pool(new_path)?;
-        Ok(Arc::clone(&pool.readers()[0]))
+        Ok(pool.meta().clone())
     }
 
     /// Returns or creates a pool of readers for the given path, for callers
-    /// that read multiple channels/Z-slices in parallel, or just want a
-    /// single reader (see [`Self::get_or_create_reader`]). Reuses the
+    /// that read multiple channels/Z-slices in parallel, or just want
+    /// its metadata (see [`Self::get_image_meta`]). Reuses the
     /// existing pool if the path has not changed. See [`ReaderPool`]'s doc
     /// comment for why this builds exactly as many readers as the image
     /// needs (primary first, then the rest capped to real channel count),

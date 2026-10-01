@@ -12,9 +12,7 @@ use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
 use evanalyzer_app::extensions::object_ext::ObjectExt;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_app::images::ImageContainer;
-use evanalyzer_core::Object;
-use kornia_image::ImageSize;
+use evanalyzer_app::images::{ImageContainer, object_from_mask};
 use log::warn;
 use slint::ComponentHandle;
 use slint::Model;
@@ -450,20 +448,16 @@ impl ViewPortObjectController {
         };
 
         if let Some((_, selected_channel)) = data_tmp.get(idx as usize) {
-            let object = Object::from_mask(
-                &ImageSize {
-                    width: read_context.full_image_w,
-                    height: read_context.full_image_h,
-                },
+            let object = object_from_mask(
+                read_context.full_image_w,
+                read_context.full_image_h,
                 mask_data,
                 bbox,
                 selected_channel,
                 data_tmp.as_slice(),
                 object_class,
             );
-            self.app_state
-                .get_project_write()
-                .add_object(&object.to_object_settings());
+            self.app_state.get_project_write().add_object(&object);
             self.app_state.mark_dirty();
         }
     }
@@ -477,10 +471,9 @@ mod tests {
     use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project};
     use crate::editor::viewport_cache::{ReadContext, ViewportCache};
     use bitvec::prelude::*;
-    use evanalyzer_app::images::ManagedImage;
+    use evanalyzer_app::images::{ImageChannel, ManagedImage};
     use evanalyzer_cfg::core_types::ObjectId;
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
-    use evanalyzer_core::ImageChannel;
     use kornia_apriltag::utils::Point2d;
     use kornia_image::Image;
     use kornia_image::allocator::CpuAllocator;

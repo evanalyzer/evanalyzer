@@ -8,10 +8,9 @@ use crate::{
     },
 };
 use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_app::images::ImageContainer;
+use evanalyzer_app::images::{ImageChannel, ImageContainer};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
-use evanalyzer_core::ImageChannel;
 use log::{debug, info, warn};
 use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::sync::{

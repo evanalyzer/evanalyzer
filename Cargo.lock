@@ -2688,6 +2688,7 @@ dependencies = [
  "human-sort",
  "image",
  "indexmap",
+ "kornia-image",
  "log",
  "pathdiff",
  "rayon",

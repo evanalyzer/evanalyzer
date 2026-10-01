@@ -14,6 +14,7 @@ log = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true }
 bitvec = { workspace = true }
+kornia-image = { workspace = true }
 pathdiff = { workspace = true }
 rayon = { workspace = true }
 human-sort ={ workspace = true }

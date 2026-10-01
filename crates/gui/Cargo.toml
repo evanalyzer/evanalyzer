@@ -7,9 +7,6 @@ license = { workspace = true }
 publish = { workspace = true }
 
 [dependencies]
-# Image viewer only (ImageReader, ImageChannel, PyramidInfo, Object::from_mask).
-# TODO(remote-control): remove once image access goes through evanalyzer_app.
-#evanalyzer_core = { workspace = true }
 evanalyzer_app = { workspace = true }
 evanalyzer_cfg = { workspace = true }
 evanalyzer_gui_slint = { path = "ui" }

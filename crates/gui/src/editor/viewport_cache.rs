@@ -2,11 +2,10 @@ use crate::UiState;
 use crate::editor::viewport_controller::ViewportState;
 use clru::{CLruCache, WeightScale};
 use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_app::images::{ImageContainer, ManagedImage};
+use evanalyzer_app::images::{ImageChannel, ImageContainer, ManagedImage, PyramidInfo};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::core_types::{ImageTile, ZProjection};
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
-use evanalyzer_core::{ImageChannel, ImageReader, PyramidInfo};
 use kornia_image::allocator::CpuAllocator;
 use kornia_image::{Image, InterpolationMode};
 use kornia_imgproc::resize;
@@ -280,7 +279,7 @@ impl ViewportCache {
         };
 
         let pool = self.app_state.get_or_create_reader_pool(&path)?;
-        let meta = pool.readers()[0].get_image_meta();
+        let meta = pool.meta();
         let s_info = meta
             .series
             .get(&series)
@@ -495,14 +494,12 @@ impl ViewportCache {
 
         // Read image from disk - channels/Z-slices are read in parallel
         // across the reader pool instead of one at a time.
-        let mut loaded = ImageReader::read_image_tile_combined_pooled(
-            pool.readers(),
+        let mut loaded = pool.read_tile(
             series,
             ctx.res_idx,
             z_projection,
             &z_range,
             t_stack,
-            None,
             &ImageTile {
                 offset_x: ctx.read_off_x,
                 offset_y: ctx.read_off_y,
