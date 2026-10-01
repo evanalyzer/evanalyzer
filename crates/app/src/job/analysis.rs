@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// concurrent workers as it has cores. The per-worker RAM estimate is sized
 /// to the images actually being analyzed, not a flat guess - see
 /// `JobExecutor::estimate_ram_per_worker_bytes`.
-pub fn start_analysis(
+pub(crate) fn start_analysis(
     settings: ProjectSettings,
     project_path: PathBuf,
     job_name: Option<String>,

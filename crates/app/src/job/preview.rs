@@ -5,6 +5,7 @@ use evanalyzer_cfg::{
 };
 use evanalyzer_core::PreviewTileSettings;
 use log::{error, info};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Previews covering more tiles than this are rejected: at low zoom the
@@ -14,7 +15,7 @@ use std::path::PathBuf;
 pub const MAX_PREVIEW_VISIBLE_TILES: usize = 4;
 
 /// The visible area a preview is restricted to, in screen pixels.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct PreviewViewport {
     /// Current pan offset (screen pixels from the image's top-left corner).
     pub offset_x: f32,
@@ -25,6 +26,7 @@ pub struct PreviewViewport {
     pub zoom: f32,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PreviewRequest {
     pub settings: ProjectSettings,
     pub project_path: PathBuf,
@@ -53,7 +55,7 @@ impl From<InternalErrors> for StartPreviewError {
 /// Starts a preview run restricted to the tiles visible in `viewport`. The
 /// final merged objects are returned by [`RunningJob::wait`] in
 /// [`JobOutput::preview_objects`](super::JobOutput::preview_objects).
-pub fn start_preview(request: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
+pub(crate) fn start_preview(request: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
     let (mut job, out_objects) = evanalyzer_core::generate_preview_job_from_project_settings(
         request.settings,
         request.project_path,

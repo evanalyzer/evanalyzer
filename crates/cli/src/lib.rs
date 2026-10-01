@@ -8,16 +8,19 @@ mod table;
 
 pub use args::CliCommand;
 
+use evanalyzer_app::backend::Backend;
 use evanalyzer_cfg::core_types::InternalErrors;
 
-pub fn run(command: CliCommand) -> Result<(), InternalErrors> {
+/// Runs `command`. Analysis and training run on `backend` (local or a
+/// server); the other commands only read local files.
+pub fn run(command: CliCommand, backend: &dyn Backend) -> Result<(), InternalErrors> {
     match command {
-        CliCommand::Analyze(args) => commands::analyze::run(args),
+        CliCommand::Analyze(args) => commands::analyze::run(args, backend),
         CliCommand::ProjectInfo(args) => commands::project::run(args),
         CliCommand::Validate(args) => commands::project::run_validate(args),
         CliCommand::Export(args) => commands::export::run(args),
         CliCommand::View(args) => commands::view::run(args),
         CliCommand::Columns(args) => commands::view::run_columns(args),
-        CliCommand::TrainClassifier(args) => commands::train_classifier::run(args),
+        CliCommand::TrainClassifier(args) => commands::train_classifier::run(args, backend),
     }
 }

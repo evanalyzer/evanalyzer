@@ -21,6 +21,7 @@ use evanalyzer_core::{
     ObjectTrainingJob, PixelTrainingJob, SavedClassifier, TrainingImage, load_classifier_from_file,
     save_classifier_to_file,
 };
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -30,7 +31,7 @@ use std::thread::JoinHandle;
 /// Extra parameters `PixelTrainingJob` needs that aren't part of the portable
 /// `AiLearningSettings` model descriptor - object training needs none of
 /// these, since it reads no images (see `ObjectTrainingJob`'s doc comment).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PixelTrainingParams {
     pub channel: i32,
     pub t_stack: i32,
@@ -119,7 +120,7 @@ fn build_training_job(
 
 /// What a training run learns from: labeled images (pixel classifier) or
 /// labeled objects (object classifier), with how many of them were found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrainingItems {
     Images(usize),
     Objects(usize),
@@ -157,18 +158,53 @@ impl std::error::Error for StartTrainingError {}
 /// ends never depend on `evanalyzer_core`'s model representation.
 pub struct TrainedClassifier(SavedClassifier);
 
-/// A classifier training run on its own thread. Drain
+impl TrainedClassifier {
+    /// Serialized form for sending a model trained elsewhere (e.g. on a
+    /// server) - the same JSON the model file stores.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, InternalErrors> {
+        serde_json::to_vec(&self.0)
+            .map_err(|e| InternalErrors::Internal(format!("failed to serialize classifier: {e}")))
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, InternalErrors> {
+        serde_json::from_slice(bytes)
+            .map(TrainedClassifier)
+            .map_err(|e| InternalErrors::Internal(format!("failed to read classifier: {e}")))
+    }
+}
+
+/// Blocks until a training run is over and yields the model - a local run
+/// joins its thread, a remote one waits for the server's final message.
+pub type TrainingCompletion = Box<dyn FnOnce() -> Result<TrainedClassifier, InternalErrors> + Send>;
+
+/// A classifier training run, wherever it runs. Drain
 /// [`events`](Self::events) until it closes, then call [`wait`](Self::wait)
 /// for the trained model - saving it is up to the caller
 /// ([`save_trained_model`]).
 pub struct RunningTraining {
-    handle: JoinHandle<Result<SavedClassifier, InternalErrors>>,
     events: Receiver<TrainingProgressEvent>,
     cancel: CancelHandle,
     items: TrainingItems,
+    completion: TrainingCompletion,
 }
 
 impl RunningTraining {
+    /// Assembles a training run executed by some other backend (e.g. on a
+    /// server). The `events` channel must close once training is over.
+    pub fn from_parts(
+        events: Receiver<TrainingProgressEvent>,
+        cancel: CancelHandle,
+        items: TrainingItems,
+        completion: TrainingCompletion,
+    ) -> Self {
+        Self {
+            events,
+            cancel,
+            items,
+            completion,
+        }
+    }
+
     /// Progress events, in order. The channel closes once the training
     /// thread exits, so `for event in training.events()` ends by itself.
     pub fn events(&self) -> &Receiver<TrainingProgressEvent> {
@@ -183,11 +219,11 @@ impl RunningTraining {
         self.items
     }
 
-    /// Blocks until training finishes. A panic in the training thread is
-    /// returned as `InternalErrors::Internal`, a cancel as
+    /// Blocks until training finishes. A panic in a local training thread
+    /// is returned as `InternalErrors::Internal`, a cancel as
     /// `InternalErrors::Cancelled`.
     pub fn wait(self) -> Result<TrainedClassifier, InternalErrors> {
-        join_job(self.handle, "Training worker").map(TrainedClassifier)
+        (self.completion)()
     }
 }
 
@@ -196,7 +232,7 @@ impl RunningTraining {
 /// front with [`StartTrainingError::NoTrainingData`] instead of starting a
 /// run that can only fail later with a less helpful "cannot train on zero
 /// samples".
-pub fn start_training(
+pub(crate) fn start_training(
     project: &ProjectSettings,
     settings: AiLearningSettings,
     pixel_params: PixelTrainingParams,
@@ -211,10 +247,12 @@ pub fn start_training(
 
             let (handle, events, cancel) = job.run_async();
             Ok(RunningTraining {
-                handle,
                 events,
                 cancel: CancelHandle::new(cancel),
                 items,
+                completion: Box::new(move || {
+                    join_job(handle, "Training worker").map(TrainedClassifier)
+                }),
             })
         }
         Err(error) => Err(StartTrainingError::Failed(error)),

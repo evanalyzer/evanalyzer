@@ -1,7 +1,8 @@
 use crate::args::{TrainClassifierArgs, ZStackHandlingArg};
 use evanalyzer_app::ai_learning::{
-    PixelTrainingParams, StartTrainingError, TrainingItems, save_trained_model, start_training,
+    PixelTrainingParams, StartTrainingError, TrainingItems, save_trained_model,
 };
+use evanalyzer_app::backend::{Backend, TrainingRequest};
 use evanalyzer_app::extensions::project_ext::load_project;
 use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent};
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
@@ -10,7 +11,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
-pub fn run(args: TrainClassifierArgs) -> Result<(), InternalErrors> {
+pub fn run(args: TrainClassifierArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
     let project = load_project(&args.project)?;
 
     let settings_json = std::fs::read_to_string(&args.settings).map_err(|e| {
@@ -50,8 +51,13 @@ pub fn run(args: TrainClassifierArgs) -> Result<(), InternalErrors> {
         z_stack_handling: to_z_stack_handling(args.z_stack_handling),
     };
 
-    let training =
-        start_training(&project.settings, settings, pixel_params).map_err(|e| match e {
+    let training = backend
+        .start_training(TrainingRequest {
+            project: project.settings.clone(),
+            settings,
+            pixel_params,
+        })
+        .map_err(|e| match e {
             StartTrainingError::NoTrainingData => InternalErrors::InvalidArgument(e.to_string()),
             StartTrainingError::Failed(e) => e,
         })?;
@@ -161,7 +167,12 @@ fn print_training_progress(event: TrainingProgressEvent) {
 mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
+    use evanalyzer_app::backend::LocalBackend;
     use evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings;
+
+    fn run(args: TrainClassifierArgs) -> Result<(), InternalErrors> {
+        super::run(args, &LocalBackend)
+    }
     use evanalyzer_cfg::settings::ai_learning_settings::{
         AiLearningBackendSettings, AiLearningClassifierSettings,
     };

@@ -1,7 +1,8 @@
 //! Starting and driving analysis/preview jobs - the one place that knows how
 //! to turn `ProjectSettings` into a running `evanalyzer_core::JobExecutor`.
 //!
-//! Both the GUI and the CLI go through here instead of building jobs from
+//! Front ends reach this through [`crate::backend::Backend`] (the local
+//! backend calls straight into here) instead of building jobs from
 //! `evanalyzer_core` themselves, so job setup (parallelism, preview tile
 //! limits, breakpoints, panic handling) can't drift between the two. Front
 //! ends only consume the resulting [`ProgressEvent`] stream and present it.
@@ -12,13 +13,12 @@ mod analysis;
 mod preview;
 mod running_job;
 
-pub use analysis::start_analysis;
+pub(crate) use analysis::start_analysis;
 pub use evanalyzer_core::ProgressEvent;
-pub use preview::{
-    MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, PreviewViewport, StartPreviewError, start_preview,
-};
+pub(crate) use preview::start_preview;
+pub use preview::{MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, PreviewViewport, StartPreviewError};
 pub(crate) use running_job::join_job;
-pub use running_job::{CancelHandle, JobOutput, RunningJob};
+pub use running_job::{CancelHandle, JobCompletion, JobOutput, RunningJob};
 
 #[cfg(test)]
 mod tests {

@@ -1,21 +1,18 @@
 // app/src/project_owner.rs
 
+use crate::backend::{Backend, ImageSource, LocalBackend};
+use crate::extensions::project_ext::ProjectExt;
+use crate::images::ImageMeta;
 use evanalyzer_cfg::{
-    core_types::{ImageTile, InternalErrors, ObjectClass, ObjectId, ZProjection},
+    core_types::{InternalErrors, ObjectClass, ObjectId},
     settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
 };
-use evanalyzer_core::{
-    ImageChannel, ImageMeta, ImageReader, ReadMode, recommended_reader_pool_size,
-};
-use rayon::prelude::*;
 use std::collections::HashSet;
 use std::{
-    ops::{Deref, DerefMut, RangeInclusive},
+    ops::{Deref, DerefMut},
     path::PathBuf,
     sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
-
-use crate::extensions::project_ext::ProjectExt;
 
 /// Acquires a write lock on the shared project, recovering from poison
 /// instead of panicking.
@@ -121,13 +118,24 @@ pub struct ProjectOwner {
 
     /// Current project file path - None if unsaved
     current_path: Mutex<Option<PathBuf>>,
+
+    /// Where compute runs - handed to every [`AppHandle`].
+    backend: Arc<dyn Backend>,
 }
 
 impl ProjectOwner {
+    /// An owner whose compute runs in this process.
     pub fn new() -> Self {
+        Self::with_backend(Arc::new(LocalBackend))
+    }
+
+    /// An owner whose analysis/preview/training runs and image reads go to
+    /// `backend` (e.g. a remote server).
+    pub fn with_backend(backend: Arc<dyn Backend>) -> Self {
         Self {
             project: Arc::new(RwLock::new(ProjectWithRuntime::default())),
             current_path: Mutex::new(None),
+            backend,
         }
     }
 
@@ -135,7 +143,8 @@ impl ProjectOwner {
     pub fn handle(&self) -> AppHandle {
         AppHandle {
             project: Arc::clone(&self.project),
-            reader_pool: Arc::new(Mutex::new(None)),
+            backend: Arc::clone(&self.backend),
+            image_source: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -172,77 +181,6 @@ impl ProjectOwner {
     }
 }
 
-/// A pool of independent readers open on the same image path, so different
-/// channels/Z-slices can be read truly in parallel instead of serializing
-/// through one reader's internal `Mutex` (see `evanalyzer_core::ImageReader`)
-/// - one reader is safe, not concurrent. This is also `AppHandle`'s *only*
-/// reader cache - `get_image_meta` reads from `pool[0]`, not a separate
-/// cache - see that method's doc comment for why.
-///
-/// Built as the primary reader (unavoidable - channel count can only be
-/// learned from a full parse) plus exactly `channel_count - 1` more, capped
-/// to [`recommended_reader_pool_size`] and built in parallel - never more
-/// readers than the image actually has channels.
-///
-/// A blind batch of `recommended_reader_pool_size` readers, trimmed to real
-/// channel count only *after* building all of them, was tried and reverted:
-/// it keeps wall time close to one parse *only* when I/O has enough spare
-/// bandwidth to run all of them without contention. Measured on real
-/// hardware it did not - building 8 readers for a 2-channel file took
-/// ~1.0-1.1s wall time (bottlenecked by the slowest of 8 concurrently-
-/// contending reads, most of them immediately discarded), and directly
-/// stalled the render worker's first read of a newly opened image for that
-/// same ~1s, visible as `read` jumping from microseconds to over a second
-/// in `viewport_worker.rs`'s own timing log. Building only what's needed
-/// bounds worst-case latency to roughly two sequential parses, predictably,
-/// regardless of storage speed - unlike the blind-batch approach, whose
-/// downside has no such bound on slower storage.
-///
-/// Deliberately not using `bioformats::Memoizer` here: unlike Java
-/// Bio-Formats' `Memoizer` (which deep-clones the whole reader's internal
-/// parsed state, e.g. TIFF IFD offset tables), this crate's `Memoizer` only
-/// caches the lightweight `ImageMetadata`/`OmeMetadata` summary to disk. Its
-/// `set_resolution` unconditionally forces a full real reopen regardless of
-/// cache state - and every pool member needs a working resolution/pixel
-/// read, not just cached summary fields - so wrapping pool members in it
-/// would add a `.bfmemo` file next to every opened image for no actual
-/// savings on this specific path.
-pub struct ReaderPool {
-    path: PathBuf,
-    readers: Vec<Arc<ImageReader>>,
-}
-
-impl ReaderPool {
-    /// The image's metadata (series, pyramid levels, channels), parsed once
-    /// when the pool was built.
-    pub fn meta(&self) -> &ImageMeta {
-        self.readers[0].get_image_meta()
-    }
-
-    /// Reads one tile of every channel of `series` at `resolution_idx`,
-    /// spreading the channels/Z-slices across the pool's readers.
-    pub fn read_tile(
-        &self,
-        series: i32,
-        resolution_idx: i32,
-        z_projection: ZProjection,
-        z_range: &Option<RangeInclusive<i32>>,
-        t_stack: i32,
-        tile: &ImageTile,
-    ) -> Result<Vec<ImageChannel>, InternalErrors> {
-        ImageReader::read_image_tile_combined_pooled(
-            &self.readers,
-            series,
-            resolution_idx,
-            z_projection,
-            z_range,
-            t_stack,
-            None,
-            tile,
-        )
-    }
-}
-
 /// AppHandle lightweight, cloneable, handed to GUI/CLI
 /// Only exposes what GUI/CLI need no pipeline, no owner concerns
 #[derive(Clone)]
@@ -250,13 +188,16 @@ pub struct AppHandle {
     /// Shared reference to the project - same Arc as ProjectOwner
     project: Arc<RwLock<ProjectWithRuntime>>,
 
-    /// Per-handle reader pool cache - the only reader cache `AppHandle` has,
-    /// used both by callers that only want metadata (`get_image_meta` reads
-    /// `pool[0]`) and callers that read multiple channels/Z-slices in
-    /// parallel (`get_or_create_reader_pool`, see [`ReaderPool`]). A single
-    /// shared cache guarantees a given image path is only ever parsed once
-    /// per selection, however many callers ask for it concurrently.
-    reader_pool: Arc<Mutex<Option<Arc<ReaderPool>>>>,
+    /// Where compute runs - see [`Self::backend`].
+    backend: Arc<dyn Backend>,
+
+    /// Per-handle cache of the currently opened image - the only image
+    /// cache `AppHandle` has, used both by callers that only want metadata
+    /// (`get_image_meta`) and callers that read tiles
+    /// (`get_image_source`). A single shared cache guarantees a given image
+    /// path is only ever opened once per selection, however many callers ask
+    /// for it concurrently.
+    image_source: Arc<Mutex<Option<(PathBuf, Arc<dyn ImageSource>)>>>,
 }
 
 impl AppHandle {
@@ -304,83 +245,35 @@ impl AppHandle {
         Ok((warnings, legacy_image_folder))
     }
 
-    /// Returns the metadata of the image at `new_path`. Thin wrapper around
-    /// [`Self::get_or_create_reader_pool`] - see that method's doc comment
-    /// and [`ReaderPool`]'s for why this isn't a separate cache: a caller
-    /// needing only metadata still goes through the same single build/cache
-    /// as pool callers, so a given path is never parsed more than once per
-    /// selection regardless of how many callers ask for it, and
-    /// simultaneously.
-    pub fn get_image_meta(&self, new_path: &PathBuf) -> Result<ImageMeta, InternalErrors> {
-        let pool = self.get_or_create_reader_pool(new_path)?;
-        Ok(pool.meta().clone())
+    /// Where analysis/preview/training runs and image reads happen - local
+    /// or a server, decided when the [`ProjectOwner`] was created.
+    pub fn backend(&self) -> &Arc<dyn Backend> {
+        &self.backend
     }
 
-    /// Returns or creates a pool of readers for the given path, for callers
-    /// that read multiple channels/Z-slices in parallel, or just want
-    /// its metadata (see [`Self::get_image_meta`]). Reuses the
-    /// existing pool if the path has not changed. See [`ReaderPool`]'s doc
-    /// comment for why this builds exactly as many readers as the image
-    /// needs (primary first, then the rest capped to real channel count),
-    /// rather than a blind batch up to the hardware-recommended max.
-    pub fn get_or_create_reader_pool(
+    /// Returns the metadata of the image at `new_path`, from the same cached
+    /// [`ImageSource`] as [`Self::get_image_source`].
+    pub fn get_image_meta(&self, new_path: &PathBuf) -> Result<ImageMeta, InternalErrors> {
+        Ok(self.get_image_source(new_path)?.meta().clone())
+    }
+
+    /// Returns the opened image at `new_path`, opening it through the
+    /// backend only if it isn't the one already cached. The lock is held
+    /// while opening, so concurrent callers asking for the same new path
+    /// wait for that one open instead of parsing the file again.
+    pub fn get_image_source(
         &self,
         new_path: &PathBuf,
-    ) -> Result<Arc<ReaderPool>, InternalErrors> {
-        let mut pool_lock = self.reader_pool.lock().unwrap();
-        if let Some(ref pool) = *pool_lock {
-            if &pool.path == new_path {
-                return Ok(Arc::clone(pool));
+    ) -> Result<Arc<dyn ImageSource>, InternalErrors> {
+        let mut cached = self.image_source.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((path, source)) = cached.as_ref() {
+            if path == new_path {
+                return Ok(Arc::clone(source));
             }
         }
-
-        let start = std::time::Instant::now();
-
-        // The primary reader's parse is unavoidable up front - channel
-        // count (needed to size the rest of the pool) can only be learned
-        // from a full parse, there's no cheaper way to ask a format "how
-        // many channels do you have".
-        let primary = Arc::new(ImageReader::new(new_path, ReadMode::SplitChannels)?);
-        let channel_count = primary
-            .get_image_meta()
-            .series
-            .values()
-            .map(|s| s.nr_c_stacks.max(1) as usize)
-            .max()
-            .unwrap_or(1);
-        let size = recommended_reader_pool_size().min(channel_count).max(1);
-
-        // The remaining `size - 1` members are built in parallel: they each
-        // pay their own full parse cost (no Memoizer cache to populate or
-        // race on, unlike the old Java-backed reader), so building them one
-        // at a time would serialize N full opens back to back instead of
-        // overlapping them. Concurrent construction of independent readers
-        // on the same path is already relied on elsewhere (see
-        // `concurrent_readers_on_independent_threads_produce_consistent_results`
-        // in `evanalyzer_core::image::image_reader`'s own tests).
-        let readers: Vec<Arc<ImageReader>> = if size > 1 {
-            let mut rest: Vec<Arc<ImageReader>> = (0..size - 1)
-                .into_par_iter()
-                .map(|_| ImageReader::new(new_path, ReadMode::SplitChannels).map(Arc::new))
-                .collect::<Result<Vec<_>, InternalErrors>>()?;
-            rest.insert(0, primary);
-            rest
-        } else {
-            vec![primary]
-        };
-
-        log::info!(
-            "Built reader pool of {size} (channel count {channel_count}) for {} in {:?}",
-            new_path.display(),
-            start.elapsed()
-        );
-
-        let pool = Arc::new(ReaderPool {
-            path: new_path.clone(),
-            readers,
-        });
-        *pool_lock = Some(Arc::clone(&pool));
-        Ok(pool)
+        let source = self.backend.open_image(new_path)?;
+        *cached = Some((new_path.clone(), Arc::clone(&source)));
+        Ok(source)
     }
 }
 

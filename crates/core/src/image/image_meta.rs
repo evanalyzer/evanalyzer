@@ -7,9 +7,10 @@ pub struct Point2d {
     pub x: usize,
     pub y: usize,
 }
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct ChannelInfo {
     pub id: String,
     pub name: String,
@@ -17,7 +18,7 @@ pub struct ChannelInfo {
     pub contrast_method: String,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct PyramidInfo {
     pub nr_bits: u16,
     pub color_channels: u8, // Is either 1, 3 or 4
@@ -30,14 +31,14 @@ pub struct PyramidInfo {
     pub is_little_endian: bool,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct PixelSizes {
     pub px_size_x: f32, // Pixel x size in nm
     pub px_size_y: f32, // Pixel y size in nm
     pub px_size_z: f32, // Pixel z size in nm
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct ImageInfo {
     pub nr_c_stacks: i32,
     pub nr_z_stacks: i32,
@@ -47,14 +48,14 @@ pub struct ImageInfo {
     pub channels: BTreeMap<i32, ChannelInfo>, // Contains the channel information <channelIdx | channelinfo>
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Objective {
     pub manufacturer: String,
     pub model: String,
     pub magnification: f32,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct ImageMeta {
     pub name: String,
     pub objective: Objective,

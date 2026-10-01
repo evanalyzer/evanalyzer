@@ -7,9 +7,9 @@ use crate::{
         viewport_controller::ViewportController,
     },
 };
+use evanalyzer_app::backend::AnalysisRequest;
 use evanalyzer_app::job::{
-    self, MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, PreviewViewport, ProgressEvent,
-    StartPreviewError,
+    MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, PreviewViewport, ProgressEvent, StartPreviewError,
 };
 use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
 use log::{error, info};
@@ -87,7 +87,7 @@ impl PipelineWorker {
                         pipeline_step_id,
                         mode,
                     });
-                match job::start_preview(PreviewRequest {
+                match self.app_state.backend().start_preview(PreviewRequest {
                     settings: task.project_settings,
                     project_path: task.project_path,
                     viewport,
@@ -120,12 +120,12 @@ impl PipelineWorker {
                     }
                 }
             } else {
-                match job::start_analysis(
-                    task.project_settings,
-                    task.project_path,
-                    task.job_name,
-                    None,
-                ) {
+                match self.app_state.backend().start_analysis(AnalysisRequest {
+                    settings: task.project_settings,
+                    project_path: task.project_path,
+                    job_name: task.job_name,
+                    threads: None,
+                }) {
                     Ok(job) => job,
                     Err(e) => {
                         error!("Could not execute job: {e:?}");

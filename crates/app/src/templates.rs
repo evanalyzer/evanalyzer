@@ -1,9 +1,8 @@
+use crate::settings::get_user_folder;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
 use evanalyzer_cfg::{PIPELINE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS};
 use std::path::{Path, PathBuf};
-
-use crate::settings::get_user_folder;
 
 /// Loads a single `ProjectTemplate` from an arbitrary path (e.g. one picked
 /// via a file-open dialog), rather than scanning a whole templates folder

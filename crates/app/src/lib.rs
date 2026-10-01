@@ -1,4 +1,5 @@
 pub mod ai_learning;
+pub mod backend;
 pub mod bioimageio;
 pub mod crash_log;
 pub mod export;
@@ -13,9 +14,7 @@ pub mod system;
 pub mod templates;
 
 pub use frontend::Frontend;
-pub use project_owner::{
-    AppHandle, ProjectOwner, ProjectTmpSettings, ProjectWithRuntime, ReaderPool,
-};
+pub use project_owner::{AppHandle, ProjectOwner, ProjectTmpSettings, ProjectWithRuntime};
 
 pub mod prelude {
     pub use super::Frontend;

@@ -1,6 +1,7 @@
 use crate::UiState;
 use crate::editor::viewport_controller::ViewportState;
 use clru::{CLruCache, WeightScale};
+use evanalyzer_app::backend::TileRequest;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::images::{ImageChannel, ImageContainer, ManagedImage, PyramidInfo};
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -277,8 +278,8 @@ impl ViewportCache {
             )
         };
 
-        let pool = self.app_state.get_or_create_reader_pool(&path)?;
-        let meta = pool.meta();
+        let source = self.app_state.get_image_source(&path)?;
+        let meta = source.meta();
         let s_info = meta
             .series
             .get(&series)
@@ -491,21 +492,21 @@ impl ViewportCache {
             return Ok((cached_tile.data.clone(), ctx));
         }
 
-        // Read image from disk - channels/Z-slices are read in parallel
-        // across the reader pool instead of one at a time.
-        let mut loaded = pool.read_tile(
+        // Read the tile through the backend - locally, channels/Z-slices are
+        // read in parallel across a reader pool instead of one at a time.
+        let mut loaded = source.read_tile(&TileRequest {
             series,
-            ctx.res_idx,
+            resolution_idx: ctx.res_idx,
             z_projection,
-            &z_range,
+            z_range: z_range.clone(),
             t_stack,
-            &ImageTile {
+            tile: ImageTile {
                 offset_x: ctx.read_off_x,
                 offset_y: ctx.read_off_y,
                 width: request_w as usize,
                 height: request_h as usize,
             },
-        )?;
+        })?;
 
         // Scale down if it is low res
         if is_low_res {

@@ -1,4 +1,5 @@
 use crate::args::AnalyzeArgs;
+use evanalyzer_app::backend::{AnalysisRequest, Backend};
 use evanalyzer_app::extensions::project_ext::{ProjectExt, load_project};
 use evanalyzer_app::job::ProgressEvent;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -6,7 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
-pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
+pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
     let mut project = load_project(&args.project)?;
 
     if let Some(images_dir) = &args.images {
@@ -33,12 +34,12 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
     println!("Pipelines: {enabled_pipelines} enabled");
 
     let start = Instant::now();
-    let job = evanalyzer_app::job::start_analysis(
-        project.settings.clone(),
-        project_dir,
-        args.job_name.clone(),
-        args.threads,
-    )?;
+    let job = backend.start_analysis(AnalysisRequest {
+        settings: project.settings.clone(),
+        project_path: project_dir,
+        job_name: args.job_name.clone(),
+        threads: args.threads,
+    })?;
     let output_path = job.output_path().clone();
     println!("Output:    {}", output_path.display());
     println!(
@@ -105,10 +106,15 @@ mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
     use calamine::DataType as _;
+    use evanalyzer_app::backend::LocalBackend;
     use evanalyzer_app::result::{
         Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter, ResultsGenerator,
     };
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
+
+    fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
+        super::run(args, &LocalBackend)
+    }
 
     #[test]
     fn run_rejects_a_project_with_no_images_and_no_images_dir_override() {

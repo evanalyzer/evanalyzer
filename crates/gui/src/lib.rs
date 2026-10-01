@@ -2,8 +2,9 @@
 
 pub use evanalyzer_gui_slint::*;
 
+use evanalyzer_app::backend::{Backend, ImageSource};
 use evanalyzer_app::images::ImageMeta;
-use evanalyzer_app::{AppHandle, Frontend, ProjectOwner, ProjectWithRuntime, ReaderPool};
+use evanalyzer_app::{AppHandle, Frontend, ProjectOwner, ProjectWithRuntime};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use slint::ComponentHandle;
@@ -216,13 +217,18 @@ impl UiState {
         self.app.get_image_meta(new_path)
     }
 
-    /// Returns or creates a cached pool of readers for the given path, for
-    /// reading multiple channels/Z-slices in parallel.
-    pub fn get_or_create_reader_pool(
+    /// Returns the cached opened image for the given path, opening it
+    /// through the backend (local readers or a server) if needed.
+    pub fn get_image_source(
         &self,
         new_path: &PathBuf,
-    ) -> Result<Arc<ReaderPool>, InternalErrors> {
-        self.app.get_or_create_reader_pool(new_path)
+    ) -> Result<Arc<dyn ImageSource>, InternalErrors> {
+        self.app.get_image_source(new_path)
+    }
+
+    /// Where analysis/preview/training runs - local or a server.
+    pub fn backend(&self) -> &Arc<dyn Backend> {
+        self.app.backend()
     }
 
     /// Loads a project from disk replacing the current project.

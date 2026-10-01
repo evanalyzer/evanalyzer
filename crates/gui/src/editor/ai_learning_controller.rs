@@ -6,6 +6,7 @@ use crate::{
     TrainingObjectRowSlint,
 };
 use evanalyzer_app::ai_learning::{self, PixelTrainingParams};
+use evanalyzer_app::backend::TrainingRequest;
 use evanalyzer_app::job::CancelHandle;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::TrainingProgressEvent;
@@ -482,14 +483,17 @@ impl AiLearningController {
             ..Default::default()
         };
 
-        let training =
-            match ai_learning::start_training(&project_settings, ai_settings, pixel_params) {
-                Ok(training) => training,
-                Err(e) => {
-                    self.set_training_status(&e.to_string(), true);
-                    return;
-                }
-            };
+        let training = match self.app_state.backend().start_training(TrainingRequest {
+            project: project_settings,
+            settings: ai_settings,
+            pixel_params,
+        }) {
+            Ok(training) => training,
+            Err(e) => {
+                self.set_training_status(&e.to_string(), true);
+                return;
+            }
+        };
 
         // Every pre-flight check passed - hand off to the background worker.
         // The dialog is never closed here (or on completion below) so the

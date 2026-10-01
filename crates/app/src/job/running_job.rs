@@ -1,5 +1,6 @@
 use evanalyzer_cfg::{core_types::InternalErrors, settings::object_settings::ObjectMetricSettings};
 use evanalyzer_core::{JobExecutor, ProgressEvent};
+use serde::{Deserialize, Serialize};
 use std::{
     any::Any,
     path::PathBuf,
@@ -15,25 +16,54 @@ use std::{
 /// [`RunningTraining`](crate::ai_learning::RunningTraining) from another thread (a Cancel
 /// button, a Ctrl+C handler). The job stops after in-flight work finishes and
 /// its `wait` returns `InternalErrors::Cancelled`.
-#[derive(Clone, Debug)]
-pub struct CancelHandle(Arc<AtomicBool>);
+///
+/// Locally the job polls the shared flag; a remote backend additionally
+/// registers `on_cancel` to forward the request to the server.
+#[derive(Clone)]
+pub struct CancelHandle {
+    flag: Arc<AtomicBool>,
+    on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl std::fmt::Debug for CancelHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CancelHandle")
+            .field("cancelled", &self.is_cancelled())
+            .finish()
+    }
+}
 
 impl CancelHandle {
     pub(crate) fn new(flag: Arc<AtomicBool>) -> Self {
-        Self(flag)
+        Self {
+            flag,
+            on_cancel: None,
+        }
+    }
+
+    /// For backends whose job doesn't poll a local flag: `on_cancel` runs
+    /// (once per `cancel` call) in addition to setting the flag.
+    pub fn with_callback(on_cancel: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+            on_cancel: Some(Arc::new(on_cancel)),
+        }
     }
 
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.flag.store(true, Ordering::SeqCst);
+        if let Some(on_cancel) = &self.on_cancel {
+            on_cancel();
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.flag.load(Ordering::SeqCst)
     }
 }
 
 /// What a job produced once it has finished successfully.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct JobOutput {
     /// Preview runs only: the final, tile-merged object set. Replaces the
     /// per-tile objects streamed earlier via `ProgressEvent::TileCompleted`,
@@ -42,37 +72,64 @@ pub struct JobOutput {
     pub preview_objects: Option<Vec<ObjectMetricSettings>>,
 }
 
-/// A job running on its own thread. Drain [`events`](Self::events) until it
+/// Blocks until a job has finished and yields its result - a local job
+/// joins its thread, a remote one waits for the server's final message.
+pub type JobCompletion = Box<dyn FnOnce() -> Result<JobOutput, InternalErrors> + Send>;
+
+/// A running job, wherever it runs. Drain [`events`](Self::events) until it
 /// closes, then call [`wait`](Self::wait) for the result.
 pub struct RunningJob {
-    handle: JoinHandle<Result<(), InternalErrors>>,
     events: Receiver<ProgressEvent>,
     cancel: CancelHandle,
     output_path: PathBuf,
     parallelism: usize,
-    preview_objects: Option<Arc<Mutex<Vec<ObjectMetricSettings>>>>,
+    completion: JobCompletion,
 }
 
 impl RunningJob {
-    pub(super) fn spawn(
+    /// Runs `job` on its own thread in this process.
+    pub(crate) fn spawn(
         job: JobExecutor,
         parallelism: usize,
         preview_objects: Option<Arc<Mutex<Vec<ObjectMetricSettings>>>>,
     ) -> Self {
         let output_path = job.output_path.clone();
         let (handle, events, cancel) = job.run_async(parallelism);
+        let completion: JobCompletion = Box::new(move || {
+            join_job(handle, "Pipeline worker")?;
+            let preview_objects = preview_objects
+                .map(|objects| objects.lock().unwrap_or_else(|e| e.into_inner()).clone());
+            Ok(JobOutput { preview_objects })
+        });
         Self {
-            handle,
             events,
             cancel: CancelHandle::new(cancel),
             output_path,
             parallelism,
-            preview_objects,
+            completion,
         }
     }
 
-    /// Progress events, in order. The channel closes once the job thread
-    /// exits, so `for event in job.events()` ends by itself.
+    /// Assembles a job run by some other backend (e.g. on a server). The
+    /// `events` channel must close once the job is over, like a local job's.
+    pub fn from_parts(
+        events: Receiver<ProgressEvent>,
+        cancel: CancelHandle,
+        output_path: PathBuf,
+        parallelism: usize,
+        completion: JobCompletion,
+    ) -> Self {
+        Self {
+            events,
+            cancel,
+            output_path,
+            parallelism,
+            completion,
+        }
+    }
+
+    /// Progress events, in order. The channel closes once the job is over,
+    /// so `for event in job.events()` ends by itself.
     pub fn events(&self) -> &Receiver<ProgressEvent> {
         &self.events
     }
@@ -91,17 +148,13 @@ impl RunningJob {
         self.parallelism
     }
 
-    /// Blocks until the job thread exits and returns its result.
+    /// Blocks until the job is over and returns its result.
     ///
-    /// A panic inside the job thread (e.g. a malformed tile at the image
+    /// A panic inside a local job thread (e.g. a malformed tile at the image
     /// edge) is returned as `InternalErrors::Internal` instead of being
     /// re-raised, so the calling worker survives to run the next job.
     pub fn wait(self) -> Result<JobOutput, InternalErrors> {
-        join_job(self.handle, "Pipeline worker")?;
-        let preview_objects = self
-            .preview_objects
-            .map(|objects| objects.lock().unwrap_or_else(|e| e.into_inner()).clone());
-        Ok(JobOutput { preview_objects })
+        (self.completion)()
     }
 }
 
@@ -142,6 +195,19 @@ mod tests {
         assert!(!handle.is_cancelled());
         clone.cancel();
         assert!(handle.is_cancelled());
+    }
+
+    #[test]
+    fn a_callback_cancel_handle_runs_its_callback_and_reports_cancelled() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let handle = CancelHandle::with_callback(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        assert!(!handle.is_cancelled());
+        handle.clone().cancel();
+        assert!(handle.is_cancelled());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
