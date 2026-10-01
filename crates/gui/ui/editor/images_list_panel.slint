@@ -266,9 +266,9 @@ export component ImagesListPanel inherits Rectangle {
             property <int> scroll_index: ImagesListState.scroll_to_image_index;
             changed scroll_index => {
                 if (ImagesListState.scroll_to_image_index >= 0) {
-                    images_listview.viewport-y = Math.clamp(
+                    images_listview.content-y = Math.clamp(
                         -(ImagesListState.scroll_to_image_index * 52px) + images_listview.height / 2 - 26px,
-                        images_listview.height - images_listview.viewport-height,
+                        images_listview.height - images_listview.content-height,
                         0px
                     );
                 }

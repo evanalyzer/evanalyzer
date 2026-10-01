@@ -148,7 +148,7 @@ component ChannelRow inherits Rectangle {
 // ---------- Channel list ----------
 export component ChannelList inherits ScrollView {
     height: Math.min(180px, layout.preferred-height + 4px);
-    viewport-height: layout.preferred-height;
+    content-height: layout.preferred-height;
 
     layout := VerticalLayout {
         spacing: 2px;

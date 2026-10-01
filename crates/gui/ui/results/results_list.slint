@@ -142,7 +142,7 @@ export component ResultsListView inherits Rectangle {
                     clip: true;
 
                     header-layout := HorizontalLayout {
-                        x: body-list.viewport-x;
+                        x: body-list.content-x;
                         width: max(self.preferred-width, parent.width);
                         padding-left: 16px;
                         padding-right: 16px;
@@ -179,8 +179,8 @@ export component ResultsListView inherits Rectangle {
                     vertical-stretch: 1;
                     accessible-role: list;
                     accessible-orientation: Orientation.vertical;
-                    viewport-width: header-layout.width;
-                    viewport-height: ResultsState.list-rows.length * 34px;
+                    content-width: header-layout.width;
+                    content-height: ResultsState.list-rows.length * 34px;
 
                     for row[index] in ResultsState.list-rows: Rectangle {
                         y: index * 34px;
@@ -190,8 +190,8 @@ export component ResultsListView inherits Rectangle {
                         background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
                         opacity: row.disabled ? 0.55 : 1.0;
 
-                        property <bool> row-visible: self.y + self.height >= -body-list.viewport-y - 3 * self.height
-                            && self.y <= -body-list.viewport-y + body-list.height + 3 * self.height;
+                        property <bool> row-visible: self.y + self.height >= -body-list.content-y - 3 * self.height
+                            && self.y <= -body-list.content-y + body-list.height + 3 * self.height;
 
                         Rectangle {
                             y: 34px;
@@ -224,8 +224,8 @@ export component ResultsListView inherits Rectangle {
                                 clip: true;
                                 width: ResultsState.list-column-widths[c-index] * 1px;
 
-                                property <bool> col-visible: self.x + self.width >= -body-list.viewport-x - 3 * self.width
-                                    && self.x <= -body-list.viewport-x + header-rect.width + 3 * self.width;
+                                property <bool> col-visible: self.x + self.width >= -body-list.content-x - 3 * self.width
+                                    && self.x <= -body-list.content-x + header-rect.width + 3 * self.width;
 
                                 if col-visible: Text {
                                     text: cell;
