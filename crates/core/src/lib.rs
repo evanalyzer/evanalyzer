@@ -47,8 +47,6 @@ pub use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 
 // Job execution
 pub use crate::job::algos_from_config::into_algorithm;
-pub use crate::job::job_executor::BreakpointMode;
-pub use crate::job::job_executor::BreakpointSettings;
 pub use crate::job::job_executor::JobExecutor;
 pub use crate::job::job_executor::PreviewTileSettings;
 pub use crate::job::job_executor::ProgressEvent;

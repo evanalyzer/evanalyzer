@@ -12,7 +12,7 @@ use crate::{
     storage::PipelineResultExporter,
 };
 use evanalyzer_cfg::{
-    core_types::{ImageAddress, InternalErrors, PipelineId},
+    core_types::{BreakpointMode, BreakpointSettings, ImageAddress, InternalErrors, PipelineId},
     settings::{
         images_settings::{
             GlobalImageSettings, ImageEntry, TStackHandling, ZStackHandling, ZStackSettings,
@@ -131,23 +131,6 @@ impl PreviewTileSettings {
         let y2 = (tile.offset_y + tile.height) as f32 * self.zoom + self.offset_y;
         x1 < self.viewport_width && x2 > 0.0 && y1 < self.viewport_height && y2 > 0.0
     }
-}
-
-/// Controls pipeline behaviour when a breakpoint step is reached.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BreakpointMode {
-    /// Stop the pipeline at this step and return the intermediate image.
-    Stop,
-    /// Capture the image at this step, then continue running the pipeline
-    /// to completion.  The final results (ROIs, DB write) are produced
-    /// normally; the captured image is sent as a side-channel preview.
-    Snapshot,
-}
-
-pub struct BreakpointSettings {
-    pub pipeline_id: PipelineId,
-    pub pipeline_step_id: i32,
-    pub mode: BreakpointMode,
 }
 
 /// The one place `evanalyzer_cfg::settings::project_settings::TileMergeConnectivity`

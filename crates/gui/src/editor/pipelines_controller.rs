@@ -68,7 +68,8 @@ pub struct PipelinesController {
     pub(crate) task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>,
     pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<evanalyzer_app::job::CancelHandle>>>,
     /// Currently active breakpoint: (pipeline_id, step_id, mode).  `None` = no breakpoint.
-    pub(crate) breakpoint: Arc<Mutex<Option<(u32, i32, evanalyzer_core::BreakpointMode)>>>,
+    pub(crate) breakpoint:
+        Arc<Mutex<Option<(u32, i32, evanalyzer_cfg::core_types::BreakpointMode)>>>,
 
     /// If true the trigger_pipeline_preview_execution is called on parameter change
     auto_preview_enabled: Mutex<bool>,
@@ -128,9 +129,9 @@ impl PipelinesController {
             ui.global::<PipelinesPanelState>().on_set_breakpoint(
                 move |pipeline_id, step_id, mode| {
                     let bp_mode = if mode == 2 {
-                        evanalyzer_core::BreakpointMode::Snapshot
+                        evanalyzer_cfg::core_types::BreakpointMode::Snapshot
                     } else {
-                        evanalyzer_core::BreakpointMode::Stop
+                        evanalyzer_cfg::core_types::BreakpointMode::Stop
                     };
                     *manager.breakpoint.lock().unwrap() =
                         Some((pipeline_id as u32, step_id, bp_mode));
@@ -3205,14 +3206,14 @@ mod tests {
             .invoke_set_breakpoint(7, 2, 1);
         assert_eq!(
             *controller.breakpoint.lock().unwrap(),
-            Some((7, 2, evanalyzer_core::BreakpointMode::Stop))
+            Some((7, 2, evanalyzer_cfg::core_types::BreakpointMode::Stop))
         );
 
         ui.global::<PipelinesPanelState>()
             .invoke_set_breakpoint(7, 2, 2);
         assert_eq!(
             *controller.breakpoint.lock().unwrap(),
-            Some((7, 2, evanalyzer_core::BreakpointMode::Snapshot)),
+            Some((7, 2, evanalyzer_cfg::core_types::BreakpointMode::Snapshot)),
             "mode 2 must map to Snapshot"
         );
 

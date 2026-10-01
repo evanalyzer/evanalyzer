@@ -1,6 +1,9 @@
 use super::RunningJob;
-use evanalyzer_cfg::{core_types::InternalErrors, settings::project_settings::ProjectSettings};
-use evanalyzer_core::{BreakpointSettings, PreviewTileSettings};
+use evanalyzer_cfg::{
+    core_types::{BreakpointSettings, InternalErrors},
+    settings::project_settings::ProjectSettings,
+};
+use evanalyzer_core::PreviewTileSettings;
 use log::{error, info};
 use std::path::PathBuf;
 

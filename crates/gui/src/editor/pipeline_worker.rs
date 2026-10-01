@@ -8,9 +8,10 @@ use crate::{
     },
 };
 use evanalyzer_app::job::{
-    self, MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, PreviewViewport, StartPreviewError,
+    self, MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, PreviewViewport, ProgressEvent,
+    StartPreviewError,
 };
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
 use log::{error, info};
 use slint::ComponentHandle;
 use std::sync::{Arc, Condvar, Mutex};
@@ -81,12 +82,10 @@ impl PipelineWorker {
                 };
                 let breakpoint = task
                     .breakpoint
-                    .map(|(pipeline_id, pipeline_step_id, mode)| {
-                        evanalyzer_core::BreakpointSettings {
-                            pipeline_id,
-                            pipeline_step_id,
-                            mode,
-                        }
+                    .map(|(pipeline_id, pipeline_step_id, mode)| BreakpointSettings {
+                        pipeline_id,
+                        pipeline_step_id,
+                        mode,
                     });
                 match job::start_preview(PreviewRequest {
                     settings: task.project_settings,
@@ -146,7 +145,7 @@ impl PipelineWorker {
             let mut pipeline_start: Option<std::time::Instant> = None;
             for event in job.events() {
                 match event {
-                    evanalyzer_core::ProgressEvent::TilesScheduled { total_tiles } => {
+                    ProgressEvent::TilesScheduled { total_tiles } => {
                         let ui_handle = self.app_state.ui_handle.clone();
                         let total = total_tiles as i32;
                         let _ = slint::invoke_from_event_loop(move || {
@@ -158,7 +157,7 @@ impl PipelineWorker {
                             }
                         });
                     }
-                    evanalyzer_core::ProgressEvent::Started { total } => {
+                    ProgressEvent::Started { total } => {
                         info!("Pipeline started: {total} images to process");
                         pipeline_start = Some(std::time::Instant::now());
                         // Clear any stale preview ROIs so the incremental tile updates
@@ -184,7 +183,7 @@ impl PipelineWorker {
                             }
                         });
                     }
-                    evanalyzer_core::ProgressEvent::TileCompleted {
+                    ProgressEvent::TileCompleted {
                         tile_index,
                         total_tiles,
                         objects,
@@ -218,7 +217,7 @@ impl PipelineWorker {
                             }
                         });
                     }
-                    evanalyzer_core::ProgressEvent::WholeImagePhaseCompleted {
+                    ProgressEvent::WholeImagePhaseCompleted {
                         completed,
                         total_tiles,
                     } => {
@@ -243,7 +242,7 @@ impl PipelineWorker {
                             }
                         });
                     }
-                    evanalyzer_core::ProgressEvent::ImageCompleted { index, total, path } => {
+                    ProgressEvent::ImageCompleted { index, total, path } => {
                         info!(
                             "Pipeline progress: {}/{} - {}",
                             index,
@@ -271,7 +270,7 @@ impl PipelineWorker {
                             });
                         }
                     }
-                    evanalyzer_core::ProgressEvent::BreakpointReached {
+                    ProgressEvent::BreakpointReached {
                         image,
                         segmentation,
                         instances,
@@ -300,10 +299,10 @@ impl PipelineWorker {
                             channel_idx,
                         );
                     }
-                    evanalyzer_core::ProgressEvent::ImageFailed { path } => {
+                    ProgressEvent::ImageFailed { path } => {
                         error!("Pipeline image failed: {}", path.display());
                     }
-                    evanalyzer_core::ProgressEvent::Finished => {
+                    ProgressEvent::Finished => {
                         info!("Pipeline job finished - waiting for result");
                         *self
                             .pipeline_controller
