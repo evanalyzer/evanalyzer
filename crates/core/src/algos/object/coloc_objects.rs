@@ -51,6 +51,31 @@ pub enum ColocMultiplicity {
     MultiFor(Vec<ObjectClass>),
 }
 
+/// How much two objects must overlap to colocalize (`min_coloc_area` with
+/// its `size_unit`). Also the bar an excluded class has to clear.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum MinOverlap {
+    /// At least this many overlapping pixels (`Pixels`/`NanoMeter`).
+    Pixels(usize),
+    /// At least this percentage of the smaller object's area (`Percent`) -
+    /// e.g. a spot fully inside a cell is 100 %, whatever the cell's size.
+    PercentOfSmaller(f32),
+}
+
+impl MinOverlap {
+    fn is_met(self, overlap_px: usize, a: &Object, b: &Object) -> bool {
+        match self {
+            MinOverlap::Pixels(min) => overlap_px >= min,
+            // overlap / smaller >= percent / 100, multiplied out so whole
+            // numbers stay exact: 50 % of 100 px is exactly 50 px.
+            MinOverlap::PercentOfSmaller(percent) => {
+                let smaller = a.area.min(b.area) as f64;
+                overlap_px as f64 * 100.0 >= percent as f64 * smaller
+            }
+        }
+    }
+}
+
 /// Calculates spatial colocalization and intersections between specified object classes.
 ///
 /// This command scans the object cache, groups objects by their designated classes,
@@ -110,9 +135,7 @@ impl ImageAlgorithm for Colocalization {
             return Ok(());
         }
 
-        let px_sizes = ctx.pixel_sizes();
-        let pixel_area_nm2 = px_sizes.px_size_x * px_sizes.px_size_y;
-        let min_area_px = self.size_unit.to_pixel(self.min_coloc_area, pixel_area_nm2) as usize;
+        let min_overlap = self.min_overlap(ctx);
 
         // --- PHASE 1: Group ObjectIds by their specific ObjectClass ---
         let mut class_buckets: std::collections::HashMap<ObjectClass, Vec<ObjectId>> =
@@ -216,7 +239,7 @@ impl ImageAlgorithm for Colocalization {
                         source_id,
                         &candidates,
                         cache,
-                        min_area_px,
+                        min_overlap,
                     ) {
                         best_partner.insert((source_id.clone(), *target_class), best_id);
                     }
@@ -252,7 +275,7 @@ impl ImageAlgorithm for Colocalization {
                     };
                     let other_candidates = other_grid.candidates(anchor_object.bbox);
 
-                    // Compute the actual overlap and keep only entries meeting min_area_px.
+                    // Compute the actual overlap and keep only entries meeting min_overlap.
                     // Each entry is (ObjectId, overlap_area_in_pixels).
                     let mut candidates: Vec<(ObjectId, usize)> = other_candidates
                         .iter()
@@ -261,8 +284,11 @@ impl ImageAlgorithm for Colocalization {
                             cache
                                 .object_cache
                                 .get(other_id)
-                                .and_then(|r| anchor_object.overlaps(r))
-                                .filter(|intersection| intersection.area >= min_area_px)
+                                .and_then(|r| {
+                                    anchor_object.overlaps(r).filter(|intersection| {
+                                        min_overlap.is_met(intersection.area, anchor_object, r)
+                                    })
+                                })
                                 .map(|intersection| (other_id.clone(), intersection.area))
                         })
                         .collect();
@@ -309,11 +335,11 @@ impl ImageAlgorithm for Colocalization {
                     .iter()
                     .any(|excl_id| {
                         excl_id != anchor_id
-                            && cache
-                                .object_cache
-                                .get(excl_id)
-                                .and_then(|r| anchor_object.overlaps(r))
-                                .is_some_and(|intersection| intersection.area >= min_area_px)
+                            && cache.object_cache.get(excl_id).is_some_and(|r| {
+                                anchor_object.overlaps(r).is_some_and(|intersection| {
+                                    min_overlap.is_met(intersection.area, anchor_object, r)
+                                })
+                            })
                     })
                 {
                     continue 'anchor;
@@ -421,6 +447,20 @@ impl ImageAlgorithm for Colocalization {
 }
 
 impl Colocalization {
+    /// `min_coloc_area` in `size_unit`, resolved once per run.
+    fn min_overlap(&self, ctx: &crate::pipeline::pipeline_context::PipelineContext) -> MinOverlap {
+        match self.size_unit {
+            SizeUnitsRel::Percent => MinOverlap::PercentOfSmaller(self.min_coloc_area),
+            SizeUnitsRel::Pixels | SizeUnitsRel::NanoMeter => {
+                let px_sizes = ctx.pixel_sizes();
+                let pixel_area_nm2 = px_sizes.px_size_x * px_sizes.px_size_y;
+                MinOverlap::Pixels(
+                    self.size_unit.to_pixel(self.min_coloc_area, pixel_area_nm2) as usize
+                )
+            }
+        }
+    }
+
     /// Whether an anchor object of `anchor_class` may keep more than one
     /// overlapping partner per other class, or must be capped to its single
     /// best-overlap match (see [`ColocMultiplicity`]).
@@ -433,14 +473,14 @@ impl Colocalization {
     }
 
     /// Finds the single overlapping object in `bucket` with the largest overlap
-    /// area against `object` (>= `min_area_px`), ties broken toward the lower
+    /// area against `object` (meeting `min_overlap`), ties broken toward the lower
     /// `ObjectId` for a deterministic pick independent of cache iteration order.
     fn best_overlap(
         object: &Object,
         exclude_id: &ObjectId,
         bucket: &[ObjectId],
         cache: &crate::pipeline::pipeline_cache::GlobalPipelineCache,
-        min_area_px: usize,
+        min_overlap: MinOverlap,
     ) -> Option<ObjectId> {
         bucket
             .iter()
@@ -449,8 +489,11 @@ impl Colocalization {
                 cache
                     .object_cache
                     .get(other_id)
-                    .and_then(|r| object.overlaps(r))
-                    .filter(|intersection| intersection.area >= min_area_px)
+                    .and_then(|r| {
+                        object
+                            .overlaps(r)
+                            .filter(|intersection| min_overlap.is_met(intersection.area, object, r))
+                    })
                     .map(|intersection| (other_id.clone(), intersection.area))
             })
             .max_by(|(id_a, area_a), (id_b, area_b)| {
@@ -479,6 +522,11 @@ mod tests {
     use kornia_image::{Image, ImageSize};
 
     fn make_ctx() -> PipelineContext {
+        make_ctx_with_pixel_size(1.0)
+    }
+
+    /// `px_size` nm per pixel in x and y.
+    fn make_ctx_with_pixel_size(px_size: f32) -> PipelineContext {
         let size = ImageSize {
             width: 1,
             height: 1,
@@ -502,8 +550,8 @@ mod tests {
                 is_rgb: false,
                 nr_of_bits: 8,
                 pixel_sizes: PixelSizes {
-                    px_size_x: 1.0,
-                    px_size_y: 1.0,
+                    px_size_x: px_size,
+                    px_size_y: px_size,
                     px_size_z: 1.0,
                 },
             },
@@ -616,35 +664,338 @@ mod tests {
             objects
         }
 
-        for &n in &[500u32, 2_000, 8_000, 20_000] {
-            let span = (n as f64).sqrt().ceil() as u32 + 1;
-            let mut cache = GlobalPipelineCache::default();
-            for o in scattered_objects(n, CLASS_A, 100_000, span, 111) {
-                cache.object_cache.insert(o.id.clone(), o);
+        // Every minimum-overlap mode, so a change to how the threshold is
+        // checked shows up here too (the jittered 3x3 objects overlap their
+        // neighbour of the other class by 1-9 px, i.e. 11-100 %).
+        // The last mode adds an excluded class: one object per 10 of class A,
+        // placed on top of them.
+        let modes = [
+            (SizeUnitsRel::Pixels, 0.0, false, "pixels >= 0"),
+            (SizeUnitsRel::Pixels, 4.0, false, "pixels >= 4"),
+            (SizeUnitsRel::Percent, 50.0, false, "percent >= 50"),
+            (SizeUnitsRel::Pixels, 0.0, true, "pixels, exclude"),
+        ];
+        for (size_unit, min_coloc_area, with_exclude, mode) in modes {
+            for &n in &[500u32, 2_000, 8_000, 20_000] {
+                let span = (n as f64).sqrt().ceil() as u32 + 1;
+                let mut cache = GlobalPipelineCache::default();
+                for o in scattered_objects(n, CLASS_A, 100_000, span, 111) {
+                    cache.object_cache.insert(o.id.clone(), o);
+                }
+                for o in scattered_objects(n, CLASS_B, 900_000_000, span, 222) {
+                    cache.object_cache.insert(o.id.clone(), o);
+                }
+                if with_exclude {
+                    for o in scattered_objects(n, CLASS_C, 1_800_000_000, span, 111)
+                        .into_iter()
+                        .step_by(10)
+                    {
+                        cache.object_cache.insert(o.id.clone(), o);
+                    }
+                }
+
+                let coloc = Colocalization {
+                    classes_to_coloc: vec![CLASS_A, CLASS_B],
+                    filter_classes: vec![],
+                    exclude_classes: if with_exclude { vec![CLASS_C] } else { vec![] },
+                    class_for_overlapping_areas: CLASS_OVERLAP,
+                    multiplicity: ColocMultiplicity::ManyToMany,
+                    size_unit,
+                    min_coloc_area,
+                };
+
+                // Best of 3, to keep scheduler noise out of the comparison.
+                let mut elapsed = std::time::Duration::MAX;
+                let mut colocalized = 0;
+                for _ in 0..3 {
+                    let mut cache = cache.clone();
+                    let t0 = std::time::Instant::now();
+                    run(&coloc, &mut cache);
+                    elapsed = elapsed.min(t0.elapsed());
+                    colocalized = cache
+                        .object_cache
+                        .values()
+                        .filter(|o| !o.colocalized_with.is_empty())
+                        .count();
+                }
+
+                println!(
+                    "{mode:<14} class_a={n:6} class_b={n:6} -> {elapsed:8.2?}  ({colocalized} objects colocalized)"
+                );
             }
-            for o in scattered_objects(n, CLASS_B, 900_000_000, span, 222) {
-                cache.object_cache.insert(o.id.clone(), o);
-            }
-
-            let coloc = Colocalization {
-                classes_to_coloc: vec![CLASS_A, CLASS_B],
-                filter_classes: vec![],
-                exclude_classes: vec![],
-                class_for_overlapping_areas: CLASS_OVERLAP,
-                multiplicity: ColocMultiplicity::ManyToMany,
-                size_unit: SizeUnitsRel::Pixels,
-                min_coloc_area: 0.0,
-            };
-
-            let t0 = std::time::Instant::now();
-            run(&coloc, &mut cache);
-            let elapsed = t0.elapsed();
-
-            println!(
-                "class_a={n:6} class_b={n:6} ({:>12} pairs scanned) -> {elapsed:8.2?}",
-                n as u64 * n as u64
-            );
         }
+    }
+
+    // -- minimum overlap: pixels / nm² (guards for existing behaviour) ----
+
+    fn coloc_with(
+        size_unit: SizeUnitsRel,
+        min_coloc_area: f32,
+        multiplicity: ColocMultiplicity,
+        exclude_classes: Vec<ObjectClass>,
+    ) -> Colocalization {
+        Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            filter_classes: vec![],
+            exclude_classes,
+            class_for_overlapping_areas: ObjectClass::Unset,
+            multiplicity,
+            size_unit,
+            min_coloc_area,
+        }
+    }
+
+    /// Runs `coloc` on the given objects (`(id, bbox, class)`) with
+    /// `px_size` nm/px and returns whether the A and B objects colocalized.
+    fn a_and_b_colocalize(
+        coloc: &Colocalization,
+        px_size: f32,
+        objects: &[(u128, [u32; 4], ObjectClass)],
+    ) -> bool {
+        let mut cache = GlobalPipelineCache::default();
+        for (id, bbox, class) in objects {
+            let object = make_filled_object(*id, *bbox, ImagePlane::default(), *class);
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        coloc
+            .execute(&mut make_ctx_with_pixel_size(px_size), &mut cache)
+            .unwrap();
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
+        let a_has_b = a.colocalized_with.values().flatten().any(|id| *id == b.id);
+        let b_has_a = b.colocalized_with.values().flatten().any(|id| *id == a.id);
+        assert_eq!(a_has_b, b_has_a, "coloc must be symmetric");
+        a_has_b
+    }
+
+    // A: 10x10 = 100 px. B: 10x10 = 100 px, overlapping A by 5 columns
+    // x 10 rows = 50 px.
+    const BOX_A: [u32; 4] = [0, 0, 9, 9];
+    const BOX_B_HALF_ON_A: [u32; 4] = [5, 0, 14, 9];
+
+    #[test]
+    fn pixel_minimum_is_inclusive_at_the_exact_overlap() {
+        let objects = [(ID_A, BOX_A, CLASS_A), (ID_B, BOX_B_HALF_ON_A, CLASS_B)];
+        let at = coloc_with(
+            SizeUnitsRel::Pixels,
+            50.0,
+            ColocMultiplicity::ManyToMany,
+            vec![],
+        );
+        let above = coloc_with(
+            SizeUnitsRel::Pixels,
+            51.0,
+            ColocMultiplicity::ManyToMany,
+            vec![],
+        );
+        assert!(a_and_b_colocalize(&at, 1.0, &objects));
+        assert!(!a_and_b_colocalize(&above, 1.0, &objects));
+    }
+
+    #[test]
+    fn nanometer_minimum_is_converted_with_the_pixel_area() {
+        // 2 nm/px: one pixel is 4 nm², so the 50 px overlap is 200 nm².
+        let objects = [(ID_A, BOX_A, CLASS_A), (ID_B, BOX_B_HALF_ON_A, CLASS_B)];
+        let at = coloc_with(
+            SizeUnitsRel::NanoMeter,
+            200.0,
+            ColocMultiplicity::ManyToMany,
+            vec![],
+        );
+        let above = coloc_with(
+            SizeUnitsRel::NanoMeter,
+            204.0,
+            ColocMultiplicity::ManyToMany,
+            vec![],
+        );
+        assert!(a_and_b_colocalize(&at, 2.0, &objects));
+        assert!(!a_and_b_colocalize(&above, 2.0, &objects));
+    }
+
+    #[test]
+    fn one_to_one_also_respects_the_pixel_minimum() {
+        let objects = [(ID_A, BOX_A, CLASS_A), (ID_B, BOX_B_HALF_ON_A, CLASS_B)];
+        let at = coloc_with(
+            SizeUnitsRel::Pixels,
+            50.0,
+            ColocMultiplicity::OneToOne,
+            vec![],
+        );
+        let above = coloc_with(
+            SizeUnitsRel::Pixels,
+            51.0,
+            ColocMultiplicity::OneToOne,
+            vec![],
+        );
+        assert!(a_and_b_colocalize(&at, 1.0, &objects));
+        assert!(!a_and_b_colocalize(&above, 1.0, &objects));
+    }
+
+    #[test]
+    fn excluded_class_below_the_pixel_minimum_does_not_drop_the_pair() {
+        // C touches A only along its bottom row: 10 px (and B by 5 px).
+        let objects = [
+            (ID_A, BOX_A, CLASS_A),
+            (ID_B, BOX_B_HALF_ON_A, CLASS_B),
+            (ID_C, [0, 9, 29, 18], CLASS_C),
+        ];
+        let lenient = coloc_with(
+            SizeUnitsRel::Pixels,
+            20.0,
+            ColocMultiplicity::ManyToMany,
+            vec![CLASS_C],
+        );
+        let strict = coloc_with(
+            SizeUnitsRel::Pixels,
+            5.0,
+            ColocMultiplicity::ManyToMany,
+            vec![CLASS_C],
+        );
+        assert!(a_and_b_colocalize(&lenient, 1.0, &objects));
+        assert!(!a_and_b_colocalize(&strict, 1.0, &objects));
+    }
+
+    #[test]
+    fn exclusion_is_decided_per_object_as_documented() {
+        // C (excluded) touches only A. Per `exclude_classes`' doc, A gets no
+        // colocalization recorded for it; B didn't touch C, passes its own
+        // check and still lists A - same per-object model as the hub/spoke
+        // case, where a spoke failing the check is still listed by the hub.
+        let mut cache = GlobalPipelineCache::default();
+        for (id, bbox, class) in [
+            (ID_A, BOX_A, CLASS_A),
+            (ID_B, BOX_B_HALF_ON_A, CLASS_B),
+            (ID_C, [0, 0, 1, 1], CLASS_C),
+        ] {
+            let object = make_filled_object(id, bbox, ImagePlane::default(), class);
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        let coloc = coloc_with(
+            SizeUnitsRel::Pixels,
+            1.0,
+            ColocMultiplicity::ManyToMany,
+            vec![CLASS_C],
+        );
+        run(&coloc, &mut cache);
+
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
+        assert!(a.colocalized_with.is_empty(), "excluded A records nothing");
+        let b_partners: Vec<&ObjectId> = b.colocalized_with.values().flatten().collect();
+        assert_eq!(b_partners, [&ObjectId(ID_A)]);
+    }
+
+    // -- minimum overlap: percent of the smaller object (new) -----------
+
+    #[test]
+    fn percent_minimum_is_inclusive_at_the_exact_share() {
+        // 50 px overlap of two 100 px objects: 50 %.
+        let objects = [(ID_A, BOX_A, CLASS_A), (ID_B, BOX_B_HALF_ON_A, CLASS_B)];
+        let at = coloc_with(
+            SizeUnitsRel::Percent,
+            50.0,
+            ColocMultiplicity::ManyToMany,
+            vec![],
+        );
+        let above = coloc_with(
+            SizeUnitsRel::Percent,
+            51.0,
+            ColocMultiplicity::ManyToMany,
+            vec![],
+        );
+        assert!(a_and_b_colocalize(&at, 1.0, &objects));
+        assert!(!a_and_b_colocalize(&above, 1.0, &objects));
+    }
+
+    #[test]
+    fn percent_is_measured_against_the_smaller_object() {
+        // A 400 px cell, B a 100 px object overlapping it by 50 px: 50 % of
+        // B, but only 12.5 % of A - 40 % must pass.
+        let objects = [
+            (ID_A, [0, 0, 19, 19], CLASS_A),
+            (ID_B, [15, 0, 24, 9], CLASS_B),
+        ];
+        let coloc = coloc_with(
+            SizeUnitsRel::Percent,
+            40.0,
+            ColocMultiplicity::ManyToMany,
+            vec![],
+        );
+        assert!(a_and_b_colocalize(&coloc, 1.0, &objects));
+    }
+
+    #[test]
+    fn small_object_fully_inside_a_big_one_is_100_percent() {
+        let objects = [
+            (ID_A, [0, 0, 19, 19], CLASS_A),
+            (ID_B, [2, 2, 5, 5], CLASS_B),
+        ];
+        let coloc = coloc_with(
+            SizeUnitsRel::Percent,
+            100.0,
+            ColocMultiplicity::ManyToMany,
+            vec![],
+        );
+        assert!(a_and_b_colocalize(&coloc, 1.0, &objects));
+    }
+
+    #[test]
+    fn percent_minimum_does_not_depend_on_the_pixel_size() {
+        let objects = [(ID_A, BOX_A, CLASS_A), (ID_B, BOX_B_HALF_ON_A, CLASS_B)];
+        let above = coloc_with(
+            SizeUnitsRel::Percent,
+            51.0,
+            ColocMultiplicity::ManyToMany,
+            vec![],
+        );
+        assert!(!a_and_b_colocalize(&above, 0.1, &objects));
+        assert!(!a_and_b_colocalize(&above, 100.0, &objects));
+    }
+
+    #[test]
+    fn one_to_one_respects_the_percent_minimum() {
+        let objects = [(ID_A, BOX_A, CLASS_A), (ID_B, BOX_B_HALF_ON_A, CLASS_B)];
+        let at = coloc_with(
+            SizeUnitsRel::Percent,
+            50.0,
+            ColocMultiplicity::OneToOne,
+            vec![],
+        );
+        let above = coloc_with(
+            SizeUnitsRel::Percent,
+            51.0,
+            ColocMultiplicity::OneToOne,
+            vec![],
+        );
+        assert!(a_and_b_colocalize(&at, 1.0, &objects));
+        assert!(!a_and_b_colocalize(&above, 1.0, &objects));
+    }
+
+    #[test]
+    fn excluded_class_uses_the_percent_minimum_too() {
+        // A and B overlap by 50 %. C only grazes A (10 px = 10 % of A, the
+        // smaller of the two): not enough to exclude at 50 %.
+        let grazing = [
+            (ID_A, BOX_A, CLASS_A),
+            (ID_B, BOX_B_HALF_ON_A, CLASS_B),
+            (ID_C, [0, 9, 29, 18], CLASS_C),
+        ];
+        // A small C inside the A/B overlap: 100 % of C for both - excludes.
+        // (Exclusion is decided per object, so a C touching only A would
+        // drop A's side of the pair but not B's.)
+        let inside = [
+            (ID_A, BOX_A, CLASS_A),
+            (ID_B, BOX_B_HALF_ON_A, CLASS_B),
+            (ID_C, [5, 0, 6, 1], CLASS_C),
+        ];
+        let coloc = coloc_with(
+            SizeUnitsRel::Percent,
+            50.0,
+            ColocMultiplicity::ManyToMany,
+            vec![CLASS_C],
+        );
+        assert!(a_and_b_colocalize(&coloc, 1.0, &grazing));
+        assert!(!a_and_b_colocalize(&coloc, 1.0, &inside));
     }
 
     #[test]

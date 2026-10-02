@@ -15,12 +15,12 @@ mod storage;
 
 // System resource sizing (parallelism, reader pool size) based on available RAM
 pub use crate::resources::SystemDiagnostics;
-pub use crate::storage::duckdb::shared_connection as open_results_database;
 pub use crate::resources::cpu_ram_diagnostics;
 pub use crate::resources::cuda_is_available;
 pub use crate::resources::recommended_parallelism;
 pub use crate::resources::recommended_reader_pool_size;
 pub use crate::resources::system_diagnostics;
+pub use crate::storage::duckdb::shared_connection as open_results_database;
 
 // Image reader
 pub use crate::image::ChannelInfo;
