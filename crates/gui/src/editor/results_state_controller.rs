@@ -2944,6 +2944,13 @@ impl ResultsStateController {
             return Err("Choose an output folder first.".to_string());
         }
 
+        let file_prefix_tmp = state.get_output_file_prefix().to_string();
+        let file_prefix = if file_prefix_tmp.is_empty() {
+            None
+        } else {
+            Some(file_prefix_tmp)
+        };
+
         let parse_u32 = |label: &str, text: slint::SharedString| -> Result<u32, String> {
             text.trim()
                 .parse::<u32>()
@@ -3042,6 +3049,7 @@ impl ResultsStateController {
 
         Ok(ResultExport {
             output_dir: PathBuf::from(output_dir),
+            outputfile_prefix: file_prefix,
             format,
             z_stacks: std::range::Range {
                 start: z_start,

@@ -404,6 +404,12 @@ pub struct ResultExport {
     /// Every document below lives directly under it (`list.xlsx`,
     /// `plate.xlsx`, `well.xlsx`, `heatmap_{image}.xlsx`).
     pub output_dir: PathBuf,
+
+    /// Optional prefix added to each output file name, as
+    /// `{prefix}_{name}` (e.g. `exp1_list.xlsx`). Blank means none; unsafe
+    /// characters are replaced by `_`.
+    pub outputfile_prefix: Option<String>,
+
     pub format: ExportFormat,
     #[serde(with = "range_serde")]
     pub t_stacks: Range<u32>,

@@ -7,7 +7,7 @@
 // globals are per-tree, so the main window's dialog machinery is simply
 // unreachable here.
 
-import { LineEdit, CheckBox, ScrollView } from "std-widgets.slint";
+import { LineEdit, CheckBox, ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
 import {
@@ -20,6 +20,7 @@ export global ExportDialogState {
 
     // -- Output --
     in-out property <string> output-dir: "";
+    in-out property <string> output-file-prefix: "";
     callback pick-output-dir();
 
     // -- Format --
@@ -203,6 +204,14 @@ export component ExportDialog inherits Rectangle {
 
                             HorizontalLayout {
                                 spacing: 8px;
+
+                                LineEdit {
+                                    width: 120px;
+                                    placeholder-text: "filename prefix_";
+                                    text <=> ExportDialogState.output-file-prefix;
+                                    font-size: 11.5px;
+                                }
+
                                 Rectangle {
                                     horizontal-stretch: 1;
                                     height: 32px;
@@ -226,7 +235,7 @@ export component ExportDialog inherits Rectangle {
                                     summary-text: ExportDialogState.format-summary;
                                     items <=> ExportDialogState.format-items;
                                     multi-select: false;
-                                    pill-width: 140px;
+                                    pill-width: 70px;
                                     item-selected(key, value, selected) => { if selected { ExportDialogState.format-summary = value; } }
                                 }
 

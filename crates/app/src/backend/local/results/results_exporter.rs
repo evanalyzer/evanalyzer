@@ -35,6 +35,25 @@ const EMPTY_CELL_BG: u32 = 0xE0E0E0;
 const LIST_VALUE_COL_PX: u32 = 90;
 
 impl ResultExport {
+    /// Where an export document named `file_name` goes: inside
+    /// `output_dir`, prefixed with `outputfile_prefix` (`{prefix}_{file_name}`)
+    /// when one is set. The prefix is sanitized like every other file name
+    /// part, so it can't point outside `output_dir`.
+    fn output_path(&self, file_name: &str) -> std::path::PathBuf {
+        match self
+            .outputfile_prefix
+            .as_deref()
+            .map(str::trim)
+            .filter(|prefix| !prefix.is_empty())
+        {
+            Some(prefix) => self.output_dir.join(format!(
+                "{}_{file_name}",
+                sanitize_filename_component(prefix)
+            )),
+            None => self.output_dir.join(file_name),
+        }
+    }
+
     /// `on_progress(message, current, total)` is called throughout to
     /// report what's happening — see `ExportProgress`'s doc comment for what
     /// `current`/`total` are relative to. Called from a background thread
@@ -209,7 +228,7 @@ impl ResultExport {
                 }
 
                 workbook
-                    .save(self.output_dir.join(format!("{file_stem}.xlsx")))
+                    .save(self.output_path(&format!("{file_stem}.xlsx")))
                     .map_err(xlsx_err)?;
             }
             ExportFormat::CSV => {
@@ -220,7 +239,7 @@ impl ResultExport {
                     images,
                     object_classes,
                     false,
-                    &self.output_dir.join(format!("{file_stem}.csv")),
+                    &self.output_path(&format!("{file_stem}.csv")),
                 )?;
                 if self.with_list_coloc_details {
                     write_list_csv(
@@ -230,9 +249,7 @@ impl ResultExport {
                         images,
                         object_classes,
                         true,
-                        &self
-                            .output_dir
-                            .join(format!("{file_stem}_coloc_details.csv")),
+                        &self.output_path(&format!("{file_stem}_coloc_details.csv")),
                     )?;
                 }
             }
@@ -302,11 +319,11 @@ impl ResultExport {
                 write_database_result_sheet(sheet, &result)?;
 
                 workbook
-                    .save(self.output_dir.join("grouped_by_image.xlsx"))
+                    .save(self.output_path("grouped_by_image.xlsx"))
                     .map_err(xlsx_err)?;
             }
             ExportFormat::CSV => {
-                write_csv(&result, &self.output_dir.join("grouped_by_image.csv"))?;
+                write_csv(&result, &self.output_path("grouped_by_image.csv"))?;
             }
             // See the identical arm in `write_list_document` above.
             ExportFormat::Parquet => {
@@ -431,7 +448,7 @@ impl ResultExport {
             }
 
             plate_workbook
-                .save(self.output_dir.join("plate.xlsx"))
+                .save(self.output_path("plate.xlsx"))
                 .map_err(xlsx_err)?;
         }
 
@@ -507,7 +524,7 @@ impl ResultExport {
             }
 
             well_workbook
-                .save(self.output_dir.join("well.xlsx"))
+                .save(self.output_path("well.xlsx"))
                 .map_err(xlsx_err)?;
         }
 
@@ -650,7 +667,7 @@ impl ResultExport {
                 plate_values.into_iter().collect();
             plate_rows.sort_by(|(a, _), (b, _)| a.cmp(b));
             write_flat_pivot(
-                &self.output_dir.join("plate_list.xlsx"),
+                &self.output_path("plate_list.xlsx"),
                 "Plate",
                 &["Well"],
                 &combo_labels,
@@ -747,7 +764,7 @@ impl ResultExport {
                 })
             });
             write_flat_pivot(
-                &self.output_dir.join("well_list.xlsx"),
+                &self.output_path("well_list.xlsx"),
                 "Well",
                 &["Well", "Field", "Image"],
                 &combo_labels,
@@ -833,7 +850,7 @@ impl ResultExport {
                 sanitize_filename_component(&image_stub(image))
             );
             workbook
-                .save(self.output_dir.join(file_name))
+                .save(self.output_path(&file_name))
                 .map_err(xlsx_err)?;
         }
         Ok(())
@@ -854,7 +871,7 @@ impl ResultExport {
     ) -> Result<(), InternalErrors> {
         check_cancelled(cancel)?;
         on_progress("Exporting Parquet", 0, 1);
-        let path = self.output_dir.join("objects.parquet");
+        let path = self.output_path("objects.parquet");
         // DuckDB's `COPY` takes the destination as a single-quoted string
         // literal inside the SQL text itself (not a bindable parameter), so
         // any literal `'` in the path has to be escaped the same way a SQL
@@ -1889,6 +1906,84 @@ mod tests {
     /// and the GUI export dialog) actually writes a real
     /// `list.csv`/`grouped_by_image.csv` with the expected content — not
     /// just that a caller's own call site happens to work.
+    #[test]
+    fn output_file_prefix_is_prepended_to_every_document() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+        ]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            outputfile_prefix: Some("exp1".into()),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            columns,
+            aggregations: vec![Aggregation::Avg],
+            with_list_view: true,
+            with_grouped_by_image_list: true,
+            with_heatmap: true,
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("prefixed export");
+
+        let mut written: Vec<String> = std::fs::read_dir(&out_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        written.sort();
+        assert!(
+            written.contains(&"exp1_list.xlsx".to_string()),
+            "{written:?}"
+        );
+        assert!(
+            written.contains(&"exp1_grouped_by_image.xlsx".to_string()),
+            "{written:?}"
+        );
+        assert!(
+            written.iter().any(|f| f.starts_with("exp1_heatmap_")),
+            "{written:?}"
+        );
+        assert!(
+            written.iter().all(|f| f.starts_with("exp1_")),
+            "{written:?}"
+        );
+    }
+
+    #[test]
+    fn output_path_sanitizes_the_prefix_and_ignores_a_blank_one() {
+        let export = |prefix: Option<&str>| ResultExport {
+            output_dir: PathBuf::from("/out"),
+            outputfile_prefix: prefix.map(str::to_string),
+            ..Default::default()
+        };
+        assert_eq!(
+            export(None).output_path("list.csv"),
+            PathBuf::from("/out/list.csv")
+        );
+        assert_eq!(
+            export(Some("  ")).output_path("list.csv"),
+            PathBuf::from("/out/list.csv")
+        );
+        assert_eq!(
+            export(Some(" run 2 ")).output_path("list.csv"),
+            PathBuf::from("/out/run_2_list.csv")
+        );
+        // Can't escape the output folder.
+        assert_eq!(
+            export(Some("../../etc/x")).output_path("list.csv"),
+            PathBuf::from("/out/______etc_x_list.csv")
+        );
+    }
+
     #[test]
     fn start_export_writes_csv_for_list_and_grouped_by_image() {
         let (database, out_dir) = open(&[
