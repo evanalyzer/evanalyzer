@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ret = match args.command {
         Some(cmd) => match cmd {
             TopCommand::Cli { command } => start_cli(&backend, command),
-            TopCommand::Serve {
+            TopCommand::Worker {
                 listen,
                 token,
                 roots,

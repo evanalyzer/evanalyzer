@@ -149,7 +149,7 @@ impl SessionManagement {
         let worker_token = generate_token()?;
         let mut command = Command::new(&self.worker_command);
         command
-            .arg("serve")
+            .arg("worker")
             .arg("--listen")
             .arg(format!("127.0.0.1:{port}"))
             .stdin(Stdio::null())

@@ -37,14 +37,14 @@ pub enum TopCommand {
         #[command(subcommand)]
         command: evanalyzer_cli::CliCommand,
     },
+    /// Start an EVAnalyzer server which manages more evanalyzer worker sessions
+    Server {
+        #[arg(long, default_value = "127.0.0.1:7400")]
+        listen: String,
+    },
     /// Run as a compute server for remote GUIs/CLIs (`--remote ws://...`).
-    ///
-    /// The connection is not encrypted: across machines, reach the server
-    /// through an SSH tunnel or VPN. Anyone with the token can make this
-    /// machine read images and write results wherever this process may.
-    Serve {
-        /// Address to listen on. Defaults to this machine only; use e.g.
-        /// `0.0.0.0:7400` to accept other machines.
+    Worker {
+        /// Address to listen on.
         #[arg(long, default_value = "127.0.0.1:7400")]
         listen: String,
 
@@ -52,16 +52,9 @@ pub enum TopCommand {
         #[arg(long, env = "EVANALYZER_SERVER_TOKEN", hide_env_values = true)]
         token: Option<String>,
 
-        /// Folder clients may browse and use (repeatable). Every file, image,
-        /// project and results path must lie inside one of them. Without any,
-        /// clients can reach every file this process can.
+        /// Folder clients may browse and use (repeatable).
         #[arg(long = "root", value_name = "FOLDER")]
         roots: Vec<std::path::PathBuf>,
-    },
-    /// Start an EVAnalyzer server
-    Server {
-        #[arg(long, default_value = "127.0.0.1:7400")]
-        listen: String,
     },
 }
 
@@ -133,7 +126,7 @@ mod tests {
     fn serve_defaults_to_localhost_only() {
         let args = Args::try_parse_from(["evanalyzer", "serve"]).unwrap();
         match args.command {
-            Some(TopCommand::Serve { listen, roots, .. }) => {
+            Some(TopCommand::Worker { listen, roots, .. }) => {
                 assert_eq!(listen, "127.0.0.1:7400");
                 assert!(roots.is_empty());
             }
@@ -153,7 +146,7 @@ mod tests {
         ])
         .unwrap();
         match args.command {
-            Some(TopCommand::Serve { roots, .. }) => {
+            Some(TopCommand::Worker { roots, .. }) => {
                 assert_eq!(
                     roots,
                     [std::path::PathBuf::from("/data"), "/scratch".into()]
