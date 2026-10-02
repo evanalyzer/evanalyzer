@@ -11,3 +11,10 @@ publish = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 tungstenite = { workspace = true }
+yescrypt = { version = "0.1.0", default-features = false, features = ["password-hash"] }
+sha-crypt = "0.6.0"
+serde_json = { workspace = true }
+serde = { workspace = true, features = ["derive","rc"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

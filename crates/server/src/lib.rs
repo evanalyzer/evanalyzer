@@ -1,3 +1,4 @@
+mod api;
 mod server;
 mod session_management;
 mod user_management;

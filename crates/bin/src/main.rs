@@ -129,7 +129,7 @@ fn start_serve(
 
 /// Start evanalyzer server
 fn start_server(listen: String) -> Result<(), Box<dyn std::error::Error>> {
-    serve(listen);
+    serve(listen)?;
     Ok(())
 }
 
