@@ -359,7 +359,7 @@
         },
         "sizeUnit": {
           "description": "Size unit for the minimum coloc area size",
-          "$ref": "#/$defs/SizeUnits",
+          "$ref": "#/$defs/SizeUnitsRel",
           "default": "PIXELS"
         }
       }
@@ -2487,6 +2487,14 @@
       "enum": [
         "NANO_METER",
         "PIXELS"
+      ]
+    },
+    "SizeUnitsRel": {
+      "type": "string",
+      "enum": [
+        "NANO_METER",
+        "PIXELS",
+        "PERCENT"
       ]
     },
     "StardistSettings": {

@@ -1921,6 +1921,50 @@ mod tests {
     /// `list.csv`/`grouped_by_image.csv` with the expected content — not
     /// just that a caller's own call site happens to work.
     #[test]
+    fn transposed_export_writes_the_classes_side_by_side() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 200),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 300),
+        ]);
+        let (z_stacks, t_stacks) = full_range();
+        ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_list_view: true,
+            with_grouped_by_image_list: true,
+            transpond_table: true,
+            ..Default::default()
+        }
+        .start_export(&database, &no_cancel(), &mut no_progress())
+        .expect("transposed export");
+
+        let list = std::fs::read_to_string(out_dir.join("list.csv")).unwrap();
+        let mut lines = list.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "image,Area [px] (ClassA),Area [px] (ClassB)"
+        );
+        assert_eq!(lines.count(), 2, "one row per image here: {list}");
+
+        let grouped = std::fs::read_to_string(out_dir.join("grouped_by_image.csv")).unwrap();
+        let mut lines = grouped.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "image,Area [px] (AVG) (ClassA),Area [px] (AVG) (ClassB)"
+        );
+        // img2 has no ClassB objects: an empty field, not 0.
+        assert!(
+            lines.any(|line| line.starts_with("img2.tif,300") && line.ends_with(',')),
+            "{grouped}"
+        );
+    }
+
+    #[test]
     fn output_file_prefix_is_prepended_to_every_document() {
         let (database, out_dir) = open(&[
             ObjectSpec::new("img1.tif", "ClassA", 1, 100),

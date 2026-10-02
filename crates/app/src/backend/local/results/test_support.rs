@@ -242,6 +242,48 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
     }
 }
 
+/// Seeds a large synthetic database for benchmarks: `images` images x
+/// `classes` classes x `per_class` objects each, with random measurements
+/// and random (v4) object ids like real data. Bulk `INSERT ... SELECT`, so
+/// millions of rows take seconds instead of the per-row inserts of
+/// [`seed_db`].
+pub(super) fn seed_synthetic_db(path: &Path, images: u32, classes: u32, per_class: u32) {
+    let conn = Connection::open(path).expect("open bench db");
+    create_schema(&conn);
+    conn.execute_batch(&format!(
+        "INSERT INTO objects (
+            image_name, image_rel_path, c_stack, z_stack, t_stack, object_id,
+            seg_class_name, seg_class_id, object_class_name, object_class_id, track_id,
+            centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+            bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+            bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+            area_px, area_nm2, perimeter_px, perimeter_nm,
+            circularity, solidity, aspect_ratio, roundness, compactness,
+            major_axis_px, minor_axis_px, eccentricity, touches_edge,
+            pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+            intensities_json, coloc_json)
+         SELECT
+            'img_' || lpad(i::VARCHAR, 5, '0') || '.tif', 'img_' || lpad(i::VARCHAR, 5, '0') || '.tif',
+            0, 0, 0, uuid(),
+            'class_' || c, c, '[\"class_' || c || '\"]', '[' || c || ']', 0,
+            random() * 1000, random() * 1000, 0, 0,
+            0, 0, 10, 10, 0, 0, 0, 0,
+            (random() * 1000)::UBIGINT, random() * 1000, random() * 100, random() * 100,
+            random(), random(), 1, 1, 1,
+            10, 10, random(), false,
+            1, 1, 1,
+            '{CH0_INTENSITIES_JSON}', '{{}}'
+         FROM range({images}) t1(i), range(1, {classes} + 1) t2(c), range({per_class}) t3(k);
+         INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks)
+         SELECT 'img_' || lpad(i::VARCHAR, 5, '0') || '.tif', 'img_' || lpad(i::VARCHAR, 5, '0') || '.tif',
+                1000, 1000, 1, 1, 1
+         FROM range({images}) t(i);
+         INSERT INTO classes (class_id, name, color)
+         SELECT c, 'class_' || c, 0 FROM range(1, {classes} + 1) t(c);"
+    ))
+    .expect("seed synthetic db");
+}
+
 /// Extracts a flat JSON object's top-level keys without pulling in a JSON
 /// crate — good enough for the simple `{"0":{...},"1":{...}}` shape
 /// `intensities_to_json` produces (used only to compute a fixture's real

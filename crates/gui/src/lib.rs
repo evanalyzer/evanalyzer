@@ -491,7 +491,10 @@ mod ui_state_tests {
         assert_eq!(connection_label(backend.as_ref()), "This computer");
 
         let ui = AppWindow::new().unwrap();
-        assert!(show_connection(&ui, &backend).is_none(), "no polling locally");
+        assert!(
+            show_connection(&ui, &backend).is_none(),
+            "no polling locally"
+        );
         let state = ui.global::<ConnectionState>();
         assert!(!state.get_remote());
         assert!(state.get_connected());

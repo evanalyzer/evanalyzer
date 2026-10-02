@@ -76,6 +76,7 @@ pub mod core_types {
     pub use crate::types::image::ZProjection;
     pub use crate::types::units::PixelUnits;
     pub use crate::types::units::SizeUnits;
+    pub use crate::types::units::SizeUnitsRel;
 }
 
 #[cfg(test)]

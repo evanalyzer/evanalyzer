@@ -1,6 +1,6 @@
 // @generated - do not edit by hand
 use crate::{
-    core_types::{ImageAddress, MemoryId, PixelUnits, SizeUnits},
+    core_types::{ImageAddress, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel},
     types::classes::{ObjectClass, SegmentationClass},
 };
 use schemars::JsonSchema;
@@ -2120,7 +2120,7 @@ pub struct ColocalizationSettings {
     /// How many partners an object may coloc with at once.
     pub multiplicity: ObjectColocObjectsColocMultiplicitySettings,
     /// Size unit for the minimum coloc area size
-    pub size_unit: SizeUnits,
+    pub size_unit: SizeUnitsRel,
     /// Minimum overlapping area size to count objects as coloc
     pub min_coloc_area: f32,
     /// Classes an object must NOT overlap to be considered colocalized.
@@ -2143,7 +2143,7 @@ impl Default for ColocalizationSettings {
             filter_classes: vec![],
             class_for_overlapping_areas: ObjectClass::default(),
             multiplicity: ObjectColocObjectsColocMultiplicitySettings::OneToOne,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
             min_coloc_area: 0.0f32,
             exclude_classes: vec![],
         }

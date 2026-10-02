@@ -265,7 +265,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     // Header - only config/serde imports, no core
     out.push_str("// @generated - do not edit by hand\n");
     // out.push_str("use indexmap::IndexMap;\n");
-    out.push_str("use crate::{core_types::{ImageAddress,MemoryId,PixelUnits, SizeUnits}, types::classes::{ObjectClass, SegmentationClass}};\n");
+    out.push_str("use crate::{core_types::{ImageAddress,MemoryId,PixelUnits, SizeUnits, SizeUnitsRel}, types::classes::{ObjectClass, SegmentationClass}};\n");
     out.push_str("use std::path::PathBuf;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");

@@ -94,6 +94,19 @@ export component ResultsListView inherits Rectangle {
                 }
 
                 MultiSelectDropdown {
+                    label: "LAYOUT";
+                    summary-text: ResultsState.list-layout-summary;
+                    items <=> ResultsState.list-layout-items;
+                    multi-select: false;
+                    pill-width: 110px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.list-layout-summary = value;
+                        ResultsState.list-transpond = key == "side-by-side";
+                        ResultsState.list-transpond-changed(ResultsState.list-transpond);
+                    }
+                }
+
+                MultiSelectDropdown {
                     label: "VIEW";
                     summary-text: ResultsState.list-group-by-summary;
                     items <=> ResultsState.list-group-by-items;

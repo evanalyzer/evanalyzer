@@ -183,6 +183,17 @@ export global ResultsState {
     ];
     in-out property <string> list-with-coloc-details-summary: "Flat";
 
+    // Rows (one row per object / per (image, class)) or the classes side by
+    // side: per image one column block per class (`transpond_table` on
+    // `ListFilter`/`GroupedByImageFilter` in results_generator.rs).
+    in-out property <bool> list-transpond: false;
+    callback list-transpond-changed(bool);
+    in-out property <[MultiSelectItem]> list-layout-items: [
+        { key: "rows", value: "Rows", group: "", selected: true },
+        { key: "side-by-side", value: "Side by side", group: "", selected: false },
+    ];
+    in-out property <string> list-layout-summary: "Rows";
+
     // Table body. Rust only ever fills this with the current page (see
     // ResultsStateController::update_list_view) — never the full result set
     // — so it stays cheap to diff/render no matter how large the underlying
@@ -208,9 +219,7 @@ export global ResultsState {
     // longest header/cell text actually on this page, capped at 260px -
     // see that function's own comment for why a real font-metrics
     // measurement isn't needed here.
-    in-out property <[float]> list-column-widths: [
-        120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120
-    ];
+    in-out property <[float]> list-column-widths: [120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120];
     in-out property <[ResultRow]> list-rows: [
         { cells: ["long text", "short"] },
         {

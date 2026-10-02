@@ -65,6 +65,8 @@ struct ListFilter {
     pub object_classes: Vec<ObjectClass>,
     pub columns: Vec<Column>,
     pub with_coloc_details: bool,
+    /// Classes side by side instead of one row per object/(image, class).
+    pub transpond: bool,
     pub group_by: ListGroupBy,
     /// Unused in Objects mode.
     pub aggregations: Vec<Aggregation>,
@@ -473,6 +475,15 @@ impl ResultsStateController {
                         .lock()
                         .expect("Poisened")
                         .with_coloc_details = enabled;
+                    manager.refresh_list();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_transpond_changed(move |enabled| {
+                    manager.list_filter.lock().expect("Poisened").transpond = enabled;
+                    // Rows and cursors mean something else in the other
+                    // layout: start over at page 1.
                     manager.refresh_list();
                 });
 
@@ -1350,6 +1361,7 @@ impl ResultsStateController {
                     object_classes: default_object_classes,
                     columns: DEFAULT_LIST_COLUMNS.to_vec(),
                     with_coloc_details: false,
+                    transpond: false,
                     group_by: ListGroupBy::Objects,
                     aggregations: vec![Aggregation::Avg],
                 };
@@ -1419,6 +1431,11 @@ impl ResultsStateController {
                     if let Some(ui_ready) = ui_weak.upgrade() {
                         let state = ui_ready.global::<ResultsState>();
                         state.set_list_with_coloc_details(false);
+                        state.set_list_transpond(false);
+                        state.set_list_layout_summary("Rows".into());
+                        state.set_list_layout_items(ModelRc::from(Rc::new(VecModel::from(
+                            layout_items(false),
+                        ))));
                         state.set_list_group_by_summary("Objects".into());
                         state.set_list_group_by_items(ModelRc::from(Rc::new(VecModel::from(
                             group_by_items(false),
@@ -1775,6 +1792,7 @@ impl ResultsStateController {
         };
         let columns = list_filter.columns.clone();
         let with_coloc_details = list_filter.with_coloc_details;
+        let transpond_table = list_filter.transpond;
         let group_by = list_filter.group_by;
         let aggregations = list_filter.aggregations.clone();
         drop(list_filter);
@@ -1799,7 +1817,7 @@ impl ResultsStateController {
                     limit: LIST_PAGE_SIZE,
                     after: cursor,
                 },
-                transpond_table: false,
+                transpond_table,
             }),
             // Non-aggregable columns (Object ID/Image/Class) don't mean
             // anything once rows are grouped by image — silently dropped
@@ -1819,7 +1837,7 @@ impl ResultsStateController {
                         limit: LIST_PAGE_SIZE,
                         after: cursor,
                     },
-                    transpond_table: false,
+                    transpond_table,
                 })
             }
         };
@@ -3334,6 +3352,26 @@ fn group_by_items(selected_images: bool) -> Vec<MultiSelectItem> {
     ]
 }
 
+/// The LAYOUT dropdown: rows, or the Side by side.
+fn layout_items(side_by_side: bool) -> Vec<MultiSelectItem> {
+    vec![
+        MultiSelectItem {
+            key: "rows".into(),
+            value: "Rows".into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: !side_by_side,
+        },
+        MultiSelectItem {
+            key: "side-by-side".into(),
+            value: "Side by side".into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: side_by_side,
+        },
+    ]
+}
+
 // Distinct group names in first-seen order, so the dropdown renders sections
 // in the same order the columns arrive in.
 fn column_groups(columns: &[ColumnEntry]) -> Vec<slint::SharedString> {
@@ -4320,6 +4358,11 @@ mod tests {
 
         state.invoke_list_with_coloc_details_changed(true);
         assert!(controller.list_filter.lock().unwrap().with_coloc_details);
+
+        state.invoke_list_transpond_changed(true);
+        assert!(controller.list_filter.lock().unwrap().transpond);
+        state.invoke_list_transpond_changed(false);
+        assert!(!controller.list_filter.lock().unwrap().transpond);
 
         state.invoke_list_group_by_selected("images".into());
         assert_eq!(

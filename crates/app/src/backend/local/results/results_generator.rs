@@ -167,6 +167,16 @@ impl ResultsGenerator {
         if let Some(names) = &image_names {
             conditions.push(format!("image_rel_path IN ({})", sql_string_in_list(names)));
         }
+        if filter.transpond_table {
+            let blocks = class_blocks(class_ids.as_deref(), &classes);
+            return self.get_object_list_transposed(
+                filter,
+                &conditions,
+                &blocks,
+                &ordered_columns,
+                &classes,
+            );
+        }
         if let Some(ids) = &class_ids {
             conditions.push(format!(
                 "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
@@ -364,6 +374,25 @@ impl ResultsGenerator {
                     .join(", ")
             ));
         }
+        if filter.transpond_table {
+            let ids: Option<Vec<u32>> = filter.object_classes.as_ref().map(|wanted| {
+                wanted
+                    .iter()
+                    .filter_map(|id| match id {
+                        ObjectClass::Valid(n) => Some(*n),
+                        ObjectClass::Unset => None,
+                    })
+                    .collect()
+            });
+            let blocks = class_blocks(ids.as_deref(), &classes);
+            return self.get_grouped_by_image_transposed(
+                filter,
+                &conditions,
+                &blocks,
+                &ordered_columns,
+                &classes,
+            );
+        }
         // Keyset pagination over the *groups* (one (image, class) pair =
         // one row here), not over individual objects like
         // `get_object_list` - ordered the same way (`image_rel_path`, then
@@ -491,6 +520,304 @@ impl ResultsGenerator {
             max: max as f32,
             source_object_count,
             row_locations: Vec::new(),
+        })
+    }
+
+    /// `get_grouped_by_image` with `transpond_table`: one row per image, and
+    /// per class in `blocks` one column per (column x aggregation) - the
+    /// (image, class) rows of the normal view placed side by side.
+    ///
+    /// Done in the query itself in one pass: a single `GROUP BY image` with
+    /// one `agg(...) FILTER (WHERE class_id = c)` per output column, so
+    /// DuckDB aggregates every class at once instead of us re-shaping
+    /// (image, class) rows afterwards. Pages over images (`row_names` holds
+    /// each row's `image_rel_path`, the next page's cursor).
+    fn get_grouped_by_image_transposed(
+        &self,
+        filter: &GroupedByImageFilter,
+        base_conditions: &[String],
+        blocks: &[u32],
+        ordered_columns: &[Column],
+        classes: &[Class],
+    ) -> Result<DatabaseResult, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut column_names = vec!["image".to_string()];
+        let mut value_exprs = Vec::new();
+        for class_id in blocks {
+            let class_label = class_display_label(ObjectClass::Valid(*class_id), classes);
+            for column in ordered_columns {
+                for aggregation in &filter.aggregation {
+                    let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
+                    column_names.push(format!(
+                        "{} ({agg_fn}) ({class_label})",
+                        column.display_label(classes)
+                    ));
+                    value_exprs.push(format!(
+                        "{agg_fn}({value_expr}) FILTER (WHERE class_id = {class_id}) AS value_{}",
+                        value_exprs.len()
+                    ));
+                }
+            }
+        }
+        if value_exprs.is_empty() {
+            return Ok(empty_database_result(column_names));
+        }
+
+        let mut conditions = base_conditions.to_vec();
+        conditions.push(format!("class_id IN ({})", sql_u32_list(blocks)));
+        if let Some(cursor) = &filter.page.after {
+            conditions.push(format!("image_rel_path > '{}'", cursor.replace('\'', "''")));
+        }
+        let limit = filter.page.limit.max(0);
+        let sql = format!(
+            "SELECT image_rel_path, MIN(image_name), {}\n\
+             FROM objects, UNNEST(CAST(object_class_id AS INTEGER[])) AS u(class_id)\n\
+             WHERE {}\n\
+             GROUP BY image_rel_path\n\
+             ORDER BY image_rel_path\n\
+             LIMIT {limit}",
+            value_exprs.join(", "),
+            conditions.join(" AND ")
+        );
+        let n = value_exprs.len();
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let groups: Vec<(String, String, Vec<Option<f64>>)> = stmt
+            .query_map([], |row| {
+                let mut values = Vec::with_capacity(n);
+                for i in 0..n {
+                    values.push(row.get::<_, Option<f64>>(2 + i)?);
+                }
+                Ok((row.get(0)?, row.get(1)?, values))
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+
+        let (min, max) = value_range(groups.iter().flat_map(|(_, _, values)| values.iter()));
+        let row_names = groups.iter().map(|(path, _, _)| path.clone()).collect();
+        let source_object_count = groups.len();
+        let rows = groups
+            .into_iter()
+            .map(|(image_rel_path, image_name, values)| {
+                let search_key = Some((image_name.clone(), image_rel_path));
+                let mut cells = vec![Cell {
+                    value: CellValue::String(image_name),
+                    search_key: search_key.clone(),
+                    ..plain_cell()
+                }];
+                cells.extend(values.into_iter().map(|value| Cell {
+                    // No objects of that class in this image: empty, not 0.
+                    value: value.map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
+                    search_key: search_key.clone(),
+                    ..plain_cell()
+                }));
+                cells
+            })
+            .collect();
+        Ok(DatabaseResult {
+            column_names,
+            row_names,
+            rows,
+            min,
+            max,
+            source_object_count,
+            row_locations: Vec::new(),
+        })
+    }
+
+    /// `get_object_list` with `transpond_table`: the classes side by side.
+    /// Per image, the n-th object of each class in `blocks` (ordered by
+    /// object id) shares row n, with one block of columns per class; a class
+    /// with fewer objects in that image leaves its block empty in the extra
+    /// rows. `ImageName`/`ObjectClass` aren't repeated per block - the image
+    /// is the first column and the class is the block.
+    ///
+    /// Two queries, like the normal list: the row layout comes straight from
+    /// SQL (`row_number() OVER (PARTITION BY image, class)` gives every
+    /// object its row, and the page is cut on (image, row) keys), touching
+    /// only narrow id/filter columns; then the page's objects are fetched in
+    /// full by id. Pages over (image, row): `row_names` holds
+    /// `"{image_rel_path}\u{1}{row}"`, the next page's cursor.
+    fn get_object_list_transposed(
+        &self,
+        filter: &ListFilter,
+        base_conditions: &[String],
+        blocks: &[u32],
+        ordered_columns: &[Column],
+        classes: &[Class],
+    ) -> Result<DatabaseResult, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let block_columns: Vec<Column> = ordered_columns
+            .iter()
+            .filter(|c| !matches!(c, Column::ImageName | Column::ObjectClass))
+            .cloned()
+            .collect();
+        let mut column_names = vec!["image".to_string()];
+        for class_id in blocks {
+            let class_label = class_display_label(ObjectClass::Valid(*class_id), classes);
+            for column in &block_columns {
+                column_names.push(format!("{} ({class_label})", column.display_label(classes)));
+            }
+        }
+        if blocks.is_empty() {
+            return Ok(empty_database_result(column_names));
+        }
+
+        let mut page_condition = String::new();
+        let mut cursor_path = None;
+        if let Some(cursor) = &filter.page.after {
+            let (path, row) = cursor.split_once('\u{1}').unwrap_or((cursor.as_str(), "0"));
+            let path = path.replace('\'', "''");
+            let rows_done = row.parse::<i64>().unwrap_or(0);
+            page_condition = format!("WHERE (image_rel_path, rn) > ('{path}', {rows_done})");
+            cursor_path = Some(path);
+        }
+        let limit = filter.page.limit.max(0);
+        // Without the class condition: it would need the UNNEST, which makes
+        // finding the next images 5x slower. An image without objects of the
+        // selected classes just contributes no rows below.
+        let image_conditions = {
+            let mut conditions = base_conditions.to_vec();
+            if let Some(path) = &cursor_path {
+                conditions.push(format!("image_rel_path >= '{path}'"));
+            }
+            conditions.join(" AND ")
+        };
+        let mut conditions = base_conditions.to_vec();
+        conditions.push(format!("class_id IN ({})", sql_u32_list(blocks)));
+        let conditions = conditions.join(" AND ");
+
+        // Numbering objects into rows needs a sort per (image, class), so
+        // only the next few images get numbered: start with 4 and widen 4x
+        // while the page isn't full and there are more images - a 500-row
+        // page usually needs one or two. Numbering every remaining image
+        // instead made a page ~20x slower on 2.4M objects.
+        let mut batch = 4;
+        let slots = loop {
+            let images: Vec<String> = {
+                let sql = format!(
+                    "SELECT DISTINCT image_rel_path FROM objects WHERE {image_conditions}\n\
+                     ORDER BY image_rel_path LIMIT {batch}"
+                );
+                let mut stmt = self.database.prepare(&sql).map_err(err)?;
+                stmt.query_map([], |row| row.get(0))
+                    .map_err(err)?
+                    .collect::<Result<_, _>>()
+                    .map_err(err)?
+            };
+            if images.is_empty() {
+                return Ok(empty_database_result(column_names));
+            }
+            let sql = format!(
+                "WITH ranked AS (\n\
+                    SELECT image_rel_path, image_name, class_id, object_id,\n\
+                           row_number() OVER (PARTITION BY image_rel_path, class_id ORDER BY object_id) AS rn\n\
+                    FROM objects, UNNEST(CAST(object_class_id AS INTEGER[])) AS u(class_id)\n\
+                    WHERE {conditions} AND image_rel_path IN ({})\n\
+                 ), page AS (\n\
+                    SELECT DISTINCT image_rel_path, rn FROM ranked {page_condition}\n\
+                    ORDER BY image_rel_path, rn LIMIT {limit}\n\
+                 )\n\
+                 SELECT r.image_rel_path, r.image_name, r.rn, r.class_id, r.object_id::VARCHAR\n\
+                 FROM ranked r JOIN page p ON r.image_rel_path = p.image_rel_path AND r.rn = p.rn\n\
+                 ORDER BY r.image_rel_path, r.rn, r.class_id",
+                sql_string_in_list(&images)
+            );
+            let mut stmt = self.database.prepare(&sql).map_err(err)?;
+            let slots: Vec<(String, String, i64, u32, String)> = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })
+                .map_err(err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(err)?;
+            let mut rows: Vec<(&str, i64)> =
+                slots.iter().map(|slot| (slot.0.as_str(), slot.2)).collect();
+            rows.dedup();
+            let page_full = rows.len() >= limit as usize;
+            let no_more_images = images.len() < batch;
+            if page_full || no_more_images {
+                break slots;
+            }
+            batch *= 4;
+        };
+        if slots.is_empty() {
+            return Ok(empty_database_result(column_names));
+        }
+
+        // Full rows for exactly this page's objects (an object of several
+        // classes appears in several blocks but is fetched once).
+        let mut ids: Vec<String> = slots.iter().map(|slot| slot.4.clone()).collect();
+        ids.sort();
+        ids.dedup();
+        let needs = ObjectColumnNeeds::for_columns(&block_columns);
+        let sql = format!(
+            "SELECT {}\n FROM objects o LEFT JOIN images i ON i.image_rel_path = o.image_rel_path\n WHERE o.object_id IN ({})",
+            object_select_clause(needs),
+            sql_string_in_list(&ids)
+        );
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let objects: HashMap<String, ObjectRow> = stmt
+            .query_map([], map_object_row)
+            .map_err(err)?
+            .map(|row| row.map(|object| (object.object_id.clone(), object)))
+            .collect::<Result<_, _>>()
+            .map_err(err)?;
+
+        let mut row_names = Vec::new();
+        let mut rows: Vec<Vec<Cell>> = Vec::new();
+        let mut row_locations = Vec::new();
+        let mut index = 0;
+        while index < slots.len() {
+            let (image_rel_path, image_name, rn, _, _) = &slots[index];
+            let end = slots[index..]
+                .iter()
+                .position(|slot| &slot.0 != image_rel_path || slot.2 != *rn)
+                .map_or(slots.len(), |offset| index + offset);
+            let row_objects: Vec<(u32, &ObjectRow)> = slots[index..end]
+                .iter()
+                .filter_map(|slot| objects.get(&slot.4).map(|object| (slot.3, object)))
+                .collect();
+            let search_key = Some((image_name.clone(), image_rel_path.clone()));
+            let mut cells = vec![Cell {
+                value: CellValue::String(image_name.clone()),
+                search_key,
+                disabled: row_objects.iter().any(|(_, object)| object.disabled),
+                ..plain_cell()
+            }];
+            for class_id in blocks {
+                match row_objects.iter().find(|(class, _)| class == class_id) {
+                    Some((_, object)) => cells.extend(
+                        block_columns
+                            .iter()
+                            .map(|column| cell_for_column(column, object, classes)),
+                    ),
+                    None => cells.extend(block_columns.iter().map(|_| plain_cell())),
+                }
+            }
+            // Clicking a row opens its image at the row's first object.
+            row_locations.push(match row_objects.first() {
+                Some((_, object)) => object_location(object),
+                None => (image_rel_path.clone(), [0; 4]),
+            });
+            row_names.push(format!("{image_rel_path}\u{1}{rn}"));
+            rows.push(cells);
+            index = end;
+        }
+        Ok(DatabaseResult {
+            column_names,
+            row_names,
+            rows,
+            min: 0.0,
+            max: 0.0,
+            source_object_count: objects.len(),
+            row_locations,
         })
     }
 
@@ -1907,6 +2234,72 @@ pub(crate) fn class_display_label(class: ObjectClass, classes: &[Class]) -> Stri
     }
 }
 
+/// The classes a transposed view puts side by side, in id order: the
+/// selected ones (`selected`, already validated), or every registered class.
+fn class_blocks(selected: Option<&[u32]>, classes: &[Class]) -> Vec<u32> {
+    let mut ids: Vec<u32> = match selected {
+        Some(ids) => ids.to_vec(),
+        None => classes
+            .iter()
+            .filter_map(|class| match class.id {
+                ObjectClass::Valid(n) => Some(n),
+                ObjectClass::Unset => None,
+            })
+            .collect(),
+    };
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// Comma-joined integers for a SQL `IN (...)` list.
+fn sql_u32_list(values: &[u32]) -> String {
+    values
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// An empty, unstyled cell - also the filler for a class block with no
+/// object in a transposed row.
+fn plain_cell() -> Cell {
+    Cell {
+        value: CellValue::Empty,
+        bg_color: 0,
+        alternating_color: false,
+        search_key: None,
+        disabled: false,
+        any_disabled: false,
+    }
+}
+
+fn empty_database_result(column_names: Vec<String>) -> DatabaseResult {
+    DatabaseResult {
+        column_names,
+        row_names: vec![],
+        rows: vec![],
+        min: 0.0,
+        max: 0.0,
+        source_object_count: 0,
+        row_locations: vec![],
+    }
+}
+
+/// Min and max of the present values, `(0, 0)` if there are none.
+fn value_range<'a>(values: impl Iterator<Item = &'a Option<f64>>) -> (f32, f32) {
+    let (min, max) = values
+        .flatten()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(*v), hi.max(*v))
+        });
+    if min.is_finite() && max.is_finite() {
+        (min as f32, max as f32)
+    } else {
+        (0.0, 0.0)
+    }
+}
+
 /// Escapes and comma-joins string literals for a SQL `IN (...)` list.
 ///
 /// `pub(super)`: also used by `results_charts.rs`'s boxplot query, which
@@ -2611,6 +3004,170 @@ fn well_fields_to_result(
 mod tests {
     use super::*;
 
+    /// Performance of the List view, normal vs. transposed, on a large
+    /// synthetic database. Not a correctness test - run explicitly:
+    ///
+    /// ```sh
+    /// BENCH_IMAGES=400 BENCH_CLASSES=4 BENCH_PER_CLASS=300 \
+    ///   cargo test --release -p evanalyzer_app --lib bench_transposed_list \
+    ///   -- --ignored --nocapture
+    /// ```
+    ///
+    /// Measures what a user actually waits for: the first page, paging on
+    /// (GUI scrolling, 500 rows/page like `LIST_PAGE_SIZE`), and walking
+    /// every page (what an export does). For grouped-by-image it also times
+    /// transposing in Rust after the normal query, the alternative to doing
+    /// it in SQL.
+    #[test]
+    #[ignore]
+    fn bench_transposed_list() {
+        use std::time::{Duration, Instant};
+        let env = |name: &str, default: u32| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
+        };
+        let (images, classes, per_class) = (
+            env("BENCH_IMAGES", 400),
+            env("BENCH_CLASSES", 4),
+            env("BENCH_PER_CLASS", 300),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bench.evadb");
+        let start = Instant::now();
+        seed_synthetic_db(&path, images, classes, per_class);
+        let generator = ResultsGenerator::open_database(path).unwrap();
+        println!(
+            "\n{} objects ({images} images x {classes} classes x {per_class}), seeded in {:?}",
+            images * classes * per_class,
+            start.elapsed()
+        );
+        let columns = vec![
+            Column::ImageName,
+            Column::ObjectClass,
+            Column::AreaSizePx,
+            Column::Circularity,
+            Column::IntensityAvg(0),
+        ];
+        const PAGE: i32 = 500;
+        let generator = &generator;
+        let columns = &columns;
+
+        // Walks up to `max_pages` pages; returns (first page, avg per page,
+        // pages, rows).
+        let walk = |fetch: &dyn Fn(Option<String>) -> DatabaseResult, max_pages: usize| {
+            let mut cursor = None;
+            let mut times = Vec::new();
+            let mut rows = 0;
+            for _ in 0..max_pages {
+                let start = Instant::now();
+                let page = fetch(cursor.take());
+                times.push(start.elapsed());
+                rows += page.rows.len();
+                cursor = page.row_names.last().cloned();
+                if page.rows.len() < PAGE as usize {
+                    break;
+                }
+            }
+            let total: Duration = times.iter().sum();
+            (
+                times[0],
+                total / times.len() as u32,
+                times.len(),
+                rows,
+                total,
+            )
+        };
+        let report = |name: &str, r: (Duration, Duration, usize, usize, Duration)| {
+            println!(
+                "{name:<34} first {:>9.2?}  avg/page {:>9.2?}  {:>4} pages {:>8} rows  total {:>9.2?}",
+                r.0, r.1, r.2, r.3, r.4
+            );
+        };
+        let list = |transpond_table: bool| {
+            move |after: Option<String>| {
+                generator
+                    .get_object_list(&ListFilter {
+                        plane: plane(),
+                        images: None,
+                        object_classes: None,
+                        columns: columns.clone(),
+                        with_coloc_details: false,
+                        page: Pagination { limit: PAGE, after },
+                        transpond_table,
+                    })
+                    .unwrap()
+            }
+        };
+        let grouped = |transpond_table: bool| {
+            move |after: Option<String>| {
+                generator
+                    .get_grouped_by_image(&GroupedByImageFilter {
+                        plane: plane(),
+                        images: None,
+                        object_classes: None,
+                        columns: vec![Column::Count, Column::AreaSizePx, Column::Circularity],
+                        aggregation: vec![Aggregation::Avg, Aggregation::Max],
+                        page: Pagination { limit: PAGE, after },
+                        transpond_table,
+                    })
+                    .unwrap()
+            }
+        };
+
+        for transposed in [false, true] {
+            let label = if transposed { "transposed" } else { "normal" };
+            report(
+                &format!("object list {label} (20 pages)"),
+                walk(&list(transposed), 20),
+            );
+        }
+        for transposed in [false, true] {
+            let label = if transposed { "transposed" } else { "normal" };
+            report(
+                &format!("grouped {label} (all pages)"),
+                walk(&grouped(transposed), usize::MAX),
+            );
+        }
+
+        // The alternative: normal grouped query, transposed in Rust.
+        let start = Instant::now();
+        let mut cursor = None;
+        let mut per_image: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+        loop {
+            let page = grouped(false)(cursor.take());
+            for row in &page.rows {
+                let image = match &row[0].value {
+                    CellValue::String(s) => s.clone(),
+                    _ => String::new(),
+                };
+                let class = match &row[1].value {
+                    CellValue::Class((name, _)) => name.clone(),
+                    _ => String::new(),
+                };
+                let values = row[2..]
+                    .iter()
+                    .map(|cell| match cell.value {
+                        CellValue::Float(v) => v.to_string(),
+                        _ => String::new(),
+                    })
+                    .collect();
+                per_image.entry(image).or_default().insert(class, values);
+            }
+            cursor = page.row_names.last().cloned();
+            if page.rows.len() < PAGE as usize {
+                break;
+            }
+        }
+        println!(
+            "{:<34} total {:>9.2?}  ({} image rows)",
+            "grouped normal + pivot in Rust",
+            start.elapsed(),
+            per_image.len()
+        );
+    }
+
     /// Opening results the analysis in this process just wrote must reuse
     /// the analysis' connection. A separate `Connection::open` of the same
     /// file is refused on Windows ("file is being used by another process");
@@ -2703,7 +3260,7 @@ mod tests {
         assert_eq!(generator.get_nr_of_c_stacks(), 1);
     }
 
-    use super::super::test_support::{ObjectSpec, seed_db};
+    use super::super::test_support::{ObjectSpec, seed_db, seed_synthetic_db};
 
     /// Opens a fresh `ResultsGenerator` over a temp `.evadb` seeded with
     /// `objects` (see `test_support::seed_db`). Leaks the backing `TempDir`
@@ -2991,6 +3548,248 @@ mod tests {
         assert_eq!(result.column_names[0], "image");
         assert_eq!(result.column_names[1], "class");
         assert_eq!(result.column_names[2], "Area [px] (AVG)");
+    }
+
+    // -- transposed (classes side by side) -------------------------------
+
+    fn grouped_transposed(
+        generator: &ResultsGenerator,
+        object_classes: Option<Vec<ObjectClass>>,
+        page: Pagination,
+    ) -> DatabaseResult {
+        generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes,
+                columns: vec![Column::Count, Column::AreaSizePx],
+                aggregation: vec![Aggregation::Avg],
+                page,
+                transpond_table: true,
+            })
+            .unwrap()
+    }
+
+    fn cell_value(cell: &Cell) -> Option<f64> {
+        match &cell.value {
+            CellValue::Float(v) => Some(*v as f64),
+            CellValue::Empty => None,
+            _ => panic!("expected a float or empty cell"),
+        }
+    }
+
+    #[test]
+    fn transposed_grouped_puts_each_class_of_an_image_in_one_row() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 20),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 100),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 50),
+        ]);
+        let result = grouped_transposed(&generator, None, no_page());
+
+        assert_eq!(
+            result.column_names,
+            [
+                "image",
+                "Count (COUNT) (ClassA)",
+                "Area [px] (AVG) (ClassA)",
+                "Count (COUNT) (ClassB)",
+                "Area [px] (AVG) (ClassB)",
+            ]
+        );
+        assert_eq!(result.rows.len(), 2, "one row per image");
+        let values = |row: &[Cell]| row[1..].iter().map(cell_value).collect::<Vec<_>>();
+        assert_eq!(
+            values(&result.rows[0]),
+            [Some(2.0), Some(15.0), Some(1.0), Some(100.0)]
+        );
+        // img2 has no ClassB objects: no count of 0 pretending to be data
+        // for the average, just empty.
+        assert_eq!(values(&result.rows[1])[..2], [Some(1.0), Some(50.0)]);
+        assert_eq!(values(&result.rows[1])[3], None);
+    }
+
+    #[test]
+    fn transposed_grouped_matches_the_normal_view_value_for_value() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 30),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 50),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 70),
+        ]);
+        let normal = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::Count, Column::AreaSizePx],
+                aggregation: vec![Aggregation::Avg],
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+        let transposed = grouped_transposed(&generator, None, no_page());
+        // Every (image, class) row of the normal view appears in the
+        // transposed row of its image, in its class' block.
+        for row in &normal.rows {
+            let image = match &row[0].value {
+                CellValue::String(s) => s.clone(),
+                _ => unreachable!(),
+            };
+            let block = match &row[1].value {
+                CellValue::Class((name, _)) if name == "ClassA" => 0,
+                _ => 1,
+            };
+            let wide = transposed
+                .rows
+                .iter()
+                .find(|r| matches!(&r[0].value, CellValue::String(s) if *s == image))
+                .unwrap();
+            for (i, cell) in row[2..].iter().enumerate() {
+                assert_eq!(cell_value(cell), cell_value(&wide[1 + block * 2 + i]));
+            }
+        }
+    }
+
+    #[test]
+    fn transposed_grouped_pages_by_image_and_respects_the_class_filter() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 20),
+            ObjectSpec::new("img3.tif", "ClassA", 1, 30),
+        ]);
+        let first = grouped_transposed(
+            &generator,
+            None,
+            Pagination {
+                limit: 2,
+                after: None,
+            },
+        );
+        assert_eq!(first.row_names, ["img1.tif", "img2.tif"]);
+        let next = grouped_transposed(
+            &generator,
+            None,
+            Pagination {
+                limit: 2,
+                after: first.row_names.last().cloned(),
+            },
+        );
+        assert_eq!(next.row_names, ["img3.tif"]);
+
+        let only_a = grouped_transposed(&generator, Some(vec![ObjectClass::Valid(1)]), no_page());
+        assert_eq!(only_a.column_names.len(), 1 + 2, "image + one class block");
+        assert_eq!(only_a.row_names, ["img1.tif", "img3.tif"]);
+    }
+
+    fn list_transposed(
+        generator: &ResultsGenerator,
+        object_classes: Option<Vec<ObjectClass>>,
+        page: Pagination,
+    ) -> DatabaseResult {
+        generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes,
+                columns: vec![Column::ImageName, Column::ObjectClass, Column::AreaSizePx],
+                with_coloc_details: false,
+                page,
+                transpond_table: true,
+            })
+            .unwrap()
+    }
+
+    fn area(cell: &Cell) -> Option<u64> {
+        match &cell.value {
+            CellValue::Integer(v) => Some(*v as u64),
+            CellValue::Float(v) => Some(*v as u64),
+            CellValue::Empty => None,
+            other => panic!(
+                "unexpected area cell {:?}",
+                matches!(other, CellValue::String(_))
+            ),
+        }
+    }
+
+    #[test]
+    fn transposed_list_puts_the_classes_of_an_image_side_by_side() {
+        // ObjectSpec ids are assigned in seeding order, so within an image
+        // and class the n-th seeded object is the n-th row.
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 11),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 12),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 13),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 21),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 22),
+        ]);
+        let result = list_transposed(&generator, None, no_page());
+
+        assert_eq!(
+            result.column_names,
+            ["image", "Area [px] (ClassA)", "Area [px] (ClassB)"]
+        );
+        let rows: Vec<(String, Option<u64>, Option<u64>)> = result
+            .rows
+            .iter()
+            .map(|row| {
+                let image = match &row[0].value {
+                    CellValue::String(s) => s.clone(),
+                    _ => unreachable!(),
+                };
+                (image, area(&row[1]), area(&row[2]))
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("img1.tif".into(), Some(11), Some(21)),
+                ("img1.tif".into(), Some(12), None),
+                ("img1.tif".into(), Some(13), None),
+                ("img2.tif".into(), None, Some(22)),
+            ]
+        );
+        assert_eq!(result.row_locations.len(), 4, "every row can be clicked");
+        assert_eq!(result.source_object_count, 5);
+    }
+
+    #[test]
+    fn transposed_list_pages_without_gaps_or_repeats_across_images() {
+        let mut specs = Vec::new();
+        for (image, n) in [("img1.tif", 3), ("img2.tif", 2), ("img3.tif", 4)] {
+            for i in 0..n {
+                specs.push(ObjectSpec::new(image, "ClassA", 1, 100 + i));
+                specs.push(ObjectSpec::new(image, "ClassB", 2, 200 + i));
+            }
+        }
+        let generator = open(&specs);
+        let all = list_transposed(&generator, None, no_page());
+        assert_eq!(all.rows.len(), 9);
+
+        let mut paged = Vec::new();
+        let mut after = None;
+        loop {
+            let page = list_transposed(&generator, None, Pagination { limit: 2, after });
+            if page.rows.is_empty() {
+                break;
+            }
+            after = page.row_names.last().cloned();
+            paged.extend(page.row_names);
+        }
+        assert_eq!(paged, all.row_names);
+    }
+
+    #[test]
+    fn transposed_list_with_a_class_filter_shows_only_that_block() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 11),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 21),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 22),
+        ]);
+        let result = list_transposed(&generator, Some(vec![ObjectClass::Valid(2)]), no_page());
+        assert_eq!(result.column_names, ["image", "Area [px] (ClassB)"]);
+        assert_eq!(result.rows.len(), 2);
     }
 
     #[test]

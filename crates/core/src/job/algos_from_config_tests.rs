@@ -9,7 +9,7 @@
 use super::algos_from_config::into_algorithm;
 use crate::algos::*;
 use evanalyzer_cfg::core_types::{
-    ImageAddress, ObjectClass, PixelUnits, SegmentationClass, SizeUnits,
+    ImageAddress, ObjectClass, PixelUnits, SegmentationClass, SizeUnits, SizeUnitsRel,
 };
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::*;
@@ -500,7 +500,7 @@ fn colocalization_settings_convert_all_fields() {
         class_for_overlapping_areas: ObjectClass::Valid(9),
         exclude_classes: vec![ObjectClass::Valid(4)],
         multiplicity: ObjectColocObjectsColocMultiplicitySettings::ManyToMany,
-        size_unit: SizeUnits::Pixels,
+        size_unit: SizeUnitsRel::Pixels,
         min_coloc_area: 12.5,
     };
     let result = Colocalization::from(settings);
@@ -512,7 +512,7 @@ fn colocalization_settings_convert_all_fields() {
     assert_eq!(result.class_for_overlapping_areas, ObjectClass::Valid(9));
     assert_eq!(result.exclude_classes, vec![ObjectClass::Valid(4)]);
     assert_eq!(result.multiplicity, ColocMultiplicity::ManyToMany);
-    assert_eq!(result.size_unit, SizeUnits::Pixels);
+    assert_eq!(result.size_unit, SizeUnitsRel::Pixels);
     assert_eq!(result.min_coloc_area, 12.5);
 }
 

@@ -49,6 +49,32 @@ impl SizeUnits {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SizeUnitsRel {
+    #[default]
+    #[serde(alias = "nm")]
+    NanoMeter,
+    #[serde(alias = "px")]
+    Pixels,
+    #[serde(alias = "%")]
+    Percent,
+}
+
+impl SizeUnitsRel {
+    /// Convert a value in this unit to pixels.
+    /// `pixel_size_nm` is the size of one pixel in nanometers (nm/px), used only for `NanoMeter`.
+    #[allow(dead_code)]
+    pub fn to_pixel(self, value: f32, pixel_size_nm: f32) -> f32 {
+        match self {
+            SizeUnitsRel::Pixels => value,
+            SizeUnitsRel::NanoMeter => value / pixel_size_nm,
+            SizeUnitsRel::Percent => value / 100.0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

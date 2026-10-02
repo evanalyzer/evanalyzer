@@ -22,6 +22,7 @@ use crate::{
 };
 use evanalyzer_cfg::core_types::{
     CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,
+    SizeUnitsRel,
 };
 use indexmap::IndexMap;
 use log::{debug, info, warn};
@@ -78,8 +79,8 @@ pub struct Colocalization {
     pub multiplicity: ColocMultiplicity,
 
     /// Size unit for the minimum coloc area size
-    #[cmdsmeta(default = SizeUnits::Pixels)]
-    pub size_unit: SizeUnits,
+    #[cmdsmeta(default = SizeUnitsRel::Pixels)]
+    pub size_unit: SizeUnitsRel,
 
     /// Minimum overlapping area size to count objects as coloc
     #[cmdsmeta(default = 0.0)]
@@ -111,7 +112,7 @@ impl ImageAlgorithm for Colocalization {
 
         let px_sizes = ctx.pixel_sizes();
         let pixel_area_nm2 = px_sizes.px_size_x * px_sizes.px_size_y;
-        let min_area_px = self.size_unit.to_pixel(self.min_coloc_area, pixel_area_nm2);
+        let min_area_px = self.size_unit.to_pixel(self.min_coloc_area, pixel_area_nm2) as usize;
 
         // --- PHASE 1: Group ObjectIds by their specific ObjectClass ---
         let mut class_buckets: std::collections::HashMap<ObjectClass, Vec<ObjectId>> =
@@ -631,7 +632,7 @@ mod tests {
                 exclude_classes: vec![],
                 class_for_overlapping_areas: CLASS_OVERLAP,
                 multiplicity: ColocMultiplicity::ManyToMany,
-                size_unit: SizeUnits::Pixels,
+                size_unit: SizeUnitsRel::Pixels,
                 min_coloc_area: 0.0,
             };
 
@@ -655,7 +656,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         let object = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
@@ -680,7 +681,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         // object A: [0,0,4,4], object B: [2,2,6,6] → overlap [2,2,4,4]
@@ -715,7 +716,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         // No shared bounding box region
@@ -745,7 +746,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         let plane_ch0 = ImagePlane { z: 0, c: 0, t: 0 };
@@ -778,7 +779,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         // object_a has CLASS_A but NOT CLASS_C → filtered out
@@ -809,7 +810,7 @@ mod tests {
             class_for_overlapping_areas: CLASS_OVERLAP,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         // Inclusive bboxes: A covers [0,3]×[0,3], B covers [2,5]×[2,5] → overlap [2,3]×[2,3]=2×2=4 px
@@ -906,7 +907,7 @@ mod tests {
             class_for_overlapping_areas: CLASS_OVERLAP,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         coloc.execute(&mut ctx, &mut cache).unwrap();
 
@@ -939,7 +940,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 6, 6], ImagePlane::default(), CLASS_A);
@@ -999,7 +1000,7 @@ mod tests {
             class_for_overlapping_areas: CLASS_OVERLAP,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
@@ -1041,7 +1042,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 10, 10], ImagePlane::default(), CLASS_A);
@@ -1088,7 +1089,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
@@ -1138,7 +1139,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
 
@@ -1192,7 +1193,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 6, 6], ImagePlane::default(), CLASS_A);
@@ -1224,7 +1225,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
@@ -1254,7 +1255,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
@@ -1287,7 +1288,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::MultiFor(vec![CLASS_A]),
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let mut cache = GlobalPipelineCache::default();
 
@@ -1505,7 +1506,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::MultiFor(vec![CLASS_A]),
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         let coloc_c = Colocalization {
             classes_to_coloc: vec![CLASS_A, CLASS_C],
@@ -1514,7 +1515,7 @@ mod tests {
             class_for_overlapping_areas: ObjectClass::Unset,
             multiplicity: ColocMultiplicity::MultiFor(vec![CLASS_A]),
             min_coloc_area: 0.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
         run(&coloc_b, &mut cache);
         run(&coloc_c, &mut cache);
@@ -1752,7 +1753,7 @@ mod tests {
                 class_for_overlapping_areas: ObjectClass::Unset,
                 multiplicity: ColocMultiplicity::ManyToMany,
                 min_coloc_area: 0.0,
-                size_unit: SizeUnits::Pixels,
+                size_unit: SizeUnitsRel::Pixels,
             };
             run(&coloc, &mut cache);
 
@@ -1894,7 +1895,7 @@ mod tests {
             // Above each fragment's own 4px overlap, but at/below the merged
             // object's 8px overlap.
             min_coloc_area: 5.0,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
         };
 
         // Sanity check: without tile-merge, neither fragment's overlap with
