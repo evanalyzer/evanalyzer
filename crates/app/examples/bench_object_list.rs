@@ -196,6 +196,7 @@ fn main() {
                     limit: page_size,
                     after: after.clone(),
                 },
+                transpond_table: false,
             };
             let start = Instant::now();
             let result = generator.get_object_list(&filter).unwrap();

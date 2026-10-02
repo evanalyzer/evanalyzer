@@ -222,6 +222,8 @@ pub struct ListFilter {
     pub columns: Vec<Column>,
     pub with_coloc_details: bool,
     pub page: Pagination,
+    /// If true each object class is shown in a separate table instead of in rows
+    pub transpond_table: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -232,6 +234,8 @@ pub struct GroupedByImageFilter {
     pub columns: Vec<Column>,
     pub aggregation: Vec<Aggregation>,
     pub page: Pagination,
+    /// If true each object class is shown in a separate table instead of in rows
+    pub transpond_table: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -452,6 +456,8 @@ pub struct ResultExport {
     pub with_plate_view_list: bool,
     pub with_well_view_list: bool,
     pub with_heatmap: bool,
+    /// If true each object class is shown in a separate table instead of in rows
+    pub transpond_table: bool,
 }
 
 /// serde for `std::range::Range` (no upstream support yet): `(start, end)`.

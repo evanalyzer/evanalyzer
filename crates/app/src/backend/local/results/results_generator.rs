@@ -2753,6 +2753,7 @@ mod tests {
                 columns: vec![Column::ObjectClass, Column::AreaSizePx],
                 with_coloc_details: false,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
 
@@ -2786,6 +2787,7 @@ mod tests {
                 columns: vec![Column::ImageName, Column::ObjectClass, Column::AreaSizePx],
                 with_coloc_details: false,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
 
@@ -2824,6 +2826,7 @@ mod tests {
                 columns: vec![Column::ImageName],
                 with_coloc_details: false,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 1);
@@ -2843,6 +2846,7 @@ mod tests {
                 columns: vec![Column::ObjectClass],
                 with_coloc_details: false,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 1);
@@ -2859,6 +2863,7 @@ mod tests {
                 columns: vec![Column::ObjectClass],
                 with_coloc_details: false,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 0);
@@ -2882,6 +2887,7 @@ mod tests {
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 1);
@@ -2905,6 +2911,7 @@ mod tests {
                     limit: 2,
                     after: None,
                 },
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(first_page.rows.len(), 2);
@@ -2921,6 +2928,7 @@ mod tests {
                     limit: 2,
                     after: cursor.clone(),
                 },
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(second_page.rows.len(), 2);
@@ -2948,6 +2956,7 @@ mod tests {
                 columns: vec![Column::IntensityAvg(0)],
                 with_coloc_details: false,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(result.rows.len(), 1);
@@ -2974,6 +2983,7 @@ mod tests {
                 columns: vec![Column::AreaSizePx],
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
 
@@ -2994,6 +3004,7 @@ mod tests {
                 columns: vec![],
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -3010,6 +3021,7 @@ mod tests {
                 columns: vec![Column::AreaSizePx],
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -3461,6 +3473,7 @@ mod tests {
                 ],
                 with_coloc_details: true,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
 
@@ -4048,6 +4061,7 @@ mod tests {
                 columns: vec![Column::ObjectClass],
                 with_coloc_details: false,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 0);
@@ -4068,6 +4082,7 @@ mod tests {
                 columns: vec![Column::AreaSizePx],
                 with_coloc_details: false,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(result.source_object_count, 0);
@@ -4088,6 +4103,7 @@ mod tests {
                 columns: vec![Column::AreaSizePx],
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(
@@ -4108,6 +4124,7 @@ mod tests {
                 columns: vec![Column::AreaSizePx],
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -4127,6 +4144,7 @@ mod tests {
                 columns: vec![Column::AreaSizePx],
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert!(result.rows.is_empty());
@@ -4151,6 +4169,7 @@ mod tests {
                 limit: 1,
                 after: None,
             },
+            transpond_table: false,
         };
         let first = generator.get_grouped_by_image(&base).unwrap();
         assert_eq!(first.rows.len(), 1);
@@ -4191,6 +4210,7 @@ mod tests {
                 ],
                 with_coloc_details: true,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
         assert_eq!(
@@ -4226,6 +4246,7 @@ mod tests {
                 ],
                 with_coloc_details: true,
                 page: no_page(),
+                transpond_table: false,
             })
             .unwrap();
 

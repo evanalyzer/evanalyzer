@@ -90,6 +90,7 @@ pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> 
             limit: args.limit.max(1) as i32,
             after: None,
         },
+        transpond_table: args.filter.transpond.unwrap_or_else(|| false),
     };
     let cursor = cursor_for_page(db, &base_filter, args.page)?;
     let result = db.get_object_list(&ListFilter {

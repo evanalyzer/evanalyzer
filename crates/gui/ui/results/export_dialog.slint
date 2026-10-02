@@ -60,6 +60,7 @@ export global ExportDialogState {
     in-out property <bool> with-list-coloc-details: false;
     in-out property <bool> with-list-one-file-per-image: true;
     in-out property <bool> with-grouped-by-image-list: true;
+    in-out property <bool> transpond-output-table: false;
     in-out property <bool> with-heatmap: false;
 
     in-out property <bool> with-plate-heatmap-view: false;
@@ -260,9 +261,18 @@ export component ExportDialog inherits Rectangle {
                                 font-weight: 600;
                             }
 
-                            CheckBox {
-                                text: "Image list";
-                                checked <=> ExportDialogState.with-grouped-by-image-list;
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: 125px;
+                                CheckBox {
+                                    text: "Image list";
+                                    checked <=> ExportDialogState.with-grouped-by-image-list;
+                                }
+
+                                CheckBox {
+                                    text: "Transpond output table";
+                                    checked <=> ExportDialogState.transpond-output-table;
+                                }
                             }
 
                             HorizontalLayout {

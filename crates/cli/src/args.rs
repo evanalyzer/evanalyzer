@@ -174,6 +174,10 @@ pub struct FilterArgs {
     /// Restrict to colocalized (true) or non-colocalized (false) ROIs only
     #[arg(long)]
     pub colocalized: Option<bool>,
+
+    /// Transponod output table
+    #[arg(long)]
+    pub transpond: Option<bool>,
 }
 
 #[derive(Args, Default)]

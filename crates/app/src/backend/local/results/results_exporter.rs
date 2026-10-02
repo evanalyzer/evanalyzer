@@ -282,7 +282,10 @@ impl ResultExport {
         check_cancelled(cancel)?;
         on_progress("Exporting Grouped Image List", 0, 1);
 
-        let images = resolve_images(database, self)?;
+        // Group by image always returns a list of all images.
+        // Image filter is not applied here.
+        // let images = resolve_images(database, self)?;
+        let images = resolve_all_images(database)?;
         let object_classes = if self.object_classes.is_empty() {
             None
         } else {
@@ -308,6 +311,7 @@ impl ResultExport {
                 limit: 0,
                 after: None,
             },
+            transpond_table: self.transpond_table,
         };
         let result = fetch_all_grouped_by_image_rows(database, &base_filter)?;
 
@@ -920,6 +924,15 @@ fn resolve_images(
     }
 }
 
+fn resolve_all_images(database: &ResultsGenerator) -> Result<Vec<String>, InternalErrors> {
+    let all = database.get_images()?;
+    Ok(all
+        .into_iter()
+        .filter(|image| !image.disabled)
+        .map(|image| image.rel_path.to_string_lossy().into_owned())
+        .collect())
+}
+
 // `get_list` only ever hands back one bounded page (`ListFilter.page`) —
 // same keyset-pagination shape `results_state_controller.rs` pages through
 // for the GUI's List view (see its own `update_list_view`) — so an export,
@@ -985,6 +998,7 @@ fn stream_list_pages(
                         limit: PAGE_SIZE,
                         after: cursor.take(),
                     },
+                    transpond_table: export.transpond_table,
                 };
                 let page = database.get_object_list(&filter)?;
                 let is_last_page = page.source_object_count < PAGE_SIZE as usize;

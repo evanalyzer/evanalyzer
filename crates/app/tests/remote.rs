@@ -554,6 +554,7 @@ fn remote_results_queries_match_local_ones() {
             limit: 100,
             after: None,
         },
+        transpond_table: false,
     };
     let (remote_list, local_list) = (
         remote_db.get_object_list(&filter).unwrap(),

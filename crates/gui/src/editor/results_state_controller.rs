@@ -1799,6 +1799,7 @@ impl ResultsStateController {
                     limit: LIST_PAGE_SIZE,
                     after: cursor,
                 },
+                transpond_table: false,
             }),
             // Non-aggregable columns (Object ID/Image/Class) don't mean
             // anything once rows are grouped by image — silently dropped
@@ -1818,6 +1819,7 @@ impl ResultsStateController {
                         limit: LIST_PAGE_SIZE,
                         after: cursor,
                     },
+                    transpond_table: false,
                 })
             }
         };
@@ -2951,6 +2953,8 @@ impl ResultsStateController {
             Some(file_prefix_tmp)
         };
 
+        let transpond_table = state.get_transpond_output_table();
+
         let parse_u32 = |label: &str, text: slint::SharedString| -> Result<u32, String> {
             text.trim()
                 .parse::<u32>()
@@ -3082,6 +3086,7 @@ impl ResultsStateController {
             with_plate_view_list: state.get_with_plate_list(),
             with_well_view_list: state.get_with_well_list(),
             with_heatmap: state.get_with_heatmap(),
+            transpond_table,
         })
     }
 
