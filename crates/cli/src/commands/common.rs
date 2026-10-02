@@ -1,6 +1,8 @@
 use crate::args::{AggKind, GroupArgs, GroupByKind};
-use evanalyzer_app::backend::ResultsSource;
-use evanalyzer_app::result::{Aggregation, Cell, CellValue};
+use evanalyzer_app::api::Aggregation;
+use evanalyzer_app::api::Cell;
+use evanalyzer_app::api::CellValue;
+use evanalyzer_app::api::ResultsSource;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 
 /// Resolves `--image` names into the `image_rel_path`s the results engine

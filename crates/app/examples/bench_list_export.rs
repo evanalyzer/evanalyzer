@@ -7,7 +7,10 @@
 // Usage: cargo run --release -p evanalyzer_app --example bench_list_export -- [--rows N] [--mode xlsx|csv|both]
 
 use duckdb::{Connection, params};
-use evanalyzer_app::result::{Column, ExportFormat, ResultExport, ResultsGenerator};
+use evanalyzer_app::api::Column;
+use evanalyzer_app::api::ExportFormat;
+use evanalyzer_app::api::ResultExport;
+use evanalyzer_app::backend::local::results::ResultsGenerator;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;

@@ -21,8 +21,10 @@
 use crate::{
     FileBrowserCrumb, FileBrowserEntry, FileBrowserMode, FileBrowserPlace, FileBrowserState,
 };
-use evanalyzer_app::backend::{Backend, DirEntry, PlaceKind};
-use evanalyzer_app::system::SUPPORTED_IMAGE_FORMATS;
+use evanalyzer_app::api::Backend;
+use evanalyzer_app::api::DirEntry;
+use evanalyzer_app::api::PlaceKind;
+use evanalyzer_app::backend::local::system::SUPPORTED_IMAGE_FORMATS;
 use evanalyzer_cfg::{
     EVANALYZER_TRAINED_AI_MODELS, LEGACY_PROJECT_FILE_EXTENSION, PIPELINE_EXTENSIONS,
     PROJECT_FILE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS, RESULTS_FILE_EXTENSION,

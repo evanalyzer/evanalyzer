@@ -2,8 +2,10 @@
 
 pub use evanalyzer_gui_slint::*;
 
-use evanalyzer_app::backend::{Backend, ImageSource};
-use evanalyzer_app::images::ImageMeta;
+use evanalyzer_app::api::Backend;
+
+use evanalyzer_app::api::ImageMeta;
+use evanalyzer_app::api::ImageSource;
 use evanalyzer_app::{AppHandle, Frontend, ProjectOwner, ProjectWithRuntime};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -406,7 +408,8 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
 /// hundreds of ms), and nobody looks at the About dialog in the first instant
 /// after launch, so there's no reason to make the window wait on it.
 fn load_about_dialog_information(ui: &AppWindow) {
-    let (cpu_cores, total_ram_bytes) = evanalyzer_app::system::cpu_ram_diagnostics();
+    let (cpu_cores, total_ram_bytes) =
+        evanalyzer_app::backend::local::system::cpu_ram_diagnostics();
     let info = ui.global::<AppInfoState>();
     info.set_version(env!("CARGO_PKG_VERSION").into());
     info.set_cpu_cores(cpu_cores as i32);
@@ -439,7 +442,7 @@ fn load_about_dialog_information(ui: &AppWindow) {
 
     let ui_weak = ui.as_weak();
     std::thread::spawn(move || {
-        let cuda_available = evanalyzer_app::system::cuda_is_available();
+        let cuda_available = evanalyzer_app::backend::local::system::cuda_is_available();
         slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<AppInfoState>()
@@ -602,7 +605,7 @@ mod ui_state_tests {
 /// owns its own `Appearance`/`Palette` instance, so this has to be done
 /// for both explicitly - see the comment on `Appearance` in style.slint.
 fn load_user_settings(ui: &AppWindow, results_ui: &ResultsWindow) {
-    let settings = evanalyzer_app::settings::load_app_settings();
+    let settings = evanalyzer_app::workspace::settings::load_app_settings();
     let results_ui_handle = results_ui.as_weak();
     ui.global::<Appearance>().invoke_apply(settings.dark_mode);
     results_ui
@@ -611,9 +614,9 @@ fn load_user_settings(ui: &AppWindow, results_ui: &ResultsWindow) {
 
     let results_ui_handle = results_ui_handle.clone();
     ui.global::<Appearance>().on_dark_mode_toggled(move |dark| {
-        evanalyzer_app::settings::save_app_settings(&evanalyzer_app::settings::AppSettings {
-            dark_mode: dark,
-        });
+        evanalyzer_app::workspace::settings::save_app_settings(
+            &evanalyzer_app::workspace::settings::AppSettings { dark_mode: dark },
+        );
         if let Some(results_ui) = results_ui_handle.upgrade() {
             results_ui.global::<Appearance>().invoke_apply(dark);
         }

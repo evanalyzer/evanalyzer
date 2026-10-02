@@ -1,7 +1,7 @@
 use crate::AppWindow;
 use crate::editor::results_state_controller::ResultsStateController;
 use crate::{ResultItemData, ResultsListState, UiState};
-use evanalyzer_app::backend::FileSystem;
+use evanalyzer_app::api::FileSystem;
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use log::warn;
 use slint::ComponentHandle;
@@ -221,6 +221,8 @@ fn extract_name_from_path(path: &PathBuf) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    use evanalyzer_app::backend::LocalFileSystem;
+
     use super::*;
 
     // -- format_file_size ----------------------------------------------------
@@ -342,11 +344,7 @@ mod tests {
         std::fs::write(nested.join("also_keep.evadb"), b"x").unwrap();
 
         let mut items = Vec::new();
-        collect_results_files(
-            &evanalyzer_app::backend::LocalFileSystem::default(),
-            &dir,
-            &mut items,
-        );
+        collect_results_files(&LocalFileSystem::default(), &dir, &mut items);
 
         let names: std::collections::HashSet<String> =
             items.iter().map(|(_, d)| d.name.to_string()).collect();
@@ -361,11 +359,7 @@ mod tests {
     fn collect_results_files_on_a_nonexistent_directory_leaves_items_empty() {
         let dir = std::env::temp_dir().join("evanalyzer_results_list_controller_does_not_exist");
         let mut items = Vec::new();
-        collect_results_files(
-            &evanalyzer_app::backend::LocalFileSystem::default(),
-            &dir,
-            &mut items,
-        );
+        collect_results_files(&LocalFileSystem::default(), &dir, &mut items);
         assert!(items.is_empty());
     }
 }

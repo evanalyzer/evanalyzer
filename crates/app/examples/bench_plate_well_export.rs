@@ -11,7 +11,11 @@
 //     [--scale N] [--classes N] [--columns N] [--aggregations N] [--mode view|flat|both]
 
 use duckdb::{Connection, params};
-use evanalyzer_app::result::{Aggregation, Column, ExportFormat, ResultExport, ResultsGenerator};
+use evanalyzer_app::api::Aggregation;
+use evanalyzer_app::api::Column;
+use evanalyzer_app::api::ExportFormat;
+use evanalyzer_app::api::ResultExport;
+use evanalyzer_app::backend::local::results::ResultsGenerator;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;

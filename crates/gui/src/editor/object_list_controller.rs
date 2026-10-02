@@ -3,7 +3,7 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::helper::color_generators::get_colors_from_class;
 use crate::{AppWindow, ObjectItemDataSlint, ObjectListState};
 use evanalyzer_app::ProjectWithRuntime;
-use evanalyzer_app::extensions::project_ext::ProjectExt;
+use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, SegmentationClass};
 use evanalyzer_cfg::settings::images_settings::PixelSizeSettings;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;

@@ -8,7 +8,7 @@ mod table;
 
 pub use args::CliCommand;
 
-use evanalyzer_app::backend::Backend;
+use evanalyzer_app::api::Backend;
 use evanalyzer_cfg::core_types::InternalErrors;
 
 /// Runs `command`. Analysis and training run on `backend` (local or a

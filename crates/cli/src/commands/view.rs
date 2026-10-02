@@ -1,8 +1,12 @@
 use crate::args::{ColumnsArgs, ViewArgs};
 use crate::commands::common::{cell_text, resolve_image_rel_paths, resolve_object_classes};
 use crate::table::print_object_table;
-use evanalyzer_app::backend::{Backend, ResultsSource};
-use evanalyzer_app::result::{Column, ListFilter, Pagination, PlaneFilter};
+use evanalyzer_app::api::Backend;
+use evanalyzer_app::api::Column;
+use evanalyzer_app::api::ListFilter;
+use evanalyzer_app::api::Pagination;
+use evanalyzer_app::api::PlaneFilter;
+use evanalyzer_app::api::ResultsSource;
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde_json::json;
 
@@ -202,8 +206,9 @@ fn summarize(names: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use evanalyzer_app::backend::LocalBackend;
+
+    use super::*;
 
     fn run(args: ViewArgs) -> Result<(), InternalErrors> {
         super::run(args, &LocalBackend::default())

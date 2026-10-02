@@ -1,9 +1,11 @@
 use crate::args::{TrainClassifierArgs, ZStackHandlingArg};
-use evanalyzer_app::ai_learning::{
-    PixelTrainingParams, StartTrainingError, TrainingItems, save_trained_model,
-};
-use evanalyzer_app::backend::{Backend, TrainingRequest};
-use evanalyzer_app::extensions::project_ext::load_project;
+use evanalyzer_app::api::Backend;
+use evanalyzer_app::api::PixelTrainingParams;
+use evanalyzer_app::api::StartTrainingError;
+use evanalyzer_app::api::TrainingItems;
+use evanalyzer_app::api::TrainingRequest;
+use evanalyzer_app::workspace::ai_learning::save_trained_model;
+use evanalyzer_app::workspace::extensions::project_ext::load_project;
 use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent};
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;

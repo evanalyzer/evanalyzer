@@ -7,10 +7,12 @@ use crate::{
         viewport_controller::ViewportController,
     },
 };
-use evanalyzer_app::backend::AnalysisRequest;
-use evanalyzer_app::job::{
-    MAX_PREVIEW_VISIBLE_TILES, PreviewRequest, PreviewViewport, ProgressEvent, StartPreviewError,
-};
+use evanalyzer_app::api::AnalysisRequest;
+use evanalyzer_app::api::MAX_PREVIEW_VISIBLE_TILES;
+use evanalyzer_app::api::PreviewRequest;
+use evanalyzer_app::api::PreviewViewport;
+use evanalyzer_app::api::ProgressEvent;
+use evanalyzer_app::api::StartPreviewError;
 use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
 use log::{error, info};
 use slint::ComponentHandle;

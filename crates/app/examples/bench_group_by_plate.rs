@@ -29,10 +29,15 @@
 // Usage: cargo run --release -p evanalyzer_app --example bench_group_by_plate -- <path.evadb> [--iters N]
 
 use duckdb::Connection;
-use evanalyzer_app::result::{
-    Aggregation, ColorScale, ColorSchema, Column, PlaneFilter, PlateFilter, PlateFilterMulti,
-    ResultsGenerator, View,
-};
+use evanalyzer_app::api::Aggregation;
+use evanalyzer_app::api::ColorScale;
+use evanalyzer_app::api::ColorSchema;
+use evanalyzer_app::api::Column;
+use evanalyzer_app::api::PlaneFilter;
+use evanalyzer_app::api::PlateFilter;
+use evanalyzer_app::api::PlateFilterMulti;
+use evanalyzer_app::api::View;
+use evanalyzer_app::backend::local::results::ResultsGenerator;
 use evanalyzer_cfg::core_types::ObjectClass;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -234,7 +239,7 @@ fn main() {
         start.elapsed() / iters as u32
     );
 
-    let well_filter = evanalyzer_app::result::WellFilter {
+    let well_filter = evanalyzer_app::api::WellFilter {
         plane: filter.plane.clone(),
         group_name: "A2".to_string(),
         grouping_regex: String::new(),
@@ -257,7 +262,7 @@ fn main() {
         start.elapsed() / iters as u32
     );
 
-    let wells_filter = evanalyzer_app::result::WellsBatchFilter {
+    let wells_filter = evanalyzer_app::api::WellsBatchFilter {
         plane: filter.plane.clone(),
         grouping_regex: String::new(),
         aggregation: Aggregation::Avg,
@@ -317,7 +322,7 @@ fn main() {
         start.elapsed() / iters as u32
     );
 
-    let wells_multi_filter = evanalyzer_app::result::WellsBatchFilterMulti {
+    let wells_multi_filter = evanalyzer_app::api::WellsBatchFilterMulti {
         plane: filter.plane.clone(),
         grouping_regex: String::new(),
         aggregation: vec![Aggregation::Avg, Aggregation::Sum],

@@ -1,7 +1,7 @@
 use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{AppWindow, HistogramState};
-use evanalyzer_app::extensions::project_ext::ProjectExt;
+use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
 use log::warn;
 use slint::ComponentHandle;
 use std::sync::Arc;

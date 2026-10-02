@@ -7,8 +7,9 @@ use crate::{
         viewport_task::{DrawingTask, TaskDispatch},
     },
 };
-use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_app::images::{ImageChannel, ImageContainer};
+use evanalyzer_app::api::ImageChannel;
+use evanalyzer_app::api::ImageContainer;
+use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use log::{debug, info, warn};
@@ -885,8 +886,8 @@ pub(crate) fn histogram_to_svg_fast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_app::images::ManagedImage;
-    use evanalyzer_app::images::Point2d;
+    use evanalyzer_app::api::ManagedImage;
+    use evanalyzer_app::api::Point2d;
     use evanalyzer_cfg::core_types::ImagePlane;
     use kornia_image::{Image, ImageSize};
 

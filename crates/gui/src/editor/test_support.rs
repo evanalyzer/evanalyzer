@@ -14,7 +14,7 @@
 use crate::{AppWindow, ResultsWindow, UiState};
 use evanalyzer_app::ProjectOwner;
 use evanalyzer_app::ProjectWithRuntime;
-use evanalyzer_app::extensions::project_ext::ProjectExt;
+use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
 use evanalyzer_cfg::settings::images_settings::{
     ChannelSettings, ImageEntry, PixelSizeSettings, SeriesSettings,
 };
@@ -45,7 +45,7 @@ pub(crate) fn test_ui_state_with_project(project: ProjectWithRuntime) -> Arc<UiS
 /// A minimal project with one 2x2, 2-channel image set as "current" (i.e.
 /// what `get_current_image_settings`/`with_current_series_mut` resolve to) -
 /// mirrors the equivalent private helper in
-/// `evanalyzer_app::extensions::project_ext`'s own test module, since
+/// `evanalyzer_app::workspace::extensions::project_ext`'s own test module, since
 /// several controller methods only do anything when a "current image" is
 /// set.
 pub(crate) fn project_with_one_image() -> ProjectWithRuntime {

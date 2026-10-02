@@ -5,9 +5,9 @@ use crate::{
     DialogType, FeatureRowSlint, GlobalAppState, ObjectMetricRowSlint, TrainingImageRowSlint,
     TrainingObjectRowSlint,
 };
-use evanalyzer_app::ai_learning::{self, PixelTrainingParams};
-use evanalyzer_app::backend::TrainingRequest;
-use evanalyzer_app::job::CancelHandle;
+use evanalyzer_app::api::CancelHandle;
+use evanalyzer_app::api::PixelTrainingParams;
+use evanalyzer_app::api::TrainingRequest;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::TrainingProgressEvent;
 use evanalyzer_cfg::settings::ai_learning_object_settings::{
@@ -343,17 +343,19 @@ impl AiLearningController {
             return;
         };
 
-        let loaded =
-            match ai_learning::load_classifier_settings(self.app_state.backend().files(), &path) {
-                Ok(loaded) => loaded,
-                Err(e) => {
-                    self.set_training_status(
-                        &format!("Could not load '{}': {e}", path.display()),
-                        true,
-                    );
-                    return;
-                }
-            };
+        let loaded = match evanalyzer_app::workspace::ai_learning::load_classifier_settings(
+            self.app_state.backend().files(),
+            &path,
+        ) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                self.set_training_status(
+                    &format!("Could not load '{}': {e}", path.display()),
+                    true,
+                );
+                return;
+            }
+        };
 
         let state = ui.global::<AiLearningState>();
         let mut settings = state.get_settings();
@@ -418,7 +420,7 @@ impl AiLearningController {
 
     /// Builds an `AiLearningSettings` from the dialog's state, gathers
     /// training data from the project (every object with an assigned class -
-    /// see `evanalyzer_app::ai_learning::start_training`'s doc comment;
+    /// see `evanalyzer_app::backend::local::training::start_training`'s doc comment;
     /// `training_images`/`training_objects` aren't needed here since labels
     /// already live on the project's objects via `assign_object_class`, not
     /// in Slint-only state), then runs training on a background thread and
@@ -533,7 +535,7 @@ impl AiLearningController {
                         .as_ref()
                         .map(format_training_stats)
                         .unwrap_or_default();
-                    match evanalyzer_app::ai_learning::save_trained_model(
+                    match evanalyzer_app::workspace::ai_learning::save_trained_model(
                         manager.app_state.backend().files(),
                         &classifier,
                         &project_dir,
@@ -653,7 +655,8 @@ impl AiLearningController {
                 return;
             };
             let project = app_state.get_project();
-            let used = evanalyzer_app::ai_learning::used_object_classes(&project.settings);
+            let used =
+                evanalyzer_app::workspace::ai_learning::used_object_classes(&project.settings);
             let rows: Vec<ClassSelectionRowSlint> = project
                 .classification
                 .classes()
@@ -955,7 +958,7 @@ fn build_ai_learning_settings(
                     .map(feature_row_to_preprocessing_steps)
                     .collect(),
             },
-            class_labels: evanalyzer_app::ai_learning::pixel_class_labels_from_project(
+            class_labels: evanalyzer_app::workspace::ai_learning::pixel_class_labels_from_project(
                 project,
                 selected_classes,
             ),
@@ -969,7 +972,7 @@ fn build_ai_learning_settings(
                     .map(object_metric_row_to_metric)
                     .collect(),
             },
-            class_labels: evanalyzer_app::ai_learning::object_class_labels_from_project(
+            class_labels: evanalyzer_app::workspace::ai_learning::object_class_labels_from_project(
                 project,
                 selected_classes,
             ),
@@ -1821,7 +1824,7 @@ mod tests {
     use crate::editor::test_support::{
         project_with_one_image, test_ui_state_with_project, test_ui_windows,
     };
-    use evanalyzer_app::extensions::project_ext::ProjectExt;
+    use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
     use evanalyzer_cfg::core_types::ObjectId;
     use evanalyzer_cfg::settings::classification_settings::Class;
 

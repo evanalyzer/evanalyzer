@@ -1,36 +1,15 @@
-pub mod ai_learning;
-pub mod backend;
-pub mod bioimageio;
-pub mod crash_log;
-pub mod export;
-pub mod extensions;
-pub mod frontend;
-pub mod images;
-pub mod job;
-mod project_owner;
-mod results;
-pub mod settings;
-pub mod system;
-pub mod templates;
+//! - [`api`]: the contract between front ends and backends.
+//! - [`backend`]: where the work runs - [`backend::local`] (this process,
+//!   the only module calling `evanalyzer_core`) or [`backend::remote`].
+//! - [`workspace`]: the UI side - the open project, editing, undo.
 
-pub use frontend::Frontend;
-pub use project_owner::{AppHandle, ProjectOwner, ProjectTmpSettings, ProjectWithRuntime};
+pub mod api;
+pub mod backend;
+pub mod workspace;
+
+pub use workspace::{AppHandle, Frontend, ProjectOwner, ProjectTmpSettings, ProjectWithRuntime};
 
 pub mod prelude {
     pub use super::Frontend;
-    pub use super::extensions::*;
-}
-
-pub mod result {
-    pub use crate::results::*;
-}
-
-pub mod exporter {
-    pub use crate::export::cite_project::cite_project;
-}
-
-pub mod net {
-    pub use crate::backend::net::RemoteBackend;
-    pub use crate::backend::net::Server;
-    pub use crate::backend::net::generate_token;
+    pub use super::workspace::extensions::*;
 }

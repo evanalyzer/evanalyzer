@@ -1,7 +1,8 @@
 use crate::args::AnalyzeArgs;
-use evanalyzer_app::backend::{AnalysisRequest, Backend};
-use evanalyzer_app::extensions::project_ext::{ProjectExt, load_project};
-use evanalyzer_app::job::ProgressEvent;
+use evanalyzer_app::api::AnalysisRequest;
+use evanalyzer_app::api::Backend;
+use evanalyzer_app::api::ProgressEvent;
+use evanalyzer_app::workspace::extensions::project_ext::{ProjectExt, load_project};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::io::Write;
 use std::path::PathBuf;
@@ -106,10 +107,9 @@ mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
     use calamine::DataType as _;
+    use evanalyzer_app::api::{Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter};
     use evanalyzer_app::backend::LocalBackend;
-    use evanalyzer_app::result::{
-        Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter, ResultsGenerator,
-    };
+    use evanalyzer_app::backend::local::ResultsGenerator;
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 
     fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {

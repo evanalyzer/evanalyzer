@@ -1,6 +1,6 @@
 use crate::args::{ProjectInfoArgs, ValidateArgs};
-use evanalyzer_app::backend::Backend;
-use evanalyzer_app::extensions::project_ext::{ProjectExt, load_project};
+use evanalyzer_app::api::Backend;
+use evanalyzer_app::workspace::extensions::project_ext::{ProjectExt, load_project};
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde_json::json;
 
@@ -123,7 +123,6 @@ pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), Int
 mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
-    use evanalyzer_app::backend::LocalBackend;
 
     fn run(args: ProjectInfoArgs) -> Result<(), InternalErrors> {
         super::run(args, &LocalBackend::default())
@@ -132,6 +131,7 @@ mod tests {
     fn run_validate(args: ValidateArgs) -> Result<(), InternalErrors> {
         super::run_validate(args, &LocalBackend::default())
     }
+    use evanalyzer_app::backend::LocalBackend;
     use evanalyzer_cfg::settings::images_settings::ImageEntry;
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 

@@ -26,7 +26,11 @@
 // Usage: cargo run --release -p evanalyzer_app --example bench_object_list -- [path.evadb] [--iters N] [--pages N] [--page-size N]
 
 use duckdb::Connection;
-use evanalyzer_app::result::{Column, ListFilter, Pagination, PlaneFilter, ResultsGenerator};
+use evanalyzer_app::api::Column;
+use evanalyzer_app::api::ListFilter;
+use evanalyzer_app::api::Pagination;
+use evanalyzer_app::api::PlaneFilter;
+use evanalyzer_app::backend::local::results::ResultsGenerator;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
