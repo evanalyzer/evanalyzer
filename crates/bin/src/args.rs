@@ -1,5 +1,4 @@
 // main.rs or app/src/args.rs
-
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -58,6 +57,11 @@ pub enum TopCommand {
         /// clients can reach every file this process can.
         #[arg(long = "root", value_name = "FOLDER")]
         roots: Vec<std::path::PathBuf>,
+    },
+    /// Start an EVAnalyzer server
+    Server {
+        #[arg(long, default_value = "127.0.0.1:7400")]
+        listen: String,
     },
 }
 

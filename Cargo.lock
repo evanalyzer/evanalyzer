@@ -2795,6 +2795,7 @@ dependencies = [
  "evanalyzer_cli",
  "evanalyzer_gui",
  "evanalyzer_llm",
+ "evanalyzer_server",
  "log",
 ]
 
@@ -2910,6 +2911,14 @@ dependencies = [
  "schemars",
  "serde_json",
  "tokenizers 0.23.2",
+]
+
+[[package]]
+name = "evanalyzer_server"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "log",
 ]
 
 [[package]]

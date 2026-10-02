@@ -8,9 +8,10 @@ publish = { workspace = true }
 
 [dependencies]
 evanalyzer_cfg = { workspace = true }
-evanalyzer_gui    = { path = "../gui" }
-evanalyzer_cli    = { path = "../cli" }
+evanalyzer_gui    = { workspace = true }
+evanalyzer_cli    = { workspace = true }
 evanalyzer_app    = { workspace = true }
+evanalyzer_server    = { workspace = true }
 evanalyzer_llm    = { workspace = true, optional = true }
 log = { workspace = true }
 env_logger = { workspace = true }

@@ -7,15 +7,135 @@ use evanalyzer_app::backends::local::LocalBackend;
 use evanalyzer_app::global::Frontend;
 use evanalyzer_app::project::ProjectOwner;
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cli::CliCommand;
+use evanalyzer_server::serve;
 use log::{LevelFilter, info, warn};
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // As early as possible, before any other setup: a packaged build has no
-    // attached console, so without this a panic anywhere in the process
-    // just makes the window disappear with nothing to diagnose it from.
-    evanalyzer_app::global::crash_log::install_panic_hook();
+    init_logger();
 
+    let args = parse_args();
+
+    // The one place that decides where compute runs - front ends only ever
+    // see the `Backend` trait.
+    let backend = generate_backend(args.remote, args.remote_token)?;
+    log::info!("Compute backend: {}", backend.description());
+
+    let ret = match args.command {
+        Some(cmd) => match cmd {
+            TopCommand::Cli { command } => start_cli(&backend, command),
+            TopCommand::Serve {
+                listen,
+                token,
+                roots,
+            } => start_serve(listen, token, roots),
+            TopCommand::Server { listen } => start_server(listen),
+        },
+        None => start_gui(backend, args.project),
+    };
+
+    ret
+}
+
+/// Generate a backend
+fn generate_backend(
+    remote: Option<String>,
+    token: Option<String>,
+) -> Result<Arc<dyn Backend>, Box<dyn std::error::Error>> {
+    match &remote {
+        None => Ok(Arc::new(LocalBackend::default())),
+        Some(url) => {
+            let token = token
+                .as_deref()
+                .ok_or("--remote needs a token: set EVANALYZER_REMOTE_TOKEN (or --remote-token)")?;
+            match evanalyzer_app::backends::remote::RemoteBackend::connect(url, token) {
+                Ok(remote) => Ok(Arc::new(remote)),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+fn start_gui(
+    backend: Arc<dyn Backend>,
+    project: Option<std::path::PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // GUI mode (default)
+    let owner = ProjectOwner::with_backend(backend);
+    if let Some(path) = &project {
+        owner.load_project(path)?;
+    }
+    let frontend: Box<dyn Frontend> = Box::new(evanalyzer_gui::create());
+    frontend.start(owner);
+    Ok(())
+}
+
+/// Start CLI
+fn start_cli(
+    backend: &Arc<dyn Backend>,
+    command: CliCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(e) = evanalyzer_cli::run(command, backend.as_ref()) {
+        match e {
+            InternalErrors::Cancelled => {
+                eprintln!("Cancelled.");
+                std::process::exit(130);
+            }
+            other => {
+                eprintln!("Error: {other}");
+                std::process::exit(1);
+            }
+        }
+    }
+    return Ok(());
+}
+
+/// Serve a local instance which can react on websocket commannds
+fn start_serve(
+    listen: String,
+    token: Option<String>,
+    roots: Vec<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let token = match token {
+        Some(token) => token,
+        None => {
+            let token = evanalyzer_app::backends::remote::generate_token()?;
+            info!("No token given - generated one for this session:\n\n  {token}\n");
+            eprintln!("Clients connect with EVANALYZER_REMOTE_TOKEN set to this value.");
+            token
+        }
+    };
+    let server = evanalyzer_app::backends::remote::Server::bind(&listen, token)?;
+    info!(
+        "EVAnalyzer server listening on ws://{}",
+        server.local_addr()?
+    );
+    let backend = if roots.is_empty() {
+        warn!("Warning: no --root given - clients can reach every file this process can.");
+        LocalBackend::default()
+    } else {
+        for root in &roots {
+            info!("Serving folder {}", root.display());
+        }
+        LocalBackend::restricted_to(&roots)?
+    };
+    server.run(Arc::new(backend));
+    return Ok(());
+}
+
+/// Start evanalyzer server
+fn start_server(listen: String) -> Result<(), Box<dyn std::error::Error>> {
+    serve(listen);
+    Ok(())
+}
+
+/// Init the logger
+fn init_logger() {
+    evanalyzer_app::global::crash_log::install_panic_hook();
     let mut builder = Builder::new();
     builder.filter_level(LevelFilter::Debug);
     builder
@@ -33,87 +153,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         builder.parse_filters(&rust_log);
     }
     builder.init();
-
-    let args = parse_args();
-
-    // Server mode: execute remote clients' requests on this machine.
-    if let Some(TopCommand::Serve {
-        listen,
-        token,
-        roots,
-    }) = args.command
-    {
-        let token = match token {
-            Some(token) => token,
-            None => {
-                let token = evanalyzer_app::backends::remote::generate_token()?;
-                info!("No token given - generated one for this session:\n\n  {token}\n");
-                eprintln!("Clients connect with EVANALYZER_REMOTE_TOKEN set to this value.");
-                token
-            }
-        };
-        let server = evanalyzer_app::backends::remote::Server::bind(&listen, token)?;
-        info!(
-            "EVAnalyzer server listening on ws://{}",
-            server.local_addr()?
-        );
-        let backend = if roots.is_empty() {
-            warn!("Warning: no --root given - clients can reach every file this process can.");
-            LocalBackend::default()
-        } else {
-            for root in &roots {
-                info!("Serving folder {}", root.display());
-            }
-            LocalBackend::restricted_to(&roots)?
-        };
-        server.run(Arc::new(backend));
-        return Ok(());
-    }
-
-    // The one place that decides where compute runs - front ends only ever
-    // see the `Backend` trait.
-    let backend: Arc<dyn Backend> = match &args.remote {
-        None => Arc::new(LocalBackend::default()),
-        Some(url) => {
-            let token = args
-                .remote_token
-                .as_deref()
-                .ok_or("--remote needs a token: set EVANALYZER_REMOTE_TOKEN (or --remote-token)")?;
-            match evanalyzer_app::backends::remote::RemoteBackend::connect(url, token) {
-                Ok(remote) => Arc::new(remote),
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
-    };
-    log::info!("Compute backend: {}", backend.description());
-
-    // CLI mode: run the requested batch command and exit, no GUI event loop involved.
-    if let Some(TopCommand::Cli { command }) = args.command {
-        if let Err(e) = evanalyzer_cli::run(command, backend.as_ref()) {
-            match e {
-                InternalErrors::Cancelled => {
-                    eprintln!("Cancelled.");
-                    std::process::exit(130);
-                }
-                other => {
-                    eprintln!("Error: {other}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        return Ok(());
-    }
-
-    // GUI mode (default)
-    let owner = ProjectOwner::with_backend(backend);
-    if let Some(path) = &args.project {
-        owner.load_project(path)?;
-    }
-
-    let frontend: Box<dyn Frontend> = Box::new(evanalyzer_gui::create());
-    frontend.start(owner);
-    Ok(())
 }
