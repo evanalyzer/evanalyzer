@@ -71,6 +71,15 @@ impl Server {
                     .peer_addr()
                     .map(|a| a.to_string())
                     .unwrap_or_else(|_| "?".into());
+                // A connection closed without sending a single byte is a port
+                // check (e.g. `evanalyzer server` waiting for this worker to
+                // come up), not a client - don't warn about it.
+                let mut first = [0u8; 1];
+                let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
+                if matches!(stream.peek(&mut first), Ok(0)) {
+                    log::debug!("{peer} closed without sending anything (port check)");
+                    return;
+                }
                 match serve_connection(stream, &token, backend) {
                     Ok(()) => log::info!("Client {peer} disconnected"),
                     Err(reason) => log::warn!("Client {peer} rejected: {reason}"),

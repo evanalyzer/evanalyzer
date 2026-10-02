@@ -15,7 +15,8 @@ evanalyzer_server    = { workspace = true }
 evanalyzer_llm    = { workspace = true, optional = true }
 log = { workspace = true }
 env_logger = { workspace = true }
-clap = { workspace = true, features = ["derive", "env"] }
+clap = { workspace = true, features = ["derive"] }
+rpassword = { workspace = true }
 
 # Off by default: local-LLM pipeline generation is too slow on CPU for a
 # shipped desktop build right now. Build with `--features llm` to include it.

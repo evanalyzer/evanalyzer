@@ -58,11 +58,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tungstenite::{Message, WebSocket};
 
 /// Port used when the URL doesn't name one.
 pub const DEFAULT_PORT: u16 = 7400;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Logging in to an `evanalyzer server` may include starting the user's
+/// worker, which takes longer than a plain connect.
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct RemoteBackend {
     inner: Arc<Inner>,
@@ -347,40 +351,28 @@ impl RemoteBackend {
     /// `token`. Fails with a readable message if the server is unreachable,
     /// rejects the token, or runs a different version.
     pub fn connect(url: &str, token: &str) -> Result<Self, InternalErrors> {
-        let uri: tungstenite::http::Uri = url.parse().map_err(|e| {
-            InternalErrors::InvalidArgument(format!("Invalid server URL '{url}': {e}"))
-        })?;
-        match uri.scheme_str() {
-            Some("ws") => {}
-            Some("wss") => {
-                return Err(InternalErrors::InvalidArgument(
-                    "wss:// is not supported - use ws:// through an SSH tunnel or VPN".into(),
-                ));
-            }
-            _ => {
-                return Err(InternalErrors::InvalidArgument(format!(
-                    "Server URL must start with ws:// (got '{url}')"
-                )));
-            }
-        }
-        let host = uri
-            .host()
-            .ok_or_else(|| InternalErrors::InvalidArgument(format!("No host in '{url}'")))?;
-        let port = uri.port_u16().unwrap_or(DEFAULT_PORT);
-        let request_url = format!("ws://{host}:{port}/");
+        let ws = open_websocket(url)?;
+        Self::start(ws, url, token)
+    }
 
-        let stream = connect_tcp(host, port)?;
-        stream.set_nodelay(true).ok();
-        stream.set_read_timeout(Some(CONNECT_TIMEOUT))?;
-        let config = tungstenite::protocol::WebSocketConfig::default()
-            .max_message_size(Some(MAX_MESSAGE_SIZE))
-            .max_frame_size(Some(MAX_MESSAGE_SIZE));
-        let (mut ws, _) =
-            tungstenite::client::client_with_config(request_url.as_str(), stream, Some(config))
-                .map_err(|e| {
-                    InternalErrors::Io(format!("WebSocket handshake with {url} failed: {e}"))
-                })?;
+    /// Connects to an `evanalyzer server` (`ws://host[:port]`), logs in as
+    /// `username` and attaches to the user's worker, which the server starts
+    /// if it isn't running yet.
+    pub fn connect_with_login(
+        url: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<Self, InternalErrors> {
+        let mut ws = open_websocket(url)?;
+        let session_token = login(&mut ws, url, username, password)?;
+        // From here on the server forwards everything to the worker, which
+        // accepts the session token in `Hello`.
+        Self::start(ws, url, &session_token)
+    }
 
+    /// Remote protocol handshake (`Hello`) on an open WebSocket, then starts
+    /// the I/O thread.
+    fn start(mut ws: WebSocket<TcpStream>, url: &str, token: &str) -> Result<Self, InternalErrors> {
         let hello = frame::encode(
             &ClientMsg::Hello {
                 protocol_version: PROTOCOL_VERSION,
@@ -439,6 +431,108 @@ impl RemoteBackend {
             },
             inner,
         })
+    }
+}
+
+/// Opens the WebSocket to `url` (`ws://host[:port]`).
+fn open_websocket(url: &str) -> Result<WebSocket<TcpStream>, InternalErrors> {
+    let uri: tungstenite::http::Uri = url
+        .parse()
+        .map_err(|e| InternalErrors::InvalidArgument(format!("Invalid server URL '{url}': {e}")))?;
+    match uri.scheme_str() {
+        Some("ws") => {}
+        Some("wss") => {
+            return Err(InternalErrors::InvalidArgument(
+                "wss:// is not supported - use ws:// through an SSH tunnel or VPN".into(),
+            ));
+        }
+        _ => {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "Server URL must start with ws:// (got '{url}')"
+            )));
+        }
+    }
+    let host = uri
+        .host()
+        .ok_or_else(|| InternalErrors::InvalidArgument(format!("No host in '{url}'")))?;
+    let port = uri.port_u16().unwrap_or(DEFAULT_PORT);
+    let request_url = format!("ws://{host}:{port}/");
+
+    let stream = connect_tcp(host, port)?;
+    stream.set_nodelay(true).ok();
+    stream.set_read_timeout(Some(CONNECT_TIMEOUT))?;
+    let config = tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE_SIZE))
+        .max_frame_size(Some(MAX_MESSAGE_SIZE));
+    let (ws, _) =
+        tungstenite::client::client_with_config(request_url.as_str(), stream, Some(config))
+            .map_err(|e| {
+                InternalErrors::Io(format!("WebSocket handshake with {url} failed: {e}"))
+            })?;
+    Ok(ws)
+}
+
+#[derive(serde::Deserialize)]
+enum LoginState {
+    #[serde(alias = "accepted")]
+    Accepted,
+    #[serde(alias = "error")]
+    Error,
+}
+
+/// Reply of an `evanalyzer server` to a text command.
+#[derive(serde::Deserialize)]
+struct LoginReply {
+    response: LoginState,
+    #[serde(default)]
+    msg: String,
+    session_token: Option<String>,
+}
+
+/// Sends the server's JSON login command and returns the session token.
+/// Text messages that aren't a reply (the server's greeting) are skipped.
+fn login(
+    ws: &mut WebSocket<TcpStream>,
+    url: &str,
+    username: &str,
+    password: &str,
+) -> Result<String, InternalErrors> {
+    let request = serde_json::json!({
+        "cmd": "login",
+        "username": username,
+        "password": password,
+    });
+    ws.send(Message::text(request.to_string()))
+        .map_err(|e| InternalErrors::Io(format!("Could not reach {url}: {e}")))?;
+    ws.get_ref().set_read_timeout(Some(LOGIN_TIMEOUT))?;
+    let reply = loop {
+        let text = match ws.read() {
+            Ok(Message::Text(text)) => text,
+            Ok(Message::Binary(_)) => {
+                return Err(InternalErrors::InvalidArgument(format!(
+                    "{url} is not an EVAnalyzer server (connect with a token instead)"
+                )));
+            }
+            Ok(Message::Close(_)) => {
+                return Err(InternalErrors::Io(format!("{url} closed the connection")));
+            }
+            Ok(_) => continue,
+            Err(e) => return Err(InternalErrors::Io(format!("No answer from {url}: {e}"))),
+        };
+        if let Ok(reply) = serde_json::from_str::<LoginReply>(&text) {
+            break reply;
+        }
+    };
+    ws.get_ref().set_read_timeout(Some(CONNECT_TIMEOUT))?;
+    match (reply.response, reply.session_token) {
+        (LoginState::Accepted, Some(token)) => Ok(token),
+        (LoginState::Accepted, None) => Err(InternalErrors::Internal(format!(
+            "{url} accepted the login but sent no session"
+        ))),
+        (LoginState::Error, _) => Err(InternalErrors::InvalidArgument(format!(
+            "Login at {url} failed: {}",
+            reply.msg
+        ))),
     }
 }
 

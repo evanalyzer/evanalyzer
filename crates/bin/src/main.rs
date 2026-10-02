@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The one place that decides where compute runs - front ends only ever
     // see the `Backend` trait.
-    let backend = generate_backend(args.remote, args.remote_token)?;
+    let backend = generate_backend(args.remote, args.remote_token, args.user, args.password)?;
     log::info!("Compute backend: {}", backend.description());
 
     let ret = match args.command {
@@ -42,14 +42,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn generate_backend(
     remote: Option<String>,
     token: Option<String>,
+    user: Option<String>,
+    password: Option<String>,
 ) -> Result<Arc<dyn Backend>, Box<dyn std::error::Error>> {
+    use evanalyzer_app::backends::remote::RemoteBackend;
     match &remote {
         None => Ok(Arc::new(LocalBackend::default())),
         Some(url) => {
-            let token = token
-                .as_deref()
-                .ok_or("--remote needs a token: set EVANALYZER_REMOTE_TOKEN (or --remote-token)")?;
-            match evanalyzer_app::backends::remote::RemoteBackend::connect(url, token) {
+            let connected = match (user, token) {
+                // `evanalyzer server`: log in, the server attaches us to our worker.
+                (Some(user), _) => {
+                    let password = match password {
+                        Some(password) => password,
+                        None => rpassword::prompt_password(format!("Password for {user}: "))?,
+                    };
+                    RemoteBackend::connect_with_login(url, &user, &password)
+                }
+                // `evanalyzer worker` directly.
+                (None, Some(token)) => RemoteBackend::connect(url, &token),
+                (None, None) => {
+                    return Err("--remote needs --user (evanalyzer server) \
+                                or --remote-token (evanalyzer worker)"
+                        .into());
+                }
+            };
+            match connected {
                 Ok(remote) => Ok(Arc::new(remote)),
                 Err(e) => {
                     eprintln!("Error: {e}");
@@ -105,7 +122,7 @@ fn start_serve(
         None => {
             let token = evanalyzer_app::backends::remote::generate_token()?;
             info!("No token given - generated one for this session:\n\n  {token}\n");
-            eprintln!("Clients connect with EVANALYZER_REMOTE_TOKEN set to this value.");
+            eprintln!("Clients connect with --remote-token set to this value.");
             token
         }
     };

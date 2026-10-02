@@ -8,21 +8,42 @@ pub struct Args {
     #[arg(long)]
     pub project: Option<std::path::PathBuf>,
 
-    /// Run analysis, preview, training and image reads on an
-    /// `evanalyzer serve` instance instead of this machine, e.g.
-    /// `ws://workstation:7400`. Both machines must see the images and the
-    /// project folder under the same paths.
-    #[arg(long, global = true, value_name = "URL")]
+    /// EVAnalyzer server to work on instead of this machine, e.g.
+    /// `ws://workstation:7400`. Projects, images and results are then read
+    /// and written there; all paths refer to that machine.
+    #[arg(long, global = true, value_name = "URL", help_heading = "Remote")]
     pub remote: Option<String>,
 
-    /// Token printed by (or given to) the server. Prefer the environment
-    /// variable - command-line arguments are visible to other local users.
+    /// User to log in as on the `--remote` server.
+    #[arg(
+        long,
+        global = true,
+        value_name = "USER",
+        requires = "remote",
+        help_heading = "Remote"
+    )]
+    pub user: Option<String>,
+
+    /// Password for `--user`. Asked for (hidden) if not given. Note that
+    /// command-line arguments are visible to other local users.
+    #[arg(
+        long,
+        global = true,
+        value_name = "PASSWORD",
+        requires = "user",
+        help_heading = "Remote"
+    )]
+    pub password: Option<String>,
+
+    /// Connect to an `evanalyzer worker` directly, without server login,
+    /// using the token it printed (instead of `--user`).
     #[arg(
         long,
         global = true,
         value_name = "TOKEN",
-        env = "EVANALYZER_REMOTE_TOKEN",
-        hide_env_values = true
+        requires = "remote",
+        conflicts_with = "user",
+        help_heading = "Remote"
     )]
     pub remote_token: Option<String>,
 
@@ -42,14 +63,15 @@ pub enum TopCommand {
         #[arg(long, default_value = "127.0.0.1:7400")]
         listen: String,
     },
-    /// Run as a compute server for remote GUIs/CLIs (`--remote ws://...`).
+    /// Run one compute instance. Started by `evanalyzer server` for each
+    /// logged-in user, or by hand for a direct `--remote-token` connection.
     Worker {
         /// Address to listen on.
         #[arg(long, default_value = "127.0.0.1:7400")]
         listen: String,
 
         /// Token clients must present. Generated and printed if not set.
-        #[arg(long, env = "EVANALYZER_SERVER_TOKEN", hide_env_values = true)]
+        #[arg(long)]
         token: Option<String>,
 
         /// Folder clients may browse and use (repeatable).
@@ -65,6 +87,65 @@ pub fn parse_args() -> Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn help_lists_all_options_without_environment_variables() {
+        let help = Args::command().render_long_help().to_string();
+        for shown in [
+            "Remote:",
+            "--remote",
+            "--user",
+            "--password",
+            "--remote-token",
+            "\n  server ",
+            "\n  worker ",
+        ] {
+            assert!(help.contains(shown), "{shown} missing in:\n{help}");
+        }
+        assert!(!help.contains("[env:"), "no environment variables:\n{help}");
+    }
+
+    #[test]
+    fn user_without_remote_and_user_with_token_are_rejected() {
+        assert!(Args::try_parse_from(["evanalyzer", "--user", "alice"]).is_err());
+        assert!(
+            Args::try_parse_from(["evanalyzer", "--remote", "ws://h", "--password", "x"]).is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "evanalyzer",
+                "--remote",
+                "ws://h",
+                "--user",
+                "a",
+                "--remote-token",
+                "t"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn user_flag_selects_server_login() {
+        let args = Args::try_parse_from([
+            "evanalyzer",
+            "cli",
+            "--remote",
+            "ws://server:7400",
+            "--user",
+            "alice",
+            "--password",
+            "secret",
+            "project-info",
+            "--project",
+            "p.evaproj",
+        ])
+        .unwrap();
+        assert_eq!(args.remote.as_deref(), Some("ws://server:7400"));
+        assert_eq!(args.user.as_deref(), Some("alice"));
+        assert_eq!(args.password.as_deref(), Some("secret"));
+    }
 
     #[test]
     fn no_arguments_launches_gui_mode_with_no_project() {
@@ -123,22 +204,22 @@ mod tests {
     }
 
     #[test]
-    fn serve_defaults_to_localhost_only() {
-        let args = Args::try_parse_from(["evanalyzer", "serve"]).unwrap();
+    fn worker_defaults_to_localhost_only() {
+        let args = Args::try_parse_from(["evanalyzer", "worker"]).unwrap();
         match args.command {
             Some(TopCommand::Worker { listen, roots, .. }) => {
                 assert_eq!(listen, "127.0.0.1:7400");
                 assert!(roots.is_empty());
             }
-            _ => panic!("expected the serve command"),
+            _ => panic!("expected the worker command"),
         }
     }
 
     #[test]
-    fn serve_accepts_several_roots() {
+    fn worker_accepts_several_roots() {
         let args = Args::try_parse_from([
             "evanalyzer",
-            "serve",
+            "worker",
             "--root",
             "/data",
             "--root",
@@ -152,7 +233,7 @@ mod tests {
                     [std::path::PathBuf::from("/data"), "/scratch".into()]
                 );
             }
-            _ => panic!("expected the serve command"),
+            _ => panic!("expected the worker command"),
         }
     }
 

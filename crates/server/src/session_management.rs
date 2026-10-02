@@ -26,21 +26,32 @@ use std::{
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Environment variables passed on to workers; everything else is dropped.
-const WORKER_ENV: &[&str] = &["PATH", "LANG", "LC_ALL", "RUST_LOG", "LD_LIBRARY_PATH"];
+/// `TERM` and the colour variables keep the worker's log output (which goes
+/// to the server's terminal) coloured like the server's own.
+const WORKER_ENV: &[&str] = &[
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "RUST_LOG",
+    "LD_LIBRARY_PATH",
+    "TERM",
+    "COLORTERM",
+    "NO_COLOR",
+    "CLICOLOR",
+    "CLICOLOR_FORCE",
+];
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SessionEntry {
     /// Process ID of the started evanalyzer instance for this session
     pub pid: u32,
-    /// Token the client presents to get back into this session
+    /// Token of this session. The worker expects it in the remote protocol's
     pub session_token: String,
     /// User id of the user which started the session
     pub user_id: String,
     pub username: String,
     /// The worker listens on `127.0.0.1:<port>`
     pub port: u16,
-    /// Token the worker expects (`EVANALYZER_SERVER_TOKEN`); only the server knows it
-    pub worker_token: String,
     /// Date time when the session has been started
     pub start_date: SystemTime,
 }
@@ -146,21 +157,21 @@ impl SessionManagement {
 
     fn create_session(&self, state: &mut State, user: &User) -> io::Result<SessionEntry> {
         let port = free_port()?;
-        let worker_token = generate_token()?;
+        let session_token = generate_token()?;
         let mut command = Command::new(&self.worker_command);
         command
             .arg("worker")
             .arg("--listen")
             .arg(format!("127.0.0.1:{port}"))
+            .arg("--token")
+            .arg(&session_token)
             .stdin(Stdio::null())
             .env_clear()
             .envs(
                 WORKER_ENV
                     .iter()
                     .filter_map(|k| Some((k, std::env::var_os(k)?))),
-            )
-            // Not on the command line: that is visible to every local user.
-            .env("EVANALYZER_SERVER_TOKEN", &worker_token);
+            );
         run_as(&mut command, user);
 
         let mut child = command.spawn()?;
@@ -171,11 +182,10 @@ impl SessionManagement {
         }
         let entry = SessionEntry {
             pid: child.id(),
-            session_token: generate_token()?,
+            session_token,
             user_id: user.user_id.clone(),
             username: user.username.clone(),
             port,
-            worker_token,
             start_date: SystemTime::now(),
         };
         info!(
@@ -396,7 +406,7 @@ mod tests {
 
         let bob = sessions.open_or_create_session(&user("bob")).unwrap();
         assert_ne!(bob.port, first.port);
-        assert_ne!(bob.worker_token, first.worker_token);
+        assert_ne!(bob.session_token, first.session_token);
 
         sessions.close_session(&first.session_token).unwrap();
         sessions.close_session(&bob.session_token).unwrap();

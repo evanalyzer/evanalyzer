@@ -8,7 +8,8 @@ use crate::{
 use log::{error, info, warn};
 use std::{
     collections::HashMap,
-    net::{SocketAddr, TcpListener, TcpStream},
+    io,
+    net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -53,6 +54,8 @@ struct Connection {
     username: Option<String>,
     /// Session this connection logged into.
     session_token: Option<String>,
+    /// Port of the session's worker on 127.0.0.1.
+    worker_port: Option<u16>,
 }
 
 pub fn serve(listen: String) -> std::io::Result<()> {
@@ -95,6 +98,7 @@ impl Server {
                 state: State::WaitingForLogin,
                 username: None,
                 session_token: None,
+                worker_port: None,
             };
             thread::spawn(move || {
                 let mut socket = match tungstenite::accept(stream) {
@@ -108,11 +112,32 @@ impl Server {
                 {
                     return;
                 }
-                while let Some(data) = Self::listen_for_data(&mut socket) {
-                    let command = String::from_utf8_lossy(&data)
-                        .to_string()
-                        .trim()
-                        .to_string();
+                while let Some(message) = Self::listen_for_data(&mut socket) {
+                    // Text messages are commands for this server; the first
+                    // binary message (the remote protocol's `Hello`) hands
+                    // the connection over to the user's worker.
+                    let Message::Text(text) = message else {
+                        match connection.worker_port {
+                            Some(port) => {
+                                let id = connection.session_id;
+                                info!("Session {id}: forwarding to worker on port {port}");
+                                if let Err(err) = forward_to_worker(socket, port, message) {
+                                    warn!("Session {id}: forwarding to worker failed: {err}");
+                                }
+                                return;
+                            }
+                            None => {
+                                let answer = Response::error("Log in first");
+                                let json =
+                                    serde_json::to_string(&answer).expect("Response serializes");
+                                if socket.send(Message::text(json)).is_err() {
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
+                    };
+                    let command = text.trim().to_string();
                     // Never log the content: login messages carry passwords.
                     log::debug!(
                         "Session {}: received {} bytes",
@@ -130,13 +155,12 @@ impl Server {
         Ok(())
     }
 
-    /// Waits for the next text or binary message and returns its bytes.
-    /// `None` when the client disconnected.
-    pub fn listen_for_data(socket: &mut WebSocket<TcpStream>) -> Option<Vec<u8>> {
+    /// Waits for the next text or binary message. `None` when the client
+    /// disconnected.
+    pub fn listen_for_data(socket: &mut WebSocket<TcpStream>) -> Option<Message> {
         loop {
             match socket.read().ok()? {
-                Message::Text(text) => return Some(text.as_bytes().to_vec()),
-                Message::Binary(bytes) => return Some(bytes.to_vec()),
+                message @ (Message::Text(_) | Message::Binary(_)) => return Some(message),
                 Message::Close(_) => return None,
                 _ => {} // ping/pong are handled by tungstenite
             }
@@ -170,9 +194,8 @@ impl Connection {
                                 return Response::error("Could not start EVAnalyzer for this user");
                             }
                         };
-                        // TODO: forward this connection to `session.worker_url()`,
-                        // authenticating with `session.worker_token`.
                         self.username = Some(user.username);
+                        self.worker_port = Some(session.port);
                         self.session_token = Some(session.session_token.clone());
                         self.state = State::WaitingForCommands;
                         Response {
@@ -216,9 +239,48 @@ impl Connection {
             info.username = None;
         }
         self.username = None;
+        self.worker_port = None;
         self.state = State::WaitingForLogin;
         Response::accepted("Session closed")
     }
+}
+
+/// Hands the client's connection over to its worker: opens a WebSocket to
+/// the worker, passes on the client's first binary message (the remote
+/// protocol's `Hello`, whose token the worker checks) and from then on copies
+/// raw bytes both ways until one side closes.
+///
+/// Copying bytes works because the frames already have the form the other
+/// side expects: the client's frames are masked, as a server (the worker)
+/// requires from its client, and the worker's frames are unmasked, as the
+/// client requires from its server. The client sends nothing after `Hello`
+/// until the worker answered, so tungstenite holds no unread data when the
+/// raw copying starts.
+fn forward_to_worker(client: WebSocket<TcpStream>, port: u16, hello: Message) -> io::Result<()> {
+    let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))?;
+    stream.set_nodelay(true).ok();
+    let (mut worker, _) = tungstenite::client(format!("ws://127.0.0.1:{port}/"), stream)
+        .map_err(|e| io::Error::other(format!("handshake with worker failed: {e}")))?;
+    worker.send(hello).map_err(io::Error::other)?;
+    pipe(client.get_ref().try_clone()?, worker.get_ref().try_clone()?)
+}
+
+/// Copies bytes between both sockets in both directions until either side
+/// closes, then closes the other one too.
+fn pipe(client: TcpStream, worker: TcpStream) -> io::Result<()> {
+    client.set_read_timeout(None)?;
+    worker.set_read_timeout(None)?;
+    let (mut client_read, mut worker_write) = (client.try_clone()?, worker.try_clone()?);
+    let upstream = thread::spawn(move || {
+        let _ = io::copy(&mut client_read, &mut worker_write);
+        let _ = worker_write.shutdown(Shutdown::Both);
+    });
+    let (mut worker_read, mut client_write) = (worker, client);
+    let _ = io::copy(&mut worker_read, &mut client_write);
+    // Also ends the upstream copy if the worker went away first.
+    let _ = client_write.shutdown(Shutdown::Both);
+    let _ = upstream.join();
+    Ok(())
 }
 
 impl Drop for Connection {
@@ -229,5 +291,71 @@ impl Drop for Connection {
             sessions.remove(&self.session_id);
         }
         info!("Session {} closed", self.session_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A worker that answers every binary message with its bytes reversed.
+    fn reversing_worker() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            while let Ok(Message::Binary(bytes)) = ws.read() {
+                let reversed: Vec<u8> = bytes.iter().rev().copied().collect();
+                ws.send(Message::binary(reversed)).unwrap();
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn forwarded_connection_reaches_the_worker_both_ways() {
+        let worker_port = reversing_worker();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            let hello = socket.read().unwrap();
+            forward_to_worker(socket, worker_port, hello).unwrap();
+        });
+
+        let (mut client, _) = tungstenite::connect(url).unwrap();
+        client.send(Message::binary(vec![1, 2, 3])).unwrap();
+        assert_eq!(client.read().unwrap().into_data().as_ref(), &[3, 2, 1]);
+        // Large messages and many frames pass the raw copy unchanged.
+        let big: Vec<u8> = (0..1_000_000u32).map(|i| i as u8).collect();
+        for _ in 0..3 {
+            client.send(Message::binary(big.clone())).unwrap();
+            let back = client.read().unwrap().into_data();
+            assert!(back.iter().eq(big.iter().rev()));
+        }
+
+        client.close(None).unwrap();
+        let _ = client.read();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn forwarding_to_a_missing_worker_fails() {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let socket = tungstenite::accept(stream).unwrap();
+            forward_to_worker(socket, port, Message::binary(vec![0]))
+        });
+        let (_client, _) = tungstenite::connect(url).unwrap();
+        assert!(server.join().unwrap().is_err());
     }
 }
