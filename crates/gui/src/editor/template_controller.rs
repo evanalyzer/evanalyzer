@@ -1,11 +1,10 @@
 use crate::AppWindow;
 use crate::DialogType;
+use crate::FileRequest;
 use crate::UiState;
 use crate::{GlobalAppState, TemplateMetaSlint, TemplateMetaState};
 use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_app::templates::{
-    get_user_templates_folder, load_pipeline_templates, load_project_templates,
-};
+use evanalyzer_app::templates::{load_pipeline_templates, load_project_templates};
 use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_cfg::{PIPELINE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS};
@@ -98,14 +97,15 @@ impl TemplateController {
         // background, so the dialog can offer them as quick-pick suggestions
         // without blocking on disk IO.
         let ui_weak = self.ui.clone();
+        let backend = Arc::clone(self.app_state.backend());
         std::thread::spawn(move || {
             let mut categories: BTreeSet<String> = BTreeSet::new();
-            for (_path, template) in load_project_templates() {
+            for (_path, template) in load_project_templates(backend.as_ref()) {
                 if !template.meta.category.is_empty() {
                     categories.insert(template.meta.category);
                 }
             }
-            for (_path, template) in load_pipeline_templates() {
+            for (_path, template) in load_pipeline_templates(backend.as_ref()) {
                 if !template.meta.category.is_empty() {
                     categories.insert(template.meta.category);
                 }
@@ -160,39 +160,58 @@ impl TemplateController {
             app_version: String::new(),
         };
 
-        let templates_folder = get_user_templates_folder();
+        // The backend's own templates folder - the server's in remote mode.
+        let templates_folder = self
+            .app_state
+            .backend()
+            .template_folders()
+            .map(|folders| folders.user)
+            .unwrap_or_default();
         let default_file_name = if meta.name.is_empty() {
             "template".to_string()
         } else {
             meta.name.clone()
         };
 
-        let dialog = match target {
-            TemplateTarget::Pipeline(_) => {
-                rfd::FileDialog::new().add_filter("Pipeline template", &[PIPELINE_EXTENSIONS])
-            }
-            TemplateTarget::Project => rfd::FileDialog::new()
-                .add_filter("Project template", &[PROJECT_FILE_TEMPLATE_EXTENSIONS]),
-        };
-
-        let Some(path) = dialog
-            .set_directory(&templates_folder)
-            .set_file_name(&default_file_name)
-            .save_file()
-        else {
-            return;
-        };
+        let request = match target {
+            TemplateTarget::Pipeline(_) => FileRequest::save_file("Save pipeline template")
+                .filter("Pipeline template", &[PIPELINE_EXTENSIONS]),
+            TemplateTarget::Project => FileRequest::save_file("Save project template")
+                .filter("Project template", &[PROJECT_FILE_TEMPLATE_EXTENSIONS]),
+        }
+        .start_in(&templates_folder)
+        .file_name(&default_file_name);
 
         let app_state = self.app_state.clone();
-        std::thread::spawn(move || {
-            let result = match target {
-                TemplateTarget::Pipeline(pipeline_id) => app_state
-                    .get_project_write()
-                    .save_pipeline_as_template(meta, pipeline_id, &path),
-                TemplateTarget::Project => app_state
-                    .get_project_write()
-                    .save_project_as_template(meta, &path),
+        self.app_state.file_browser.open(request, move |path| {
+            let Some(path) = path else {
+                return;
             };
+            Self::write_template(app_state, target, meta, path);
+        });
+    }
+
+    fn write_template(
+        app_state: Arc<UiState>,
+        target: TemplateTarget,
+        meta: MetaData,
+        path: std::path::PathBuf,
+    ) {
+        std::thread::spawn(move || {
+            let result =
+                match target {
+                    TemplateTarget::Pipeline(pipeline_id) => {
+                        app_state.get_project_write().save_pipeline_as_template(
+                            app_state.backend().files(),
+                            meta,
+                            pipeline_id,
+                            &path,
+                        )
+                    }
+                    TemplateTarget::Project => app_state
+                        .get_project_write()
+                        .save_project_as_template(app_state.backend().files(), meta, &path),
+                };
 
             match result {
                 Ok(_) => log::info!("Template saved to {}", path.display()),

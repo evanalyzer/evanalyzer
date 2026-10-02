@@ -117,6 +117,14 @@ import {
 import { ResultsListState } from "editor/results_list_panel.slint";
 import { ResultsState } from "results/results_state.slint";
 import { ExportDialogState } from "results/export_dialog.slint";
+import {
+    FileBrowserDialog,
+    FileBrowserState,
+    FileBrowserMode,
+    FileBrowserPlace,
+    FileBrowserCrumb,
+    FileBrowserEntry,
+} from "dialogs/file_browser_dialog.slint";
 
 export {
     GlobalAppState,
@@ -167,6 +175,11 @@ export {
     TrainingObjectRowSlint,
     ResultsState,
     ExportDialogState,
+    FileBrowserState,
+    FileBrowserMode,
+    FileBrowserPlace,
+    FileBrowserCrumb,
+    FileBrowserEntry,
 }
 export component AppWindow inherits Window {
     // A literal binding on the inherited `title` property isn't settable
@@ -362,5 +375,12 @@ export component AppWindow inherits Window {
                 height: 100%;
             }
         }
+    }
+
+    // The file browser sits above every other overlay: some dialogs (e.g.
+    // AI learning) open it while they are themselves still open.
+    if FileBrowserState.visible: FileBrowserDialog {
+        width: 100%;
+        height: 100%;
     }
 }

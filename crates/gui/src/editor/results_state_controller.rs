@@ -4,11 +4,11 @@ use crate::{
     MultiSelectItem, ResultRow, ResultsChartKind2, ResultsListState, ResultsRailMode, ResultsState,
     UiState,
 };
+use evanalyzer_app::backend::ResultsSource;
 use evanalyzer_app::result::{
     self, Aggregation, BoxplotFilter, Cell, CellValue, ColorScale, ColorSchema, Column,
     ColumnEntry, DatabaseResult, ExportFormat, GroupedByImageFilter, HistogramFilter, ImageEntry,
-    ImageHeatmapFilter, PlateDimensions, ResultCharts, ResultExport, ResultsGenerator,
-    ScatterFilter, WellFilter, WellSize,
+    ImageHeatmapFilter, PlateDimensions, ResultExport, ScatterFilter, WellFilter, WellSize,
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -95,7 +95,8 @@ struct MatrixFilter {
 pub struct ResultsStateController {
     pub(crate) ui: slint::Weak<ResultsWindow>,
     pub(crate) _app_state: Arc<UiState>,
-    result_generator: Mutex<Option<ResultsGenerator>>,
+    /// The open results database - on the server in remote mode.
+    result_generator: Mutex<Option<Arc<dyn ResultsSource>>>,
     list_filter: Mutex<ListFilter>,
     matrix_filter: Mutex<Option<MatrixFilter>>,
     chart_filter: Mutex<ChartFilter>,
@@ -1018,17 +1019,25 @@ impl ResultsStateController {
             });
 
             let ui_weak = self.ui.clone();
+            let browser = self._app_state.results_file_browser.clone();
             ui.global::<ExportDialogState>()
                 .on_pick_output_dir(move || {
                     let Some(ui_ready) = ui_weak.upgrade() else {
                         warn!("Failed to upgrade UI handle in on_pick_output_dir");
                         return;
                     };
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                    let current = ui_ready.global::<ExportDialogState>().get_output_dir();
+                    let request = crate::FileRequest::open_folder("Choose export folder")
+                        .start_in(current.as_str());
+                    let ui_weak = ui_weak.clone();
+                    browser.open(request, move |path| {
+                        let (Some(path), Some(ui_ready)) = (path, ui_weak.upgrade()) else {
+                            return;
+                        };
                         ui_ready
                             .global::<ExportDialogState>()
                             .set_output_dir(path.to_string_lossy().into_owned().into());
-                    }
+                    });
                 });
 
             let manager = self.clone();
@@ -1276,7 +1285,7 @@ impl ResultsStateController {
 
     pub fn open_database(&self, path: PathBuf) {
         info!("Opening database {:?}", path);
-        let db = result::ResultsGenerator::open_database(path);
+        let db = self._app_state.backend().open_results(&path);
         match db {
             Ok(results) => {
                 *self.export_populated.lock().expect("Poisened") = false;
@@ -1491,54 +1500,44 @@ impl ResultsStateController {
 
         let chart_filter = self.chart_filter.lock().expect("Poisened").clone();
         let object_classes = chart_filter.object_class.map(|class| vec![class]);
-        let charts = ResultCharts {};
 
         match chart_filter.kind {
             ChartKind::Histogram => {
-                match charts.paint_histogram(
-                    db,
-                    &HistogramFilter {
-                        plane,
-                        images: None,
-                        object_classes,
-                        column: chart_filter.column,
-                        bins: CHART_HISTOGRAM_BINS,
-                    },
-                ) {
+                match db.histogram(&HistogramFilter {
+                    plane,
+                    images: None,
+                    object_classes,
+                    column: chart_filter.column,
+                    bins: CHART_HISTOGRAM_BINS,
+                }) {
                     Ok(histogram) => self.push_histogram_in_slint(&histogram),
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
             ChartKind::Scatter => {
-                match charts.paint_scatter(
-                    db,
-                    &ScatterFilter {
-                        plane,
-                        images: None,
-                        object_classes,
-                        x_column: chart_filter.column,
-                        y_column: chart_filter.y_column,
-                        max_points: Some(CHART_SCATTER_MAX_POINTS),
-                    },
-                ) {
+                match db.scatter(&ScatterFilter {
+                    plane,
+                    images: None,
+                    object_classes,
+                    x_column: chart_filter.column,
+                    y_column: chart_filter.y_column,
+                    max_points: Some(CHART_SCATTER_MAX_POINTS),
+                }) {
                     Ok(scatter) => self.push_scatter_in_slint(&scatter),
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
             ChartKind::Boxplot => {
-                match charts.paint_boxplot(
-                    db,
-                    &BoxplotFilter {
-                        plane,
-                        images: None,
-                        // Boxplot always groups by every class present —
-                        // the CLASS dropdown doesn't gate it the way it
-                        // does Histogram/Scatter (see `ChartFilter::object_class`'s
-                        // doc comment).
-                        object_classes: None,
-                        column: chart_filter.column,
-                    },
-                ) {
+                match db.boxplot(&BoxplotFilter {
+                    plane,
+                    images: None,
+                    // Boxplot always groups by every class present —
+                    // the CLASS dropdown doesn't gate it the way it
+                    // does Histogram/Scatter (see `ChartFilter::object_class`'s
+                    // doc comment).
+                    object_classes: None,
+                    column: chart_filter.column,
+                }) {
                     Ok(boxplot) => self.push_boxplot_in_slint(&boxplot.boxes),
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
@@ -3061,40 +3060,21 @@ impl ResultsStateController {
         })
     }
 
-    // Runs `export` on a background thread against its *own* connection to
-    // the same already-open database, so the (potentially long-running)
-    // export doesn't hold `result_generator`'s lock for its whole duration
-    // and block every other List/Matrix query on the UI thread meanwhile.
-    // That second connection is `result_generator`'s own connection cloned
-    // via `ResultsGenerator::try_clone` (a new connection to the same
-    // already-open DuckDB database, not a second file open) - opening the
-    // same path a second time via `open_database` was the original
-    // approach, but on Windows the OS enforces exclusive-by-default file
-    // locking even for a second handle from the same process, so the app
-    // ended up locking itself out of its own database on every export.
+    // Runs `export` on a background thread. The results source gives it its
+    // own database connection (see `LocalResults::export`), so the
+    // (potentially long-running) export doesn't block every other
+    // List/Matrix query meanwhile.
     fn run_export(self: &Arc<Self>, export: ResultExport) {
-        let cloned = match self.result_generator.lock().expect("Poisened").as_ref() {
-            Some(database) => database.try_clone(),
-            None => {
-                self.push_export_error("No database is open.".to_string());
-                return;
-            }
-        };
-        let database = match cloned {
-            Ok(database) => database,
-            Err(err) => {
-                self.push_export_error(format!(
-                    "Could not open a database connection for export: {err}"
-                ));
-                return;
-            }
+        let Some(database) = self.result_generator.lock().expect("Poisened").clone() else {
+            self.push_export_error("No database is open.".to_string());
+            return;
         };
         let cancel = Arc::new(AtomicBool::new(false));
         *self.export_cancel_flag.lock().expect("Poisened") = Some(cancel.clone());
         let manager = self.clone();
         std::thread::spawn(move || {
             let manager_for_progress = manager.clone();
-            let result = export.start_export(&database, &cancel, &mut |message, current, total| {
+            let result = database.export(&export, &cancel, &mut |message, current, total| {
                 manager_for_progress.push_export_progress(message.to_string(), current, total);
             });
             match result {

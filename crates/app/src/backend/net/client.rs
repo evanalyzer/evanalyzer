@@ -12,13 +12,24 @@ use crate::backend::net::protocol::{
     APP_VERSION, ClientMsg, PROTOCOL_VERSION, Reply, Request, ServerMsg, channels_from_wire,
     event_from_wire,
 };
-use crate::backend::{AnalysisRequest, Backend, ImageSource, TileRequest, TrainingRequest};
+use crate::backend::net::protocol::{ResultsAnswer, ResultsQuery, from_postcard, to_postcard};
+use crate::backend::{
+    AnalysisRequest, Backend, DirEntry, ExportProgressFn, FileSystem, ImageSource, Place,
+    ResultsSource, TemplateFolders, TileRequest, TrainingRequest,
+};
 use crate::images::{ImageChannel, ImageMeta};
 use crate::job::{CancelHandle, PreviewRequest, RunningJob, StartPreviewError};
+use crate::result::{
+    BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, GroupedByImageFilter,
+    HistogramFilter, HistogramResult, ImageEntry, ImageHeatmapFilter, ListFilter, PlateFilter,
+    ResultExport, ScatterFilter, ScatterResult, View, WellFilter,
+};
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::settings::classification_settings::Class;
 use std::collections::HashMap;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -31,6 +42,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct RemoteBackend {
     inner: Arc<Inner>,
+    files: RemoteFiles,
 }
 
 impl Backend for RemoteBackend {
@@ -151,8 +163,149 @@ impl Backend for RemoteBackend {
         }
     }
 
+    fn open_results(&self, path: &Path) -> Result<Arc<dyn ResultsSource>, InternalErrors> {
+        let request = Request::OpenResults {
+            path: path.to_path_buf(),
+        };
+        match self.files.call(request, Vec::new())?.msg {
+            Reply::ResultsOpened { handle } => Ok(Arc::new(RemoteResults {
+                inner: Arc::clone(&self.inner),
+                handle,
+            })),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn read_image_meta(&self, path: &Path) -> Result<ImageMeta, InternalErrors> {
+        let request = Request::ReadImageMeta {
+            path: path.to_path_buf(),
+        };
+        match self.files.call(request, Vec::new())?.msg {
+            Reply::ImageMeta(meta) => Ok(meta),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn template_folders(&self) -> Result<TemplateFolders, InternalErrors> {
+        match self.files.call(Request::TemplateFolders, Vec::new())?.msg {
+            Reply::TemplateFolders(folders) => Ok(folders),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn files(&self) -> &dyn FileSystem {
+        &self.files
+    }
+
+    fn is_remote(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> String {
         self.inner.url.clone()
+    }
+}
+
+/// The server's file system, one request per call.
+struct RemoteFiles {
+    inner: Arc<Inner>,
+}
+
+impl RemoteFiles {
+    fn call(&self, request: Request, blobs: Vec<Vec<u8>>) -> Result<Frame<Reply>, InternalErrors> {
+        let (id, rx) = self.inner.request_with_blobs(request, blobs)?;
+        let reply = self.inner.recv(&rx);
+        self.inner.finish(id);
+        match reply? {
+            Frame {
+                msg: Reply::Failed(e),
+                ..
+            } => Err(e.into_internal()),
+            frame => Ok(frame),
+        }
+    }
+}
+
+impl FileSystem for RemoteFiles {
+    fn places(&self) -> Result<Vec<Place>, InternalErrors> {
+        match self.call(Request::Places, Vec::new())?.msg {
+            Reply::Places(places) => Ok(places),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn list_dir(&self, dir: &Path) -> Result<Vec<DirEntry>, InternalErrors> {
+        let request = Request::ListDir {
+            path: dir.to_path_buf(),
+        };
+        match self.call(request, Vec::new())?.msg {
+            Reply::DirEntries(entries) => Ok(entries),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn stat(&self, path: &Path) -> Result<Option<DirEntry>, InternalErrors> {
+        let request = Request::Stat {
+            path: path.to_path_buf(),
+        };
+        match self.call(request, Vec::new())?.msg {
+            Reply::Stat(entry) => Ok(entry),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>, InternalErrors> {
+        let request = Request::ReadFile {
+            path: path.to_path_buf(),
+        };
+        match self.call(request, Vec::new())? {
+            Frame {
+                msg: Reply::FileData,
+                mut blobs,
+            } if blobs.len() == 1 => Ok(blobs.remove(0)),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn write_file(&self, path: &Path, data: &[u8]) -> Result<(), InternalErrors> {
+        let request = Request::WriteFile {
+            path: path.to_path_buf(),
+        };
+        match self.call(request, vec![data.to_vec()])?.msg {
+            Reply::Done => Ok(()),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn create_dir_all(&self, path: &Path) -> Result<(), InternalErrors> {
+        let request = Request::CreateDir {
+            path: path.to_path_buf(),
+        };
+        match self.call(request, Vec::new())?.msg {
+            Reply::Done => Ok(()),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> Result<(), InternalErrors> {
+        let request = Request::Rename {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+        };
+        match self.call(request, Vec::new())?.msg {
+            Reply::Done => Ok(()),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn remove_all(&self, path: &Path) -> Result<(), InternalErrors> {
+        let request = Request::RemoveAll {
+            path: path.to_path_buf(),
+        };
+        match self.call(request, Vec::new())?.msg {
+            Reply::Done => Ok(()),
+            _ => Err(unexpected_reply()),
+        }
     }
 }
 
@@ -256,7 +409,12 @@ impl RemoteBackend {
                     inner.pending.lock().unwrap().clear();
                 }
             })?;
-        Ok(Self { inner })
+        Ok(Self {
+            files: RemoteFiles {
+                inner: Arc::clone(&inner),
+            },
+            inner,
+        })
     }
 }
 
@@ -303,17 +461,29 @@ impl Inner {
     }
 
     fn send(&self, msg: &ClientMsg) -> Result<(), InternalErrors> {
-        let bytes = frame::encode(msg, &[])?;
+        self.send_with_blobs(msg, &[])
+    }
+
+    fn send_with_blobs(&self, msg: &ClientMsg, blobs: &[Vec<u8>]) -> Result<(), InternalErrors> {
+        let bytes = frame::encode(msg, blobs)?;
         self.outgoing.send(bytes).map_err(|_| self.disconnected())
     }
 
     /// Sends `request` and returns its id plus the channel its replies
     /// arrive on.
     fn request(&self, request: Request) -> Result<(u64, Receiver<Frame<Reply>>), InternalErrors> {
+        self.request_with_blobs(request, Vec::new())
+    }
+
+    fn request_with_blobs(
+        &self,
+        request: Request,
+        blobs: Vec<Vec<u8>>,
+    ) -> Result<(u64, Receiver<Frame<Reply>>), InternalErrors> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel();
         self.pending.lock().unwrap().insert(id, tx);
-        if let Err(e) = self.send(&ClientMsg::Request { id, request }) {
+        if let Err(e) = self.send_with_blobs(&ClientMsg::Request { id, request }, &blobs) {
             self.finish(id);
             return Err(e);
         }
@@ -425,6 +595,210 @@ impl ImageSource for RemoteImageSource {
 impl Drop for RemoteImageSource {
     fn drop(&mut self) {
         let _ = self.inner.send(&ClientMsg::CloseImage {
+            handle: self.handle,
+        });
+    }
+}
+
+/// A results database opened on the server; every query is one request.
+struct RemoteResults {
+    inner: Arc<Inner>,
+    handle: u64,
+}
+
+impl RemoteResults {
+    fn query(&self, query: ResultsQuery) -> Result<ResultsAnswer, InternalErrors> {
+        let request = Request::QueryResults {
+            handle: self.handle,
+        };
+        let (id, rx) = self
+            .inner
+            .request_with_blobs(request, vec![to_postcard(&query)?])?;
+        let reply = self.inner.recv(&rx);
+        self.inner.finish(id);
+        match reply? {
+            Frame {
+                msg: Reply::ResultsAnswer,
+                blobs,
+            } => from_postcard(blobs.first()),
+            Frame {
+                msg: Reply::Failed(e),
+                ..
+            } => Err(e.into_internal()),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn table(&self, query: ResultsQuery) -> Result<DatabaseResult, InternalErrors> {
+        match self.query(query)? {
+            ResultsAnswer::Table(table) => Ok(table),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn count(&self, query: ResultsQuery) -> u32 {
+        match self.query(query) {
+            Ok(ResultsAnswer::Count(n)) => n,
+            Ok(_) => {
+                log::warn!("Unexpected answer to a stack-count query");
+                1
+            }
+            Err(e) => {
+                log::warn!("Could not read stack count from the server: {e}");
+                1
+            }
+        }
+    }
+}
+
+impl ResultsSource for RemoteResults {
+    fn get_object_list(&self, filter: &ListFilter) -> Result<DatabaseResult, InternalErrors> {
+        self.table(ResultsQuery::ObjectList(filter.clone()))
+    }
+
+    fn get_grouped_by_image(
+        &self,
+        filter: &GroupedByImageFilter,
+    ) -> Result<DatabaseResult, InternalErrors> {
+        self.table(ResultsQuery::GroupedByImage(filter.clone()))
+    }
+
+    fn get_group_by_plate(
+        &self,
+        filter: &PlateFilter,
+        view: &View,
+    ) -> Result<DatabaseResult, InternalErrors> {
+        self.table(ResultsQuery::GroupByPlate(filter.clone(), view.clone()))
+    }
+
+    fn get_group_by_well(
+        &self,
+        filter: &WellFilter,
+        view: &View,
+    ) -> Result<DatabaseResult, InternalErrors> {
+        self.table(ResultsQuery::GroupByWell(filter.clone(), view.clone()))
+    }
+
+    fn get_image_heatmap(
+        &self,
+        filter: &ImageHeatmapFilter,
+        view: &View,
+    ) -> Result<DatabaseResult, InternalErrors> {
+        self.table(ResultsQuery::ImageHeatmap(filter.clone(), view.clone()))
+    }
+
+    fn get_images(&self) -> Result<Vec<ImageEntry>, InternalErrors> {
+        match self.query(ResultsQuery::Images)? {
+            ResultsAnswer::Images(images) => Ok(images),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn enable_image(&self, image_rel_path: &str, disable: bool) -> Result<(), InternalErrors> {
+        let query = ResultsQuery::EnableImage {
+            image_rel_path: image_rel_path.into(),
+            disable,
+        };
+        match self.query(query)? {
+            ResultsAnswer::Done => Ok(()),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn get_object_classes(&self) -> Result<Vec<Class>, InternalErrors> {
+        match self.query(ResultsQuery::ObjectClasses)? {
+            ResultsAnswer::Classes(classes) => Ok(classes),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors> {
+        match self.query(ResultsQuery::AvailableColumns)? {
+            ResultsAnswer::Columns(columns) => Ok(columns),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn get_nr_of_z_stacks(&self) -> u32 {
+        self.count(ResultsQuery::ZStacks)
+    }
+
+    fn get_nr_of_t_stacks(&self) -> u32 {
+        self.count(ResultsQuery::TStacks)
+    }
+
+    fn boxplot(&self, filter: &BoxplotFilter) -> Result<BoxplotResult, InternalErrors> {
+        match self.query(ResultsQuery::Boxplot(filter.clone()))? {
+            ResultsAnswer::Boxplot(result) => Ok(result),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn histogram(&self, filter: &HistogramFilter) -> Result<HistogramResult, InternalErrors> {
+        match self.query(ResultsQuery::Histogram(filter.clone()))? {
+            ResultsAnswer::Histogram(result) => Ok(result),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn scatter(&self, filter: &ScatterFilter) -> Result<ScatterResult, InternalErrors> {
+        match self.query(ResultsQuery::Scatter(filter.clone()))? {
+            ResultsAnswer::Scatter(result) => Ok(result),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn export(
+        &self,
+        export: &ResultExport,
+        cancel: &AtomicBool,
+        on_progress: ExportProgressFn,
+    ) -> Result<(), InternalErrors> {
+        let request = Request::ExportResults {
+            handle: self.handle,
+        };
+        let (id, rx) = self
+            .inner
+            .request_with_blobs(request, vec![to_postcard(export)?])?;
+        let mut cancel_sent = false;
+        let result = loop {
+            if !cancel_sent && cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                cancel_sent = true;
+                let _ = self.inner.send(&ClientMsg::Cancel { id });
+            }
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Frame {
+                    msg:
+                        Reply::ExportProgress {
+                            message,
+                            current,
+                            total,
+                        },
+                    ..
+                }) => on_progress(&message, current, total),
+                Ok(Frame {
+                    msg: Reply::ExportDone(result),
+                    ..
+                }) => break result.map_err(|e| e.into_internal()),
+                Ok(Frame {
+                    msg: Reply::Failed(e),
+                    ..
+                }) => break Err(e.into_internal()),
+                Ok(_) => break Err(unexpected_reply()),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break Err(self.inner.disconnected());
+                }
+            }
+        };
+        self.inner.finish(id);
+        result
+    }
+}
+
+impl Drop for RemoteResults {
+    fn drop(&mut self) {
+        let _ = self.inner.send(&ClientMsg::CloseResults {
             handle: self.handle,
         });
     }

@@ -6,6 +6,7 @@ use crate::result::{
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use rust_xlsxwriter::{Color, Format, FormatAlign, Workbook, Worksheet, XlsxError};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -29,7 +30,7 @@ const EMPTY_CELL_BG: u32 = 0xE0E0E0;
 // budget to share across many columns.
 const LIST_VALUE_COL_PX: u32 = 90;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportFormat {
     #[default]
     XLSX,
@@ -44,14 +45,16 @@ pub enum ExportFormat {
 /// have no shared unit to make a single running percentage meaningful.
 pub type ExportProgress<'a> = &'a mut dyn FnMut(&str, usize, usize);
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct ResultExport {
     /// Directory the export writes its file(s) into — created if missing.
     /// Every document below lives directly under it (`list.xlsx`,
     /// `plate.xlsx`, `well.xlsx`, `heatmap_{image}.xlsx`).
     pub output_dir: PathBuf,
     pub format: ExportFormat,
+    #[serde(with = "range_serde")]
     pub t_stacks: Range<u32>,
+    #[serde(with = "range_serde")]
     pub z_stacks: Range<u32>,
     /// `[]` means every image in the database (see `resolve_images`).
     pub image_rel_paths: Vec<String>,
@@ -90,6 +93,21 @@ pub struct ResultExport {
     pub with_plate_view_list: bool,
     pub with_well_view_list: bool,
     pub with_heatmap: bool,
+}
+
+/// serde for `std::range::Range` (no upstream support yet): `(start, end)`.
+mod range_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::range::Range;
+
+    pub fn serialize<S: Serializer>(range: &Range<u32>, serializer: S) -> Result<S::Ok, S::Error> {
+        (range.start, range.end).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Range<u32>, D::Error> {
+        let (start, end) = <(u32, u32)>::deserialize(deserializer)?;
+        Ok(Range { start, end })
+    }
 }
 
 impl ResultExport {

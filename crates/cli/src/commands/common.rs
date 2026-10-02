@@ -1,5 +1,6 @@
 use crate::args::{AggKind, GroupArgs, GroupByKind};
-use evanalyzer_app::result::{Aggregation, Cell, CellValue, ResultsGenerator};
+use evanalyzer_app::backend::ResultsSource;
+use evanalyzer_app::result::{Aggregation, Cell, CellValue};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 
 /// Resolves `--image` names into the `image_rel_path`s the results engine
@@ -7,7 +8,7 @@ use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 /// `*Filter`/`ResultExport` in `evanalyzer_app::result` already treats as
 /// "every image", so callers don't need their own empty-means-all check.
 pub fn resolve_image_rel_paths(
-    db: &ResultsGenerator,
+    db: &dyn ResultsSource,
     names: &[String],
 ) -> Result<Vec<String>, InternalErrors> {
     if names.is_empty() {
@@ -32,7 +33,7 @@ pub fn resolve_image_rel_paths(
 /// `resolve_image_rel_paths` resolves `--image` names — `[]` means "every
 /// class".
 pub fn resolve_object_classes(
-    db: &ResultsGenerator,
+    db: &dyn ResultsSource,
     names: &[String],
 ) -> Result<Vec<ObjectClass>, InternalErrors> {
     if names.is_empty() {

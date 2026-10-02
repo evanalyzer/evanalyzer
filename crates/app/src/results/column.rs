@@ -1,6 +1,7 @@
 use evanalyzer_cfg::{core_types::ObjectClass, settings::classification_settings::Class};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Column {
     ObjectId,
     ImageName,

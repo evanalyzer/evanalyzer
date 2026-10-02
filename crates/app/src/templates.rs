@@ -1,3 +1,4 @@
+use crate::backend::{Backend, FileSystem};
 use crate::settings::get_user_folder;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
@@ -10,10 +11,12 @@ use std::path::{Path, PathBuf};
 /// silently skips files that fail to parse, since one bad file in a folder
 /// shouldn't block the rest - a single explicitly-opened file surfaces its
 /// error so the caller can show it to the user.
-pub fn load_project_template_from_file(path: &Path) -> Result<ProjectTemplate, InternalErrors> {
-    let data =
-        std::fs::read_to_string(path).map_err(|e| InternalErrors::Internal(e.to_string()))?;
-    serde_json::from_str(&data)
+pub fn load_project_template_from_file(
+    files: &dyn FileSystem,
+    path: &Path,
+) -> Result<ProjectTemplate, InternalErrors> {
+    let data = files.read_file(path)?;
+    serde_json::from_slice(&data)
         .map_err(|e| InternalErrors::Internal(format!("Failed to parse project template: {e}")))
 }
 
@@ -37,44 +40,59 @@ pub fn get_user_templates_folder() -> PathBuf {
     folder
 }
 
-/// Loads all `PipelineTemplate`s found in the user and app templates folders.
+/// Loads all `PipelineTemplate`s found in the backend's user and app
+/// templates folders.
 ///
 /// Files are matched by the [`PIPELINE_EXTENSIONS`] extension. The returned
 /// templates are paired with the path they were loaded from.
-pub fn load_pipeline_templates() -> Vec<(PathBuf, PipelineTemplate)> {
-    let mut templates = Vec::new();
-    for folder in [get_user_templates_folder(), get_app_templates_folder()] {
-        load_templates_from_folder(&folder, PIPELINE_EXTENSIONS, &mut templates);
-    }
-    templates
+pub fn load_pipeline_templates(backend: &dyn Backend) -> Vec<(PathBuf, PipelineTemplate)> {
+    load_templates(backend, PIPELINE_EXTENSIONS)
 }
 
-/// Loads all `ProjectTemplate`s found in the user and app templates folders.
+/// Loads all `ProjectTemplate`s found in the backend's user and app
+/// templates folders.
 ///
 /// Files are matched by the [`PROJECT_FILE_TEMPLATE_EXTENSIONS`] extension. The
 /// returned templates are paired with the path they were loaded from.
-pub fn load_project_templates() -> Vec<(PathBuf, ProjectTemplate)> {
+pub fn load_project_templates(backend: &dyn Backend) -> Vec<(PathBuf, ProjectTemplate)> {
+    load_templates(backend, PROJECT_FILE_TEMPLATE_EXTENSIONS)
+}
+
+fn load_templates<T: serde::de::DeserializeOwned>(
+    backend: &dyn Backend,
+    extension: &str,
+) -> Vec<(PathBuf, T)> {
     let mut templates = Vec::new();
-    for folder in [get_user_templates_folder(), get_app_templates_folder()] {
-        load_templates_from_folder(&folder, PROJECT_FILE_TEMPLATE_EXTENSIONS, &mut templates);
+    match backend.template_folders() {
+        Ok(folders) => {
+            for folder in [folders.user, folders.bundled] {
+                load_templates_from_folder(backend.files(), &folder, extension, &mut templates);
+            }
+        }
+        Err(e) => log::warn!("Could not locate the template folders: {e}"),
     }
     templates
 }
 
 fn load_templates_from_folder<T: serde::de::DeserializeOwned>(
+    files: &dyn FileSystem,
     folder: &Path,
     extension: &str,
     out: &mut Vec<(PathBuf, T)>,
 ) {
-    let Ok(entries) = std::fs::read_dir(folder) else {
+    let Ok(entries) = files.list_dir(folder) else {
         return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for entry in entries.into_iter().filter(|e| !e.is_dir) {
+        let path = entry.path;
         if path.extension().and_then(|e| e.to_str()) != Some(extension) {
             continue;
         }
-        let Ok(data) = std::fs::read_to_string(&path) else {
+        let Some(data) = files
+            .read_file(&path)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        else {
             continue;
         };
         match serde_json::from_str::<T>(&data) {
@@ -123,6 +141,7 @@ mod tests {
     fn returns_empty_for_a_folder_that_does_not_exist() {
         let mut out: Vec<(PathBuf, PipelineTemplate)> = Vec::new();
         load_templates_from_folder(
+            &crate::backend::LocalFileSystem::default(),
             Path::new("/does/not/exist/at/all"),
             PIPELINE_EXTENSIONS,
             &mut out,
@@ -139,7 +158,12 @@ mod tests {
         write(dir.path(), "c.evapipe.bak", &json); // extension is "bak", not "evapipe"
 
         let mut out: Vec<(PathBuf, PipelineTemplate)> = Vec::new();
-        load_templates_from_folder(dir.path(), PIPELINE_EXTENSIONS, &mut out);
+        load_templates_from_folder(
+            &crate::backend::LocalFileSystem::default(),
+            dir.path(),
+            PIPELINE_EXTENSIONS,
+            &mut out,
+        );
 
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, dir.path().join("a.evapipe"));
@@ -157,7 +181,12 @@ mod tests {
         write(dir.path(), "bad.evapipe", "{ this is not valid json");
 
         let mut out: Vec<(PathBuf, PipelineTemplate)> = Vec::new();
-        load_templates_from_folder(dir.path(), PIPELINE_EXTENSIONS, &mut out);
+        load_templates_from_folder(
+            &crate::backend::LocalFileSystem::default(),
+            dir.path(),
+            PIPELINE_EXTENSIONS,
+            &mut out,
+        );
 
         assert_eq!(
             out.len(),
@@ -182,7 +211,12 @@ mod tests {
         );
 
         let mut out: Vec<(PathBuf, PipelineTemplate)> = Vec::new();
-        load_templates_from_folder(dir.path(), PIPELINE_EXTENSIONS, &mut out);
+        load_templates_from_folder(
+            &crate::backend::LocalFileSystem::default(),
+            dir.path(),
+            PIPELINE_EXTENSIONS,
+            &mut out,
+        );
 
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].1.meta.name, "Good");
@@ -208,7 +242,12 @@ mod tests {
         );
 
         let mut out: Vec<(PathBuf, ProjectTemplate)> = Vec::new();
-        load_templates_from_folder(dir.path(), PROJECT_FILE_TEMPLATE_EXTENSIONS, &mut out);
+        load_templates_from_folder(
+            &crate::backend::LocalFileSystem::default(),
+            dir.path(),
+            PROJECT_FILE_TEMPLATE_EXTENSIONS,
+            &mut out,
+        );
 
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].1.meta.name, "Proj");

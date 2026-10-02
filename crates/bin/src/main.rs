@@ -31,7 +31,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
 
     // Server mode: execute remote clients' requests on this machine.
-    if let Some(TopCommand::Serve { listen, token }) = args.command {
+    if let Some(TopCommand::Serve {
+        listen,
+        token,
+        roots,
+    }) = args.command
+    {
         let token = match token {
             Some(token) => token,
             None => {
@@ -46,14 +51,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "EVAnalyzer server listening on ws://{}",
             server.local_addr()?
         );
-        server.run(Arc::new(LocalBackend));
+        let backend = if roots.is_empty() {
+            eprintln!("Warning: no --root given - clients can reach every file this process can.");
+            LocalBackend::default()
+        } else {
+            for root in &roots {
+                eprintln!("Serving folder {}", root.display());
+            }
+            LocalBackend::restricted_to(&roots)?
+        };
+        server.run(Arc::new(backend));
         return Ok(());
     }
 
     // The one place that decides where compute runs - front ends only ever
     // see the `Backend` trait.
     let backend: Arc<dyn Backend> = match &args.remote {
-        None => Arc::new(LocalBackend),
+        None => Arc::new(LocalBackend::default()),
         Some(url) => {
             let token = args
                 .remote_token

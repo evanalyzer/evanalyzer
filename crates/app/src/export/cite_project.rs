@@ -9,7 +9,13 @@ use evanalyzer_core::into_algorithm;
 /// Renders every enabled pipeline as an ASCII/Unicode flow diagram followed
 /// by a consolidated reference list of every citation used, and writes the
 /// result as a single markdown file to `output_file`.
-pub fn cite_project(config: &ProjectSettings, output_file: &PathBuf) -> Result<(), InternalErrors> {
+/// Writes through `files` (the backend's), so the citation lands next to
+/// the project wherever it lives.
+pub fn cite_project(
+    files: &dyn crate::backend::FileSystem,
+    config: &ProjectSettings,
+    output_file: &PathBuf,
+) -> Result<(), InternalErrors> {
     let mut out = String::new();
     let mut citations: BTreeMap<&'static str, &'static CitationMetadata> = BTreeMap::new();
 
@@ -114,7 +120,7 @@ pub fn cite_project(config: &ProjectSettings, output_file: &PathBuf) -> Result<(
 
     writeln!(out, "```").ok();
 
-    std::fs::write(output_file, out)?;
+    files.write_file(output_file, out.as_bytes())?;
 
     Ok(())
 }
@@ -157,7 +163,12 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let output_file = dir.path().join("cite.md");
-        cite_project(&config, &output_file).unwrap();
+        cite_project(
+            &crate::backend::LocalFileSystem::default(),
+            &config,
+            &output_file,
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&output_file).unwrap();
         println!("{}", content);

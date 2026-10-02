@@ -1,6 +1,7 @@
 use crate::AppWindow;
 use crate::editor::results_state_controller::ResultsStateController;
 use crate::{ResultItemData, ResultsListState, UiState};
+use evanalyzer_app::backend::FileSystem;
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use log::warn;
 use slint::ComponentHandle;
@@ -66,10 +67,10 @@ impl ResultsListController {
         // Drop the read lock before doing file I/O
         drop(project);
 
-        let mut items: Vec<(std::time::SystemTime, ResultItemData)> = Vec::new();
-
-        if results_dir.exists() {
-            collect_results_files(&results_dir, &mut items);
+        let mut items: Vec<(i64, ResultItemData)> = Vec::new();
+        let files = self.app_state.backend().files();
+        if matches!(files.stat(&results_dir), Ok(Some(entry)) if entry.is_dir) {
+            collect_results_files(files, &results_dir, &mut items);
         }
 
         // Newest first
@@ -96,6 +97,21 @@ impl ResultsListController {
         let results_dir = project_dir.join("results");
         drop(project);
 
+        // The results live on the server: the local file manager can't show
+        // them, so browse them in-app - picking a results file opens it.
+        if self.app_state.backend().is_remote() {
+            let request = crate::FileRequest::open_file("Results")
+                .filter("Results", &[RESULTS_FILE_EXTENSION])
+                .start_in(results_dir);
+            let table = self.results_state_controller.clone();
+            self.app_state.file_browser.open(request, move |path| {
+                if let Some(path) = path {
+                    table.open_database(path);
+                }
+            });
+            return;
+        }
+
         let path = if results_dir.exists() {
             results_dir
         } else {
@@ -117,10 +133,15 @@ impl ResultsListController {
     }
 }
 
-/// Recursively walks `dir`, appending every file whose extension matches
-/// [`RESULTS_FILE_EXTENSION`] to `items` together with its modification time.
-fn collect_results_files(dir: &Path, items: &mut Vec<(std::time::SystemTime, ResultItemData)>) {
-    let entries = match std::fs::read_dir(dir) {
+/// Recursively walks `dir` through the backend's file system, appending
+/// every file whose extension matches [`RESULTS_FILE_EXTENSION`] to `items`
+/// together with its modification time (seconds since the Unix epoch).
+fn collect_results_files(
+    files: &dyn FileSystem,
+    dir: &Path,
+    items: &mut Vec<(i64, ResultItemData)>,
+) {
+    let entries = match files.list_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
             warn!("Could not read results directory {:?}: {}", dir, e);
@@ -128,11 +149,11 @@ fn collect_results_files(dir: &Path, items: &mut Vec<(std::time::SystemTime, Res
         }
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for entry in entries {
+        let path = entry.path;
 
-        if path.is_dir() {
-            collect_results_files(&path, items);
+        if entry.is_dir {
+            collect_results_files(files, &path, items);
             continue;
         }
 
@@ -140,17 +161,9 @@ fn collect_results_files(dir: &Path, items: &mut Vec<(std::time::SystemTime, Res
             continue;
         }
 
-        let (file_size, modified, mtime) = match std::fs::metadata(&path) {
-            Ok(meta) => {
-                let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                (
-                    format_file_size(meta.len()),
-                    format_modified_time(mtime),
-                    mtime,
-                )
-            }
-            Err(_) => (String::new(), String::new(), std::time::UNIX_EPOCH),
-        };
+        let mtime = entry.modified.unwrap_or(0);
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime.max(0) as u64);
+        let (file_size, modified) = (format_file_size(entry.size), format_modified_time(modified));
 
         let name = extract_name_from_path(&path).unwrap_or("-");
         items.push((
@@ -329,7 +342,11 @@ mod tests {
         std::fs::write(nested.join("also_keep.evadb"), b"x").unwrap();
 
         let mut items = Vec::new();
-        collect_results_files(&dir, &mut items);
+        collect_results_files(
+            &evanalyzer_app::backend::LocalFileSystem::default(),
+            &dir,
+            &mut items,
+        );
 
         let names: std::collections::HashSet<String> =
             items.iter().map(|(_, d)| d.name.to_string()).collect();
@@ -344,7 +361,11 @@ mod tests {
     fn collect_results_files_on_a_nonexistent_directory_leaves_items_empty() {
         let dir = std::env::temp_dir().join("evanalyzer_results_list_controller_does_not_exist");
         let mut items = Vec::new();
-        collect_results_files(&dir, &mut items);
+        collect_results_files(
+            &evanalyzer_app::backend::LocalFileSystem::default(),
+            &dir,
+            &mut items,
+        );
         assert!(items.is_empty());
     }
 }

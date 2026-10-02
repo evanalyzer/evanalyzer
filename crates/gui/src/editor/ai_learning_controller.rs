@@ -326,29 +326,34 @@ impl AiLearningController {
     /// and the model name - so retraining with more labeled data doesn't
     /// require re-entering the whole configuration by hand.
     fn browse_existing_model(self: &Arc<Self>) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter(
-                "AI Classifier Model",
-                &[evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS],
-            )
-            .pick_file()
-        else {
-            return;
-        };
+        let request = crate::FileRequest::open_file("Load AI classifier model").filter(
+            "AI classifier model",
+            &[evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS],
+        );
+        let this = Arc::clone(self);
+        self.app_state.file_browser.open(request, move |path| {
+            if let Some(path) = path {
+                this.load_existing_model(path);
+            }
+        });
+    }
+
+    fn load_existing_model(self: &Arc<Self>, path: PathBuf) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
 
-        let loaded = match ai_learning::load_classifier_settings(&path) {
-            Ok(loaded) => loaded,
-            Err(e) => {
-                self.set_training_status(
-                    &format!("Could not load '{}': {e}", path.display()),
-                    true,
-                );
-                return;
-            }
-        };
+        let loaded =
+            match ai_learning::load_classifier_settings(self.app_state.backend().files(), &path) {
+                Ok(loaded) => loaded,
+                Err(e) => {
+                    self.set_training_status(
+                        &format!("Could not load '{}': {e}", path.display()),
+                        true,
+                    );
+                    return;
+                }
+            };
 
         let state = ui.global::<AiLearningState>();
         let mut settings = state.get_settings();
@@ -529,6 +534,7 @@ impl AiLearningController {
                         .map(format_training_stats)
                         .unwrap_or_default();
                     match evanalyzer_app::ai_learning::save_trained_model(
+                        manager.app_state.backend().files(),
                         &classifier,
                         &project_dir,
                         &model_name,

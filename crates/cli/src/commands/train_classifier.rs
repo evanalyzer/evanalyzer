@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 pub fn run(args: TrainClassifierArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
-    let project = load_project(&args.project)?;
+    let project = load_project(backend.files(), &args.project)?;
 
     let settings_json = std::fs::read_to_string(&args.settings).map_err(|e| {
         InternalErrors::Io(format!(
@@ -84,7 +84,7 @@ pub fn run(args: TrainClassifierArgs, backend: &dyn Backend) -> Result<(), Inter
     }
     let classifier = training.wait()?;
 
-    let output_path = save_trained_model(&classifier, &project_dir, &model_name)?;
+    let output_path = save_trained_model(backend.files(), &classifier, &project_dir, &model_name)?;
 
     println!(
         "\nDone: trained in {:.1?}. Model saved to: {}",
@@ -171,7 +171,7 @@ mod tests {
     use evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings;
 
     fn run(args: TrainClassifierArgs) -> Result<(), InternalErrors> {
-        super::run(args, &LocalBackend)
+        super::run(args, &LocalBackend::default())
     }
     use evanalyzer_cfg::settings::ai_learning_settings::{
         AiLearningBackendSettings, AiLearningClassifierSettings,

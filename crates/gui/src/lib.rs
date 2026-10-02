@@ -7,6 +7,7 @@ use evanalyzer_app::images::ImageMeta;
 use evanalyzer_app::{AppHandle, Frontend, ProjectOwner, ProjectWithRuntime};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
+pub use file_browser::{FileBrowser, FileMode, FileRequest};
 use slint::ComponentHandle;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -27,6 +28,7 @@ const UNDO_STACK_LIMIT: usize = 100;
 const UNDO_COALESCE_WINDOW: Duration = Duration::from_millis(600);
 
 mod editor;
+mod file_browser;
 mod helper;
 mod license_text;
 mod prelude;
@@ -41,6 +43,10 @@ pub struct UiState {
     pub app: AppHandle, // cloneable handle - no Arc needed, AppHandle is already Arc inside
     pub ui_handle: slint::Weak<AppWindow>,
     pub results_ui_handle: slint::Weak<ResultsWindow>,
+    /// The in-app open/save dialog of each window - browses the backend's
+    /// files, so remote mode shows the server's folders.
+    pub file_browser: Arc<FileBrowser<AppWindow>>,
+    pub results_file_browser: Arc<FileBrowser<ResultsWindow>>,
     /// Mirrors `ToolbarState.has_unsaved_changes`, but readable synchronously
     /// from any thread (the Slint property can only be read/written on the
     /// UI thread via `invoke_from_event_loop`) - lets background threads
@@ -79,7 +85,10 @@ impl UiState {
         handle: slint::Weak<AppWindow>,
         results_handle: slint::Weak<ResultsWindow>,
     ) -> Self {
+        let backend = Arc::clone(app.backend());
         Self {
+            file_browser: Arc::new(FileBrowser::new(handle.clone(), Arc::clone(&backend))),
+            results_file_browser: Arc::new(FileBrowser::new(results_handle.clone(), backend)),
             app,
             ui_handle: handle,
             results_ui_handle: results_handle,
@@ -371,6 +380,8 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     // (loaded into `owner` before the GUI was created, so it's already
     // sitting in the shared `ProjectWithRuntime` `ui_state` now points at).
     ui_state.set_window_title(false);
+    ui_state.file_browser.attach(&ui);
+    ui_state.results_file_browser.attach(&results_ui);
 
     // Attach callbacks synchronously before the event loop starts.
     // Using invoke_from_event_loop here caused the initial `changed width/height`

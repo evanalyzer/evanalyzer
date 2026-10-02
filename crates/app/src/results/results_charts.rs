@@ -1,4 +1,5 @@
 use crate::result::Column;
+use serde::{Deserialize, Serialize};
 
 use super::results_generator::{
     PlaneFilter, ResultsGenerator, class_display_label, column_aggregate_expr,
@@ -11,7 +12,7 @@ use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 /// matching `plane`/`images`/`object_classes`, bucketed into `bins`
 /// equal-width bins — same plane/images/class scoping every other results
 /// view uses (see `ListFilter`/`PlateFilter` in results_generator.rs).
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HistogramFilter {
     pub plane: PlaneFilter,
     /// `None` means every image in the database.
@@ -26,7 +27,7 @@ pub struct HistogramFilter {
 
 /// One scatter plot: every matched object's `(x_column, y_column)` pair,
 /// one point per object.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ScatterFilter {
     pub plane: PlaneFilter,
     /// `None` means every image in the database.
@@ -45,7 +46,7 @@ pub struct ScatterFilter {
 /// outliers) — one box per class in `object_classes` (or every registered
 /// class if `None`), so distributions across classes can be compared side
 /// by side in a single chart.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BoxplotFilter {
     pub plane: PlaneFilter,
     /// `None` means every image in the database.
@@ -59,6 +60,7 @@ pub struct BoxplotFilter {
 /// One equal-width-binned histogram, ready for the GUI to draw straight
 /// from `bin_edges`/`counts` — `bin_edges` has `counts.len() + 1` entries
 /// (edge `i` / edge `i+1` bound bin `i`).
+#[derive(Serialize, Deserialize)]
 pub struct HistogramResult {
     pub bin_edges: Vec<f64>,
     pub counts: Vec<u64>,
@@ -66,7 +68,7 @@ pub struct HistogramResult {
     pub max: f64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct ScatterPoint {
     pub x: f64,
     pub y: f64,
@@ -74,6 +76,7 @@ pub struct ScatterPoint {
 
 /// `points` may be a random sample of `total_object_count` rather than
 /// every one of them — see `ScatterFilter::max_points`.
+#[derive(Serialize, Deserialize)]
 pub struct ScatterResult {
     pub points: Vec<ScatterPoint>,
     pub x_min: f64,
@@ -85,6 +88,7 @@ pub struct ScatterResult {
 
 /// One class's box: min/Q1/median/Q3/max plus any Tukey outliers (values
 /// beyond 1.5x the interquartile range from Q1/Q3).
+#[derive(Serialize, Deserialize)]
 pub struct BoxplotBox {
     pub label: String,
     pub color: u32,
@@ -97,6 +101,7 @@ pub struct BoxplotBox {
     pub object_count: usize,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct BoxplotResult {
     pub boxes: Vec<BoxplotBox>,
 }

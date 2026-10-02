@@ -1,5 +1,6 @@
 use crate::AppWindow;
 use crate::DialogType;
+use crate::FileRequest;
 use crate::GlobalAppState;
 use crate::ImagesListState;
 use crate::PipelinesPanelState;
@@ -236,8 +237,10 @@ impl ProjectController {
         if let Some(root) = &image_root_dir {
             // Scan off-lock (see `images_list_controller::scan_image_root_for_images`
             // for why) - only the fast in-memory apply below needs the write guard.
-            let found_images =
-                evanalyzer_app::extensions::project_ext::collect_images_at_root(root);
+            let found_images = evanalyzer_app::extensions::project_ext::collect_images_at_root(
+                self.app_state.backend().as_ref(),
+                root,
+            );
             let mut project = self.app_state.get_project_write();
             project.images.root = Some(root.clone());
             project.apply_scanned_images(found_images);
@@ -282,7 +285,8 @@ impl ProjectController {
     /// current project, same as confirming it in the "New from Project
     /// Template" picker would.
     pub fn open_project_template_file(self: Arc<Self>, path: &PathBuf) {
-        let template = match load_project_template_from_file(path) {
+        let template = match load_project_template_from_file(self.app_state.backend().files(), path)
+        {
             Ok(template) => template,
             Err(e) => {
                 warn!("Could not load project template {:?}: {}", path, e);
@@ -550,19 +554,20 @@ impl ProjectController {
         allowed_files.push(LEGACY_PROJECT_FILE_EXTENSION);
         allowed_files.push(PROJECT_FILE_TEMPLATE_EXTENSIONS);
 
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Supported Files", &allowed_files)
-            .add_filter("Image Files", &SUPPORTED_IMAGE_FORMATS)
-            .add_filter("Project Files", &[PROJECT_FILE_EXTENSIONS])
-            .add_filter("Legacy Project Files", &[LEGACY_PROJECT_FILE_EXTENSION])
-            .add_filter(
-                "Project Template Files",
+        let request = FileRequest::open_file("Open")
+            .filter("Supported files", &allowed_files)
+            .filter("Image files", SUPPORTED_IMAGE_FORMATS)
+            .filter("Project files", &[PROJECT_FILE_EXTENSIONS])
+            .filter("Legacy project files", &[LEGACY_PROJECT_FILE_EXTENSION])
+            .filter(
+                "Project template files",
                 &[PROJECT_FILE_TEMPLATE_EXTENSIONS],
-            )
-            .pick_file()
-        {
-            let manager = Arc::clone(self);
-
+            );
+        let manager = Arc::clone(self);
+        self.app_state.file_browser.open(request, move |path| {
+            let Some(path) = path else {
+                return;
+            };
             std::thread::spawn(move || {
                 let ext = path.extension().and_then(|ext| ext.to_str());
 
@@ -576,7 +581,7 @@ impl ProjectController {
                     manager.image_list_controller.open_new_image(&path);
                 }
             });
-        }
+        });
     }
 
     /// Serializes the current project state and persists it to the filesystem.
@@ -596,34 +601,55 @@ impl ProjectController {
     /// in the event of a power failure or crash during the write process.
     /// Always shows a Save As dialog, regardless of whether a project path exists.
     fn save_project_as_handler(self: &Arc<Self>) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Project files", &[PROJECT_FILE_EXTENSIONS])
-            .save_file()
-        {
-            let in_thread = self.clone();
-            std::thread::spawn(move || {
-                // Bind to an owned `Result` first so the write guard from
-                // `get_project_write()` is dropped at this `let` (not kept
-                // alive across the match arms below, which - as a `match`
-                // scrutinee temporary - it otherwise would be). `clear_dirty()`
-                // calls `set_window_title()`, which takes a *read* lock on the
-                // same project `RwLock`; still holding the write guard there
-                // deadlocks the thread against itself.
-                let result = in_thread
-                    .app_state
-                    .get_project_write()
-                    .save_project_as(&path);
-                match result {
-                    Ok(_) => {
-                        info!("Project saved as: {}", path.display());
-                        in_thread.app_state.clear_dirty();
+        let in_thread = self.clone();
+        self.app_state
+            .file_browser
+            .open(self.save_project_request(), move |path| {
+                let Some(path) = path else {
+                    return;
+                };
+                std::thread::spawn(move || {
+                    // Bind to an owned `Result` first so the write guard from
+                    // `get_project_write()` is dropped at this `let` (not kept
+                    // alive across the match arms below, which - as a `match`
+                    // scrutinee temporary - it otherwise would be). `clear_dirty()`
+                    // calls `set_window_title()`, which takes a *read* lock on the
+                    // same project `RwLock`; still holding the write guard there
+                    // deadlocks the thread against itself.
+                    let result = in_thread
+                        .app_state
+                        .get_project_write()
+                        .save_project_as(in_thread.app_state.backend().files(), &path);
+                    match result {
+                        Ok(_) => {
+                            info!("Project saved as: {}", path.display());
+                            in_thread.app_state.clear_dirty();
+                        }
+                        Err(msg) => {
+                            warn!("Project not saved: {}", msg);
+                        }
                     }
-                    Err(msg) => {
-                        warn!("Project not saved: {}", msg);
-                    }
-                }
+                });
             });
+    }
+
+    /// "Save project" dialog, starting next to the current project file.
+    fn save_project_request(&self) -> FileRequest {
+        let current = self
+            .app_state
+            .get_project()
+            .tmp_settings
+            .current_project
+            .clone();
+        let mut request = FileRequest::save_file("Save project")
+            .filter("Project files", &[PROJECT_FILE_EXTENSIONS]);
+        if let Some(current) = current {
+            if let Some(name) = current.file_name() {
+                request = request.file_name(&name.to_string_lossy());
+            }
+            request = request.start_in(current);
         }
+        request
     }
 
     fn save_project(self: &Arc<Self>) {
@@ -631,14 +657,21 @@ impl ProjectController {
     }
 
     fn export_project_cite(self: &Arc<Self>) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Markdown files", &["md"])
-            .save_file()
-        {
-            let in_thread = self.clone();
+        let request = FileRequest::save_file("Export citation")
+            .filter("Markdown files", &["md"])
+            .file_name("citation.md");
+        let in_thread = self.clone();
+        self.app_state.file_browser.open(request, move |path| {
+            let Some(path) = path else {
+                return;
+            };
             std::thread::spawn(move || {
                 let project_settings = &in_thread.app_state.get_project().settings;
-                let result = exporter::cite_project(project_settings, &path);
+                let result = exporter::cite_project(
+                    in_thread.app_state.backend().files(),
+                    project_settings,
+                    &path,
+                );
                 match result {
                     Ok(_) => {
                         info!("Project cite saved as: {}", path.display());
@@ -649,7 +682,7 @@ impl ProjectController {
                     }
                 }
             });
-        }
+        });
     }
 
     /// Saves the project (prompting for a path first if none is set yet,
@@ -673,35 +706,36 @@ impl ProjectController {
             .is_some();
 
         if !has_path {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("Project files", &[PROJECT_FILE_EXTENSIONS])
-                .save_file()
-            {
-                let in_thread = self.clone();
-                std::thread::spawn(move || {
-                    // See the comment in `save_project_as_handler` above -
-                    // same fix: drop the write guard at this `let` instead of
-                    // holding it across the match arms, where `clear_dirty()`
-                    // would deadlock trying to re-acquire it for reading.
-                    let result = in_thread
-                        .app_state
-                        .get_project_write()
-                        .save_project_as(&path);
-                    let ok = result.is_ok();
-                    match result {
-                        Ok(_) => {
-                            info!("Project saved: {}", path.display());
-                            in_thread.app_state.clear_dirty();
+            let in_thread = self.clone();
+            self.app_state
+                .file_browser
+                .open(self.save_project_request(), move |path| {
+                    let Some(path) = path else {
+                        on_done(false);
+                        return;
+                    };
+                    std::thread::spawn(move || {
+                        // See the comment in `save_project_as_handler` above -
+                        // same fix: drop the write guard at this `let` instead of
+                        // holding it across the match arms, where `clear_dirty()`
+                        // would deadlock trying to re-acquire it for reading.
+                        let result = in_thread
+                            .app_state
+                            .get_project_write()
+                            .save_project_as(in_thread.app_state.backend().files(), &path);
+                        let ok = result.is_ok();
+                        match result {
+                            Ok(_) => {
+                                info!("Project saved: {}", path.display());
+                                in_thread.app_state.clear_dirty();
+                            }
+                            Err(msg) => {
+                                warn!("Project not saved: {}", msg);
+                            }
                         }
-                        Err(msg) => {
-                            warn!("Project not saved: {}", msg);
-                        }
-                    }
-                    on_done(ok);
+                        on_done(ok);
+                    });
                 });
-            } else {
-                on_done(false);
-            }
             return;
         }
 
@@ -711,7 +745,10 @@ impl ProjectController {
             // value, so the write guard from `get_project_write()` is
             // dropped at this `let`, before `clear_dirty()` (which takes a
             // read lock) runs in the match arm below.
-            let result = in_thread.app_state.get_project_write().save_project();
+            let result = in_thread
+                .app_state
+                .get_project_write()
+                .save_project(in_thread.app_state.backend().files());
             let ok = result == SaveProjectActions::Success;
             match result {
                 SaveProjectActions::Success => {
@@ -806,10 +843,11 @@ impl ProjectController {
                 .set_active_dialog(DialogType::ProjectTemplate);
         }
         std::thread::spawn(move || {
-            let templates: Vec<ProjectTemplate> = load_project_templates()
-                .into_iter()
-                .map(|(_path, template)| template)
-                .collect();
+            let templates: Vec<ProjectTemplate> =
+                load_project_templates(manager.app_state.backend().as_ref())
+                    .into_iter()
+                    .map(|(_path, template)| template)
+                    .collect();
             *manager.project_templates.lock().expect("Poisoned") = templates;
 
             if let Err(e) = slint::invoke_from_event_loop(move || {

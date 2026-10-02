@@ -11,11 +11,11 @@
 use super::conn::{self, HANDSHAKE_MESSAGE_SIZE, MAX_MESSAGE_SIZE};
 use super::frame::{self, Frame};
 use super::protocol::{
-    APP_VERSION, ClientMsg, PROTOCOL_VERSION, Reply, Request, ServerMsg, WireError,
-    channels_to_wire, event_to_wire,
+    APP_VERSION, ClientMsg, PROTOCOL_VERSION, Reply, Request, ResultsAnswer, ResultsQuery,
+    ServerMsg, WireError, channels_to_wire, event_to_wire, from_postcard, to_postcard,
 };
 use crate::ai_learning::StartTrainingError;
-use crate::backend::{Backend, ImageSource};
+use crate::backend::{Backend, ImageSource, ResultsSource};
 use crate::job::{CancelHandle, StartPreviewError};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::collections::HashMap;
@@ -152,6 +152,7 @@ fn serve_connection(
         outgoing,
         running: Mutex::new(HashMap::new()),
         images: Mutex::new(HashMap::new()),
+        results: Mutex::new(HashMap::new()),
         next_handle: AtomicU64::new(1),
     });
     let handler = Arc::clone(&session);
@@ -163,6 +164,7 @@ fn serve_connection(
         cancel.cancel();
     }
     session.images.lock().unwrap().clear();
+    session.results.lock().unwrap().clear();
     Ok(())
 }
 
@@ -178,14 +180,16 @@ struct Session {
     running: Mutex<HashMap<u64, CancelHandle>>,
     /// Images the client has opened, by handle.
     images: Mutex<HashMap<u64, Arc<dyn ImageSource>>>,
+    /// Results databases the client has opened, by handle.
+    results: Mutex<HashMap<u64, Arc<dyn ResultsSource>>>,
     next_handle: AtomicU64,
 }
 
 impl Session {
     /// Returns `false` to drop the connection.
     fn on_frame(self: &Arc<Self>, bytes: &[u8]) -> bool {
-        let msg = match frame::decode::<ClientMsg>(bytes) {
-            Ok(Frame { msg, .. }) => msg,
+        let (msg, blobs) = match frame::decode::<ClientMsg>(bytes) {
+            Ok(Frame { msg, blobs }) => (msg, blobs),
             Err(e) => {
                 log::warn!("Dropping client after malformed message: {e}");
                 return false;
@@ -194,12 +198,15 @@ impl Session {
         match msg {
             ClientMsg::Request { id, request } => {
                 let session = Arc::clone(self);
-                std::thread::spawn(move || session.handle(id, request));
+                std::thread::spawn(move || session.handle(id, request, blobs));
             }
             ClientMsg::Cancel { id } => {
                 if let Some(cancel) = self.running.lock().unwrap().get(&id) {
                     cancel.cancel();
                 }
+            }
+            ClientMsg::CloseResults { handle } => {
+                self.results.lock().unwrap().remove(&handle);
             }
             ClientMsg::CloseImage { handle } => {
                 self.images.lock().unwrap().remove(&handle);
@@ -224,7 +231,9 @@ impl Session {
         self.reply(id, Reply::Failed(e.into()), Vec::new());
     }
 
-    fn handle(&self, id: u64, request: Request) {
+    fn handle(&self, id: u64, request: Request, blobs: Vec<Vec<u8>>) {
+        let files = self.backend.files();
+        let none = Vec::new;
         match request {
             Request::StartAnalysis(req) => match self.backend.start_analysis(req) {
                 Ok(job) => self.stream_job(id, job),
@@ -294,7 +303,117 @@ impl Session {
                     Err(e) => self.fail(id, &e),
                 }
             }
+            Request::ReadImageMeta { path } => match self.backend.read_image_meta(&path) {
+                Ok(meta) => self.reply(id, Reply::ImageMeta(meta), none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::OpenResults { path } => match self.backend.open_results(&path) {
+                Ok(source) => {
+                    let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
+                    self.results.lock().unwrap().insert(handle, source);
+                    self.reply(id, Reply::ResultsOpened { handle }, none());
+                }
+                Err(e) => self.fail(id, &e),
+            },
+            Request::QueryResults { handle } => {
+                let answer = self
+                    .results_for(handle)
+                    .and_then(|source| answer_query(source.as_ref(), from_postcard(blobs.first())?))
+                    .and_then(|answer| to_postcard(&answer));
+                match answer {
+                    Ok(bytes) => self.reply(id, Reply::ResultsAnswer, vec![bytes]),
+                    Err(e) => self.fail(id, &e),
+                }
+            }
+            Request::ExportResults { handle } => {
+                let prepared = self.results_for(handle).and_then(|source| {
+                    Ok((
+                        source,
+                        from_postcard::<crate::result::ResultExport>(blobs.first())?,
+                    ))
+                });
+                let (source, export) = match prepared {
+                    Ok(prepared) => prepared,
+                    Err(e) => return self.fail(id, &e),
+                };
+                let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                self.running
+                    .lock()
+                    .unwrap()
+                    .insert(id, CancelHandle::new(Arc::clone(&flag)));
+                let result = source.export(&export, &flag, &mut |message, current, total| {
+                    let progress = Reply::ExportProgress {
+                        message: message.to_string(),
+                        current,
+                        total,
+                    };
+                    self.reply(id, progress, Vec::new());
+                });
+                self.running.lock().unwrap().remove(&id);
+                self.reply(
+                    id,
+                    Reply::ExportDone(result.map_err(|e| WireError::from(&e))),
+                    none(),
+                );
+            }
+            Request::TemplateFolders => match self.backend.template_folders() {
+                Ok(folders) => self.reply(id, Reply::TemplateFolders(folders), none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::Places => match files.places() {
+                Ok(places) => self.reply(id, Reply::Places(places), none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::ListDir { path } => match files.list_dir(&path) {
+                Ok(entries) => self.reply(id, Reply::DirEntries(entries), none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::Stat { path } => match files.stat(&path) {
+                Ok(entry) => self.reply(id, Reply::Stat(entry), none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::ReadFile { path } => match files.read_file(&path) {
+                Ok(data) => self.reply(id, Reply::FileData, vec![data]),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::WriteFile { path } => {
+                let Some(data) = blobs.first() else {
+                    self.reply(
+                        id,
+                        Reply::Failed(WireError::message("no file contents sent")),
+                        none(),
+                    );
+                    return;
+                };
+                match files.write_file(&path, data) {
+                    Ok(()) => self.reply(id, Reply::Done, none()),
+                    Err(e) => self.fail(id, &e),
+                }
+            }
+            Request::CreateDir { path } => match files.create_dir_all(&path) {
+                Ok(()) => self.reply(id, Reply::Done, none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::Rename { from, to } => match files.rename(&from, &to) {
+                Ok(()) => self.reply(id, Reply::Done, none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::RemoveAll { path } => match files.remove_all(&path) {
+                Ok(()) => self.reply(id, Reply::Done, none()),
+                Err(e) => self.fail(id, &e),
+            },
         }
+    }
+
+    fn results_for(&self, handle: u64) -> Result<Arc<dyn ResultsSource>, InternalErrors> {
+        self.results
+            .lock()
+            .unwrap()
+            .get(&handle)
+            .cloned()
+            .ok_or_else(|| {
+                InternalErrors::Internal("results database is not open on the server".into())
+            })
     }
 
     fn stream_job(&self, id: u64, job: crate::job::RunningJob) {
@@ -321,4 +440,40 @@ impl Session {
             Vec::new(),
         );
     }
+}
+
+fn answer_query(
+    source: &dyn ResultsSource,
+    query: ResultsQuery,
+) -> Result<ResultsAnswer, InternalErrors> {
+    Ok(match query {
+        ResultsQuery::ObjectList(filter) => ResultsAnswer::Table(source.get_object_list(&filter)?),
+        ResultsQuery::GroupedByImage(filter) => {
+            ResultsAnswer::Table(source.get_grouped_by_image(&filter)?)
+        }
+        ResultsQuery::GroupByPlate(filter, view) => {
+            ResultsAnswer::Table(source.get_group_by_plate(&filter, &view)?)
+        }
+        ResultsQuery::GroupByWell(filter, view) => {
+            ResultsAnswer::Table(source.get_group_by_well(&filter, &view)?)
+        }
+        ResultsQuery::ImageHeatmap(filter, view) => {
+            ResultsAnswer::Table(source.get_image_heatmap(&filter, &view)?)
+        }
+        ResultsQuery::Images => ResultsAnswer::Images(source.get_images()?),
+        ResultsQuery::EnableImage {
+            image_rel_path,
+            disable,
+        } => {
+            source.enable_image(&image_rel_path, disable)?;
+            ResultsAnswer::Done
+        }
+        ResultsQuery::ObjectClasses => ResultsAnswer::Classes(source.get_object_classes()?),
+        ResultsQuery::AvailableColumns => ResultsAnswer::Columns(source.get_available_columns()?),
+        ResultsQuery::ZStacks => ResultsAnswer::Count(source.get_nr_of_z_stacks()),
+        ResultsQuery::TStacks => ResultsAnswer::Count(source.get_nr_of_t_stacks()),
+        ResultsQuery::Boxplot(filter) => ResultsAnswer::Boxplot(source.boxplot(&filter)?),
+        ResultsQuery::Histogram(filter) => ResultsAnswer::Histogram(source.histogram(&filter)?),
+        ResultsQuery::Scatter(filter) => ResultsAnswer::Scatter(source.scatter(&filter)?),
+    })
 }

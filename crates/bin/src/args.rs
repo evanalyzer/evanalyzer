@@ -52,6 +52,12 @@ pub enum TopCommand {
         /// Token clients must present. Generated and printed if not set.
         #[arg(long, env = "EVANALYZER_SERVER_TOKEN", hide_env_values = true)]
         token: Option<String>,
+
+        /// Folder clients may browse and use (repeatable). Every file, image,
+        /// project and results path must lie inside one of them. Without any,
+        /// clients can reach every file this process can.
+        #[arg(long = "root", value_name = "FOLDER")]
+        roots: Vec<std::path::PathBuf>,
     },
 }
 
@@ -123,7 +129,32 @@ mod tests {
     fn serve_defaults_to_localhost_only() {
         let args = Args::try_parse_from(["evanalyzer", "serve"]).unwrap();
         match args.command {
-            Some(TopCommand::Serve { listen, .. }) => assert_eq!(listen, "127.0.0.1:7400"),
+            Some(TopCommand::Serve { listen, roots, .. }) => {
+                assert_eq!(listen, "127.0.0.1:7400");
+                assert!(roots.is_empty());
+            }
+            _ => panic!("expected the serve command"),
+        }
+    }
+
+    #[test]
+    fn serve_accepts_several_roots() {
+        let args = Args::try_parse_from([
+            "evanalyzer",
+            "serve",
+            "--root",
+            "/data",
+            "--root",
+            "/scratch",
+        ])
+        .unwrap();
+        match args.command {
+            Some(TopCommand::Serve { roots, .. }) => {
+                assert_eq!(
+                    roots,
+                    [std::path::PathBuf::from("/data"), "/scratch".into()]
+                );
+            }
             _ => panic!("expected the serve command"),
         }
     }

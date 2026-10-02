@@ -29,6 +29,7 @@ image = { workspace = true }
 duckdb = { workspace = true }
 tungstenite = { workspace = true }
 getrandom = { workspace = true }
+postcard = { workspace = true }
 
 
 [dev-dependencies]

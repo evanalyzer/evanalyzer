@@ -1031,7 +1031,8 @@ component SpinnerInput inherits HorizontalLayout {
 component LeafParamRow inherits VerticalLayout {
         in property <LeafParam> p;
         callback changed(string);
-        property <string> browsed-path: "";
+        // This row's pending file-browser request (see `browse-file`).
+        property <int> browse-token: -1;
 
         spacing: 4px;
 
@@ -1103,6 +1104,16 @@ component LeafParamRow inherits VerticalLayout {
         }
 
         if p.param-type == ParamType.file-path: HorizontalLayout {
+            // Applies this row's file-browser result once it arrives.
+            property <int> result-token: PipelinesPanelState.browse-result-token;
+            changed result-token => {
+                if (self.result-token == root.browse-token && root.browse-token >= 0) {
+                    root.browse-token = -1;
+                    leaf-fp-input.text = PipelinesPanelState.browse-result-path;
+                    root.changed(PipelinesPanelState.browse-result-path);
+                }
+            }
+
             spacing: 4px;
             leaf-fp-input := LineEdit {
                 height: 24px;
@@ -1131,13 +1142,12 @@ component LeafParamRow inherits VerticalLayout {
                 leaf-browse-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
-                        root.browsed-path = PipelinesPanelState.browse-file(
+                        PipelinesPanelState.browse-token-counter += 1;
+                        root.browse-token = PipelinesPanelState.browse-token-counter;
+                        PipelinesPanelState.browse-file(
                         p.options.length > 0 ? p.options[0] : "",
-                        leaf-fp-input.text);
-                        if (root.browsed-path != "") {
-                            leaf-fp-input.text = root.browsed-path;
-                            root.changed(root.browsed-path);
-                        }
+                        leaf-fp-input.text,
+                        root.browse-token);
                     }
                 }
             }
@@ -1261,7 +1271,8 @@ component ParamRow inherits VerticalLayout {
         callback add-item();
         callback remove-item(int);
         callback show-model-info();
-        property <string> browsed-path: "";
+        // This row's pending file-browser request (see `browse-file`).
+        property <int> browse-token: -1;
 
         spacing: 4px;
 
@@ -1333,6 +1344,16 @@ component ParamRow inherits VerticalLayout {
         }
 
         if p.param-type == ParamType.file-path: HorizontalLayout {
+            // Applies this row's file-browser result once it arrives.
+            property <int> result-token: PipelinesPanelState.browse-result-token;
+            changed result-token => {
+                if (self.result-token == root.browse-token && root.browse-token >= 0) {
+                    root.browse-token = -1;
+                    fp-input.text = PipelinesPanelState.browse-result-path;
+                    root.changed(PipelinesPanelState.browse-result-path);
+                }
+            }
+
             spacing: 4px;
             fp-input := LineEdit {
                 height: 26px;
@@ -1361,13 +1382,12 @@ component ParamRow inherits VerticalLayout {
                 browse-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
-                        root.browsed-path = PipelinesPanelState.browse-file(
+                        PipelinesPanelState.browse-token-counter += 1;
+                        root.browse-token = PipelinesPanelState.browse-token-counter;
+                        PipelinesPanelState.browse-file(
                         p.options.length > 0 ? p.options[0] : "",
-                        fp-input.text);
-                        if (root.browsed-path != "") {
-                            fp-input.text = root.browsed-path;
-                            root.changed(root.browsed-path);
-                        }
+                        fp-input.text,
+                        root.browse-token);
                     }
                 }
             }
@@ -2046,10 +2066,16 @@ export global PipelinesPanelState {
         callback auto-preview(bool);
         callback save-as-template();
 
-        // Opens a native "open file" dialog filtered to the given comma-separated
-    // extensions (empty = any file), starting from current-path's directory.
-    // Returns the picked path, or "" if the dialog was cancelled.
-    callback browse-file(string, string) -> string;
+    // Opens the file browser for a file-path parameter, filtered to the given
+    // comma-separated extensions (empty = any file), starting from the
+    // current path's folder. The chosen path comes back asynchronously: Rust
+    // sets `browse-result-path`, then `browse-result-token` to the token the
+    // row passed, and the row with that token applies it (see
+    // `LeafParamRow`/`ParamRow`).
+    callback browse-file(string, string, int);
+    in-out property <int> browse-token-counter: 0;
+    in-out property <int> browse-result-token: -1;
+    in-out property <string> browse-result-path;
     }
 
 

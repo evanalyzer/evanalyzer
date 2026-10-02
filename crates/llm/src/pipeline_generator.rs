@@ -292,7 +292,10 @@ fn user_message(user_prompt: &str, options: &GenerateOptions) -> String {
         return user_prompt.to_string();
     }
 
-    let examples: Vec<String> = evanalyzer_app::templates::load_pipeline_templates()
+    // Pipeline generation runs on this machine, so its own templates serve
+    // as the examples.
+    let backend = evanalyzer_app::backend::LocalBackend::default();
+    let examples: Vec<String> = evanalyzer_app::templates::load_pipeline_templates(&backend)
         .into_iter()
         .take(MAX_EXAMPLE_TEMPLATES)
         .filter_map(|(_, template)| serde_json::to_string(&template).ok())

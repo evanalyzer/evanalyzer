@@ -1,3 +1,4 @@
+use crate::FileRequest;
 use crate::UiState;
 use crate::editor::histogram_controller::HistogramController;
 use crate::editor::image_meta_controller::ImageMetaController;
@@ -264,12 +265,23 @@ impl ImagesListController {
     /// # Threading
     /// This is a synchronous operation that updates the project state and dispatches
     /// UI property updates to the main event loop.
+    /// Where folder pickers start: the project's image folder, or the home
+    /// folder of whichever machine the backend runs on.
+    fn current_image_root(&self) -> PathBuf {
+        self.app_state
+            .get_project()
+            .images
+            .root
+            .clone()
+            .unwrap_or_default()
+    }
+
     pub fn set_new_image_root(self: &Arc<Self>, new_root: &PathBuf) {
         let ui_weak = self.ui.clone();
         let result = self
             .app_state
             .get_project_write()
-            .select_new_images_root_with_check(&new_root);
+            .select_new_images_root_with_check(self.app_state.backend().files(), &new_root);
 
         if result == SelectNewProjectRootAction::ImageNotFound {
             // Images not found, show the Missing image dialog
@@ -334,8 +346,10 @@ impl ImagesListController {
             // below needs the lock.
             let root_folder = manager.app_state.get_project().images.root.clone();
             if let Some(root_folder) = root_folder {
-                let found_images =
-                    evanalyzer_app::extensions::project_ext::collect_images_at_root(&root_folder);
+                let found_images = evanalyzer_app::extensions::project_ext::collect_images_at_root(
+                    manager.app_state.backend().as_ref(),
+                    &root_folder,
+                );
                 manager
                     .app_state
                     .get_project_write()
@@ -423,18 +437,36 @@ impl ImagesListController {
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
                 .on_open_images_folder_clicked(move || {
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                        manager.change_image_root(&path, None);
-                    }
+                    let request = FileRequest::open_folder("Choose image folder")
+                        .start_in(manager.current_image_root());
+                    let manager = Arc::clone(&manager);
+                    manager
+                        .app_state
+                        .clone()
+                        .file_browser
+                        .open(request, move |path| {
+                            if let Some(path) = path {
+                                manager.change_image_root(&path, None);
+                            }
+                        });
                 });
 
             // Set new image root. Images stay in the list only the root path is changed and it is checked if images in the new root path are found
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
                 .on_new_image_root_folder_clicked(move || {
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                        manager.set_new_image_root(&path);
-                    }
+                    let request = FileRequest::open_folder("Choose new image folder")
+                        .start_in(manager.current_image_root());
+                    let manager = Arc::clone(&manager);
+                    manager
+                        .app_state
+                        .clone()
+                        .file_browser
+                        .open(request, move |path| {
+                            if let Some(path) = path {
+                                manager.set_new_image_root(&path);
+                            }
+                        });
                 });
 
             // Rerun folder scan on selected image root

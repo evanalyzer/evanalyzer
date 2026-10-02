@@ -126,7 +126,7 @@ pub struct ProjectOwner {
 impl ProjectOwner {
     /// An owner whose compute runs in this process.
     pub fn new() -> Self {
-        Self::with_backend(Arc::new(LocalBackend))
+        Self::with_backend(Arc::new(LocalBackend::default()))
     }
 
     /// An owner whose analysis/preview/training runs and image reads go to
@@ -150,7 +150,7 @@ impl ProjectOwner {
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let project = crate::extensions::project_ext::load_project(path)?;
+        let project = crate::extensions::project_ext::load_project(self.backend.files(), path)?;
         *lock_project_write(&self.project) = project;
         *self.current_path.lock().unwrap() = Some(path.clone());
         Ok(())
@@ -170,7 +170,7 @@ impl ProjectOwner {
         project.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
         let content = serde_json::to_string_pretty(&project.settings)
             .map_err(|e| InternalErrors::Internal(e.to_string()))?;
-        std::fs::write(path, content).map_err(|e| InternalErrors::Internal(e.to_string()))?;
+        self.backend.files().write_file(path, content.as_bytes())?;
         *self.current_path.lock().unwrap() = Some(path.clone());
         Ok(())
     }
@@ -217,7 +217,7 @@ impl AppHandle {
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let project = crate::extensions::project_ext::load_project(path)?;
+        let project = crate::extensions::project_ext::load_project(self.backend.files(), path)?;
         *lock_project_write(&self.project) = project;
         Ok(())
     }
@@ -238,9 +238,10 @@ impl AppHandle {
         path: &PathBuf,
     ) -> Result<(Vec<String>, Option<String>), InternalErrors> {
         let (project, warnings, legacy_image_folder) =
-            crate::extensions::project_ext::import_legacy_project(path).map_err(|e| {
-                InternalErrors::Internal(format!("Could not import legacy project: {e}"))
-            })?;
+            crate::extensions::project_ext::import_legacy_project(self.backend.files(), path)
+                .map_err(|e| {
+                    InternalErrors::Internal(format!("Could not import legacy project: {e}"))
+                })?;
         *lock_project_write(&self.project) = project;
         Ok((warnings, legacy_image_folder))
     }

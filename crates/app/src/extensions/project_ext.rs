@@ -1,3 +1,4 @@
+use crate::backend::{Backend, FileSystem};
 use crate::extensions::classification_ext::ClassificationExt;
 use crate::extensions::object_ext::ObjectExt;
 use crate::extensions::utils::{get_relative_key, is_in_root, wavelength_to_rgb_u32};
@@ -28,12 +29,11 @@ use evanalyzer_cfg::{
     core_types::SegmentationClass, object_class_set_from_u32,
     settings::object_settings::ObjectMetricSettings,
 };
-use evanalyzer_core::{ImageMeta, ImageReader, ReadMode, SUPPORTED_IMAGE_FORMATS};
+use evanalyzer_core::{ImageMeta, SUPPORTED_IMAGE_FORMATS};
 use human_sort::compare;
 use log::{info, trace, warn};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -147,39 +147,59 @@ pub trait ProjectExt {
 
     fn select_new_images_root_with_check(
         &mut self,
+        files: &dyn FileSystem,
         new_root: &PathBuf,
     ) -> SelectNewProjectRootAction;
 
     fn select_new_images_root(&mut self, new_root: &PathBuf);
 
-    fn does_project_images_exist(&self) -> bool;
-    fn does_project_image_exists_at_path(&self, new_root: &PathBuf) -> bool;
+    fn does_project_images_exist(&self, files: &dyn FileSystem) -> bool;
+    fn does_project_image_exists_at_path(&self, files: &dyn FileSystem, new_root: &PathBuf)
+    -> bool;
 
     fn is_image_part_of_the_root(&self, absolute_path: &Path) -> bool;
-    fn add_image_and_read_meta(&mut self, absolute_path: &Path) -> ProjectAction;
+    fn add_image_and_read_meta(
+        &mut self,
+        backend: &dyn Backend,
+        absolute_path: &Path,
+    ) -> ProjectAction;
     fn add_image(&mut self, absolute_path: &Path, image_meta: &ImageMeta) -> ProjectAction;
     fn add_image_to_list(&mut self, rel_path: &Path, abs_path: &Path, image_meta: &ImageMeta);
-    fn scan_image_folder_and_add(&mut self);
+    fn scan_image_folder_and_add(&mut self, backend: &dyn Backend);
     fn apply_scanned_images(&mut self, found_images: Vec<(PathBuf, ImageMeta)>);
-    fn collect_images_parallel(&self, dir: &Path) -> Vec<(PathBuf, ImageMeta)>;
+    fn collect_images_parallel(
+        &self,
+        backend: &dyn Backend,
+        dir: &Path,
+    ) -> Vec<(PathBuf, ImageMeta)>;
     fn is_supported_image(&self, path: &Path) -> bool;
 
-    fn save_project(&mut self) -> SaveProjectActions;
-    fn save_project_as(&mut self, path: &PathBuf) -> Result<(), InternalErrors>;
+    fn save_project(&mut self, files: &dyn FileSystem) -> SaveProjectActions;
+    fn save_project_as(
+        &mut self,
+        files: &dyn FileSystem,
+        path: &PathBuf,
+    ) -> Result<(), InternalErrors>;
     fn save_project_as_template(
         &mut self,
+        files: &dyn FileSystem,
         meta: MetaData,
         path: &PathBuf,
     ) -> Result<(), InternalErrors>;
     fn save_pipeline_as_template(
         &mut self,
+        files: &dyn FileSystem,
         meta: MetaData,
         pipeline_id: PipelineId,
         path: &PathBuf,
     ) -> Result<(), InternalErrors>;
 
     fn new(&self) -> Arc<ProjectWithRuntime>;
-    fn new_project(&mut self, path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors>;
+    fn new_project(
+        &mut self,
+        files: &dyn FileSystem,
+        path: &PathBuf,
+    ) -> Result<ProjectWithRuntime, InternalErrors>;
 
     fn move_pipeline_up(&mut self, pipeline_id: PipelineId);
     fn move_pipeline_down(&mut self, pipeline_id: PipelineId);
@@ -188,7 +208,7 @@ pub trait ProjectExt {
     fn enable_pipeline_step(&mut self, enabled: bool, pipeline_id: PipelineId, step_id: usize);
 
     fn add_pipeline(&mut self, pipeline_settings: PipelineSettings);
-    fn add_pipeline_from_template_file(&mut self, template_file: &PathBuf);
+    fn add_pipeline_from_template_file(&mut self, files: &dyn FileSystem, template_file: &PathBuf);
 
     /// Replaces the classification, plate and pipeline settings of this project
     /// with the ones from `template`. The image list and project path are kept.
@@ -772,9 +792,10 @@ impl ProjectExt for ProjectWithRuntime {
     /// * `new_root` - The new absolute path where the project's images are located.
     fn select_new_images_root_with_check(
         &mut self,
+        files: &dyn FileSystem,
         new_root: &PathBuf,
     ) -> SelectNewProjectRootAction {
-        if !self.does_project_image_exists_at_path(new_root) {
+        if !self.does_project_image_exists_at_path(files, new_root) {
             return SelectNewProjectRootAction::ImageNotFound;
         }
 
@@ -793,21 +814,25 @@ impl ProjectExt for ProjectWithRuntime {
         // that the files actually exist at the new location.
     }
 
-    fn does_project_images_exist(&self) -> bool {
+    fn does_project_images_exist(&self, files: &dyn FileSystem) -> bool {
         if let Some(root) = &self.images.root {
-            return self.does_project_image_exists_at_path(&root);
+            return self.does_project_image_exists_at_path(files, root);
         };
 
         // No root set
         return true;
     }
 
-    fn does_project_image_exists_at_path(&self, new_root: &PathBuf) -> bool {
+    fn does_project_image_exists_at_path(
+        &self,
+        files: &dyn FileSystem,
+        new_root: &PathBuf,
+    ) -> bool {
         let sample_rel_path = { self.images.list.keys().next().cloned() };
 
         if let Some(rel) = sample_rel_path {
             let test_path = new_root.join(rel);
-            if !test_path.exists() {
+            if !matches!(files.stat(&test_path), Ok(Some(_))) {
                 // Warn the user that the first image wasn't found here
                 return false;
             }
@@ -844,11 +869,14 @@ impl ProjectExt for ProjectWithRuntime {
     ///
     /// # Panics
     /// Panics if the internal `RwLock` is poisoned by a previous thread failure.
-    fn add_image_and_read_meta(&mut self, absolute_path: &Path) -> ProjectAction {
+    fn add_image_and_read_meta(
+        &mut self,
+        backend: &dyn Backend,
+        absolute_path: &Path,
+    ) -> ProjectAction {
         if self.is_supported_image(&absolute_path) {
-            match ImageReader::new(&absolute_path.to_path_buf(), ReadMode::SplitChannels) {
-                Ok(reader) => {
-                    let image_meta = reader.get_image_meta();
+            match backend.read_image_meta(absolute_path) {
+                Ok(image_meta) => {
                     self.add_image(absolute_path, &image_meta);
                     return ProjectAction::Success;
                 }
@@ -1009,9 +1037,9 @@ impl ProjectExt for ProjectWithRuntime {
     /// let _ = scan_folder();
     /// ```
     ///
-    fn scan_image_folder_and_add(&mut self) {
+    fn scan_image_folder_and_add(&mut self, backend: &dyn Backend) {
         if let Some(root_folder) = self.settings.images.root.clone() {
-            let found_images = collect_images_at_root(&root_folder);
+            let found_images = collect_images_at_root(backend, &root_folder);
             self.apply_scanned_images(found_images);
         }
     }
@@ -1039,28 +1067,36 @@ impl ProjectExt for ProjectWithRuntime {
         info!("Added images {:?}", duration);
     }
 
-    fn collect_images_parallel(&self, dir: &Path) -> Vec<(PathBuf, ImageMeta)> {
-        collect_images_at_root(dir)
+    fn collect_images_parallel(
+        &self,
+        backend: &dyn Backend,
+        dir: &Path,
+    ) -> Vec<(PathBuf, ImageMeta)> {
+        collect_images_at_root(backend, dir)
     }
 
     fn is_supported_image(&self, path: &Path) -> bool {
         is_supported_image_path(path)
     }
 
-    fn save_project(&mut self) -> SaveProjectActions {
+    fn save_project(&mut self, files: &dyn FileSystem) -> SaveProjectActions {
         // 1. Clone the path to release the borrow on 'self' immediately
         let Some(path) = self.tmp_settings.current_project.clone() else {
             return SaveProjectActions::PleaseSelectFile;
         };
 
         // 2. Now 'self' is free to be borrowed mutably by 'save_project_as'
-        match self.save_project_as(&path) {
+        match self.save_project_as(files, &path) {
             Ok(_) => SaveProjectActions::Success,
             Err(_) => SaveProjectActions::Error,
         }
     }
 
-    fn save_project_as(&mut self, path: &PathBuf) -> Result<(), InternalErrors> {
+    fn save_project_as(
+        &mut self,
+        files: &dyn FileSystem,
+        path: &PathBuf,
+    ) -> Result<(), InternalErrors> {
         let mut final_path = path.clone();
 
         // Check if the extension matches; if not, set it to evaproj
@@ -1093,7 +1129,7 @@ impl ProjectExt for ProjectWithRuntime {
 
         let json = serde_json::to_string_pretty(&on_disk_settings)
             .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
-        fs::write(final_path.clone(), json)?;
+        files.write_file(&final_path, json.as_bytes())?;
 
         let _ = self.tmp_settings.current_project.insert(final_path);
         Ok(())
@@ -1102,6 +1138,7 @@ impl ProjectExt for ProjectWithRuntime {
     /// Stores the actual project as template project
     fn save_project_as_template(
         &mut self,
+        files: &dyn FileSystem,
         mut meta: MetaData,
         path: &PathBuf,
     ) -> Result<(), InternalErrors> {
@@ -1122,13 +1159,14 @@ impl ProjectExt for ProjectWithRuntime {
 
         let json = serde_json::to_string_pretty(&template)
             .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
-        fs::write(final_path, json)?;
+        files.write_file(&final_path, json.as_bytes())?;
         Ok(())
     }
 
     /// Stores the selected pipeline as template
     fn save_pipeline_as_template(
         &mut self,
+        files: &dyn FileSystem,
         mut meta: MetaData,
         pipeline_id: PipelineId,
         path: &PathBuf,
@@ -1153,7 +1191,7 @@ impl ProjectExt for ProjectWithRuntime {
 
         let json = serde_json::to_string_pretty(&template)
             .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
-        fs::write(final_path, json)?;
+        files.write_file(&final_path, json.as_bytes())?;
         Ok(())
     }
 
@@ -1170,9 +1208,13 @@ impl ProjectExt for ProjectWithRuntime {
         Arc::new(ProjectWithRuntime::default())
     }
 
-    fn new_project(&mut self, path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors> {
+    fn new_project(
+        &mut self,
+        files: &dyn FileSystem,
+        path: &PathBuf,
+    ) -> Result<ProjectWithRuntime, InternalErrors> {
         let mut project = ProjectWithRuntime::default();
-        project.save_project_as(path)?;
+        project.save_project_as(files, path)?;
         Ok(project)
     }
 
@@ -1208,8 +1250,12 @@ impl ProjectExt for ProjectWithRuntime {
     fn add_pipeline(&mut self, pipeline_settings: PipelineSettings) {
         self.pipelines.push(pipeline_settings);
     }
-    fn add_pipeline_from_template_file(&mut self, template_file: &PathBuf) {
-        let Ok(data) = fs::read_to_string(template_file) else {
+    fn add_pipeline_from_template_file(&mut self, files: &dyn FileSystem, template_file: &PathBuf) {
+        let Some(data) = files
+            .read_file(template_file)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        else {
             warn!("Could not read pipeline template {:?}", template_file);
             return;
         };
@@ -1280,13 +1326,14 @@ impl ProjectExt for ProjectWithRuntime {
 }
 
 /// Recursively scans `dir` in parallel for supported image files and reads
-/// each one's metadata. Pure filesystem I/O - takes no project reference and
-/// holds no lock, so callers on a project shared behind an `RwLock` (the GUI)
-/// should run this *before* taking the write guard, then commit the result
-/// with `ProjectExt::apply_scanned_images` - keeping the lock held only for
-/// the fast in-memory part instead of for the whole scan (which opens an
-/// `ImageReader` per file and can take seconds on a plate-sized folder).
-pub fn collect_images_at_root(dir: &Path) -> Vec<(PathBuf, ImageMeta)> {
+/// each one's metadata, through `backend` (so in remote mode the server's
+/// folder is scanned). Takes no project reference and holds no lock, so
+/// callers on a project shared behind an `RwLock` (the GUI) should run this
+/// *before* taking the write guard, then commit the result with
+/// `ProjectExt::apply_scanned_images` - keeping the lock held only for the
+/// fast in-memory part instead of for the whole scan (which reads every
+/// image's metadata and can take seconds on a plate-sized folder).
+pub fn collect_images_at_root(backend: &dyn Backend, dir: &Path) -> Vec<(PathBuf, ImageMeta)> {
     // 1. Check if the current directory itself is named "results"
     if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
         if name.eq_ignore_ascii_case("results") {
@@ -1294,25 +1341,20 @@ pub fn collect_images_at_root(dir: &Path) -> Vec<(PathBuf, ImageMeta)> {
         }
     }
 
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = backend.files().list_dir(dir) else {
         return vec![];
     };
 
     entries
-        .flatten()
-        .collect::<Vec<_>>()
         .into_par_iter()
         .flat_map(|entry| {
-            let path = entry.path();
-
-            if path.is_dir() {
+            if entry.is_dir {
                 // The check happens again here for subdirectories
-                collect_images_at_root(&path)
-            } else if is_supported_image_path(&path) {
-                if let Ok(reader) = ImageReader::new(&path, ReadMode::SplitChannels) {
-                    vec![(path, (*reader.get_image_meta()).clone())]
-                } else {
-                    vec![]
+                collect_images_at_root(backend, &entry.path)
+            } else if is_supported_image_path(&entry.path) {
+                match backend.read_image_meta(&entry.path) {
+                    Ok(meta) => vec![(entry.path, meta)],
+                    Err(_) => vec![],
                 }
             } else {
                 vec![]
@@ -1331,8 +1373,13 @@ fn is_supported_image_path(path: &Path) -> bool {
         .unwrap_or(false) // Return false if no extension exists
 }
 
-pub fn load_project(path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors> {
-    let data = fs::read_to_string(path.clone())?;
+/// Reads a project file through `files` (the backend's - the server's in
+/// remote mode).
+pub fn load_project(
+    files: &dyn FileSystem,
+    path: &PathBuf,
+) -> Result<ProjectWithRuntime, InternalErrors> {
+    let data = read_text(files, path)?;
     let raw: serde_json::Value =
         serde_json::from_str(&data).map_err(|e| InternalErrors::ParseError(e.to_string()))?;
     let mut inner: ProjectSettings = evanalyzer_cfg::load_project_settings(raw)?;
@@ -1367,9 +1414,10 @@ pub fn load_project(path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors
 /// parent) and scanning it for images, mirroring whatever flow already adds
 /// images to a new project; this function only converts settings.
 pub fn import_legacy_project(
+    files: &dyn FileSystem,
     path: &PathBuf,
 ) -> Result<(ProjectWithRuntime, Vec<String>, Option<String>), InternalErrors> {
-    let data = fs::read_to_string(path)?;
+    let data = read_text(files, path)?;
     let outcome = evanalyzer_cfg::import_legacy_project(&data)
         .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
     let project = ProjectWithRuntime {
@@ -1379,9 +1427,23 @@ pub fn import_legacy_project(
     Ok((project, outcome.warnings, outcome.legacy_image_folder))
 }
 
+fn read_text(files: &dyn FileSystem, path: &Path) -> Result<String, InternalErrors> {
+    String::from_utf8(files.read_file(path)?).map_err(|e| {
+        InternalErrors::ParseError(format!("'{}' is not a text file: {e}", path.display()))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fs() -> crate::backend::LocalFileSystem {
+        Default::default()
+    }
+
+    fn backend() -> crate::backend::LocalBackend {
+        Default::default()
+    }
     use evanalyzer_cfg::core_types::ObjectClass;
     use evanalyzer_cfg::settings::images_settings::{TStackHandling, ZStackHandling};
     use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
@@ -1714,7 +1776,7 @@ mod tests {
     fn select_new_images_root_with_check_fails_when_the_sample_image_is_missing() {
         let mut project = project_with_one_image();
         let missing_root = PathBuf::from("/definitely/does/not/exist/anywhere");
-        let action = project.select_new_images_root_with_check(&missing_root);
+        let action = project.select_new_images_root_with_check(&fs(), &missing_root);
         assert_eq!(action, SelectNewProjectRootAction::ImageNotFound);
         // A failed check must not have changed the root.
         assert_ne!(project.images.root, Some(missing_root));
@@ -1726,7 +1788,7 @@ mod tests {
         std::fs::write(dir.path().join("img.tif"), b"fake image bytes").unwrap();
 
         let mut project = project_with_one_image();
-        let action = project.select_new_images_root_with_check(&dir.path().to_path_buf());
+        let action = project.select_new_images_root_with_check(&fs(), &dir.path().to_path_buf());
         assert_eq!(action, SelectNewProjectRootAction::Success);
         assert_eq!(project.images.root, Some(dir.path().to_path_buf()));
     }
@@ -1736,7 +1798,10 @@ mod tests {
     #[test]
     fn save_project_without_a_path_asks_the_caller_to_pick_one() {
         let mut project = ProjectWithRuntime::default();
-        assert_eq!(project.save_project(), SaveProjectActions::PleaseSelectFile);
+        assert_eq!(
+            project.save_project(&fs()),
+            SaveProjectActions::PleaseSelectFile
+        );
     }
 
     #[test]
@@ -1748,7 +1813,7 @@ mod tests {
         // No extension given - save_project_as should append the project one.
         let requested = dir.path().join("myproject");
         project
-            .save_project_as(&requested)
+            .save_project_as(&fs(), &requested)
             .expect("save should succeed");
 
         let expected = dir
@@ -1762,7 +1827,7 @@ mod tests {
 
         // save_project() (no path arg) should now reuse that recorded path.
         project.meta.name = "Changed After Save As".into();
-        assert_eq!(project.save_project(), SaveProjectActions::Success);
+        assert_eq!(project.save_project(&fs()), SaveProjectActions::Success);
 
         let written = std::fs::read_to_string(&expected).unwrap();
         assert!(written.contains("Changed After Save As"));
@@ -1784,9 +1849,9 @@ mod tests {
             object_class: [ObjectClass::Valid(1)].into(),
             ..Default::default()
         });
-        project.save_project_as(&path).unwrap();
+        project.save_project_as(&fs(), &path).unwrap();
 
-        let loaded = load_project(&path).expect("load should succeed");
+        let loaded = load_project(&fs(), &path).expect("load should succeed");
         // classes()[0] is the auto-prepended Background class.
         assert_eq!(loaded.classification.classes().len(), 2);
         assert_eq!(loaded.classification.classes()[1].name, "Nucleus");
@@ -1818,7 +1883,7 @@ mod tests {
             }),
         });
         project.add_pipeline(step_pipeline);
-        project.save_project_as(&path).unwrap();
+        project.save_project_as(&fs(), &path).unwrap();
 
         // On disk, the path is relative to the project directory - not the
         // absolute temp-dir path it was set from - so the project stays
@@ -1832,7 +1897,7 @@ mod tests {
 
         // Reloading resolves it straight back to the original absolute path
         // - the rest of the app never has to know about relative storage.
-        let loaded = load_project(&path).expect("load should succeed");
+        let loaded = load_project(&fs(), &path).expect("load should succeed");
         let PipelineCommand::PixelClassifier(settings) = &loaded.pipelines[0].steps[0].command
         else {
             panic!("expected a PixelClassifier command");
@@ -1961,7 +2026,7 @@ mod tests {
 
         let mut project = ProjectWithRuntime::default();
         project.add_pipeline(pipeline(5));
-        project.add_pipeline_from_template_file(&path);
+        project.add_pipeline_from_template_file(&fs(), &path);
 
         assert_eq!(project.pipelines.len(), 2);
         assert_eq!(
@@ -1975,7 +2040,7 @@ mod tests {
     #[test]
     fn add_pipeline_from_template_file_is_a_noop_for_a_missing_file() {
         let mut project = ProjectWithRuntime::default();
-        project.add_pipeline_from_template_file(&PathBuf::from("/does/not/exist.evapipe"));
+        project.add_pipeline_from_template_file(&fs(), &PathBuf::from("/does/not/exist.evapipe"));
         assert!(project.pipelines.is_empty());
     }
 
@@ -1986,7 +2051,7 @@ mod tests {
         std::fs::write(&path, "{ not json").unwrap();
 
         let mut project = ProjectWithRuntime::default();
-        project.add_pipeline_from_template_file(&path);
+        project.add_pipeline_from_template_file(&fs(), &path);
         assert!(project.pipelines.is_empty());
     }
 
@@ -2031,7 +2096,7 @@ mod tests {
     #[test]
     fn does_project_images_exist_is_true_when_no_root_is_set() {
         let project = ProjectWithRuntime::default();
-        assert!(project.does_project_images_exist());
+        assert!(project.does_project_images_exist(&fs()));
     }
 
     #[test]
@@ -2041,18 +2106,18 @@ mod tests {
 
         let mut project = project_with_one_image();
         project.images.root = Some(dir.path().to_path_buf());
-        assert!(project.does_project_images_exist());
+        assert!(project.does_project_images_exist(&fs()));
 
         // Point the root somewhere that doesn't have img.tif.
         let other_dir = tempfile::tempdir().unwrap();
         project.images.root = Some(other_dir.path().to_path_buf());
-        assert!(!project.does_project_images_exist());
+        assert!(!project.does_project_images_exist(&fs()));
     }
 
     #[test]
     fn does_project_image_exists_at_path_is_true_for_an_empty_image_list() {
         let project = ProjectWithRuntime::default();
-        assert!(project.does_project_image_exists_at_path(&PathBuf::from("/anywhere")));
+        assert!(project.does_project_image_exists_at_path(&fs(), &PathBuf::from("/anywhere")));
     }
 
     // -- add_image / add_image_to_list ------------------------------------
@@ -2455,7 +2520,7 @@ mod tests {
     #[test]
     fn add_image_and_read_meta_rejects_an_unsupported_extension_without_opening_a_reader() {
         let mut project = ProjectWithRuntime::default();
-        let action = project.add_image_and_read_meta(Path::new("notes.txt"));
+        let action = project.add_image_and_read_meta(&backend(), Path::new("notes.txt"));
         assert_eq!(action, ProjectAction::Failure("Unsupported device".into()));
         assert!(project.images.list.is_empty());
     }
@@ -2485,14 +2550,15 @@ mod tests {
     fn collect_images_at_root_skips_a_folder_named_results_case_insensitively() {
         // The "results" check happens before any filesystem access, so this
         // is safe to call on paths that don't even exist.
-        assert!(collect_images_at_root(Path::new("/any/path/Results")).is_empty());
-        assert!(collect_images_at_root(Path::new("/any/path/RESULTS")).is_empty());
+        assert!(collect_images_at_root(&backend(), Path::new("/any/path/Results")).is_empty());
+        assert!(collect_images_at_root(&backend(), Path::new("/any/path/RESULTS")).is_empty());
     }
 
     #[test]
     fn collect_images_at_root_returns_empty_for_a_missing_directory() {
         assert!(
-            collect_images_at_root(Path::new("/definitely/does/not/exist/anywhere")).is_empty()
+            collect_images_at_root(&backend(), Path::new("/definitely/does/not/exist/anywhere"))
+                .is_empty()
         );
     }
 
@@ -2509,7 +2575,7 @@ mod tests {
         // if it were, this would fail trying to actually parse the file.
         std::fs::write(results.join("fake.tif"), b"not a real tiff").unwrap();
 
-        assert!(collect_images_at_root(dir.path()).is_empty());
+        assert!(collect_images_at_root(&backend(), dir.path()).is_empty());
     }
 
     #[test]
@@ -2517,7 +2583,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("notes.txt"), b"nope").unwrap();
         let project = ProjectWithRuntime::default();
-        assert!(project.collect_images_parallel(dir.path()).is_empty());
+        assert!(
+            project
+                .collect_images_parallel(&backend(), dir.path())
+                .is_empty()
+        );
     }
 
     // -- scan_image_folder_and_add / apply_scanned_images --------------------
@@ -2525,7 +2595,7 @@ mod tests {
     #[test]
     fn scan_image_folder_and_add_is_a_noop_without_a_root() {
         let mut project = ProjectWithRuntime::default();
-        project.scan_image_folder_and_add();
+        project.scan_image_folder_and_add(&backend());
         assert!(project.images.list.is_empty());
     }
 
@@ -2534,7 +2604,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut project = ProjectWithRuntime::default();
         project.images.root = Some(dir.path().to_path_buf());
-        project.scan_image_folder_and_add();
+        project.scan_image_folder_and_add(&backend());
         assert!(project.images.list.is_empty());
     }
 
@@ -2578,7 +2648,7 @@ mod tests {
         };
         let path = dir.path().join("out");
         project
-            .save_project_as_template(meta, &path)
+            .save_project_as_template(&fs(), meta, &path)
             .expect("save should succeed");
 
         let expected = dir
@@ -2612,7 +2682,7 @@ mod tests {
         };
         let path = dir.path().join("pipe");
         project
-            .save_pipeline_as_template(meta, PipelineId(1), &path)
+            .save_pipeline_as_template(&fs(), meta, PipelineId(1), &path)
             .expect("save should succeed");
 
         let expected = dir.path().join(format!("pipe.{}", PIPELINE_EXTENSIONS));
@@ -2630,7 +2700,7 @@ mod tests {
 
         let meta = evanalyzer_cfg::settings::meta_data::MetaData::default();
         let path = dir.path().join("pipe");
-        let result = project.save_pipeline_as_template(meta, PipelineId(99), &path);
+        let result = project.save_pipeline_as_template(&fs(), meta, PipelineId(99), &path);
         assert!(result.is_err());
         assert!(!path.with_extension(PIPELINE_EXTENSIONS).exists());
     }
@@ -2657,7 +2727,7 @@ mod tests {
         let mut project = ProjectWithRuntime::default();
         let path = dir.path().join("newproj");
 
-        let created = project.new_project(&path).expect("should succeed");
+        let created = project.new_project(&fs(), &path).expect("should succeed");
 
         let expected = dir
             .path()
@@ -2686,7 +2756,7 @@ mod tests {
             serde_json::json!(evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION + 1);
         std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
 
-        match load_project(&path) {
+        match load_project(&fs(), &path) {
             Err(err) => assert!(err.to_string().contains("newer version")),
             Ok(_) => panic!("a newer schema version must be rejected"),
         }
@@ -2714,7 +2784,7 @@ mod tests {
         std::fs::write(&path, minimal_legacy_project_json()).unwrap();
 
         let (project, _warnings, legacy_image_folder) =
-            import_legacy_project(&path).expect("should parse");
+            import_legacy_project(&fs(), &path).expect("should parse");
         assert_eq!(project.meta.name, "Legacy Demo");
         assert_eq!(legacy_image_folder, Some("images".to_string()));
         assert!(project.tmp_settings.current_project.is_none());
@@ -2726,12 +2796,12 @@ mod tests {
         let path = dir.path().join("bad.icproj");
         std::fs::write(&path, "{ not json").unwrap();
 
-        assert!(import_legacy_project(&path).is_err());
+        assert!(import_legacy_project(&fs(), &path).is_err());
     }
 
     #[test]
     fn import_legacy_project_errors_for_a_missing_file() {
-        let result = import_legacy_project(&PathBuf::from("/does/not/exist.icproj"));
+        let result = import_legacy_project(&fs(), &PathBuf::from("/does/not/exist.icproj"));
         assert!(result.is_err());
     }
 }

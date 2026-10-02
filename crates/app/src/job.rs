@@ -41,7 +41,7 @@ mod tests {
 
         let mut project = ProjectWithRuntime::default();
         project.images.root = Some(images_dir);
-        project.scan_image_folder_and_add();
+        project.scan_image_folder_and_add(&crate::backend::LocalBackend::default());
         assert_eq!(project.images.list.len(), 1);
         (dir, project.settings)
     }

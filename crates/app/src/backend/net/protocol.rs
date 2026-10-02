@@ -2,10 +2,18 @@
 //! in-memory types and their wire form (pixels split off into frame blobs).
 
 use crate::ai_learning::TrainingItems;
-use crate::backend::{AnalysisRequest, TileRequest, TrainingRequest};
+use crate::backend::{
+    AnalysisRequest, DirEntry, Place, TemplateFolders, TileRequest, TrainingRequest,
+};
 use crate::images::{ImageChannel, ImageMeta, RawImageInfo, image_from_raw, image_to_raw};
 use crate::job::{JobOutput, PreviewRequest, ProgressEvent};
+use crate::result::{
+    BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, GroupedByImageFilter,
+    HistogramFilter, HistogramResult, ImageEntry, ImageHeatmapFilter, ListFilter, PlateFilter,
+    ScatterFilter, ScatterResult, View, WellFilter,
+};
 use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent};
+use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -14,7 +22,7 @@ use std::sync::Arc;
 /// Bumped on every incompatible change to the messages below. Client and
 /// server must also run the same app version, since requests carry the
 /// app's own settings types.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -35,6 +43,9 @@ pub(crate) enum ClientMsg {
     CloseImage {
         handle: u64,
     },
+    CloseResults {
+        handle: u64,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,8 +53,104 @@ pub(crate) enum Request {
     StartAnalysis(AnalysisRequest),
     StartPreview(PreviewRequest),
     StartTraining(TrainingRequest),
-    OpenImage { path: PathBuf },
-    ReadTile { handle: u64, tile: TileRequest },
+    OpenImage {
+        path: PathBuf,
+    },
+    ReadTile {
+        handle: u64,
+        tile: TileRequest,
+    },
+    ReadImageMeta {
+        path: PathBuf,
+    },
+    OpenResults {
+        path: PathBuf,
+    },
+    /// A postcard-encoded [`ResultsQuery`] follows as blob 0.
+    QueryResults {
+        handle: u64,
+    },
+    /// A postcard-encoded `ResultExport` follows as blob 0; progress
+    /// streams back until `ExportDone`.
+    ExportResults {
+        handle: u64,
+    },
+    TemplateFolders,
+    Places,
+    ListDir {
+        path: PathBuf,
+    },
+    Stat {
+        path: PathBuf,
+    },
+    ReadFile {
+        path: PathBuf,
+    },
+    /// The file's contents follow as blob 0.
+    WriteFile {
+        path: PathBuf,
+    },
+    CreateDir {
+        path: PathBuf,
+    },
+    Rename {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    RemoveAll {
+        path: PathBuf,
+    },
+}
+
+/// One results-database operation. Travels as postcard (not JSON) because
+/// results carry `NaN`/`±inf` floats, which JSON can't represent.
+#[derive(Serialize, Deserialize)]
+pub(crate) enum ResultsQuery {
+    ObjectList(ListFilter),
+    GroupedByImage(GroupedByImageFilter),
+    GroupByPlate(PlateFilter, View),
+    GroupByWell(WellFilter, View),
+    ImageHeatmap(ImageHeatmapFilter, View),
+    Images,
+    EnableImage {
+        image_rel_path: String,
+        disable: bool,
+    },
+    ObjectClasses,
+    AvailableColumns,
+    ZStacks,
+    TStacks,
+    Boxplot(BoxplotFilter),
+    Histogram(HistogramFilter),
+    Scatter(ScatterFilter),
+}
+
+/// The successful result of a [`ResultsQuery`] (failures travel as
+/// `Reply::Failed`).
+#[derive(Serialize, Deserialize)]
+pub(crate) enum ResultsAnswer {
+    Table(DatabaseResult),
+    Images(Vec<ImageEntry>),
+    Classes(Vec<Class>),
+    Columns(Vec<ColumnEntry>),
+    Count(u32),
+    Boxplot(BoxplotResult),
+    Histogram(HistogramResult),
+    Scatter(ScatterResult),
+    Done,
+}
+
+pub(crate) fn to_postcard<T: Serialize>(value: &T) -> Result<Vec<u8>, InternalErrors> {
+    postcard::to_allocvec(value)
+        .map_err(|e| InternalErrors::Internal(format!("failed to encode message: {e}")))
+}
+
+pub(crate) fn from_postcard<T: serde::de::DeserializeOwned>(
+    bytes: Option<&Vec<u8>>,
+) -> Result<T, InternalErrors> {
+    let bytes = bytes.ok_or_else(|| InternalErrors::Internal("message payload missing".into()))?;
+    postcard::from_bytes(bytes)
+        .map_err(|e| InternalErrors::Internal(format!("malformed message payload: {e}")))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -78,6 +185,26 @@ pub(crate) enum Reply {
     },
     /// One blob of pixels per channel, in order.
     Tile(Vec<WireChannel>),
+    ImageMeta(ImageMeta),
+    ResultsOpened {
+        handle: u64,
+    },
+    /// A postcard-encoded [`ResultsAnswer`] follows as blob 0.
+    ResultsAnswer,
+    ExportProgress {
+        message: String,
+        current: usize,
+        total: usize,
+    },
+    ExportDone(Result<(), WireError>),
+    TemplateFolders(TemplateFolders),
+    Places(Vec<Place>),
+    DirEntries(Vec<DirEntry>),
+    Stat(Option<DirEntry>),
+    /// The file's contents follow as blob 0.
+    FileData,
+    /// A request without a result value succeeded.
+    Done,
     /// The request failed without producing its normal reply.
     Failed(WireError),
 }
@@ -428,6 +555,35 @@ mod tests {
             channel_idx: None,
         });
         assert!(event_from_wire(wire, Vec::new()).is_err());
+    }
+
+    #[test]
+    fn results_answers_keep_nan_and_infinity_which_json_cannot_carry() {
+        let answer = ResultsAnswer::Scatter(ScatterResult {
+            points: vec![crate::result::ScatterPoint { x: f64::NAN, y: 1.5 }],
+            x_min: f64::INFINITY,
+            x_max: f64::NEG_INFINITY,
+            y_min: -0.0,
+            y_max: f64::MAX,
+            total_object_count: 1,
+        });
+        let bytes = to_postcard(&answer).unwrap();
+        let ResultsAnswer::Scatter(back) = from_postcard(Some(&bytes)).unwrap() else {
+            panic!("expected a scatter answer");
+        };
+        assert!(back.points[0].x.is_nan());
+        assert_eq!(back.points[0].y, 1.5);
+        assert_eq!(back.x_min, f64::INFINITY);
+        assert_eq!(back.x_max, f64::NEG_INFINITY);
+        assert_eq!(back.y_max, f64::MAX);
+        // JSON would have turned those into `null` and failed to read them.
+        assert!(serde_json::from_str::<f64>(&serde_json::to_string(&f64::NAN).unwrap()).is_err());
+    }
+
+    #[test]
+    fn a_missing_or_garbled_payload_is_an_error_not_a_panic() {
+        assert!(from_postcard::<ResultsAnswer>(None).is_err());
+        assert!(from_postcard::<ResultsAnswer>(Some(&vec![255, 255, 255])).is_err());
     }
 
     #[test]

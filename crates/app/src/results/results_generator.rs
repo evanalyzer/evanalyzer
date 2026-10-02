@@ -5,6 +5,7 @@ use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass},
     settings::classification_settings::Class,
 };
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,13 +18,13 @@ pub struct ResultsGenerator {
     coloc_classes_cache: RefCell<Option<Vec<ObjectClass>>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum View {
     List,
     Heatmap,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlateDimensions {
     PLate2x3,
     Plate3x4,
@@ -49,13 +50,13 @@ impl PlateDimensions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WellSize {
     pub rows: usize,
     pub cols: usize,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Aggregation {
     #[default]
     Avg,
@@ -67,7 +68,7 @@ pub enum Aggregation {
     Skewness,
 }
 
-#[derive(Default, Clone, PartialEq, Eq)]
+#[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ColorSchema {
     #[default]
     Excel,
@@ -83,27 +84,27 @@ pub enum ColorSchema {
     Thermal,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub enum ColorScale {
     #[default]
     Auto,
     Manual(f32, f32),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PlaneFilter {
     pub z_stack: u32,
     pub t_stack: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Pagination {
     pub limit: i32,
     /// Keyset cursor: `None` fetches the first page; `Some(id)` fetches the page starting right after that `object_id`.
     pub after: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PlateFilter {
     pub plane: PlaneFilter,
     // Grouping regex, requires follwoing regex output (e.g. A1_01.vsi)
@@ -128,7 +129,7 @@ pub struct PlateFilter {
 // risk pagination guards against elsewhere (millions of raw objects, see
 // `get_object_list`/`get_grouped_by_image`) doesn't apply to an
 // already-aggregated-down-to-wells result.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PlateFilterMulti {
     pub plane: PlaneFilter,
     // Grouping regex, requires follwoing regex output (e.g. A1_01.vsi)
@@ -145,7 +146,7 @@ pub struct PlateFilterMulti {
     pub matrix_dimension: Option<PlateDimensions>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WellFilter {
     pub plane: PlaneFilter,
     // Name of the group to display
@@ -177,7 +178,7 @@ pub struct WellFilter {
 
 /// Same shape as `WellFilter` minus `group_name` — `get_wells_for_plate`
 /// answers for every well at once, so there's no single well to name.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WellsBatchFilter {
     pub plane: PlaneFilter,
     pub grouping_regex: String,
@@ -192,7 +193,7 @@ pub struct WellsBatchFilter {
 
 /// Same shape as `WellFilter` minus `group_name` — `get_wells_for_plate`
 /// answers for every well at once, so there's no single well to name.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WellsBatchFilterMulti {
     pub plane: PlaneFilter,
     pub grouping_regex: String,
@@ -205,7 +206,7 @@ pub struct WellsBatchFilterMulti {
     pub well_order: Option<Vec<u32>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ImageHeatmapFilter {
     pub plane: PlaneFilter,
     /// Image for which the heatmpa should be generated for
@@ -219,7 +220,7 @@ pub struct ImageHeatmapFilter {
     pub square_size: Option<usize>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ListFilter {
     pub plane: PlaneFilter,
     pub images: Option<Vec<String>>,
@@ -229,7 +230,7 @@ pub struct ListFilter {
     pub page: Pagination,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GroupedByImageFilter {
     pub plane: PlaneFilter,
     pub images: Option<Vec<String>>,
@@ -239,6 +240,7 @@ pub struct GroupedByImageFilter {
     pub page: Pagination,
 }
 
+#[derive(Serialize, Deserialize)]
 pub enum CellValue {
     Empty,
     String(String),
@@ -248,6 +250,7 @@ pub enum CellValue {
     Class((String, u32)),
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Cell {
     pub value: CellValue,
     /// Cell background color
@@ -262,19 +265,21 @@ pub struct Cell {
     pub any_disabled: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ColumnEntry {
     pub display_name: String,
     pub key: Column,
     pub group: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct ImageEntry {
     pub name: String,
     pub rel_path: PathBuf,
     pub disabled: bool,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct DatabaseResult {
     pub column_names: Vec<String>,
     pub row_names: Vec<String>,

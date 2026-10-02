@@ -80,7 +80,21 @@ pub struct ConfiguredModel {
 /// Reads `rdf.yaml` at `path` and configures a command from it. The weight path
 /// is resolved relative to the RDF file's directory.
 pub fn configure_from_file(path: &Path) -> Result<ConfiguredModel, ConfigureError> {
-    let rdf = rdf_parser::parse_file(path)?;
+    configure_from(&crate::backend::LocalFileSystem::default(), path)
+}
+
+/// Like [`configure_from_file`], reading `rdf.yaml` through `files` - e.g.
+/// the backend's, so a model on the server is configured with server paths.
+pub fn configure_from(
+    files: &dyn crate::backend::FileSystem,
+    path: &Path,
+) -> Result<ConfiguredModel, ConfigureError> {
+    let bytes = files
+        .read_file(path)
+        .map_err(|e| RdfError::Io(std::io::Error::other(e.to_string())))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|e| RdfError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+    let rdf = rdf_parser::parse_str(&text)?;
     configure(&rdf, path.parent())
 }
 

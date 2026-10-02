@@ -17,10 +17,7 @@ use evanalyzer_cfg::settings::ai_learning_settings::{
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
-use evanalyzer_core::{
-    ObjectTrainingJob, PixelTrainingJob, SavedClassifier, TrainingImage, load_classifier_from_file,
-    save_classifier_to_file,
-};
+use evanalyzer_core::{ObjectTrainingJob, PixelTrainingJob, SavedClassifier, TrainingImage};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -433,13 +430,16 @@ pub fn model_output_path(project_dir: &Path, model_name: &str) -> PathBuf {
 
 /// Persists a trained classifier under `<project_dir>/models/<model_name>`,
 /// creating the `models` directory if needed. Returns the path written to.
+///
+/// Written through `files` (the backend's), next to the project.
 pub fn save_trained_model(
+    files: &dyn crate::backend::FileSystem,
     classifier: &TrainedClassifier,
     project_dir: &Path,
     model_name: &str,
 ) -> Result<PathBuf, InternalErrors> {
     let path = model_output_path(project_dir, model_name);
-    save_classifier_to_file(&classifier.0, &path)?;
+    files.write_file(&path, &classifier.to_bytes()?)?;
     Ok(path)
 }
 
@@ -447,8 +447,27 @@ pub fn save_trained_model(
 /// model file was trained with - all front ends need for info dialogs,
 /// class-mapping rows and "retrain from existing model", without exposing
 /// the fitted model itself.
-pub fn load_classifier_settings(path: &Path) -> Result<AiLearningSettings, InternalErrors> {
-    load_classifier_from_file(path).map(|saved| saved.settings)
+///
+/// Read through `files` (the backend's), so in remote mode the model file on
+/// the server is read. Only the `settings` part is parsed - the fitted model
+/// can be large and isn't needed here.
+pub fn load_classifier_settings(
+    files: &dyn crate::backend::FileSystem,
+    path: &Path,
+) -> Result<AiLearningSettings, InternalErrors> {
+    #[derive(Deserialize)]
+    struct SettingsOnly {
+        settings: AiLearningSettings,
+    }
+    let bytes = files.read_file(path)?;
+    serde_json::from_slice::<SettingsOnly>(&bytes)
+        .map(|model| model.settings)
+        .map_err(|e| {
+            InternalErrors::Internal(format!(
+                "'{}' is not a valid classifier model: {e}",
+                path.display()
+            ))
+        })
 }
 
 #[cfg(test)]
@@ -987,12 +1006,22 @@ mod tests {
         let classifier = training.wait().expect("two labeled objects should train");
 
         let dir = tempfile::tempdir().unwrap();
-        let path = save_trained_model(&classifier, dir.path(), "model").unwrap();
+        let path = save_trained_model(
+            &crate::backend::LocalFileSystem::default(),
+            &classifier,
+            dir.path(),
+            "model",
+        )
+        .unwrap();
 
         // `AiLearningSettings` has no `PartialEq`; its serialized form is
         // what the model file stores anyway.
         assert_eq!(
-            serde_json::to_value(load_classifier_settings(&path).unwrap()).unwrap(),
+            serde_json::to_value(
+                load_classifier_settings(&crate::backend::LocalFileSystem::default(), &path)
+                    .unwrap()
+            )
+            .unwrap(),
             serde_json::to_value(&settings).unwrap()
         );
     }
@@ -1000,6 +1029,12 @@ mod tests {
     #[test]
     fn load_classifier_settings_reports_a_missing_file_as_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(load_classifier_settings(&dir.path().join("missing.model")).is_err());
+        assert!(
+            load_classifier_settings(
+                &crate::backend::LocalFileSystem::default(),
+                &dir.path().join("missing.model")
+            )
+            .is_err()
+        );
     }
 }

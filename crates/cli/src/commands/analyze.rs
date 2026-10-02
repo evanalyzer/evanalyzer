@@ -8,11 +8,11 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
-    let mut project = load_project(&args.project)?;
+    let mut project = load_project(backend.files(), &args.project)?;
 
     if let Some(images_dir) = &args.images {
         project.images.root = Some(images_dir.clone());
-        project.scan_image_folder_and_add();
+        project.scan_image_folder_and_add(backend);
     }
 
     let image_count = project.images.list.len();
@@ -113,7 +113,7 @@ mod tests {
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 
     fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
-        super::run(args, &LocalBackend)
+        super::run(args, &LocalBackend::default())
     }
 
     #[test]
@@ -437,14 +437,17 @@ mod tests {
         );
 
         let csv_out = out_dir.path().join("out.csv");
-        crate::commands::export::run(ExportArgs {
-            command: ExportCommand::Csv(TableExportArgs {
-                db: evadb.clone(),
-                out: csv_out.clone(),
-                filter: FilterArgs::default(),
-                group: GroupArgs::default(),
-            }),
-        })
+        crate::commands::export::run(
+            ExportArgs {
+                command: ExportCommand::Csv(TableExportArgs {
+                    db: evadb.clone(),
+                    out: csv_out.clone(),
+                    filter: FilterArgs::default(),
+                    group: GroupArgs::default(),
+                }),
+            },
+            &LocalBackend::default(),
+        )
         .expect("csv export should succeed");
         let csv_content = std::fs::read_to_string(&csv_out).expect("read exported csv");
         let mut csv_lines = csv_content.lines();
@@ -480,14 +483,17 @@ mod tests {
         );
 
         let xlsx_out = out_dir.path().join("out.xlsx");
-        crate::commands::export::run(ExportArgs {
-            command: ExportCommand::Xlsx(TableExportArgs {
-                db: evadb,
-                out: xlsx_out.clone(),
-                filter: FilterArgs::default(),
-                group: GroupArgs::default(),
-            }),
-        })
+        crate::commands::export::run(
+            ExportArgs {
+                command: ExportCommand::Xlsx(TableExportArgs {
+                    db: evadb,
+                    out: xlsx_out.clone(),
+                    filter: FilterArgs::default(),
+                    group: GroupArgs::default(),
+                }),
+            },
+            &LocalBackend::default(),
+        )
         .expect("xlsx export should succeed");
 
         use calamine::Reader;

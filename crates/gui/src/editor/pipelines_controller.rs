@@ -1,5 +1,6 @@
 use crate::AppWindow;
 use crate::DialogType;
+use crate::FileRequest;
 use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::template_controller::TemplateController;
@@ -11,6 +12,7 @@ use crate::{
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use evanalyzer_app::ai_learning::load_classifier_settings;
+use evanalyzer_app::backend::FileSystem;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
@@ -788,72 +790,87 @@ impl PipelinesController {
                     let pipeline_id = picker.get_pipeline_id() as u32;
                     let after_idx = picker.get_insert_after_idx();
 
-                    let Some(path) = rfd::FileDialog::new()
-                        .add_filter("bioimage.io RDF", &["yaml", "yml"])
-                        .pick_file()
-                    else {
-                        return; // user cancelled the file picker; leave the command picker open
-                    };
+                    let request = FileRequest::open_file("Import bioimage.io model")
+                        .filter("bioimage.io RDF", &["yaml", "yml"]);
+                    let manager = manager.clone();
+                    manager.app_state.clone().file_browser.open(request, move |path| {
+                        // Cancelled: leave the command picker open.
+                        let Some(path) = path else {
+                            return;
+                        };
+                        // The RDF is read through the backend, so a model on
+                        // the server resolves to server paths.
+                        std::thread::spawn(move || {
+                            let result = evanalyzer_app::bioimageio::configure_from(
+                                manager.app_state.backend().files(),
+                                &path,
+                            );
+                            let _ = slint::invoke_from_event_loop(move || {
+                                let Some(ui) = manager.ui.upgrade() else {
+                                    return;
+                                };
+                                match result {
+                                    Ok(configured) => {
+                                        let step = PipelineStepSettings {
+                                            enabled: true,
+                                            command: configured.command,
+                                        };
+                                        {
+                                            let mut project = manager.app_state.get_project_write();
+                                            if let Some(pipeline) =
+                                                project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
+                                            {
+                                                let insert_at = if after_idx < 0 {
+                                                    0
+                                                } else {
+                                                    ((after_idx as usize) + 1).min(pipeline.steps.len())
+                                                };
+                                                pipeline.steps.insert(insert_at, step);
+                                            }
+                                        }
+                                        ui.global::<GlobalAppState>()
+                                            .set_active_dialog(DialogType::None);
+                                        manager.pipeline_settings_changed();
+                                        manager.sync_steps_of_selected_pipeline_to_slint(
+                                            PipelineId(pipeline_id),
+                                            false,
+                                        );
 
-                    match evanalyzer_app::bioimageio::configure_from_file(&path) {
-                        Ok(configured) => {
-                            let step = PipelineStepSettings {
-                                enabled: true,
-                                command: configured.command,
-                            };
-                            {
-                                let mut project = manager.app_state.get_project_write();
-                                if let Some(pipeline) =
-                                    project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
-                                {
-                                    let insert_at = if after_idx < 0 {
-                                        0
-                                    } else {
-                                        ((after_idx as usize) + 1).min(pipeline.steps.len())
-                                    };
-                                    pipeline.steps.insert(insert_at, step);
+                                        // Surface any caveats (assumed defaults, required
+                                        // normalization, remote weights) so the user can verify.
+                                        if !configured.notes.is_empty() {
+                                            let body = configured
+                                                .notes
+                                                .iter()
+                                                .map(|n| format!("• {n}"))
+                                                .collect::<Vec<_>>()
+                                                .join("\n\n");
+                                            let msg = format!(
+                                                "Imported a model from {}.\n\nPlease review:\n\n{body}",
+                                                path.display()
+                                            );
+                                            let warning = ui.global::<WarningState>();
+                                            warning.set_info(true);
+                                            warning.set_title("bioimage.io model imported".into());
+                                            warning.set_message(msg.into());
+                                            ui.global::<GlobalAppState>()
+                                                .set_active_dialog(DialogType::Warning);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let warning = ui.global::<WarningState>();
+                                        warning.set_info(false);
+                                        warning.set_title("bioimage.io import failed".into());
+                                        warning.set_message(
+                                            format!("Could not import the bioimage.io model:\n\n{e}").into(),
+                                        );
+                                        ui.global::<GlobalAppState>()
+                                            .set_active_dialog(DialogType::Warning);
+                                    }
                                 }
-                            }
-                            ui.global::<GlobalAppState>()
-                                .set_active_dialog(DialogType::None);
-                            manager.pipeline_settings_changed();
-                            manager.sync_steps_of_selected_pipeline_to_slint(
-                                PipelineId(pipeline_id),
-                                false,
-                            );
-
-                            // Surface any caveats (assumed defaults, required
-                            // normalization, remote weights) so the user can verify.
-                            if !configured.notes.is_empty() {
-                                let body = configured
-                                    .notes
-                                    .iter()
-                                    .map(|n| format!("• {n}"))
-                                    .collect::<Vec<_>>()
-                                    .join("\n\n");
-                                let msg = format!(
-                                    "Imported a model from {}.\n\nPlease review:\n\n{body}",
-                                    path.display()
-                                );
-                                let warning = ui.global::<WarningState>();
-                                warning.set_info(true);
-                                warning.set_title("bioimage.io model imported".into());
-                                warning.set_message(msg.into());
-                                ui.global::<GlobalAppState>()
-                                    .set_active_dialog(DialogType::Warning);
-                            }
-                        }
-                        Err(e) => {
-                            let warning = ui.global::<WarningState>();
-                            warning.set_info(false);
-                            warning.set_title("bioimage.io import failed".into());
-                            warning.set_message(
-                                format!("Could not import the bioimage.io model:\n\n{e}").into(),
-                            );
-                            ui.global::<GlobalAppState>()
-                                .set_active_dialog(DialogType::Warning);
-                        }
-                    }
+                            });
+                        });
+                    });
                 });
 
             // Step parameter changed
@@ -912,11 +929,17 @@ impl PipelinesController {
                         if param_name == "model_path" {
                             match &mut step.command {
                                 PipelineCommand::PixelClassifier(settings) => {
-                                    reconcile_pixel_classifier_mapping(settings);
+                                    reconcile_pixel_classifier_mapping(
+                                        manager.app_state.backend().files(),
+                                        settings,
+                                    );
                                     needs_full_resync = true;
                                 }
                                 PipelineCommand::AiObjectClassifier(settings) => {
-                                    reconcile_ai_object_classifier_mapping(settings);
+                                    reconcile_ai_object_classifier_mapping(
+                                        manager.app_state.backend().files(),
+                                        settings,
+                                    );
                                     needs_full_resync = true;
                                 }
                                 _ => {}
@@ -1117,40 +1140,32 @@ impl PipelinesController {
                     manager.show_classifier_model_info(step_id as usize);
                 });
 
-            // Browse for a file (e.g. a TorchScript model path) - opens a native
-            // file picker filtered by the given comma-separated extensions,
-            // starting from current_path's directory.
+            // Browse for a file (e.g. a TorchScript model path) - opens the
+            // file browser filtered by the given comma-separated extensions,
+            // starting next to `current_path`. The result goes back to the
+            // row that asked via its `token` (see `browse-file` in Slint).
+            let manager = self.clone();
             ui.global::<PipelinesPanelState>().on_browse_file(
-                move |extensions_csv, current_path| {
-                    let extensions: Vec<String> = extensions_csv
+                move |extensions_csv, current_path, token| {
+                    let extensions: Vec<&str> = extensions_csv
                         .split(',')
                         .map(str::trim)
                         .filter(|e| !e.is_empty())
-                        .map(str::to_string)
                         .collect();
-
-                    let mut dialog = rfd::FileDialog::new();
+                    let mut request =
+                        FileRequest::open_file("Choose file").start_in(current_path.as_str());
                     if !extensions.is_empty() {
-                        dialog = dialog.add_filter("Allowed Files", &extensions);
+                        request = request.filter("Allowed files", &extensions);
                     }
-
-                    let current = std::path::Path::new(current_path.as_str());
-                    let start_dir = if current.is_dir() {
-                        Some(current.to_path_buf())
-                    } else {
-                        current
-                            .parent()
-                            .filter(|p| p.is_dir())
-                            .map(|p| p.to_path_buf())
-                    };
-                    if let Some(dir) = start_dir {
-                        dialog = dialog.set_directory(dir);
-                    }
-
-                    match dialog.pick_file() {
-                        Some(path) => SharedString::from(path.display().to_string()),
-                        None => SharedString::new(),
-                    }
+                    let ui_weak = manager.ui.clone();
+                    manager.app_state.file_browser.open(request, move |path| {
+                        let (Some(path), Some(ui)) = (path, ui_weak.upgrade()) else {
+                            return;
+                        };
+                        let state = ui.global::<PipelinesPanelState>();
+                        state.set_browse_result_path(path.to_string_lossy().as_ref().into());
+                        state.set_browse_result_token(token);
+                    });
                 },
             );
         }
@@ -1556,16 +1571,17 @@ impl PipelinesController {
             }
         };
 
-        let (title, message) = match load_classifier_settings(&model_path) {
-            Ok(settings) => (
-                "AI Classifier Model".to_string(),
-                format_classifier_model_info(&settings),
-            ),
-            Err(e) => (
-                "Could not load model".to_string(),
-                format!("Could not load '{}':\n\n{e}", model_path.display()),
-            ),
-        };
+        let (title, message) =
+            match load_classifier_settings(self.app_state.backend().files(), &model_path) {
+                Ok(settings) => (
+                    "AI Classifier Model".to_string(),
+                    format_classifier_model_info(&settings),
+                ),
+                Err(e) => (
+                    "Could not load model".to_string(),
+                    format!("Could not load '{}':\n\n{e}", model_path.display()),
+                ),
+            };
 
         let warning = ui.global::<WarningState>();
         warning.set_info(true);
@@ -1791,10 +1807,11 @@ impl PipelinesController {
     fn reload_pipeline_templates_async(self: &Arc<Self>) {
         let manager = self.clone();
         std::thread::spawn(move || {
-            let templates: Vec<PipelineTemplate> = load_pipeline_templates()
-                .into_iter()
-                .map(|(_path, template)| template)
-                .collect();
+            let templates: Vec<PipelineTemplate> =
+                load_pipeline_templates(manager.app_state.backend().as_ref())
+                    .into_iter()
+                    .map(|(_path, template)| template)
+                    .collect();
             *manager.pipeline_templates.lock().expect("Poisoned") = templates;
 
             let manager = manager.clone();
@@ -1972,6 +1989,8 @@ impl PipelinesController {
             }
         };
         let pid = pipeline_id.0 as i32;
+        // Model files are read through the backend (the server's, remotely).
+        let backend = Arc::clone(self.app_state.backend());
 
         if let Err(e) = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
@@ -2005,7 +2024,10 @@ impl PipelinesController {
                                 .iter()
                                 .find(|p| p.name == "model_path")
                                 .and_then(|p| {
-                                    load_pixel_classifier_class_labels(Path::new(&p.value))
+                                    load_pixel_classifier_class_labels(
+                                        backend.files(),
+                                        Path::new(&p.value),
+                                    )
                                 })
                                 .map(|labels| {
                                     labels
@@ -2019,7 +2041,10 @@ impl PipelinesController {
                                 .iter()
                                 .find(|p| p.name == "model_path")
                                 .and_then(|p| {
-                                    load_ai_object_classifier_class_labels(Path::new(&p.value))
+                                    load_ai_object_classifier_class_labels(
+                                        backend.files(),
+                                        Path::new(&p.value),
+                                    )
                                 })
                                 .map(|labels| {
                                     labels
@@ -2293,11 +2318,14 @@ const AI_OBJECT_CLASSIFIER_COMMAND_NAME: &str = "AI Object Classifier";
 /// the error here is deliberate: callers use this for best-effort UI
 /// affordances (row labels, info button availability), not validation - the
 /// pipeline step's own `execute()` is what surfaces a real error.
-fn load_pixel_classifier_class_labels(model_path: &Path) -> Option<Vec<PixelClassLabel>> {
+fn load_pixel_classifier_class_labels(
+    files: &dyn FileSystem,
+    model_path: &Path,
+) -> Option<Vec<PixelClassLabel>> {
     if model_path.as_os_str().is_empty() {
         return None;
     }
-    let settings = load_classifier_settings(model_path).ok()?;
+    let settings = load_classifier_settings(files, model_path).ok()?;
     let AiLearningClassifierSettings::Pixel { class_labels, .. } = settings.classifier else {
         return None;
     };
@@ -2312,8 +2340,11 @@ fn load_pixel_classifier_class_labels(model_path: &Path) -> Option<Vec<PixelClas
 /// still present; new entries (or a load failure, which clears the list -
 /// there's nothing to map without a readable model) default to
 /// `SegmentationClass::BACKGROUND`.
-fn reconcile_pixel_classifier_mapping(settings: &mut PixelClassifierSettings) {
-    let Some(class_labels) = load_pixel_classifier_class_labels(&settings.model_path) else {
+fn reconcile_pixel_classifier_mapping(
+    files: &dyn FileSystem,
+    settings: &mut PixelClassifierSettings,
+) {
+    let Some(class_labels) = load_pixel_classifier_class_labels(files, &settings.model_path) else {
         settings.segmentation_mapping.clear();
         return;
     };
@@ -2337,11 +2368,14 @@ fn reconcile_pixel_classifier_mapping(settings: &mut PixelClassifierSettings) {
 /// Loads `model_path` and returns the classes it declares, or `None` if the
 /// path is empty, unreadable, or not an object classifier model - the
 /// `AiObjectClassifier` analog of `load_pixel_classifier_class_labels`.
-fn load_ai_object_classifier_class_labels(model_path: &Path) -> Option<Vec<ObjectClassLabel>> {
+fn load_ai_object_classifier_class_labels(
+    files: &dyn FileSystem,
+    model_path: &Path,
+) -> Option<Vec<ObjectClassLabel>> {
     if model_path.as_os_str().is_empty() {
         return None;
     }
-    let settings = load_classifier_settings(model_path).ok()?;
+    let settings = load_classifier_settings(files, model_path).ok()?;
     let AiLearningClassifierSettings::Object { class_labels, .. } = settings.classifier else {
         return None;
     };
@@ -2357,8 +2391,12 @@ fn load_ai_object_classifier_class_labels(model_path: &Path) -> Option<Vec<Objec
 /// classifier's `SegmentationClass::BACKGROUND` default, `Unset` here is a
 /// deliberate "not mapped yet" that `AiObjectClassifier::execute` treats the
 /// same as no entry at all, rather than a value that gets written out.
-fn reconcile_ai_object_classifier_mapping(settings: &mut AiObjectClassifierSettings) {
-    let Some(class_labels) = load_ai_object_classifier_class_labels(&settings.model_path) else {
+fn reconcile_ai_object_classifier_mapping(
+    files: &dyn FileSystem,
+    settings: &mut AiObjectClassifierSettings,
+) {
+    let Some(class_labels) = load_ai_object_classifier_class_labels(files, &settings.model_path)
+    else {
         settings.segmentation_mapping.clear();
         return;
     };
@@ -2422,6 +2460,7 @@ fn format_classifier_model_info(settings: &AiLearningSettings) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_app::backend::LocalFileSystem;
     use evanalyzer_cfg::settings::images_settings::SeriesSettings;
     use evanalyzer_cfg::settings::meta_data::MetaData;
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -2794,7 +2833,7 @@ mod tests {
             }],
         };
 
-        reconcile_pixel_classifier_mapping(&mut settings);
+        reconcile_pixel_classifier_mapping(&LocalFileSystem::default(), &mut settings);
 
         assert!(
             settings.segmentation_mapping.is_empty(),
@@ -2812,7 +2851,7 @@ mod tests {
             }],
         };
 
-        reconcile_pixel_classifier_mapping(&mut settings);
+        reconcile_pixel_classifier_mapping(&LocalFileSystem::default(), &mut settings);
 
         assert!(settings.segmentation_mapping.is_empty());
     }
@@ -2827,7 +2866,7 @@ mod tests {
             ..Default::default()
         };
 
-        reconcile_ai_object_classifier_mapping(&mut settings);
+        reconcile_ai_object_classifier_mapping(&LocalFileSystem::default(), &mut settings);
 
         assert!(settings.segmentation_mapping.is_empty());
     }

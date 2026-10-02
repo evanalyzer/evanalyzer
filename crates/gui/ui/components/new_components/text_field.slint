@@ -4,7 +4,7 @@
 // behavior instead of reimplementing it.
 
 import { LineEdit } from "std-widgets.slint";
-import { Theme } from "../style.slint";
+import { Theme } from "../../style.slint";
 
 export component TextField inherits Rectangle {
     in property <string> placeholder;
@@ -12,6 +12,9 @@ export component TextField inherits Rectangle {
     in property <bool> has-icon: false;
     in property <bool> enabled: true;
     in property <bool> mono: false;
+    // Take keyboard focus (with the text selected) as soon as it appears -
+    // for fields that only show up after a click, like an inline rename.
+    in property <bool> autofocus: false;
     in-out property <string> value;
     callback edited(string);
     callback accepted(string);
@@ -45,6 +48,12 @@ export component TextField inherits Rectangle {
             font-family: root.mono ? Theme.font-mono : Theme.font-sans;
             edited(t) => { root.edited(t); }
             accepted(t) => { root.accepted(t); }
+            init => {
+                if (root.autofocus) {
+                    self.focus();
+                    self.select-all();
+                }
+            }
         }
     }
 }

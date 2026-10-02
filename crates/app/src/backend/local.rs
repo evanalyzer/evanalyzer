@@ -1,7 +1,10 @@
 //! Runs everything in this process - the default backend, and what a server
 //! (`evanalyzer_net`) uses to execute the requests it receives.
 
-use super::{AnalysisRequest, Backend, ImageSource, TileRequest, TrainingRequest};
+use super::{
+    AnalysisRequest, Backend, FileSystem, ImageSource, LocalFileSystem, TemplateFolders,
+    TileRequest, TrainingRequest,
+};
 use crate::ai_learning::{self, RunningTraining, StartTrainingError};
 use crate::images::{ImageChannel, ImageMeta};
 use crate::job::{self, PreviewRequest, RunningJob, StartPreviewError};
@@ -11,30 +14,98 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Stateless: every operation forwards to the `job`/`ai_learning` functions
-/// that hold the actual logic.
+/// Every operation forwards to the `job`/`ai_learning` functions that hold
+/// the actual logic. Optionally confined to a set of folders (a server's
+/// `--root`s): then every path a request names - files, images, the project
+/// and image folders - must lie inside them.
 #[derive(Debug, Default)]
-pub struct LocalBackend;
+pub struct LocalBackend {
+    files: LocalFileSystem,
+}
+
+impl LocalBackend {
+    /// The template folders stay reachable too, so clients can list and
+    /// save templates.
+    pub fn restricted_to(roots: &[PathBuf]) -> Result<Self, InternalErrors> {
+        let folders = local_template_folders();
+        let template_folders: Vec<PathBuf> = [folders.user, folders.bundled]
+            .into_iter()
+            .filter(|folder| folder.is_dir())
+            .collect();
+        Ok(Self {
+            files: LocalFileSystem::restricted_to(roots)?.also_allowing(&template_folders)?,
+        })
+    }
+
+    /// The paths a project makes the backend read or write.
+    fn check_project_paths(
+        &self,
+        project_path: Option<&Path>,
+        settings: &evanalyzer_cfg::settings::project_settings::ProjectSettings,
+    ) -> Result<(), InternalErrors> {
+        if !self.files.is_restricted() {
+            return Ok(());
+        }
+        if let Some(project_path) = project_path {
+            self.files.check(project_path)?;
+        }
+        if let Some(root) = &settings.images.root {
+            self.files.check(root)?;
+        }
+        Ok(())
+    }
+}
 
 impl Backend for LocalBackend {
     fn start_analysis(&self, req: AnalysisRequest) -> Result<RunningJob, InternalErrors> {
+        self.check_project_paths(Some(&req.project_path), &req.settings)?;
         job::start_analysis(req.settings, req.project_path, req.job_name, req.threads)
     }
 
     fn start_preview(&self, req: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
+        self.check_project_paths(Some(&req.project_path), &req.settings)?;
         job::start_preview(req)
     }
 
     fn start_training(&self, req: TrainingRequest) -> Result<RunningTraining, StartTrainingError> {
+        self.check_project_paths(None, &req.project)
+            .map_err(StartTrainingError::Failed)?;
         ai_learning::start_training(&req.project, req.settings, req.pixel_params)
     }
 
     fn open_image(&self, path: &Path) -> Result<Arc<dyn ImageSource>, InternalErrors> {
-        Ok(Arc::new(ReaderPool::open(path)?))
+        let path = self.files.check(path)?;
+        Ok(Arc::new(ReaderPool::open(&path)?))
+    }
+
+    fn open_results(&self, path: &Path) -> Result<Arc<dyn super::ResultsSource>, InternalErrors> {
+        let path = self.files.check(path)?;
+        Ok(Arc::new(super::LocalResults::open(path)?))
+    }
+
+    fn read_image_meta(&self, path: &Path) -> Result<ImageMeta, InternalErrors> {
+        let path = self.files.check(path)?;
+        let reader = ImageReader::new(&path, ReadMode::SplitChannels)?;
+        Ok(reader.get_image_meta().clone())
+    }
+
+    fn template_folders(&self) -> Result<TemplateFolders, InternalErrors> {
+        Ok(local_template_folders())
+    }
+
+    fn files(&self) -> &dyn FileSystem {
+        &self.files
     }
 
     fn description(&self) -> String {
         "local".into()
+    }
+}
+
+fn local_template_folders() -> TemplateFolders {
+    TemplateFolders {
+        user: crate::templates::get_user_templates_folder(),
+        bundled: crate::templates::get_app_templates_folder(),
     }
 }
 
