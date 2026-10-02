@@ -5,10 +5,6 @@
 //! Images and results are referenced by path, so client and server must see
 //! the same files under the same paths (shared storage).
 
-use crate::api::RunningTraining;
-
-use crate::api::StartTrainingError;
-
 use crate::api::AnalysisRequest;
 use crate::api::Backend;
 use crate::api::BoxplotFilter;
@@ -34,9 +30,11 @@ use crate::api::PreviewRequest;
 use crate::api::ResultExport;
 use crate::api::ResultsSource;
 use crate::api::RunningJob;
+use crate::api::RunningTraining;
 use crate::api::ScatterFilter;
 use crate::api::ScatterResult;
 use crate::api::StartPreviewError;
+use crate::api::StartTrainingError;
 use crate::api::TemplateFolders;
 use crate::api::TileRequest;
 use crate::api::TrainedClassifier;

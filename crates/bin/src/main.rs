@@ -7,7 +7,7 @@ use evanalyzer_app::backends::local::LocalBackend;
 use evanalyzer_app::global::Frontend;
 use evanalyzer_app::project::ProjectOwner;
 use evanalyzer_cfg::core_types::InternalErrors;
-use log::LevelFilter;
+use log::{LevelFilter, info, warn};
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -47,22 +47,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(token) => token,
             None => {
                 let token = evanalyzer_app::backends::remote::generate_token()?;
-                eprintln!("No token given - generated one for this session:\n\n  {token}\n");
+                info!("No token given - generated one for this session:\n\n  {token}\n");
                 eprintln!("Clients connect with EVANALYZER_REMOTE_TOKEN set to this value.");
                 token
             }
         };
         let server = evanalyzer_app::backends::remote::Server::bind(&listen, token)?;
-        eprintln!(
+        info!(
             "EVAnalyzer server listening on ws://{}",
             server.local_addr()?
         );
         let backend = if roots.is_empty() {
-            eprintln!("Warning: no --root given - clients can reach every file this process can.");
+            warn!("Warning: no --root given - clients can reach every file this process can.");
             LocalBackend::default()
         } else {
             for root in &roots {
-                eprintln!("Serving folder {}", root.display());
+                info!("Serving folder {}", root.display());
             }
             LocalBackend::restricted_to(&roots)?
         };
