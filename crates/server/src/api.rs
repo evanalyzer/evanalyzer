@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Request {
     Login { username: String, password: String },
+    Exit,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -16,6 +17,9 @@ pub enum ResponseState {
 pub struct Response {
     pub response: ResponseState,
     pub msg: String,
+    /// Handed out at login; identifies the user's session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_token: Option<String>,
 }
 
 impl Response {
@@ -23,6 +27,7 @@ impl Response {
         Self {
             response: ResponseState::Accepted,
             msg: msg.into(),
+            session_token: None,
         }
     }
 
@@ -30,6 +35,7 @@ impl Response {
         Self {
             response: ResponseState::Error,
             msg: msg.into(),
+            session_token: None,
         }
     }
 }

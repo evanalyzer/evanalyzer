@@ -6,7 +6,7 @@
 //!
 //! Reading `/etc/shadow` requires root or membership in the `shadow` group.
 
-use crate::user_management::{AuthenticationStatus, User, UserManagement};
+use crate::user_management::{AuthenticationStatus, UnixAccount, User, UserManagement};
 use sha_crypt::{PasswordVerifier, ShaCrypt};
 use std::{
     fs::File,
@@ -50,15 +50,22 @@ impl UserManagement for LinuxUsers {
         if !verify_password(&password, &hash) {
             return AuthenticationStatus::PasswordWrong;
         }
-        let user_id = match find_field(&self.passwd_file, &username, 2) {
-            Ok(Some(uid)) => uid,
-            Ok(None) => username.clone(),
+        let unix_account = match passwd_account(&self.passwd_file, &username) {
+            Ok(account) => account,
             Err(err) => {
                 log::warn!("Cannot read {}: {err}", self.passwd_file.display());
-                username.clone()
+                None
             }
         };
-        AuthenticationStatus::Authenticated(User { user_id, username })
+        let user_id = match &unix_account {
+            Some(account) => account.uid.to_string(),
+            None => username.clone(),
+        };
+        AuthenticationStatus::Authenticated(User {
+            user_id,
+            username,
+            unix_account,
+        })
     }
 }
 
@@ -90,6 +97,28 @@ fn find_field(path: &Path, username: &str, index: usize) -> std::io::Result<Opti
         if fields.next() == Some(username) {
             return Ok(fields.nth(index - 1).map(str::to_owned));
         }
+    }
+    Ok(None)
+}
+
+/// uid, gid and home folder from the user's `/etc/passwd` line
+/// (`name:x:uid:gid:gecos:home:shell`).
+fn passwd_account(path: &Path, username: &str) -> std::io::Result<Option<UnixAccount>> {
+    let reader = BufReader::new(File::open(path)?);
+    for line in reader.lines() {
+        let line = line?;
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.first() != Some(&username) || fields.len() < 6 {
+            continue;
+        }
+        let (Ok(uid), Ok(gid)) = (fields[2].parse(), fields[3].parse()) else {
+            return Ok(None);
+        };
+        return Ok(Some(UnixAccount {
+            uid,
+            gid,
+            home: fields[5].into(),
+        }));
     }
     Ok(None)
 }

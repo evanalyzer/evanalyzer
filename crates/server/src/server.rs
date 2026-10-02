@@ -5,7 +5,7 @@ use crate::{
         AuthenticationStatus, UserManagement, linux_users::LinuxUsers, single_user::SingleUser,
     },
 };
-use log::{info, warn};
+use log::{error, info, warn};
 use std::{
     collections::HashMap,
     net::{SocketAddr, TcpListener, TcpStream},
@@ -38,7 +38,7 @@ pub type Sessions = Arc<Mutex<HashMap<SessionId, SessionInfo>>>;
 
 struct Server {
     user_management: Arc<dyn UserManagement>,
-    session_management: SessionManagement,
+    session_management: Arc<SessionManagement>,
     sessions: Sessions,
     next_session_id: AtomicU64,
 }
@@ -48,22 +48,25 @@ struct Connection {
     session_id: SessionId,
     sessions: Sessions,
     user_management: Arc<dyn UserManagement>,
+    session_management: Arc<SessionManagement>,
     state: State,
     username: Option<String>,
+    /// Session this connection logged into.
+    session_token: Option<String>,
 }
 
 pub fn serve(listen: String) -> std::io::Result<()> {
-    Server::new().serve(&listen)
+    Server::new()?.serve(&listen)
 }
 
 impl Server {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> std::io::Result<Self> {
+        Ok(Self {
             user_management: Arc::new(SingleUser::default()),
-            session_management: SessionManagement {},
+            session_management: Arc::new(SessionManagement::new()?),
             sessions: Arc::default(),
             next_session_id: AtomicU64::new(1),
-        }
+        })
     }
 
     pub fn serve(&self, listen: &str) -> std::io::Result<()> {
@@ -88,8 +91,10 @@ impl Server {
                 session_id,
                 sessions: Arc::clone(&self.sessions),
                 user_management: Arc::clone(&self.user_management),
+                session_management: Arc::clone(&self.session_management),
                 state: State::WaitingForLogin,
                 username: None,
+                session_token: None,
             };
             thread::spawn(move || {
                 let mut socket = match tungstenite::accept(stream) {
@@ -108,7 +113,12 @@ impl Server {
                         .to_string()
                         .trim()
                         .to_string();
-                    info!("Session {}: received {command}", connection.session_id);
+                    // Never log the content: login messages carry passwords.
+                    log::debug!(
+                        "Session {}: received {} bytes",
+                        connection.session_id,
+                        command.len()
+                    );
                     let answer = connection.state_machine(command);
                     let json = serde_json::to_string(&answer).expect("Response serializes");
                     if socket.send(Message::text(json)).is_err() {
@@ -153,9 +163,22 @@ impl Connection {
                         {
                             info.username = Some(user.username.clone());
                         }
+                        let session = match self.session_management.open_or_create_session(&user) {
+                            Ok(session) => session,
+                            Err(err) => {
+                                error!("Cannot start EVAnalyzer for {}: {err}", user.username);
+                                return Response::error("Could not start EVAnalyzer for this user");
+                            }
+                        };
+                        // TODO: forward this connection to `session.worker_url()`,
+                        // authenticating with `session.worker_token`.
                         self.username = Some(user.username);
+                        self.session_token = Some(session.session_token.clone());
                         self.state = State::WaitingForCommands;
-                        Response::accepted("Logged in")
+                        Response {
+                            session_token: Some(session.session_token),
+                            ..Response::accepted("Logged in")
+                        }
                     }
                     // Same answer for both, so clients can't probe which
                     // usernames exist.
@@ -168,7 +191,33 @@ impl Connection {
             (State::WaitingForCommands, Request::Login { .. }) => {
                 Response::error("Already logged in")
             }
+            (State::WaitingForCommands, Request::Exit) => self.exit(),
+            (State::WaitingForLogin, Request::Exit) => Response::error("Not logged in"),
         }
+    }
+}
+
+impl Connection {
+    /// Stops the user's EVAnalyzer worker, closes the session and logs this
+    /// connection out. The WebSocket stays open for a new login.
+    fn exit(&mut self) -> Response {
+        if let Some(token) = self.session_token.take()
+            && let Err(err) = self.session_management.close_session(&token)
+        {
+            error!("Session {}: closing failed: {err}", self.session_id);
+            return Response::error("Could not close the session");
+        }
+        info!(
+            "Session {}: {} exited",
+            self.session_id,
+            self.username.as_deref().unwrap_or_default()
+        );
+        if let Some(info) = self.sessions.lock().unwrap().get_mut(&self.session_id) {
+            info.username = None;
+        }
+        self.username = None;
+        self.state = State::WaitingForLogin;
+        Response::accepted("Session closed")
     }
 }
 

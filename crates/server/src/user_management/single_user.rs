@@ -22,6 +22,7 @@ impl UserManagement for SingleUser {
             return super::AuthenticationStatus::Authenticated(super::User {
                 user_id: self.userid.clone(),
                 username,
+                unix_account: None,
             });
         }
 
