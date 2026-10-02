@@ -567,6 +567,22 @@ fn apply_param_change_unit_fields_toggle_both_variants() {
 }
 
 #[test]
+fn colocalization_size_unit_also_offers_percent() {
+    // `size_unit` is a SizeUnitsRel: nm / px like SizeUnits, plus "%".
+    let mut cmd = default_command(id_of("Colocalization")).unwrap();
+    let def = cmd
+        .to_parameters()
+        .into_iter()
+        .find(|p| p.name == "size_unit")
+        .expect("size_unit is exposed as a parameter");
+    assert_eq!(def.options, ["nm", "px", "%"]);
+    for unit in ["%", "nm", "px", "%"] {
+        cmd.apply_param_change("size_unit", unit);
+        assert_eq!(param_value(&cmd, "size_unit"), unit);
+    }
+}
+
+#[test]
 fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
     // One ObjClass field from each variant that has one, covering the
     // `"-1"` (Unset) branch and the `value.parse::<u32>()` (Valid) branch.

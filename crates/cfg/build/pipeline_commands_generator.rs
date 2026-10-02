@@ -1663,6 +1663,18 @@ fn leaf_param_def_literal(
             0.0_f32,
             0.0_f32,
         ),
+        // A size unit that may also be relative ("%"), e.g. coloc's minimum
+        // overlap as a share of the smaller object. Same widget as SizeUnits,
+        // one more option.
+        "SizeUnitsRel" => (
+            "ParamType::SizeUnits",
+            format!(
+                "match {access} {{ SizeUnitsRel::NanoMeter => \"nm\".to_string(), SizeUnitsRel::Pixels => \"px\".to_string(), SizeUnitsRel::Percent => \"%\".to_string() }}"
+            ),
+            "vec![\"nm\".to_string(), \"px\".to_string(), \"%\".to_string()]".to_string(),
+            0.0_f32,
+            0.0_f32,
+        ),
         _ => {
             if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty) {
                 // A rich (named-field) enum's own fields are exposed by the caller as
@@ -2271,6 +2283,9 @@ fn leaf_apply_change_branch(
         "SizeUnits" => format!(
             "{assign} = match value {{ \"nm\" => SizeUnits::NanoMeter, _ => SizeUnits::Pixels }};"
         ),
+        "SizeUnitsRel" => format!(
+            "{assign} = match value {{ \"nm\" => SizeUnitsRel::NanoMeter, \"%\" => SizeUnitsRel::Percent, _ => SizeUnitsRel::Pixels }};"
+        ),
         _ => {
             if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty) {
                 let settings_name = enum_info.settings_name();
@@ -2539,7 +2554,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("use crate::modules::pipeline_command_settings::*;\n");
     out.push_str("use crate::modules::parameter_def::{ParamType, ParameterDef};\n");
     out.push_str("use crate::types::classes::{ObjectClass, SegmentationClass};\n");
-    out.push_str("use crate::core_types::{MemoryId, PixelUnits, SizeUnits};\n");
+    out.push_str("use crate::core_types::{MemoryId, PixelUnits, SizeUnits, SizeUnitsRel};\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
 
