@@ -1,7 +1,9 @@
 use crate::{
     api::{Request, Response},
     session_management::SessionManagement,
-    user_management::{AuthenticationStatus, UserManagement, linux_users::LinuxUsers},
+    user_management::{
+        AuthenticationStatus, UserManagement, linux_users::LinuxUsers, single_user::SingleUser,
+    },
 };
 use log::{info, warn};
 use std::{
@@ -57,7 +59,7 @@ pub fn serve(listen: String) -> std::io::Result<()> {
 impl Server {
     pub fn new() -> Self {
         Self {
-            user_management: Arc::new(LinuxUsers::default()),
+            user_management: Arc::new(SingleUser::default()),
             session_management: SessionManagement {},
             sessions: Arc::default(),
             next_session_id: AtomicU64::new(1),

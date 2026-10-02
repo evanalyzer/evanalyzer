@@ -1,4 +1,5 @@
 pub mod linux_users;
+pub mod single_user;
 
 pub struct User {
     pub user_id: String,
