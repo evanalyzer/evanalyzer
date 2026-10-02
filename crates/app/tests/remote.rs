@@ -649,3 +649,39 @@ fn a_cancelled_remote_export_reports_cancelled() {
         "{result:?}"
     );
 }
+
+#[test]
+fn a_dropped_connection_shows_as_disconnected() {
+    // Relay between client and server that the test can cut.
+    let server_url = start_server();
+    let server_addr = server_url.trim_start_matches("ws://").to_string();
+    let relay = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let relay_url = format!("ws://{}", relay.local_addr().unwrap());
+    let (cut_tx, cut_rx) = std::sync::mpsc::channel::<std::net::TcpStream>();
+    std::thread::spawn(move || {
+        let (client, _) = relay.accept().unwrap();
+        let upstream = std::net::TcpStream::connect(server_addr).unwrap();
+        cut_tx.send(client.try_clone().unwrap()).unwrap();
+        let (mut client_r, mut upstream_w) =
+            (client.try_clone().unwrap(), upstream.try_clone().unwrap());
+        std::thread::spawn(move || std::io::copy(&mut client_r, &mut upstream_w));
+        let (mut upstream_r, mut client_w) = (upstream, client);
+        let _ = std::io::copy(&mut upstream_r, &mut client_w);
+    });
+
+    let remote = RemoteBackend::connect(&relay_url, TOKEN).unwrap();
+    assert!(remote.is_remote());
+    assert!(remote.is_connected());
+    assert_eq!(remote.user(), None, "token connections have no login user");
+
+    cut_rx
+        .recv()
+        .unwrap()
+        .shutdown(std::net::Shutdown::Both)
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while remote.is_connected() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!remote.is_connected());
+}

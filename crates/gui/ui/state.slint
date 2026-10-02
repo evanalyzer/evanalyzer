@@ -24,6 +24,17 @@ export enum DialogType {
     shortcuts_help }
 
 
+/// Where the work happens - this computer or a server. Shown in the status
+/// bar at all times, plus a banner once a server connection is lost.
+export global ConnectionState {
+    /// Working on a server (`--remote`) instead of this computer.
+    in property <bool> remote: false;
+    /// Turns `false` for good when the server connection drops.
+    in property <bool> connected: true;
+    /// "alice @ workstation:7400", or "This computer".
+    in property <string> label: "This computer";
+}
+
 export global GlobalAppState {
     // Global internal state
     in-out property <bool> show_image_tools: true;

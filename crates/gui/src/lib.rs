@@ -310,11 +310,17 @@ impl UiState {
             .and_then(|p| p.file_name())
             .map(|f| f.to_string_lossy().into_owned());
         let name = filename.unwrap_or_else(|| "Untitled".to_string());
-        let title = if dirty {
+        let mut title = if dirty {
             format!("*{name} - EVAnalyzer")
         } else {
             format!("{name} - EVAnalyzer")
         };
+        // Visible in the taskbar and window switcher too, so a local and a
+        // remote window can't be confused there either.
+        if self.backend().is_remote() {
+            title.push_str(" - ");
+            title.push_str(&connection_label(self.backend().as_ref()));
+        }
 
         let ui = self.ui_handle.clone();
         slint::invoke_from_event_loop(move || {
@@ -381,6 +387,8 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     // (loaded into `owner` before the GUI was created, so it's already
     // sitting in the shared `ProjectWithRuntime` `ui_state` now points at).
     ui_state.set_window_title(false);
+    // Kept alive until the window closes.
+    let _connection_watch = show_connection(&ui, ui_state.backend());
     ui_state.file_browser.attach(&ui);
     ui_state.results_file_browser.attach(&results_ui);
 
@@ -473,6 +481,21 @@ mod ui_state_tests {
 
         ui_state.clear_dirty();
         assert!(!ui_state.is_dirty());
+    }
+
+    #[test]
+    fn local_backend_is_labelled_this_computer_and_shown_as_local() {
+        crate::editor::test_support::ensure_slint_test_platform();
+        let backend: Arc<dyn Backend> =
+            Arc::new(evanalyzer_app::backends::local::LocalBackend::default());
+        assert_eq!(connection_label(backend.as_ref()), "This computer");
+
+        let ui = AppWindow::new().unwrap();
+        assert!(show_connection(&ui, &backend).is_none(), "no polling locally");
+        let state = ui.global::<ConnectionState>();
+        assert!(!state.get_remote());
+        assert!(state.get_connected());
+        assert_eq!(state.get_label(), "This computer");
     }
 
     #[test]
@@ -602,6 +625,52 @@ mod ui_state_tests {
 /// Apply the persisted dark/light preference to both windows. Each window
 /// owns its own `Appearance`/`Palette` instance, so this has to be done
 /// for both explicitly - see the comment on `Appearance` in style.slint.
+/// "alice @ workstation:7400" for a server, "This computer" otherwise.
+pub fn connection_label(backend: &dyn Backend) -> String {
+    if !backend.is_remote() {
+        return "This computer".into();
+    }
+    let url = backend.description();
+    let host = url
+        .trim_start_matches("ws://")
+        .trim_start_matches("wss://")
+        .trim_end_matches('/');
+    match backend.user() {
+        Some(user) => format!("{user} @ {host}"),
+        None => host.to_string(),
+    }
+}
+
+/// Fills `ConnectionState` (status bar badge, lost-connection banner) and,
+/// for a server, polls the connection once a second - cheap, it's an atomic
+/// flag. Returns the timer, which must stay alive as long as the window.
+fn show_connection(ui: &AppWindow, backend: &Arc<dyn Backend>) -> Option<slint::Timer> {
+    let state = ui.global::<ConnectionState>();
+    state.set_remote(backend.is_remote());
+    state.set_label(connection_label(backend.as_ref()).into());
+    state.set_connected(backend.is_connected());
+    if !backend.is_remote() {
+        return None;
+    }
+    let timer = slint::Timer::default();
+    let ui = ui.as_weak();
+    let backend = Arc::clone(backend);
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_secs(1),
+        move || {
+            if let Some(ui) = ui.upgrade() {
+                let state = ui.global::<ConnectionState>();
+                let connected = backend.is_connected();
+                if state.get_connected() != connected {
+                    state.set_connected(connected);
+                }
+            }
+        },
+    );
+    Some(timer)
+}
+
 fn load_user_settings(ui: &AppWindow, results_ui: &ResultsWindow) {
     let settings = evanalyzer_app::global::load_app_settings();
     let results_ui_handle = results_ui.as_weak();

@@ -62,6 +62,17 @@ pub trait Backend: Send + Sync {
     /// Human-readable location of this backend, for logs and status text
     /// ("local", "ws://host:7400").
     fn description(&self) -> String;
+
+    /// Whether the backend can still be reached. A remote backend turns
+    /// `false` for good once its connection drops; the UI then warns.
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    /// Who is logged in on a remote server (`--user`), if anyone.
+    fn user(&self) -> Option<String> {
+        None
+    }
 }
 
 /// An opened image, readable tile by tile.

@@ -1,5 +1,6 @@
 import { HorizontalBox } from "std-widgets.slint";
-import { GlobalAppState, HistogramState } from "state.slint";
+import { GlobalAppState, HistogramState, ConnectionState } from "state.slint";
+import { Theme } from "style.slint";
 import {
     ViewportState,
     ViewportObjectState,
@@ -30,6 +31,44 @@ export component StatusBar inherits Rectangle {
         padding-left: 12px;
         padding-right: 12px;
         spacing: 10px;
+
+        // Where the work happens. Always visible; coloured when on a server
+        // so local and remote windows can't be mixed up. Icon + text, not
+        // just colour.
+        Rectangle {
+            vertical-stretch: 0;
+            height: 22px;
+            border-radius: 4px;
+            background: !ConnectionState.remote ? transparent
+                : ConnectionState.connected ? Theme.accent : Theme.warn;
+            border-width: ConnectionState.remote ? 0px : 1px;
+            border-color: Theme.border;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 6px;
+                Image {
+                    width: 14px;
+                    height: 14px;
+                    y: (parent.height - self.height) / 2;
+                    source: !ConnectionState.remote ? @image-url("icons/regular-black/desktop.svg")
+                        : ConnectionState.connected ? @image-url("icons/regular-black/cloud.svg")
+                        : @image-url("icons/regular-black/cloud-slash.svg");
+                    colorize: !ConnectionState.remote ? Theme.text-dim
+                        : ConnectionState.connected ? #FFFFFF : #000000;
+                }
+                Text {
+                    text: !ConnectionState.remote ? ConnectionState.label
+                        : ConnectionState.connected ? ConnectionState.label
+                        : ConnectionState.label + " - disconnected";
+                    font-size: 11px;
+                    font-weight: ConnectionState.remote ? 600 : 400;
+                    vertical-alignment: center;
+                    color: !ConnectionState.remote ? Theme.text-dim
+                        : ConnectionState.connected ? #FFFFFF : #000000;
+                }
+            }
+        }
 
         // Status Message
         Text {

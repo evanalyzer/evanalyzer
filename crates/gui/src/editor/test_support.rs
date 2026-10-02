@@ -112,7 +112,7 @@ pub(crate) fn project_with_one_image() -> ProjectWithRuntime {
 /// thread-local (see `i-slint-core`'s `GLOBAL_CONTEXT`), so gating the call
 /// on a matching thread-local flag here correctly makes it idempotent for
 /// the lifetime of whichever thread runs it.
-fn ensure_slint_test_platform() {
+pub(crate) fn ensure_slint_test_platform() {
     thread_local! {
         static INITIALIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }

@@ -94,7 +94,7 @@ import {
 import { PipelinesPanelState } from "editor/pipelines_panel.slint";
 import { PreviewRendering } from "dialogs/preview_rendering_dialog.slint";
 import { WarningDialog } from "dialogs/warning_dialog.slint";
-import { WarningState } from "state.slint";
+import { WarningState, ConnectionState } from "state.slint";
 import { UnsavedChangesDialog } from "dialogs/unsaved_changes_dialog.slint";
 import { UnsavedChangesState } from "state.slint";
 import {
@@ -161,6 +161,7 @@ export {
     ProjectTemplateDef,
     ResultsListState,
     WarningState,
+    ConnectionState,
     AppInfoState,
     UnsavedChangesState,
     RunAnalysisState,
@@ -226,6 +227,21 @@ export component AppWindow inherits Window {
             Rectangle {
                 height: 1px;
                 background: Theme.border;
+            }
+
+            // Can't be missed: everything that needs the server fails from
+            // now on, and this is the only place that says why.
+            if ConnectionState.remote && !ConnectionState.connected: Rectangle {
+                height: 34px;
+                background: Theme.warn;
+                Text {
+                    text: "⚠  Connection to " + ConnectionState.label + " lost - images, analysis and saving are unavailable. Restart EVAnalyzer to reconnect.";
+                    color: #000000;
+                    font-size: 12px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
             }
 
             HorizontalBox {

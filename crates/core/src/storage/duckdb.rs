@@ -47,7 +47,10 @@ static CONNECTION_CACHE: LazyLock<Mutex<HashMap<PathBuf, Connection>>> =
 /// Returns a `Connection` usable for `path`, sharing the resident anchor
 /// connection for that path if one is already open (see `CONNECTION_CACHE`'s
 /// doc comment), opening and caching a fresh one otherwise.
-fn shared_connection(path: &Path) -> Result<Connection, InternalErrors> {
+///
+/// Every connection to a results file in this process must come from here -
+/// a plain `Connection::open` next to a cached one fails on Windows.
+pub fn shared_connection(path: &Path) -> Result<Connection, InternalErrors> {
     let to_io_err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
     let mut cache = CONNECTION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
 

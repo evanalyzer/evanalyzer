@@ -71,6 +71,7 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct RemoteBackend {
     inner: Arc<Inner>,
     files: RemoteFiles,
+    user: Option<String>,
 }
 
 impl Backend for RemoteBackend {
@@ -232,6 +233,14 @@ impl Backend for RemoteBackend {
     fn description(&self) -> String {
         self.inner.url.clone()
     }
+
+    fn is_connected(&self) -> bool {
+        self.inner.connected.load(Ordering::Relaxed)
+    }
+
+    fn user(&self) -> Option<String> {
+        self.user.clone()
+    }
 }
 
 /// The server's file system, one request per call.
@@ -344,6 +353,8 @@ struct Inner {
     /// drops, which turns every pending `recv` into a "connection lost".
     pending: Mutex<HashMap<u64, Sender<Frame<Reply>>>>,
     next_id: AtomicU64,
+    /// Cleared by the I/O thread when the connection ends.
+    connected: AtomicBool,
 }
 
 impl RemoteBackend {
@@ -352,7 +363,7 @@ impl RemoteBackend {
     /// rejects the token, or runs a different version.
     pub fn connect(url: &str, token: &str) -> Result<Self, InternalErrors> {
         let ws = open_websocket(url)?;
-        Self::start(ws, url, token)
+        Self::start(ws, url, token, None)
     }
 
     /// Connects to an `evanalyzer server` (`ws://host[:port]`), logs in as
@@ -367,12 +378,17 @@ impl RemoteBackend {
         let session_token = login(&mut ws, url, username, password)?;
         // From here on the server forwards everything to the worker, which
         // accepts the session token in `Hello`.
-        Self::start(ws, url, &session_token)
+        Self::start(ws, url, &session_token, Some(username.to_string()))
     }
 
     /// Remote protocol handshake (`Hello`) on an open WebSocket, then starts
     /// the I/O thread.
-    fn start(mut ws: WebSocket<TcpStream>, url: &str, token: &str) -> Result<Self, InternalErrors> {
+    fn start(
+        mut ws: WebSocket<TcpStream>,
+        url: &str,
+        token: &str,
+        user: Option<String>,
+    ) -> Result<Self, InternalErrors> {
         let hello = frame::encode(
             &ClientMsg::Hello {
                 protocol_version: PROTOCOL_VERSION,
@@ -407,6 +423,7 @@ impl RemoteBackend {
             outgoing,
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
+            connected: AtomicBool::new(true),
         });
         // The I/O thread holds only a weak reference: dropping the last
         // `RemoteBackend` (and with it the outgoing sender) ends the thread.
@@ -422,6 +439,7 @@ impl RemoteBackend {
                 });
                 if let Some(inner) = weak.upgrade() {
                     log::warn!("Lost connection to server {}", inner.url);
+                    inner.connected.store(false, Ordering::Relaxed);
                     inner.pending.lock().unwrap().clear();
                 }
             })?;
@@ -430,6 +448,7 @@ impl RemoteBackend {
                 inner: Arc::clone(&inner),
             },
             inner,
+            user,
         })
     }
 }

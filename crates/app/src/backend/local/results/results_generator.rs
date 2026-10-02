@@ -20,8 +20,7 @@ pub struct ResultsGenerator {
 
 impl ResultsGenerator {
     pub fn open_database(path: PathBuf) -> Result<Self, InternalErrors> {
-        let to_io_err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        let database = Connection::open(&path).map_err(to_io_err)?;
+        let database = evanalyzer_core::open_results_database(&path)?;
         Ok(Self {
             database,
             classes_cache: RefCell::new(None),
@@ -2611,6 +2610,30 @@ fn well_fields_to_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Opening results the analysis in this process just wrote must reuse
+    /// the analysis' connection. A separate `Connection::open` of the same
+    /// file is refused on Windows ("file is being used by another process");
+    /// on Linux it is allowed but becomes a second, stale database instance
+    /// - which this test detects: it can't see rows written afterwards.
+    #[test]
+    fn results_share_the_connection_the_analysis_wrote_with() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let writer = evanalyzer_core::open_results_database(&path).unwrap();
+        writer
+            .execute_batch("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1);")
+            .unwrap();
+
+        let results = ResultsGenerator::open_database(path.clone()).unwrap();
+        writer.execute("INSERT INTO t VALUES (2)", []).unwrap();
+
+        let count: i64 = results
+            .connection()
+            .query_row("SELECT count(*) FROM t", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "results view must see the analysis' writes");
+    }
 
     /// Builds a `ResultsGenerator` over an in-memory database with just the
     /// columns `get_available_columns`/`get_nr_of_c_stacks` actually touch.
