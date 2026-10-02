@@ -12,9 +12,9 @@
 //! becomes a no-op, exactly like it does in production when the window is
 //! gone.
 use crate::{AppWindow, ResultsWindow, UiState};
-use evanalyzer_app::ProjectOwner;
-use evanalyzer_app::ProjectWithRuntime;
-use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
+use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::ProjectOwner;
+use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::settings::images_settings::{
     ChannelSettings, ImageEntry, PixelSizeSettings, SeriesSettings,
 };

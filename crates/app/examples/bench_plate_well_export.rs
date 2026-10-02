@@ -11,11 +11,11 @@
 //     [--scale N] [--classes N] [--columns N] [--aggregations N] [--mode view|flat|both]
 
 use duckdb::{Connection, params};
-use evanalyzer_app::api::Aggregation;
-use evanalyzer_app::api::Column;
-use evanalyzer_app::api::ExportFormat;
-use evanalyzer_app::api::ResultExport;
-use evanalyzer_app::backend::local::results::ResultsGenerator;
+use evanalyzer_app::results::Aggregation;
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ExportFormat;
+use evanalyzer_app::results::LocalResultsGenerator;
+use evanalyzer_app::results::ResultExport;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -276,7 +276,7 @@ fn main() {
         peak_rss_mb(),
     );
 
-    let database = ResultsGenerator::open_database(db_path.clone()).expect("open database");
+    let database = LocalResultsGenerator::open_database(db_path.clone()).expect("open database");
 
     let base = ResultExport {
         z_stacks: (0..1).into(),

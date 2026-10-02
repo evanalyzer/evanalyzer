@@ -2142,7 +2142,7 @@ mod tests {
         let mut channels = BTreeMap::new();
         channels.insert(
             0,
-            crate::api::ChannelInfo {
+            evanalyzer_core::ChannelInfo {
                 name: channel_name.into(),
                 emission_wave_length: wavelength,
                 ..Default::default()
@@ -2151,7 +2151,7 @@ mod tests {
         let mut series = BTreeMap::new();
         series.insert(
             0,
-            crate::api::ImageInfo {
+            evanalyzer_core::ImageInfo {
                 nr_c_stacks: 1,
                 nr_z_stacks: 1,
                 nr_t_stacks: 1,

@@ -11,10 +11,10 @@ use crate::{
     PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
-use evanalyzer_app::api::FileSystem;
-use evanalyzer_app::workspace::ai_learning::load_classifier_settings;
-use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
-use evanalyzer_app::workspace::templates::load_pipeline_templates;
+use evanalyzer_app::ai_learning::load_classifier_settings;
+use evanalyzer_app::fs::FileSystem;
+use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::PipelineId;
@@ -69,7 +69,7 @@ pub struct PipelinesController {
     pub(crate) viewport_controller: Arc<ViewportController>,
     pub(crate) template_controller: Arc<TemplateController>,
     pub(crate) task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>,
-    pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<evanalyzer_app::api::CancelHandle>>>,
+    pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<evanalyzer_app::analysis::CancelHandle>>>,
     /// Currently active breakpoint: (pipeline_id, step_id, mode).  `None` = no breakpoint.
     pub(crate) breakpoint:
         Arc<Mutex<Option<(u32, i32, evanalyzer_cfg::core_types::BreakpointMode)>>>,
@@ -801,7 +801,7 @@ impl PipelinesController {
                         // The RDF is read through the backend, so a model on
                         // the server resolves to server paths.
                         std::thread::spawn(move || {
-                            let result = evanalyzer_app::workspace::bioimageio::configure_from(
+                            let result = evanalyzer_app::bioimageio::configure_from(
                                 manager.app_state.backend().files(),
                                 &path,
                             );
@@ -2460,7 +2460,7 @@ fn format_classifier_model_info(settings: &AiLearningSettings) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_app::backend::LocalFileSystem;
+    use evanalyzer_app::fs::LocalFileSystem;
     use evanalyzer_cfg::settings::images_settings::SeriesSettings;
     use evanalyzer_cfg::settings::meta_data::MetaData;
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;

@@ -1,7 +1,7 @@
 use crate::AppWindow;
 use crate::editor::results_state_controller::ResultsStateController;
 use crate::{ResultItemData, ResultsListState, UiState};
-use evanalyzer_app::api::FileSystem;
+use evanalyzer_app::fs::FileSystem;
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use log::warn;
 use slint::ComponentHandle;
@@ -221,7 +221,7 @@ fn extract_name_from_path(path: &PathBuf) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use evanalyzer_app::backend::LocalFileSystem;
+    use evanalyzer_app::fs::LocalFileSystem;
 
     use super::*;
 

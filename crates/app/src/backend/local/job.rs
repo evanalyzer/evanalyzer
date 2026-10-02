@@ -20,9 +20,9 @@ pub(crate) use running_job::{join_job, spawn_job};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ProjectWithRuntime;
     use crate::api::{PreviewRequest, PreviewViewport, RunningJob};
     use crate::backend::LocalBackend;
+    use crate::workspace::ProjectWithRuntime;
     use crate::workspace::extensions::project_ext::ProjectExt;
     use evanalyzer_cfg::core_types::InternalErrors;
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;

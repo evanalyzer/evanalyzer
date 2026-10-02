@@ -1,12 +1,12 @@
 use crate::UiState;
 use crate::editor::viewport_controller::ViewportState;
 use clru::{CLruCache, WeightScale};
-use evanalyzer_app::api::ImageChannel;
-use evanalyzer_app::api::ImageContainer;
-use evanalyzer_app::api::ManagedImage;
-use evanalyzer_app::api::PyramidInfo;
-use evanalyzer_app::api::TileRequest;
-use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
+use evanalyzer_app::images::ImageChannel;
+use evanalyzer_app::images::ImageContainer;
+use evanalyzer_app::images::ManagedImage;
+use evanalyzer_app::images::PyramidInfo;
+use evanalyzer_app::images::TileRequest;
+use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::core_types::{ImageTile, ZProjection};
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
@@ -693,7 +693,7 @@ pub fn to_z_projection(z_handling: ZStackHandling) -> ZProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_app::api::Point2d;
+    use evanalyzer_app::images::Point2d;
     use evanalyzer_cfg::core_types::ImagePlane;
     use kornia_image::ImageSize;
 

@@ -1,9 +1,9 @@
 use crate::args::{ExportArgs, ExportCommand, ParquetExportArgs, TableExportArgs};
 use crate::commands::common::{resolve_grouping, resolve_image_rel_paths, resolve_object_classes};
-use evanalyzer_app::api::Backend;
-use evanalyzer_app::api::Column;
-use evanalyzer_app::api::ExportFormat;
-use evanalyzer_app::api::ResultExport;
+use evanalyzer_app::backends::Backend;
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ExportFormat;
+use evanalyzer_app::results::ResultExport;
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -165,7 +165,7 @@ fn export_table(
 
 #[cfg(test)]
 mod tests {
-    use evanalyzer_app::backend::LocalBackend;
+    use evanalyzer_app::backends::local::LocalBackend;
 
     use super::*;
 

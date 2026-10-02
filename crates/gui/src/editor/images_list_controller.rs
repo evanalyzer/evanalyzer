@@ -7,7 +7,8 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::helper::size_formater::format_bytes;
 use crate::{AppWindow, DialogType, GlobalAppState, ObjectHighlightBox, ViewportObjectState};
 use crate::{ImageItemData, ImagesListState};
-use evanalyzer_app::workspace::extensions::project_ext::{ProjectExt, SelectNewProjectRootAction};
+use evanalyzer_app::project::collect_images_at_root;
+use evanalyzer_app::project::{ProjectExt, SelectNewProjectRootAction};
 use log::{debug, info, warn};
 use slint::{ComponentHandle, Model};
 use std::path::PathBuf;
@@ -347,10 +348,7 @@ impl ImagesListController {
             let root_folder = manager.app_state.get_project().images.root.clone();
             if let Some(root_folder) = root_folder {
                 let found_images =
-                    evanalyzer_app::workspace::extensions::project_ext::collect_images_at_root(
-                        manager.app_state.backend().as_ref(),
-                        &root_folder,
-                    );
+                    collect_images_at_root(manager.app_state.backend().as_ref(), &root_folder);
                 manager
                     .app_state
                     .get_project_write()

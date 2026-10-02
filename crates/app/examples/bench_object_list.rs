@@ -26,11 +26,11 @@
 // Usage: cargo run --release -p evanalyzer_app --example bench_object_list -- [path.evadb] [--iters N] [--pages N] [--page-size N]
 
 use duckdb::Connection;
-use evanalyzer_app::api::Column;
-use evanalyzer_app::api::ListFilter;
-use evanalyzer_app::api::Pagination;
-use evanalyzer_app::api::PlaneFilter;
-use evanalyzer_app::backend::local::results::ResultsGenerator;
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ListFilter;
+use evanalyzer_app::results::LocalResultsGenerator;
+use evanalyzer_app::results::Pagination;
+use evanalyzer_app::results::PlaneFilter;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -168,7 +168,7 @@ fn main() {
         "db: {path}\nplane: z={z_stack} t={t_stack}  ({total_objects} objects)  page size: {page_size}"
     );
 
-    let generator = ResultsGenerator::open_database(PathBuf::from(&path)).expect("open db");
+    let generator = LocalResultsGenerator::open_database(PathBuf::from(&path)).expect("open db");
     let columns = vec![
         Column::ObjectId,
         Column::ImageName,

@@ -7,7 +7,6 @@ mod column;
 pub(crate) use colors::value_to_color;
 pub use colors::{COLOR_SCALE_GRADIENT_STOPS, color_scale_gradient};
 pub use column::Column;
-
 use evanalyzer_cfg::core_types::ObjectClass;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

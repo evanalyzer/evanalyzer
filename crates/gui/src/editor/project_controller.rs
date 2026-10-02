@@ -17,12 +17,12 @@ use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_list_controller::ResultsListController;
 use crate::editor::template_controller::TemplateController;
-use evanalyzer_app::backend::local::system::SUPPORTED_IMAGE_FORMATS;
-use evanalyzer_app::workspace::export::cite_project::cite_project;
-use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
-use evanalyzer_app::workspace::extensions::project_ext::SaveProjectActions;
-use evanalyzer_app::workspace::templates::load_project_template_from_file;
-use evanalyzer_app::workspace::templates::load_project_templates;
+use evanalyzer_app::exporter::cite_project;
+use evanalyzer_app::global::SUPPORTED_IMAGE_FORMATS;
+use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::SaveProjectActions;
+use evanalyzer_app::templates::load_project_template_from_file;
+use evanalyzer_app::templates::load_project_templates;
 use evanalyzer_cfg::LEGACY_PROJECT_FILE_EXTENSION;
 use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
 use evanalyzer_cfg::PROJECT_FILE_TEMPLATE_EXTENSIONS;
@@ -238,11 +238,10 @@ impl ProjectController {
         if let Some(root) = &image_root_dir {
             // Scan off-lock (see `images_list_controller::scan_image_root_for_images`
             // for why) - only the fast in-memory apply below needs the write guard.
-            let found_images =
-                evanalyzer_app::workspace::extensions::project_ext::collect_images_at_root(
-                    self.app_state.backend().as_ref(),
-                    root,
-                );
+            let found_images = evanalyzer_app::project::collect_images_at_root(
+                self.app_state.backend().as_ref(),
+                root,
+            );
             let mut project = self.app_state.get_project_write();
             project.images.root = Some(root.clone());
             project.apply_scanned_images(found_images);

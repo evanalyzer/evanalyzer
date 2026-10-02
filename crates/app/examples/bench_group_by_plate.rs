@@ -29,15 +29,15 @@
 // Usage: cargo run --release -p evanalyzer_app --example bench_group_by_plate -- <path.evadb> [--iters N]
 
 use duckdb::Connection;
-use evanalyzer_app::api::Aggregation;
-use evanalyzer_app::api::ColorScale;
-use evanalyzer_app::api::ColorSchema;
-use evanalyzer_app::api::Column;
-use evanalyzer_app::api::PlaneFilter;
-use evanalyzer_app::api::PlateFilter;
-use evanalyzer_app::api::PlateFilterMulti;
-use evanalyzer_app::api::View;
-use evanalyzer_app::backend::local::results::ResultsGenerator;
+use evanalyzer_app::results::Aggregation;
+use evanalyzer_app::results::ColorScale;
+use evanalyzer_app::results::ColorSchema;
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::LocalResultsGenerator;
+use evanalyzer_app::results::PlaneFilter;
+use evanalyzer_app::results::PlateFilter;
+use evanalyzer_app::results::PlateFilterMulti;
+use evanalyzer_app::results::View;
 use evanalyzer_cfg::core_types::ObjectClass;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -168,7 +168,7 @@ fn main() {
         matrix_dimension: None,
     };
 
-    let generator = ResultsGenerator::open_database(PathBuf::from(&path)).expect("open db");
+    let generator = LocalResultsGenerator::open_database(PathBuf::from(&path)).expect("open db");
     let mut join_total = std::time::Duration::ZERO;
     let mut join_rows = 0;
     for _ in 0..iters {
@@ -239,7 +239,7 @@ fn main() {
         start.elapsed() / iters as u32
     );
 
-    let well_filter = evanalyzer_app::api::WellFilter {
+    let well_filter = evanalyzer_app::results::WellFilter {
         plane: filter.plane.clone(),
         group_name: "A2".to_string(),
         grouping_regex: String::new(),
@@ -262,7 +262,7 @@ fn main() {
         start.elapsed() / iters as u32
     );
 
-    let wells_filter = evanalyzer_app::api::WellsBatchFilter {
+    let wells_filter = evanalyzer_app::results::WellsBatchFilter {
         plane: filter.plane.clone(),
         grouping_regex: String::new(),
         aggregation: Aggregation::Avg,
@@ -322,7 +322,7 @@ fn main() {
         start.elapsed() / iters as u32
     );
 
-    let wells_multi_filter = evanalyzer_app::api::WellsBatchFilterMulti {
+    let wells_multi_filter = evanalyzer_app::results::WellsBatchFilterMulti {
         plane: filter.plane.clone(),
         grouping_regex: String::new(),
         aggregation: vec![Aggregation::Avg, Aggregation::Sum],

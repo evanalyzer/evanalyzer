@@ -1,10 +1,11 @@
 use crate::UiState;
 use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_controller::ViewportController;
-use crate::prelude::*;
 use crate::{
     AppWindow, ClassItemData, ClassSettingsSlint, ClassificationSettingsState, ClassificationState,
 };
+use evanalyzer_app::prelude::classification_ext::ClassificationExt;
+use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::AssignObjectClass;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;

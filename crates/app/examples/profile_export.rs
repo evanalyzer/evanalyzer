@@ -4,13 +4,10 @@
 //
 // Usage: cargo run --release -p evanalyzer_app --example profile_export -- <path/to/db.evadb>
 
-use evanalyzer_app::api::Column;
-
-use evanalyzer_app::api::ExportFormat;
-
-use evanalyzer_app::api::ResultExport;
-
-use evanalyzer_app::backend::local::results::ResultsGenerator;
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ExportFormat;
+use evanalyzer_app::results::LocalResultsGenerator;
+use evanalyzer_app::results::ResultExport;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -21,7 +18,7 @@ fn main() {
         .expect("usage: profile_export <path/to/db.evadb>");
     let db_path = PathBuf::from(db_path);
 
-    let database = ResultsGenerator::open_database(db_path.clone()).expect("open database");
+    let database = LocalResultsGenerator::open_database(db_path.clone()).expect("open database");
 
     let images = database.get_images().expect("get_images");
     let nr_images = images.len();

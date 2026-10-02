@@ -6,6 +6,5 @@
 //! Still `core` types - a WASM client will need its own versions.
 
 pub use evanalyzer_core::{
-    ChannelInfo, ImageChannel, ImageContainer, ImageInfo, ImageMeta, ManagedImage, Point2d,
-    PyramidInfo,
+    ImageChannel, ImageContainer, ImageMeta, ManagedImage, Point2d, PyramidInfo,
 };

@@ -2,9 +2,10 @@ mod args;
 
 use args::{TopCommand, parse_args};
 use env_logger::Builder;
-use evanalyzer_app::api::Backend;
-use evanalyzer_app::backend::LocalBackend;
-use evanalyzer_app::{Frontend, ProjectOwner};
+use evanalyzer_app::backends::Backend;
+use evanalyzer_app::backends::local::LocalBackend;
+use evanalyzer_app::global::Frontend;
+use evanalyzer_app::project::ProjectOwner;
 use evanalyzer_cfg::core_types::InternalErrors;
 use log::LevelFilter;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // As early as possible, before any other setup: a packaged build has no
     // attached console, so without this a panic anywhere in the process
     // just makes the window disappear with nothing to diagnose it from.
-    evanalyzer_app::workspace::crash_log::install_panic_hook();
+    evanalyzer_app::global::crash_log::install_panic_hook();
 
     let mut builder = Builder::new();
     builder.filter_level(LevelFilter::Debug);
@@ -45,13 +46,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let token = match token {
             Some(token) => token,
             None => {
-                let token = evanalyzer_app::backend::generate_token()?;
+                let token = evanalyzer_app::backends::remote::generate_token()?;
                 eprintln!("No token given - generated one for this session:\n\n  {token}\n");
                 eprintln!("Clients connect with EVANALYZER_REMOTE_TOKEN set to this value.");
                 token
             }
         };
-        let server = evanalyzer_app::backend::Server::bind(&listen, token)?;
+        let server = evanalyzer_app::backends::remote::Server::bind(&listen, token)?;
         eprintln!(
             "EVAnalyzer server listening on ws://{}",
             server.local_addr()?
@@ -78,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .remote_token
                 .as_deref()
                 .ok_or("--remote needs a token: set EVANALYZER_REMOTE_TOKEN (or --remote-token)")?;
-            match evanalyzer_app::backend::RemoteBackend::connect(url, token) {
+            match evanalyzer_app::backends::remote::RemoteBackend::connect(url, token) {
                 Ok(remote) => Arc::new(remote),
                 Err(e) => {
                     eprintln!("Error: {e}");

@@ -1,11 +1,11 @@
 use crate::args::{TrainClassifierArgs, ZStackHandlingArg};
-use evanalyzer_app::api::Backend;
-use evanalyzer_app::api::PixelTrainingParams;
-use evanalyzer_app::api::StartTrainingError;
-use evanalyzer_app::api::TrainingItems;
-use evanalyzer_app::api::TrainingRequest;
-use evanalyzer_app::workspace::ai_learning::save_trained_model;
-use evanalyzer_app::workspace::extensions::project_ext::load_project;
+use evanalyzer_app::ai_learning::PixelTrainingParams;
+use evanalyzer_app::ai_learning::StartTrainingError;
+use evanalyzer_app::ai_learning::TrainingItems;
+use evanalyzer_app::ai_learning::TrainingRequest;
+use evanalyzer_app::ai_learning::save_trained_model;
+use evanalyzer_app::backends::Backend;
+use evanalyzer_app::project::load_project;
 use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent};
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
@@ -169,7 +169,7 @@ fn print_training_progress(event: TrainingProgressEvent) {
 mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
-    use evanalyzer_app::backend::LocalBackend;
+    use evanalyzer_app::backends::local::LocalBackend;
     use evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings;
 
     fn run(args: TrainClassifierArgs) -> Result<(), InternalErrors> {

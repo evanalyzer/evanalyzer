@@ -1,8 +1,8 @@
 use crate::args::AnalyzeArgs;
-use evanalyzer_app::api::AnalysisRequest;
-use evanalyzer_app::api::Backend;
-use evanalyzer_app::api::ProgressEvent;
-use evanalyzer_app::workspace::extensions::project_ext::{ProjectExt, load_project};
+use evanalyzer_app::analysis::AnalysisRequest;
+use evanalyzer_app::analysis::ProgressEvent;
+use evanalyzer_app::backends::Backend;
+use evanalyzer_app::project::{ProjectExt, load_project};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::io::Write;
 use std::path::PathBuf;
@@ -107,9 +107,9 @@ mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
     use calamine::DataType as _;
-    use evanalyzer_app::api::{Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter};
-    use evanalyzer_app::backend::LocalBackend;
-    use evanalyzer_app::backend::local::ResultsGenerator;
+    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::results::LocalResultsGenerator;
+    use evanalyzer_app::results::{Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter};
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 
     fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
@@ -399,7 +399,7 @@ mod tests {
         // way `export_table` does (`0..=get_nr_of_{z,t}_stacks()`), and
         // keyed by object id so row *order* differences between the direct
         // query and the exported files can't cause a false mismatch.
-        let database = ResultsGenerator::open_database(evadb.clone()).expect("open evadb");
+        let database = LocalResultsGenerator::open_database(evadb.clone()).expect("open evadb");
         let expected_columns: Vec<Column> = database
             .get_available_columns()
             .expect("available columns")

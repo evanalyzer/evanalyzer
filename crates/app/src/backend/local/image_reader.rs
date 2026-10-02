@@ -11,7 +11,7 @@ use std::sync::Arc;
 /// A pool of independent readers open on the same image path, so different
 /// channels/Z-slices can be read truly in parallel instead of serializing
 /// through one reader's internal `Mutex` (see `evanalyzer_core::ImageReader`)
-/// - one reader is safe, not concurrent. [`AppHandle`](crate::AppHandle)
+/// - one reader is safe, not concurrent. [`AppHandle`](crate::workspace::AppHandle)
 /// caches the pool it gets from [`LocalBackend::open_image`] and serves both
 /// metadata and tile reads from it, so a given path is parsed only once per
 /// selection.

@@ -8,10 +8,10 @@
 //     [--images N] [--objects-per-image N] [--mode xlsx|csv]
 
 use duckdb::{Connection, params};
-use evanalyzer_app::api::Column;
-use evanalyzer_app::api::ExportFormat;
-use evanalyzer_app::api::ResultExport;
-use evanalyzer_app::backend::local::results::ResultsGenerator;
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ExportFormat;
+use evanalyzer_app::results::LocalResultsGenerator;
+use evanalyzer_app::results::ResultExport;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -252,7 +252,7 @@ fn main() {
         start.elapsed().as_secs_f64(),
     );
 
-    let database = ResultsGenerator::open_database(db_path.clone()).expect("open database");
+    let database = LocalResultsGenerator::open_database(db_path.clone()).expect("open database");
     let columns = vec![
         Column::AreaSizePx,
         Column::PerimeterPx,

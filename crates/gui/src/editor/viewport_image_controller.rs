@@ -7,8 +7,8 @@ use crate::{
     AppWindow, ChannelInfo, ChannelState, ImageMetaData, ImagePixelInfo, IntensityProjection,
     ViewportState as ViewportSlintState,
 };
-use evanalyzer_app::api::ImageContainer;
-use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
+use evanalyzer_app::images::ImageContainer;
+use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::{
     TStackHandling, TStackSettings, ZStackHandling, ZStackSettings,

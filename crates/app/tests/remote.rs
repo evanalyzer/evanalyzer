@@ -2,24 +2,24 @@
 //! `RemoteBackend` client talking to it over WebSocket. Remote results must
 //! match what the local backend produces for the same request.
 
-use evanalyzer_app::ProjectWithRuntime;
-use evanalyzer_app::api::AnalysisRequest;
-use evanalyzer_app::api::Backend;
-use evanalyzer_app::api::ImageSource;
-use evanalyzer_app::api::PixelTrainingParams;
-use evanalyzer_app::api::PreviewRequest;
-use evanalyzer_app::api::PreviewViewport;
-use evanalyzer_app::api::ProgressEvent;
-use evanalyzer_app::api::RunningJob;
-use evanalyzer_app::api::StartTrainingError;
-use evanalyzer_app::api::TileRequest;
-use evanalyzer_app::api::TrainingItems;
-use evanalyzer_app::api::TrainingRequest;
-use evanalyzer_app::backend::LocalBackend;
-use evanalyzer_app::backend::RemoteBackend;
-use evanalyzer_app::backend::Server;
-use evanalyzer_app::workspace::ai_learning::save_trained_model;
-use evanalyzer_app::workspace::extensions::project_ext::ProjectExt;
+use evanalyzer_app::ai_learning::PixelTrainingParams;
+use evanalyzer_app::ai_learning::StartTrainingError;
+use evanalyzer_app::ai_learning::TrainingItems;
+use evanalyzer_app::ai_learning::TrainingRequest;
+use evanalyzer_app::ai_learning::save_trained_model;
+use evanalyzer_app::analysis::AnalysisRequest;
+use evanalyzer_app::analysis::ProgressEvent;
+use evanalyzer_app::analysis::RunningJob;
+use evanalyzer_app::backends::Backend;
+use evanalyzer_app::backends::local::LocalBackend;
+use evanalyzer_app::backends::remote::RemoteBackend;
+use evanalyzer_app::backends::remote::Server;
+use evanalyzer_app::images::ImageSource;
+use evanalyzer_app::images::TileRequest;
+use evanalyzer_app::preview::PreviewRequest;
+use evanalyzer_app::preview::PreviewViewport;
+use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::{
     ImageTile, InternalErrors, ObjectClass, TrainingProgressEvent, ZProjection,
 };
@@ -321,8 +321,7 @@ fn a_remotely_trained_model_comes_back_and_saves_like_a_local_one() {
     let dir = tempfile::tempdir().unwrap();
     let path = save_trained_model(remote.files(), &model, dir.path(), "remote").unwrap();
     let settings =
-        evanalyzer_app::workspace::ai_learning::load_classifier_settings(remote.files(), &path)
-            .unwrap();
+        evanalyzer_app::ai_learning::load_classifier_settings(remote.files(), &path).unwrap();
     assert_eq!(
         serde_json::to_value(&settings).unwrap(),
         serde_json::to_value(two_class_object_settings()).unwrap()
@@ -452,9 +451,7 @@ fn projects_save_and_load_through_the_server() {
     project.settings = settings;
     project.save_project_as(remote.files(), &path).unwrap();
 
-    let loaded =
-        evanalyzer_app::workspace::extensions::project_ext::load_project(remote.files(), &path)
-            .unwrap();
+    let loaded = evanalyzer_app::project::load_project(remote.files(), &path).unwrap();
     assert_eq!(loaded.images.list.len(), 1);
     assert_eq!(loaded.tmp_settings.current_project, Some(path));
 }
@@ -465,13 +462,10 @@ fn a_remote_folder_scan_finds_the_same_images_as_a_local_one() {
     let (dir, _) = project_with_fixture_image();
     let scan = |backend: &dyn Backend| {
         let mut found: Vec<(PathBuf, String)> =
-            evanalyzer_app::workspace::extensions::project_ext::collect_images_at_root(
-                backend,
-                dir.path(),
-            )
-            .into_iter()
-            .map(|(path, meta)| (path, meta.name))
-            .collect();
+            evanalyzer_app::project::collect_images_at_root(backend, dir.path())
+                .into_iter()
+                .map(|(path, meta)| (path, meta.name))
+                .collect();
         found.sort();
         found
     };
@@ -521,7 +515,7 @@ fn remote_results_queries_match_local_ones() {
     let remote_db = remote.open_results(&db_path).unwrap();
     let local_db = LocalBackend::default().open_results(&db_path).unwrap();
 
-    let names = |db: &dyn evanalyzer_app::api::ResultsSource| -> Vec<String> {
+    let names = |db: &dyn evanalyzer_app::results::ResultsSource| -> Vec<String> {
         db.get_images()
             .unwrap()
             .into_iter()
@@ -538,7 +532,7 @@ fn remote_results_queries_match_local_ones() {
         remote_db.get_nr_of_t_stacks(),
         local_db.get_nr_of_t_stacks()
     );
-    let columns = |db: &dyn evanalyzer_app::api::ResultsSource| -> Vec<String> {
+    let columns = |db: &dyn evanalyzer_app::results::ResultsSource| -> Vec<String> {
         db.get_available_columns()
             .unwrap()
             .into_iter()
@@ -547,16 +541,16 @@ fn remote_results_queries_match_local_ones() {
     };
     assert_eq!(columns(remote_db.as_ref()), columns(local_db.as_ref()));
 
-    let filter = evanalyzer_app::api::ListFilter {
-        plane: evanalyzer_app::api::PlaneFilter {
+    let filter = evanalyzer_app::results::ListFilter {
+        plane: evanalyzer_app::results::PlaneFilter {
             z_stack: 0,
             t_stack: 0,
         },
         images: None,
         object_classes: None,
-        columns: vec![evanalyzer_app::api::Column::AreaSizePx],
+        columns: vec![evanalyzer_app::results::Column::AreaSizePx],
         with_coloc_details: false,
-        page: evanalyzer_app::api::Pagination {
+        page: evanalyzer_app::results::Pagination {
             limit: 100,
             after: None,
         },
@@ -581,15 +575,15 @@ fn non_finite_chart_values_survive_the_trip() {
     let local_db = LocalBackend::default().open_results(&db_path).unwrap();
     // No objects at all: the scatter range keeps its +/- infinity start
     // values, which JSON couldn't carry.
-    let filter = evanalyzer_app::api::ScatterFilter {
-        plane: evanalyzer_app::api::PlaneFilter {
+    let filter = evanalyzer_app::results::ScatterFilter {
+        plane: evanalyzer_app::results::PlaneFilter {
             z_stack: 0,
             t_stack: 0,
         },
         images: None,
         object_classes: None,
-        x_column: evanalyzer_app::api::Column::AreaSizePx,
-        y_column: evanalyzer_app::api::Column::PerimeterPx,
+        x_column: evanalyzer_app::results::Column::AreaSizePx,
+        y_column: evanalyzer_app::results::Column::PerimeterPx,
         max_points: Some(10),
     };
     let (remote_scatter, local_scatter) = (
@@ -613,12 +607,12 @@ fn a_remote_export_writes_its_files_on_the_server_and_reports_progress() {
     let (dir, db_path) = analyzed_database(&remote);
     let remote_db = remote.open_results(&db_path).unwrap();
     let out = dir.path().join("export");
-    let export = evanalyzer_app::api::ResultExport {
+    let export = evanalyzer_app::results::ResultExport {
         output_dir: out.clone(),
-        format: evanalyzer_app::api::ExportFormat::CSV,
+        format: evanalyzer_app::results::ExportFormat::CSV,
         z_stacks: std::range::Range { start: 0, end: 1 },
         t_stacks: std::range::Range { start: 0, end: 1 },
-        columns: vec![evanalyzer_app::api::Column::AreaSizePx],
+        columns: vec![evanalyzer_app::results::Column::AreaSizePx],
         with_list_view: true,
         ..Default::default()
     };
@@ -639,9 +633,9 @@ fn a_cancelled_remote_export_reports_cancelled() {
     let remote = connect();
     let (dir, db_path) = analyzed_database(&remote);
     let remote_db = remote.open_results(&db_path).unwrap();
-    let export = evanalyzer_app::api::ResultExport {
+    let export = evanalyzer_app::results::ResultExport {
         output_dir: dir.path().join("export"),
-        format: evanalyzer_app::api::ExportFormat::CSV,
+        format: evanalyzer_app::results::ExportFormat::CSV,
         with_list_view: true,
         ..Default::default()
     };

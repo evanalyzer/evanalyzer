@@ -11,6 +11,5 @@ pub(crate) mod templates;
 pub(crate) mod training;
 
 pub use filesystem::LocalFileSystem;
-pub use image_reader::ReaderPool;
 pub use local_backend::LocalBackend;
-pub use results::{LocalResults, ResultsGenerator};
+pub use results::ResultsGenerator;

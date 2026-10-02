@@ -23,6 +23,5 @@ pub(crate) mod pixels;
 mod protocol;
 mod server;
 
-pub use client::{DEFAULT_PORT, RemoteBackend};
-pub use protocol::PROTOCOL_VERSION;
+pub use client::RemoteBackend;
 pub use server::{Server, generate_token};

@@ -7,10 +7,10 @@
 // Usage: cargo run --release -p evanalyzer_app --example bench_list_export -- [--rows N] [--mode xlsx|csv|both]
 
 use duckdb::{Connection, params};
-use evanalyzer_app::api::Column;
-use evanalyzer_app::api::ExportFormat;
-use evanalyzer_app::api::ResultExport;
-use evanalyzer_app::backend::local::results::ResultsGenerator;
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ExportFormat;
+use evanalyzer_app::results::LocalResultsGenerator;
+use evanalyzer_app::results::ResultExport;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -188,7 +188,7 @@ fn main() {
         peak_rss_mb(),
     );
 
-    let database = ResultsGenerator::open_database(db_path.clone()).expect("open database");
+    let database = LocalResultsGenerator::open_database(db_path.clone()).expect("open database");
     let columns = vec![
         Column::AreaSizePx,
         Column::PerimeterPx,

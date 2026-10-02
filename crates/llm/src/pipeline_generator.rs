@@ -2,7 +2,7 @@ use candle_core::quantized::gguf_file;
 use candle_core::{DType, Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::quantized_qwen2::ModelWeights;
-use evanalyzer_app::backend::LocalBackend;
+use evanalyzer_app::backends::local::LocalBackend;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::templates::PipelineTemplate;
 use llguidance::api::TopLevelGrammar;
@@ -296,12 +296,11 @@ fn user_message(user_prompt: &str, options: &GenerateOptions) -> String {
     // Pipeline generation runs on this machine, so its own templates serve
     // as the examples.
     let backend = LocalBackend::default();
-    let examples: Vec<String> =
-        evanalyzer_app::workspace::templates::load_pipeline_templates(&backend)
-            .into_iter()
-            .take(MAX_EXAMPLE_TEMPLATES)
-            .filter_map(|(_, template)| serde_json::to_string(&template).ok())
-            .collect();
+    let examples: Vec<String> = evanalyzer_app::templates::load_pipeline_templates(&backend)
+        .into_iter()
+        .take(MAX_EXAMPLE_TEMPLATES)
+        .filter_map(|(_, template)| serde_json::to_string(&template).ok())
+        .collect();
     if examples.is_empty() {
         warn!("No templates found!");
         return user_prompt.to_string();

@@ -4,26 +4,26 @@ use crate::{
     MultiSelectItem, ResultRow, ResultsChartKind2, ResultsListState, ResultsRailMode, ResultsState,
     UiState,
 };
-use evanalyzer_app::api::Aggregation;
-use evanalyzer_app::api::BoxplotFilter;
-use evanalyzer_app::api::Cell;
-use evanalyzer_app::api::CellValue;
-use evanalyzer_app::api::ColorScale;
-use evanalyzer_app::api::ColorSchema;
-use evanalyzer_app::api::Column;
-use evanalyzer_app::api::ColumnEntry;
-use evanalyzer_app::api::DatabaseResult;
-use evanalyzer_app::api::ExportFormat;
-use evanalyzer_app::api::GroupedByImageFilter;
-use evanalyzer_app::api::HistogramFilter;
-use evanalyzer_app::api::ImageEntry;
-use evanalyzer_app::api::ImageHeatmapFilter;
-use evanalyzer_app::api::PlateDimensions;
-use evanalyzer_app::api::ResultExport;
-use evanalyzer_app::api::ResultsSource;
-use evanalyzer_app::api::ScatterFilter;
-use evanalyzer_app::api::WellFilter;
-use evanalyzer_app::api::WellSize;
+use evanalyzer_app::results::CellValue;
+use evanalyzer_app::results::ColorScale;
+use evanalyzer_app::results::ColorSchema;
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ColumnEntry;
+use evanalyzer_app::results::DatabaseResult;
+use evanalyzer_app::results::ExportFormat;
+use evanalyzer_app::results::GroupedByImageFilter;
+use evanalyzer_app::results::HistogramFilter;
+use evanalyzer_app::results::ImageEntry;
+use evanalyzer_app::results::ImageHeatmapFilter;
+use evanalyzer_app::results::PlateDimensions;
+use evanalyzer_app::results::ResultExport;
+use evanalyzer_app::results::ResultsSource;
+use evanalyzer_app::results::ScatterFilter;
+use evanalyzer_app::results::WellFilter;
+use evanalyzer_app::results::WellSize;
+use evanalyzer_app::results::{Aggregation, HistogramResult};
+use evanalyzer_app::results::{BoxplotBox, Cell};
+use evanalyzer_app::results::{BoxplotFilter, ScatterResult};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_gui_slint::ResultsWindow;
@@ -1506,7 +1506,7 @@ impl ResultsStateController {
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
-        let plane = evanalyzer_app::api::PlaneFilter {
+        let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
             t_stack: plane_filter.selected_t_stack,
         };
@@ -1583,7 +1583,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn push_histogram_in_slint(&self, result: &evanalyzer_app::api::HistogramResult) {
+    fn push_histogram_in_slint(&self, result: &HistogramResult) {
         let max_count = result.counts.iter().copied().max().unwrap_or(0).max(1);
         let bins: Vec<f32> = result
             .counts
@@ -1610,7 +1610,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn push_scatter_in_slint(&self, result: &evanalyzer_app::api::ScatterResult) {
+    fn push_scatter_in_slint(&self, result: &ScatterResult) {
         let x_range = (result.x_max - result.x_min).max(f64::EPSILON);
         let y_range = (result.y_max - result.y_min).max(f64::EPSILON);
         let points: Vec<ChartScatterPoint> = result
@@ -1647,7 +1647,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn push_boxplot_in_slint(&self, boxes: &[evanalyzer_app::api::BoxplotBox]) {
+    fn push_boxplot_in_slint(&self, boxes: &[BoxplotBox]) {
         // Every box normalized against the combined min/max across *all*
         // boxes, so they stay comparable to each other on one shared axis
         // rather than each box silently rescaling to its own range.
@@ -1750,7 +1750,7 @@ impl ResultsStateController {
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
-        let plane = evanalyzer_app::api::PlaneFilter {
+        let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
             t_stack: plane_filter.selected_t_stack,
         };
@@ -1789,13 +1789,13 @@ impl ResultsStateController {
             .flatten();
 
         let result = match group_by {
-            ListGroupBy::Objects => db.get_object_list(&evanalyzer_app::api::ListFilter {
+            ListGroupBy::Objects => db.get_object_list(&evanalyzer_app::results::ListFilter {
                 plane,
                 images,
                 object_classes,
                 columns,
                 with_coloc_details,
-                page: evanalyzer_app::api::Pagination {
+                page: evanalyzer_app::results::Pagination {
                     limit: LIST_PAGE_SIZE,
                     after: cursor,
                 },
@@ -1814,7 +1814,7 @@ impl ResultsStateController {
                     object_classes,
                     columns,
                     aggregation: aggregations,
-                    page: evanalyzer_app::api::Pagination {
+                    page: evanalyzer_app::results::Pagination {
                         limit: LIST_PAGE_SIZE,
                         after: cursor,
                     },
@@ -1923,7 +1923,7 @@ impl ResultsStateController {
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
-        let plane = evanalyzer_app::api::PlaneFilter {
+        let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
             t_stack: plane_filter.selected_t_stack,
         };
@@ -1939,7 +1939,7 @@ impl ResultsStateController {
         let value_caption = self.value_caption_for(matrix_filter);
         let is_manual_scale = matches!(matrix_filter.color_scale, ColorScale::Manual(..));
 
-        let group_filter = evanalyzer_app::api::PlateFilter {
+        let group_filter = evanalyzer_app::results::PlateFilter {
             plane,
             grouping_regex: matrix_filter.group_by_regex.clone(),
             aggregation: matrix_filter.aggregation.clone(),
@@ -1954,14 +1954,14 @@ impl ResultsStateController {
         };
         drop(matrix_filter_guard);
 
-        let result = match db.get_group_by_plate(&group_filter, &evanalyzer_app::api::View::Heatmap)
-        {
-            Ok(result) => result,
-            Err(err) => {
-                error!("Could not load matrix results: {err}");
-                return;
-            }
-        };
+        let result =
+            match db.get_group_by_plate(&group_filter, &evanalyzer_app::results::View::Heatmap) {
+                Ok(result) => result,
+                Err(err) => {
+                    error!("Could not load matrix results: {err}");
+                    return;
+                }
+            };
         self.set_matrix_in_slint(&result, value_caption, is_manual_scale);
     }
 
@@ -2024,7 +2024,7 @@ impl ResultsStateController {
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
-        let plane = evanalyzer_app::api::PlaneFilter {
+        let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
             t_stack: plane_filter.selected_t_stack,
         };
@@ -2054,13 +2054,14 @@ impl ResultsStateController {
         };
         drop(matrix_filter_guard);
 
-        let result = match db.get_group_by_well(&well_filter, &evanalyzer_app::api::View::Heatmap) {
-            Ok(result) => result,
-            Err(err) => {
-                error!("Could not load well results for {well_id}: {err}");
-                return;
-            }
-        };
+        let result =
+            match db.get_group_by_well(&well_filter, &evanalyzer_app::results::View::Heatmap) {
+                Ok(result) => result,
+                Err(err) => {
+                    error!("Could not load well results for {well_id}: {err}");
+                    return;
+                }
+            };
         self.set_well_in_slint(&result, value_caption, is_manual_scale);
     }
 
@@ -2181,7 +2182,7 @@ impl ResultsStateController {
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
-        let plane = evanalyzer_app::api::PlaneFilter {
+        let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
             t_stack: plane_filter.selected_t_stack,
         };
@@ -2209,14 +2210,14 @@ impl ResultsStateController {
         };
         drop(matrix_filter_guard);
 
-        let result = match db.get_image_heatmap(&image_filter, &evanalyzer_app::api::View::Heatmap)
-        {
-            Ok(result) => result,
-            Err(err) => {
-                error!("Could not load image heatmap for {image_rel_path}: {err}");
-                return;
-            }
-        };
+        let result =
+            match db.get_image_heatmap(&image_filter, &evanalyzer_app::results::View::Heatmap) {
+                Ok(result) => result,
+                Err(err) => {
+                    error!("Could not load image heatmap for {image_rel_path}: {err}");
+                    return;
+                }
+            };
         self.set_image_heatmap_in_slint(&result, value_caption, is_manual_scale);
     }
 
@@ -3633,7 +3634,7 @@ fn bg_color_to_slint(bg_color: u32) -> Color {
 // always matches what's on screen instead of reimplementing the
 // interpolation a second time in Slint.
 fn color_scale_gradient_slint(schema: &ColorSchema) -> Vec<Color> {
-    evanalyzer_app::api::color_scale_gradient(schema)
+    evanalyzer_app::results::color_scale_gradient(schema)
         .into_iter()
         .map(bg_color_to_slint)
         .collect()
