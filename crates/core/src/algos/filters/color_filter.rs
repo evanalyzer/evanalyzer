@@ -63,6 +63,7 @@ pub struct HsvRange {
         step = 0.1,
         display_name = "Min. Sat."
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub min_s: f32,
     /// Maximum Saturation normalized [0.0, 1.0].
     #[cmdsmeta(
@@ -73,6 +74,7 @@ pub struct HsvRange {
         step = 0.1,
         display_name = "Max. Sat."
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub max_s: f32,
 
     /// Minimum Value (Brightness) normalized [0.0, 1.0].
@@ -84,6 +86,7 @@ pub struct HsvRange {
         step = 0.1,
         display_name = "Min. Brightness"
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub min_v: f32,
     /// Maximum Value (Brightness) normalized [0.0, 1.0].
     #[cmdsmeta(
@@ -94,6 +97,7 @@ pub struct HsvRange {
         step = 0.1,
         display_name = "Max. Brightness"
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub max_v: f32,
 }
 

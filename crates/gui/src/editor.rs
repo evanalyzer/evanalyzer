@@ -157,6 +157,11 @@ impl Editor {
             }),
         ));
         pipelines_controller.set_focus_controller(focus_controller.clone());
+        pipelines_controller.set_always_show_advanced_saver(Box::new(|on| {
+            let mut settings = evanalyzer_app::global::load_app_settings();
+            settings.always_show_advanced_settings = on;
+            evanalyzer_app::global::save_app_settings(&settings);
+        }));
 
         let project_controller = Arc::new(project_controller::ProjectController::new(
             ui.clone(),
@@ -239,6 +244,13 @@ impl Editor {
         self.viewport_object_controller.attach_callbacks();
         self.object_list_controller.attach_callbacks();
         self.pipelines_controller.attach_callbacks();
+        if let Some(ui) = self.pipelines_controller.ui.upgrade() {
+            use slint::ComponentHandle;
+            ui.global::<crate::PipelinesPanelState>()
+                .set_always_show_advanced(
+                    evanalyzer_app::global::load_app_settings().always_show_advanced_settings,
+                );
+        }
         self.focus_controller
             .attach_callbacks(evanalyzer_app::global::load_app_settings().pipeline_focus_mode);
         self.results_list_controller.attach_callbacks();

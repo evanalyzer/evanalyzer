@@ -150,7 +150,7 @@ pub struct ThresholdEntry {
     /// bit: 0 - 255/65535
     /// %: 0 - 100.0
     /// rel: 0 - 1.0
-    #[cmdsmeta(default = PixelUnits::Bit)]
+    #[cmdsmeta(default = PixelUnits::Bit, visibility = Advanced)]
     pub unit: PixelUnits,
 
     /// The classification ID assigned to pixels falling within this threshold range.
@@ -160,7 +160,7 @@ pub struct ThresholdEntry {
     ///
     /// This is the source which is used to calculate the threshold value.
     /// The value itself is applied to the actual image the pipeline stands.
-    #[cmdsmeta(default = ThresholdValueSource::ActualImage, optional = true)]
+    #[cmdsmeta(default = ThresholdValueSource::ActualImage, optional = true, visibility = Advanced)]
     pub value_source: ThresholdValueSource,
 }
 

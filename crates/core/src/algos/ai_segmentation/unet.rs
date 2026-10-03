@@ -67,7 +67,7 @@ pub struct UNet {
 
     /// How to interpret the model output when it has more than one channel.
     /// Ignored for single-channel outputs.
-    #[cmdsmeta(default = UNetOutputMode::SoftmaxClasses)]
+    #[cmdsmeta(default = UNetOutputMode::SoftmaxClasses, visibility = Advanced)]
     pub output_mode: UNetOutputMode,
 
     /// Index of the channel holding the foreground probability, used only
@@ -79,7 +79,7 @@ pub struct UNet {
     /// * For `IndependentChannels`, this is whichever channel the model
     ///   dedicates to the foreground mask — commonly `0` for boundary-aware
     ///   models, which conventionally output mask before boundary.
-    #[cmdsmeta(default = 1, min = 0, max = 16, step = 1)]
+    #[cmdsmeta(default = 1, min = 0, max = 16, step = 1, visibility = Advanced)]
     pub foreground_channel: i32,
 
     /// Index of an optional **boundary** channel for boundary-aware models
@@ -93,14 +93,14 @@ pub struct UNet {
     /// predicted boundaries out as thin gaps, so a following `ConnectedComponents`
     /// separates touching objects directly — which is the whole point of a
     /// boundary model and the only way to split nuclei a plain mask merges.
-    #[cmdsmeta(default = -1, min = -1, max = 16, step = 1)]
+    #[cmdsmeta(default = -1, min = -1, max = 16, step = 1, visibility = Advanced)]
     pub boundary_channel: i32,
 
     /// Boundary probability at or above which a pixel is treated as an object
     /// boundary and excluded from the foreground. Only used when
     /// `boundary_channel` is enabled (>= 0). Lower values cut wider gaps
     /// (separate more aggressively); higher values cut thinner gaps.
-    #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.01)]
+    #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.01, visibility = Advanced)]
     pub boundary_threshold: f32,
 }
 

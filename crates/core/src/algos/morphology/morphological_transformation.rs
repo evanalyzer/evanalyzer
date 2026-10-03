@@ -74,9 +74,11 @@ pub struct MorphologicalCommand {
     pub kernel_size: usize,
 
     /// The geometric profile of the structuring element.
+    #[cmdsmeta(visibility = Advanced)]
     pub kernel_shape: KernelShapes,
 
     /// If set the grayscale image instead of the labeld image is taken to perform a morphological transform
+    #[cmdsmeta(visibility = Advanced)]
     pub use_grayscale: bool,
 }
 impl ImageAlgorithm for MorphologicalCommand {

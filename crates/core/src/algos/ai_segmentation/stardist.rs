@@ -60,7 +60,7 @@ pub struct Stardist {
 
     /// Pixel-overlap ratio (intersection / union) above which a lower-scoring
     /// candidate polygon is suppressed in favor of an overlapping higher-scoring one.
-    #[cmdsmeta(default = 0.3, min = 0.0, max = 1.0, step = 0.01)]
+    #[cmdsmeta(default = 0.3, min = 0.0, max = 1.0, step = 0.01, visibility = Advanced)]
     pub nms_threshold: f32,
 }
 

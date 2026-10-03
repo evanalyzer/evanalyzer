@@ -77,6 +77,7 @@ mod modules {
             "/src/modules/pipeline_command_settings.rs"
         ));
     }
+    #[allow(unused_parens)]
     pub mod pipeline_command {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

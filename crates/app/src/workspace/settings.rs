@@ -13,6 +13,10 @@ pub struct AppSettings {
     /// channel and object classes.
     #[serde(default)]
     pub pipeline_focus_mode: bool,
+
+    /// Show every step's advanced settings without expanding them.
+    #[serde(default)]
+    pub always_show_advanced_settings: bool,
 }
 
 /// Returns the application's per-user data directory (`<OS user data dir>/evanalyzer`),
@@ -134,6 +138,7 @@ mod tests {
         let loaded = load_from(&path);
         assert!(loaded.dark_mode);
         assert!(!loaded.pipeline_focus_mode);
+        assert!(!loaded.always_show_advanced_settings);
     }
 
     #[test]

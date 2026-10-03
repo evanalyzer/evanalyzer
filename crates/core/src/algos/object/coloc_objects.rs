@@ -91,7 +91,7 @@ pub struct Colocalization {
     /// Optional additional label filters.
     ///
     /// Only classes which matches all of these filters are used for coloc calculation
-    #[cmdsmeta(visible = false)]
+    #[cmdsmeta(visibility = Hidden)]
     pub filter_classes: Vec<ObjectClass>,
 
     /// Class of the overlapping area if needed
@@ -100,7 +100,7 @@ pub struct Colocalization {
     pub class_for_overlapping_areas: ObjectClass,
 
     /// How many partners an object may coloc with at once.
-    #[cmdsmeta(default = ColocMultiplicity::OneToOne)]
+    #[cmdsmeta(default = ColocMultiplicity::OneToOne, visibility = Advanced)]
     pub multiplicity: ColocMultiplicity,
 
     /// Size unit for the minimum coloc area size
@@ -120,7 +120,7 @@ pub struct Colocalization {
     /// So it's a "match A and B, but not C" filter
     ///
     /// Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
-    #[cmdsmeta(optional = true)]
+    #[cmdsmeta(optional = true, visibility = Advanced)]
     pub exclude_classes: Vec<ObjectClass>,
 }
 

@@ -76,6 +76,7 @@ pub struct StructureTensor {
     /// The standard deviation for the Gaussian weighting of the integration window.
     ///
     /// Controls the spatial "reach" of the neighborhood analysis.
+    #[cmdsmeta(visibility = Advanced)]
     pub sigma: f32,
 }
 impl ImageAlgorithm for StructureTensor {

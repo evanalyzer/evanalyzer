@@ -53,7 +53,7 @@ pub struct Cellpose {
     /// patch-embedding convolution only has weights for up to 3 input
     /// channels: `2` (cytoplasm + optional nucleus) is standard, `1` is for
     /// single-channel exports.
-    #[cmdsmeta(default = 2, min = 1, max = 3, step = 1)]
+    #[cmdsmeta(default = 2, min = 1, max = 3, step = 1, visibility = Advanced)]
     pub input_channels: i32,
 
     /// Cell probability above which a pixel takes part in the flow dynamics and
@@ -66,7 +66,7 @@ pub struct Cellpose {
     /// Number of Euler integration steps used to follow the flow field. Higher
     /// values let pixels of large cells reach their sink at the cost of runtime;
     /// Cellpose's default is `200`.
-    #[cmdsmeta(default = 200, min = 1, max = 1000, step = 1)]
+    #[cmdsmeta(default = 200, min = 1, max = 1000, step = 1, visibility = Advanced)]
     pub flow_iterations: i32,
 
     /// Minimum object size, in pixels. After the dynamics, any instance smaller
@@ -80,14 +80,14 @@ pub struct Cellpose {
     /// the model was trained on and are faster. The scale is taken from the
     /// full image, so every tile is scaled the same. `0` keeps the full
     /// resolution (the Cellpose web demo uses `1000`).
-    #[cmdsmeta(default = 0, min = 0, max = 100000, step = 1, optional = true)]
+    #[cmdsmeta(default = 0, min = 0, max = 100000, step = 1, optional = true, visibility = Advanced)]
     pub max_resize: i32,
 
     /// Flow error threshold: an object whose shape doesn't match the flows
     /// the model predicted (mean squared error above this value) is removed.
     /// Increase to keep more objects, decrease to keep only clean ones. `0`
     /// disables the check (Cellpose's default is `0.4`).
-    #[cmdsmeta(default = 0.4, min = 0.0, max = 10.0, step = 0.01, optional = true)]
+    #[cmdsmeta(default = 0.4, min = 0.0, max = 10.0, step = 0.01, optional = true, visibility = Advanced)]
     pub flow_threshold: f32,
 
     /// Build the objects from the flows exactly like Cellpose does: pixels
@@ -96,13 +96,13 @@ pub struct Cellpose {
     /// background. Off, every spot any pixel ends up at starts an object,
     /// which can join touching cells. Cellpose also fills the holes inside
     /// each object - add a Fill Object Holes step after this one for that.
-    #[cmdsmeta(default = true, optional = true)]
+    #[cmdsmeta(default = true, optional = true, visibility = Advanced)]
     pub cellpose_postprocessing: bool,
 
     /// Copy the gray image into every input channel instead of filling the
     /// extra channels with zeros. With `input_channels = 3` this matches
     /// Cellpose run on an RGB image whose channels are (nearly) equal.
-    #[cmdsmeta(default = true, optional = true)]
+    #[cmdsmeta(default = true, optional = true, visibility = Advanced)]
     pub replicate_gray_channel: bool,
 }
 

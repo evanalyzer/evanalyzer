@@ -108,14 +108,17 @@ pub struct IlluminationCorrection {
     pub block_size: usize,
 
     /// Smoothing applied to the block-reduced field to remove blockiness.
+    #[cmdsmeta(visibility = Advanced)]
     pub smoothing: SmoothingMethod,
 
     /// How the field is combined with the original image.
+    #[cmdsmeta(visibility = Advanced)]
     pub apply_method: ApplyMethod,
 
     /// Stretch the corrected image's intensities to fill the full
     /// `[0.0, 1.0]` range afterward - guards against `Divide` pushing
     /// previously-dim regions above `1.0`.
+    #[cmdsmeta(visibility = Advanced)]
     pub rescale: bool,
 }
 

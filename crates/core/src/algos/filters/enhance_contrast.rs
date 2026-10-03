@@ -40,12 +40,14 @@ pub struct EnhanceContrast {
 
     /// Whether to linearly stretch the remaining pixel intensities to fill
     /// the full [0.0, 1.0] range.
+    #[cmdsmeta(visibility = Advanced)]
     pub normalize: bool,
 
     /// Whether to apply Histogram Equalization.
     ///
     /// This redistributes pixel intensities to achieve a uniform distribution,
     /// which is highly effective for images with low contrast but high noise.
+    #[cmdsmeta(visibility = Advanced)]
     pub equalize_histogram: bool,
 }
 

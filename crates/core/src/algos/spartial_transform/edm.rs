@@ -29,6 +29,7 @@ pub struct DistanceTransform {
     /// Values less than or equal to this are treated as background (distance = 0).
     pub threshold: f32,
     /// If true, the pixels outside the image boundary are treated as background.
+    #[cmdsmeta(visibility = Advanced)]
     pub edges_are_background: bool,
 }
 

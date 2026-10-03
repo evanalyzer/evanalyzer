@@ -69,7 +69,7 @@ pub struct Watershed {
     /// ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask
     /// boundaries, so this is rarely needed for `DistanceMap`; for extremely
     /// noisy AI masks a value of `1.0`–`2.0` can further suppress spurious maxima.
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 10.0, step = 0.5)]
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 10.0, step = 0.5, visibility = Advanced)]
     pub smoothing_sigma: f32,
 
     /// Minimum object size, in pixels. After segmentation, any object smaller than
@@ -91,7 +91,7 @@ pub struct Watershed {
     /// method (see [`crate::algos::segmentation::maximum_finder::find_intensity_seeds`]),
     /// the fix for diffusely-connected regions whose *shape* has no separate
     /// peaks but whose *brightness* clearly does.
-    #[cmdsmeta(default = SeedSource::DistanceMap, optional = true)]
+    #[cmdsmeta(default = SeedSource::DistanceMap, optional = true, visibility = Advanced)]
     pub seed_source: SeedSource,
 }
 

@@ -56,6 +56,7 @@ pub struct WeightedDeviation {
     ///
     /// Defines the "softness" of the neighborhood boundaries. A larger
     /// sigma includes more of the surrounding context in the deviation calculation.
+    #[cmdsmeta(visibility = Advanced)]
     pub sigma: f32,
 }
 

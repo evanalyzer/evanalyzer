@@ -77,15 +77,16 @@ pub struct ObjectMath {
     /// Optional additional label filters applied to `other_class` objects.
     ///
     /// Only `other_class` objects that carry all listed classes are used.
+    #[cmdsmeta(visibility = Advanced)]
     pub other_filter_classes: Vec<ObjectClass>,
 
     /// Size unit for `min_overlap_area`
-    #[cmdsmeta(default = SizeUnits::Pixels)]
+    #[cmdsmeta(default = SizeUnits::Pixels, visibility = Advanced)]
     pub size_unit: SizeUnits,
 
     /// Minimum overlap area before an `other_class` object is treated as a partner
     /// of an input object; objects overlapping less than this are ignored.
-    #[cmdsmeta(default = 2)]
+    #[cmdsmeta(default = 2, visibility = Advanced)]
     pub min_overlap_area: f32,
 
     /// If unset, the result replaces the input object in place.
@@ -101,7 +102,7 @@ pub struct ObjectMath {
     /// Note this is a policy override, not the literal mathematical result: e.g. for
     /// `And`, the true result of "A and nothing" is empty, but `keep_unmatched = true`
     /// still leaves A untouched rather than emitting a zero-area object.
-    #[cmdsmeta(default = true)]
+    #[cmdsmeta(default = true, visibility = Advanced)]
     pub keep_unmatched: bool,
 }
 

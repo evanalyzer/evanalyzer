@@ -85,6 +85,10 @@ pub struct PipelinesController {
     /// `pipeline_settings_changed`). Set once after construction - the focus
     /// controller depends on controllers this one doesn't know about.
     focus_controller: std::sync::OnceLock<Arc<crate::editor::focus_controller::FocusController>>,
+
+    /// Persists "Always show advanced settings" (the user's app settings in
+    /// production; unset in tests, so they never write the real settings file).
+    save_always_show_advanced: std::sync::OnceLock<Box<dyn Fn(bool) + Send + Sync>>,
 }
 
 impl PipelinesController {
@@ -107,6 +111,7 @@ impl PipelinesController {
             auto_preview_enabled: Mutex::new(false),
             pipeline_templates: Mutex::new(Vec::new()),
             focus_controller: std::sync::OnceLock::new(),
+            save_always_show_advanced: std::sync::OnceLock::new(),
         }
     }
 
@@ -193,6 +198,43 @@ impl PipelinesController {
             });
 
             // Selected pipeline
+            // Expand/collapse a step's advanced settings
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_toggle_advanced(move |step_id| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<PipelinesPanelState>();
+                    let commands = state.get_active_commands();
+                    for i in 0..commands.row_count() {
+                        if let Some(mut cmd) = commands.row_data(i) {
+                            if cmd.id == step_id {
+                                cmd.show_advanced = !cmd.show_advanced;
+                                commands.set_row_data(i, cmd);
+                            }
+                        }
+                    }
+                    let pipeline_id = PipelineId(state.get_active_pipeline_id() as u32);
+                    manager.sync_steps_of_selected_pipeline_to_slint(pipeline_id, false);
+                });
+
+            // "Always show advanced settings" (user preference)
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_always_show_advanced_toggled(move |on| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<PipelinesPanelState>();
+                    state.set_always_show_advanced(on);
+                    if let Some(save) = manager.save_always_show_advanced.get() {
+                        save(on);
+                    }
+                    let pipeline_id = PipelineId(state.get_active_pipeline_id() as u32);
+                    manager.sync_steps_of_selected_pipeline_to_slint(pipeline_id, false);
+                });
+
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_select_pipeline(move |pipeline_id| {
@@ -976,6 +1018,15 @@ impl PipelinesController {
                     };
                     cmd.summary = new_summary.into();
                     let params = cmd.parameters.clone();
+                    let advanced_ui = cmd.advanced_parameters.clone();
+                    // Compare/patch against the settings exactly as displayed: advanced
+                    // ones split off (and left out while collapsed).
+                    let show_advanced = ui
+                        .global::<PipelinesPanelState>()
+                        .get_always_show_advanced()
+                        || cmd.show_advanced;
+                    cmd.advanced_changed = advanced_stats(&params_now).1 as i32;
+                    let params_now = filter_for_display(params_now, show_advanced);
 
                     if let Some((group_name, idx, field_name)) = nested_path {
                         // Nested group field: find the group CommandParameter, then either
@@ -1050,9 +1101,16 @@ impl PipelinesController {
                         // where the parameter list's shape can change.
                         let old_names: Vec<String> = (0..params.row_count())
                             .filter_map(|i| params.row_data(i).map(|p| p.name.to_string()))
+                            .chain((0..advanced_ui.row_count()).filter_map(|i| {
+                                advanced_ui.row_data(i).map(|p| p.name.to_string())
+                            }))
                             .collect();
-                        let new_names: Vec<String> =
-                            params_now.iter().map(|p| p.name.clone()).collect();
+                        let new_names: Vec<String> = params_now
+                            .iter()
+                            .filter(|p| !p.advanced)
+                            .chain(params_now.iter().filter(|p| p.advanced && show_advanced))
+                            .map(|p| p.name.clone())
+                            .collect();
                         if old_names != new_names {
                             manager.sync_steps_of_selected_pipeline_to_slint(
                                 PipelineId(pipeline_id),
@@ -1069,29 +1127,31 @@ impl PipelinesController {
                             .find(|p| p.name == param_name)
                             .map(|p| p.value)
                             .unwrap_or_default();
-                        for i in 0..params.row_count() {
-                            if let Some(mut p) = params.row_data(i) {
-                                if p.name.as_str() == param_name {
-                                    p.value = new_param_value.clone().into();
-                                    if is_toggle {
-                                        let selected: std::collections::HashSet<u32> =
-                                            new_param_value
-                                                .split(',')
-                                                .filter_map(|s| s.trim().parse::<u32>().ok())
+                        'patch: for list in [&params, &advanced_ui] {
+                            for i in 0..list.row_count() {
+                                if let Some(mut p) = list.row_data(i) {
+                                    if p.name.as_str() == param_name {
+                                        p.value = new_param_value.clone().into();
+                                        if is_toggle {
+                                            let selected: std::collections::HashSet<u32> =
+                                                new_param_value
+                                                    .split(',')
+                                                    .filter_map(|s| s.trim().parse::<u32>().ok())
+                                                    .collect();
+                                            let new_flags: Vec<SharedString> = (0u32..33u32)
+                                                .map(|idx| {
+                                                    if selected.contains(&idx) {
+                                                        "1".into()
+                                                    } else {
+                                                        "0".into()
+                                                    }
+                                                })
                                                 .collect();
-                                        let new_flags: Vec<SharedString> = (0u32..33u32)
-                                            .map(|idx| {
-                                                if selected.contains(&idx) {
-                                                    "1".into()
-                                                } else {
-                                                    "0".into()
-                                                }
-                                            })
-                                            .collect();
-                                        p.options = ModelRc::new(VecModel::from(new_flags));
+                                            p.options = ModelRc::new(VecModel::from(new_flags));
+                                        }
+                                        list.set_row_data(i, p);
+                                        break 'patch;
                                     }
-                                    params.set_row_data(i, p);
-                                    break;
                                 }
                             }
                         }
@@ -1466,6 +1526,11 @@ impl PipelinesController {
     /// only runs once the user has stopped editing for `PREVIEW_DEBOUNCE_MS`.
     /// This avoids a flood of preview refreshes while the user is still typing.
     /// Connects the pipeline focus (see `focus_controller`).
+    /// Sets how "Always show advanced settings" is persisted.
+    pub fn set_always_show_advanced_saver(&self, save: Box<dyn Fn(bool) + Send + Sync>) {
+        let _ = self.save_always_show_advanced.set(save);
+    }
+
     pub fn set_focus_controller(
         &self,
         focus: Arc<crate::editor::focus_controller::FocusController>,
@@ -2026,6 +2091,14 @@ impl PipelinesController {
                 } else {
                     std::collections::HashMap::new()
                 };
+                // Same for each step's expanded advanced section.
+                let show_advanced_by_id: std::collections::HashMap<i32, bool> = {
+                    let current = state.get_active_commands();
+                    (0..current.row_count())
+                        .filter_map(|i| current.row_data(i).map(|cmd| (cmd.id, cmd.show_advanced)))
+                        .collect()
+                };
+                let always_show_advanced = state.get_always_show_advanced();
 
                 let commands: Vec<SlintPipelineCommand> = step_data
                     .into_iter()
@@ -2085,102 +2158,112 @@ impl PipelinesController {
                             .map(|(_, name)| name.clone())
                             .collect();
 
-                        let params: Vec<CommandParameter> = d
-                            .parameters
-                            .into_iter()
-                            .map(|p| {
-                                let p_name = p.name.clone();
-                                let group_items: Vec<GroupItem> = p
-                                    .groups
-                                    .into_iter()
-                                    .map(|group| GroupItem {
-                                        fields: ModelRc::new(VecModel::from(
-                                            group
-                                                .into_iter()
-                                                .map(|lp| {
-                                                    let relabeled = p_name
-                                                        == "segmentation_mapping"
-                                                        && ((is_pixel_classifier
-                                                            && lp.name == "segmentation_class")
-                                                            || (is_ai_object_classifier
-                                                                && lp.name == "object_class"));
-                                                    let model_name = relabeled
-                                                        .then(|| lp.value.parse::<u32>().ok())
-                                                        .flatten()
-                                                        .and_then(|id| model_class_names.get(&id));
-                                                    // The model's predicted class is fixed by the
-                                                    // model file (one row per model class, see
-                                                    // `reconcile_*_mapping`), not something to
-                                                    // reassign by hand - `ParamType.obj-class` would
-                                                    // let the user pick, but its widget always
-                                                    // renders the *project's* class list regardless
-                                                    // of what label/value we set here.
-                                                    // `ParamType.dropdown` is the one fully generic
-                                                    // combo box (its options/value are just plain
-                                                    // strings we control), so route through that
-                                                    // instead: show every class the model declares
-                                                    // (for context - `apply_param_change` only
-                                                    // accepts a numeric id back, so picking a
-                                                    // different one is a harmless no-op), with this
-                                                    // row's own class preselected.
-                                                    let (param_type, value, options) =
-                                                        match model_name {
-                                                            Some(name) => (
-                                                                ParamType::Dropdown,
-                                                                name.clone(),
-                                                                model_class_name_options.clone(),
-                                                            ),
-                                                            None => (
-                                                                map_cfg_param_type(lp.param_type),
-                                                                lp.value.clone(),
-                                                                lp.options.clone(),
-                                                            ),
-                                                        };
-                                                    LeafParam {
-                                                        name: lp.name.into(),
-                                                        display_name: lp.display_name.into(),
-                                                        description: lp.description.into(),
-                                                        value: value.into(),
-                                                        param_type,
-                                                        options: ModelRc::new(VecModel::from(
-                                                            options
-                                                                .into_iter()
-                                                                .map(SharedString::from)
-                                                                .collect::<Vec<_>>(),
-                                                        )),
-                                                        min: lp.min,
-                                                        max: lp.max,
-                                                        step: lp.step,
-                                                    }
-                                                })
-                                                .collect::<Vec<_>>(),
-                                        )),
-                                    })
-                                    .collect();
-                                let has_model_info = (is_pixel_classifier
-                                    || is_ai_object_classifier)
-                                    && p_name == "model_path"
-                                    && !p.value.is_empty();
-                                CommandParameter {
-                                    name: p.name.into(),
-                                    display_name: p.display_name.into(),
-                                    description: p.description.into(),
-                                    value: p.value.into(),
-                                    param_type: map_cfg_param_type(p.param_type),
-                                    options: ModelRc::new(VecModel::from(
-                                        p.options
+                        let step_show_advanced =
+                            show_advanced_by_id.get(&d.idx).copied().unwrap_or(false);
+                        let show_advanced = always_show_advanced || step_show_advanced;
+                        let (advanced_count, advanced_changed) = advanced_stats(&d.parameters);
+                        let (advanced_defs, basic_defs): (Vec<ParameterDef>, Vec<ParameterDef>) =
+                            filter_for_display(d.parameters, show_advanced)
+                                .into_iter()
+                                .partition(|p| p.advanced);
+
+                        let convert = |p: ParameterDef| -> CommandParameter {
+                            let p_name = p.name.clone();
+                            let group_items: Vec<GroupItem> = p
+                                .groups
+                                .into_iter()
+                                .map(|group| GroupItem {
+                                    fields: ModelRc::new(VecModel::from(
+                                        group
                                             .into_iter()
-                                            .map(SharedString::from)
+                                            .map(|lp| {
+                                                let relabeled = p_name == "segmentation_mapping"
+                                                    && ((is_pixel_classifier
+                                                        && lp.name == "segmentation_class")
+                                                        || (is_ai_object_classifier
+                                                            && lp.name == "object_class"));
+                                                let model_name = relabeled
+                                                    .then(|| lp.value.parse::<u32>().ok())
+                                                    .flatten()
+                                                    .and_then(|id| model_class_names.get(&id));
+                                                // The model's predicted class is fixed by the
+                                                // model file (one row per model class, see
+                                                // `reconcile_*_mapping`), not something to
+                                                // reassign by hand - `ParamType.obj-class` would
+                                                // let the user pick, but its widget always
+                                                // renders the *project's* class list regardless
+                                                // of what label/value we set here.
+                                                // `ParamType.dropdown` is the one fully generic
+                                                // combo box (its options/value are just plain
+                                                // strings we control), so route through that
+                                                // instead: show every class the model declares
+                                                // (for context - `apply_param_change` only
+                                                // accepts a numeric id back, so picking a
+                                                // different one is a harmless no-op), with this
+                                                // row's own class preselected.
+                                                let (param_type, value, options) = match model_name
+                                                {
+                                                    Some(name) => (
+                                                        ParamType::Dropdown,
+                                                        name.clone(),
+                                                        model_class_name_options.clone(),
+                                                    ),
+                                                    None => (
+                                                        map_cfg_param_type(lp.param_type),
+                                                        lp.value.clone(),
+                                                        lp.options.clone(),
+                                                    ),
+                                                };
+                                                LeafParam {
+                                                    name: lp.name.into(),
+                                                    display_name: lp.display_name.into(),
+                                                    description: lp.description.into(),
+                                                    value: value.into(),
+                                                    param_type,
+                                                    options: ModelRc::new(VecModel::from(
+                                                        options
+                                                            .into_iter()
+                                                            .map(SharedString::from)
+                                                            .collect::<Vec<_>>(),
+                                                    )),
+                                                    min: lp.min,
+                                                    max: lp.max,
+                                                    step: lp.step,
+                                                }
+                                            })
                                             .collect::<Vec<_>>(),
                                     )),
-                                    min: p.min,
-                                    max: p.max,
-                                    step: p.step,
-                                    group_items: ModelRc::new(VecModel::from(group_items)),
-                                    has_model_info,
-                                }
-                            })
-                            .collect();
+                                })
+                                .collect();
+                            let has_model_info = (is_pixel_classifier || is_ai_object_classifier)
+                                && p_name == "model_path"
+                                && !p.value.is_empty();
+                            CommandParameter {
+                                name: p.name.into(),
+                                display_name: p.display_name.into(),
+                                description: p.description.into(),
+                                value: p.value.into(),
+                                param_type: map_cfg_param_type(p.param_type),
+                                options: ModelRc::new(VecModel::from(
+                                    p.options
+                                        .into_iter()
+                                        .map(SharedString::from)
+                                        .collect::<Vec<_>>(),
+                                )),
+                                min: p.min,
+                                max: p.max,
+                                step: p.step,
+                                group_items: ModelRc::new(VecModel::from(group_items)),
+                                has_model_info,
+                            }
+                        };
+                        let params: Vec<CommandParameter> =
+                            basic_defs.into_iter().map(&convert).collect();
+                        let advanced_params: Vec<CommandParameter> = if show_advanced {
+                            advanced_defs.into_iter().map(&convert).collect()
+                        } else {
+                            Vec::new()
+                        };
                         SlintPipelineCommand {
                             id: d.idx,
                             name: d.name.into(),
@@ -2189,6 +2272,10 @@ impl PipelinesController {
                             enabled: d.enabled,
                             expanded: expanded_by_id.get(&d.idx).copied().unwrap_or(false),
                             parameters: ModelRc::new(VecModel::from(params)),
+                            advanced_parameters: ModelRc::new(VecModel::from(advanced_params)),
+                            show_advanced: step_show_advanced,
+                            advanced_count: advanced_count as i32,
+                            advanced_changed: advanced_changed as i32,
                         }
                     })
                     .collect();
@@ -2477,6 +2564,69 @@ fn format_classifier_model_info(settings: &AiLearningSettings) -> String {
         }
     }
     out
+}
+
+/// What a step's "Advanced settings" row stands for: how many advanced items
+/// there are - advanced settings (also inside list entries) and advanced
+/// dropdown options, so the row appears even when a step's only advanced item
+/// is an option - and how many advanced settings differ from their default.
+/// (A selected advanced option isn't "changed": it stays visible anyway.)
+fn advanced_stats(params: &[ParameterDef]) -> (usize, usize) {
+    let mut count = 0;
+    let mut changed = 0;
+    for p in params {
+        count += p
+            .option_advanced
+            .iter()
+            .filter(|&&advanced| advanced)
+            .count();
+        if p.advanced {
+            count += 1;
+            if !p.default_value.is_empty() && p.value != p.default_value {
+                changed += 1;
+            }
+        }
+        for item in &p.groups {
+            let (c, ch) = advanced_stats(item);
+            count += c;
+            changed += ch;
+        }
+    }
+    (count, changed)
+}
+
+/// Prepares a step's settings for display. While its advanced section is
+/// collapsed, advanced fields inside list entries are left out, and so are
+/// advanced dropdown options - except the selected one, so a field never
+/// shows a value missing from its list. (Top-level advanced settings are
+/// split off by the caller.)
+fn filter_for_display(params: Vec<ParameterDef>, show_advanced: bool) -> Vec<ParameterDef> {
+    params
+        .into_iter()
+        .map(|mut p| {
+            if !show_advanced && p.option_advanced.len() == p.options.len() {
+                let (options, flags): (Vec<String>, Vec<bool>) = p
+                    .options
+                    .into_iter()
+                    .zip(p.option_advanced)
+                    .filter(|(option, advanced)| !advanced || *option == p.value)
+                    .unzip();
+                p.options = options;
+                p.option_advanced = flags;
+            }
+            p.groups = p
+                .groups
+                .into_iter()
+                .map(|item| {
+                    filter_for_display(item, show_advanced)
+                        .into_iter()
+                        .filter(|leaf| show_advanced || !leaf.advanced)
+                        .collect()
+                })
+                .collect();
+            p
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -3414,6 +3564,200 @@ mod tests {
 
     fn active_dialog(ui: &AppWindow) -> DialogType {
         ui.global::<GlobalAppState>().get_active_dialog()
+    }
+
+    // ---- advanced settings ----
+
+    fn def(name: &str, value: &str, default: &str, advanced: bool) -> ParameterDef {
+        ParameterDef {
+            name: name.into(),
+            display_name: name.into(),
+            description: String::new(),
+            value: value.into(),
+            param_type: CfgParamType::Number,
+            options: vec![],
+            min: 0.0,
+            max: 0.0,
+            step: 1.0,
+            groups: vec![],
+            default_value: default.into(),
+            advanced,
+            option_advanced: vec![],
+        }
+    }
+
+    #[test]
+    fn advanced_stats_count_advanced_settings_and_changed_ones_also_in_list_entries() {
+        let mut group = def("thresholds", "", "", false);
+        group.groups = vec![vec![
+            def("unit", "%", "bit", true),
+            def("method", "Li", "Manual", false),
+        ]];
+        let params = vec![
+            def("min_area", "5", "0", false), // basic: not counted
+            def("max_feret", "9", "9", true), // advanced, at default
+            def("min_feret", "3", "0", true), // advanced, changed
+            def("unknown", "3", "", true),    // no default known: not "changed"
+            group,
+        ];
+        assert_eq!(advanced_stats(&params), (4, 2));
+    }
+
+    #[test]
+    fn advanced_dropdown_options_count_toward_the_advanced_row() {
+        // A step whose only advanced items are two dropdown options still
+        // gets the row - otherwise those options could never be shown.
+        let mut dropdown = def("method", "Common", "Common", false);
+        dropdown.options = vec!["Common".into(), "Rare".into(), "Exotic".into()];
+        dropdown.option_advanced = vec![false, true, true];
+        assert_eq!(advanced_stats(&[dropdown.clone()]), (2, 0));
+
+        // Selecting one doesn't make it "changed": it stays visible.
+        dropdown.value = "Rare".into();
+        assert_eq!(advanced_stats(&[dropdown]), (2, 0));
+    }
+
+    #[test]
+    fn collapsed_display_drops_advanced_entry_fields_and_options_but_keeps_the_selected_one() {
+        let mut dropdown = def("method", "Rare", "Common", false);
+        dropdown.options = vec!["Common".into(), "Rare".into(), "Exotic".into()];
+        dropdown.option_advanced = vec![false, true, true];
+        let mut group = def("thresholds", "", "", false);
+        group.groups = vec![vec![
+            def("unit", "bit", "bit", true),
+            def("min", "0", "0", false),
+        ]];
+
+        let collapsed = filter_for_display(vec![dropdown.clone(), group.clone()], false);
+        assert_eq!(
+            collapsed[0].options,
+            ["Common", "Rare"],
+            "selected advanced option stays"
+        );
+        let fields: Vec<&str> = collapsed[1].groups[0]
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(fields, ["min"]);
+
+        let expanded = filter_for_display(vec![dropdown, group], true);
+        assert_eq!(expanded[0].options.len(), 3);
+        assert_eq!(expanded[1].groups[0].len(), 2);
+    }
+
+    fn ui_names(list: &ModelRc<CommandParameter>) -> Vec<String> {
+        (0..list.row_count())
+            .filter_map(|i| list.row_data(i))
+            .map(|p| p.name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_step_shows_its_basic_settings_and_counts_the_advanced_ones() {
+        let (ui, _ui_state, _controller) = selected(vec![step("ClassifyObjects")]);
+        let cmd = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(0)
+            .unwrap();
+        assert_eq!(
+            ui_names(&cmd.parameters),
+            [
+                "input_classes",
+                "match_handling",
+                "output_class",
+                "size_unit",
+                "min_area",
+                "max_area",
+                "allow_edge_touching"
+            ]
+        );
+        assert_eq!(cmd.advanced_parameters.row_count(), 0, "collapsed");
+        assert_eq!((cmd.advanced_count, cmd.advanced_changed), (12, 0));
+    }
+
+    #[test]
+    fn changing_a_hidden_advanced_setting_shows_up_as_changed() {
+        let (ui, _ui_state, _controller) = selected(vec![step("ClassifyObjects")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_param_changed(0, "min_circularity".into(), "0.5".into());
+        assert_eq!(
+            panel
+                .get_active_commands()
+                .row_data(0)
+                .unwrap()
+                .advanced_changed,
+            1
+        );
+    }
+
+    #[test]
+    fn expanding_shows_the_advanced_settings_below_and_always_show_applies_to_every_step() {
+        let (ui, _ui_state, _controller) =
+            selected(vec![step("ClassifyObjects"), step("Colocalization")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        let commands = || panel.get_active_commands();
+
+        panel.invoke_toggle_advanced(commands().row_data(0).unwrap().id);
+        drain_ui_queue();
+        let classify = commands().row_data(0).unwrap();
+        assert!(classify.show_advanced);
+        assert_eq!(classify.advanced_parameters.row_count(), 12);
+        assert_eq!(
+            classify.parameters.row_count(),
+            7,
+            "basic settings stay on top"
+        );
+        assert_eq!(
+            commands()
+                .row_data(1)
+                .unwrap()
+                .advanced_parameters
+                .row_count(),
+            0
+        );
+
+        panel.invoke_always_show_advanced_toggled(true);
+        drain_ui_queue();
+        assert!(panel.get_always_show_advanced());
+        let coloc = commands().row_data(1).unwrap();
+        assert_eq!(
+            ui_names(&coloc.advanced_parameters),
+            ["multiplicity", "exclude_classes"]
+        );
+    }
+
+    #[test]
+    fn advanced_fields_inside_threshold_entries_follow_the_section() {
+        let mut threshold = step("Threshold");
+        if let PipelineCommand::Threshold(s) = &mut threshold.command {
+            s.thresholds.push(Default::default());
+        }
+        let (ui, _ui_state, _controller) = selected(vec![threshold]);
+        let panel = ui.global::<PipelinesPanelState>();
+        let entry_fields = || {
+            let p = ui_param(&ui, 0, "thresholds");
+            let fields = p.group_items.row_data(0).unwrap().fields;
+            (0..fields.row_count())
+                .filter_map(|i| fields.row_data(i))
+                .map(|f| f.name.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(!entry_fields().contains(&"unit".to_string()));
+        assert!(!entry_fields().contains(&"value_source".to_string()));
+        assert_eq!(
+            panel
+                .get_active_commands()
+                .row_data(0)
+                .unwrap()
+                .advanced_count,
+            2
+        );
+
+        panel.invoke_toggle_advanced(panel.get_active_commands().row_data(0).unwrap().id);
+        drain_ui_queue();
+        assert!(entry_fields().contains(&"unit".to_string()));
+        assert!(entry_fields().contains(&"value_source".to_string()));
     }
 
     fn ui_param(ui: &AppWindow, step_idx: usize, name: &str) -> CommandParameter {

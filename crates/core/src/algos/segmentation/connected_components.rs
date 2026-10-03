@@ -38,7 +38,6 @@ pub struct ConnectedComponents {
         default = 0,
         unit = "px²",
         optional = true,
-        visible = true,
         summary = true
     )]
     pub min_size: i32,

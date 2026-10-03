@@ -691,11 +691,45 @@ struct FieldMetadata {
     display_name: Option<String>,
     summary: bool,
     optional: bool,
-    visible: bool,
+    visibility: Visibility,
     /// Comma-separated list of file extensions (no leading dot, e.g. "pt,pth")
     /// for `PathBuf` fields rendered with a "Browse…" button. Empty/absent
     /// means any file is selectable.
     file_extensions: Option<String>,
+}
+
+/// `#[cmdsmeta(visibility = ...)]` of a setting or a dropdown option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Visibility {
+    /// Always shown (also when no `visibility` is given).
+    #[default]
+    Default,
+    /// Shown only while the step's advanced settings are expanded.
+    Advanced,
+    /// Never shown in the UI.
+    Hidden,
+}
+
+impl Visibility {
+    fn is_hidden(self) -> bool {
+        self == Visibility::Hidden
+    }
+    fn is_advanced(self) -> bool {
+        self == Visibility::Advanced
+    }
+}
+
+/// Parses the value of `visibility = Default | Advanced | Hidden`.
+fn parse_visibility(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Visibility> {
+    let value: syn::Ident = meta.value()?.parse()?;
+    match value.to_string().as_str() {
+        "Default" => Ok(Visibility::Default),
+        "Advanced" => Ok(Visibility::Advanced),
+        "Hidden" => Ok(Visibility::Hidden),
+        other => panic!(
+            "cmdsmeta: unknown visibility `{other}` - use `Default`, `Advanced` or `Hidden`"
+        ),
+    }
 }
 
 impl Default for FieldMetadata {
@@ -712,7 +746,7 @@ impl Default for FieldMetadata {
             display_name: None,
             summary: false,
             optional: false,
-            visible: true,
+            visibility: Visibility::Default,
             file_extensions: None,
         }
     }
@@ -812,6 +846,8 @@ struct EnumVariant {
     named_fields: Vec<FieldInfo>,
     doc_comments: Vec<String>,
     display_name: Option<String>,
+    /// `#[cmdsmeta(visibility = ...)]` of this dropdown option.
+    visibility: Visibility,
 }
 
 impl EnumVariant {
@@ -1070,6 +1106,7 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
         .map(|v| {
             let mut doc_comments = Vec::new();
             let mut display_name: Option<String> = None;
+            let mut visibility = Visibility::Default;
             for attr in &v.attrs {
                 if attr.path().is_ident("doc") {
                     if let syn::Meta::NameValue(nv) = &attr.meta {
@@ -1087,6 +1124,13 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
                         if meta.path.is_ident("display_name") {
                             let value: syn::LitStr = meta.value()?.parse()?;
                             display_name = Some(value.value());
+                        } else if meta.path.is_ident("visibility") {
+                            visibility = parse_visibility(&meta)?;
+                        } else if meta.path.is_ident("visible") {
+                            panic!(
+                                "cmdsmeta: `visible` was replaced by \
+                                 `visibility = Default | Advanced | Hidden`"
+                            );
                         } else if meta.input.peek(syn::Token![=]) {
                             let _: syn::Expr = meta.value()?.parse()?;
                         }
@@ -1122,6 +1166,7 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
                 named_fields,
                 doc_comments,
                 display_name,
+                visibility,
             }
         })
         .collect()
@@ -1255,13 +1300,13 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                             metadata.optional = b.value;
                         }
                     }
+                } else if meta.path.is_ident("visibility") {
+                    metadata.visibility = parse_visibility(&meta)?;
                 } else if meta.path.is_ident("visible") {
-                    metadata.visible = true;
-                    if let Ok(stream) = meta.value() {
-                        if let Ok(b) = stream.parse::<syn::LitBool>() {
-                            metadata.visible = b.value;
-                        }
-                    }
+                    panic!(
+                        "cmdsmeta: `visible` was replaced by \
+                         `visibility = Default | Advanced | Hidden`"
+                    );
                 } else if meta.path.is_ident("file_extensions") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     metadata.file_extensions = Some(value.value());
@@ -1484,6 +1529,10 @@ fn concat_param_vecs(parts: &[String]) -> String {
 /// for an ordinary struct field, or just the bound identifier (e.g. `"factor"`) when called for
 /// a field bound out of a rich enum variant's pattern. Returns `None` for unrecognized types
 /// (e.g. `ImageAddress`), which are silently skipped, same as today.
+///
+/// `default_access` is the field's default value expression: rendered like the value
+/// itself, it becomes `default_value` (the UI tells changed settings by it); `None`
+/// leaves it empty.
 fn leaf_param_def_literal(
     ty: &str,
     meta: &FieldMetadata,
@@ -1492,7 +1541,34 @@ fn leaf_param_def_literal(
     display_label: &str,
     description: &str,
     enums: &[EnumInfo],
+    default_access: Option<&str>,
 ) -> Option<String> {
+    let (param_type, value_expr, options_expr, option_advanced_expr, min, max) =
+        leaf_parts(ty, meta, access, enums)?;
+    let default_expr = default_access
+        .and_then(|d| leaf_parts(ty, meta, &format!("({d})"), enums))
+        .map(|parts| parts.1)
+        .unwrap_or_else(|| "String::new()".to_string());
+    let step = if param_type == "ParamType::Spinner" {
+        meta.step.unwrap_or(1.0)
+    } else {
+        1.0_f32
+    };
+    let advanced = meta.visibility.is_advanced();
+    Some(format!(
+        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: {option_advanced_expr} }}",
+    ))
+}
+
+/// The type-dependent parts of a leaf `ParameterDef`: param type, value expression,
+/// options expression, per-option "advanced" flags expression, min, max.
+fn leaf_parts(
+    ty: &str,
+    meta: &FieldMetadata,
+    access: &str,
+    enums: &[EnumInfo],
+) -> Option<(&'static str, String, String, String, f32, f32)> {
+    let no_flags = || "vec![]".to_string();
     let (param_type, value_expr, options_expr, min, max) = match ty {
         "f32" | "f64" => {
             if meta.step.is_some() {
@@ -1527,8 +1603,13 @@ fn leaf_param_def_literal(
             // min == max → read-only label; value is shown but not editable.
             if let (Some(min_v), Some(max_v)) = (meta.min, meta.max) {
                 if (min_v - max_v).abs() < f32::EPSILON {
-                    return Some(format!(
-                        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: format!(\"{{}}\", {access}), param_type: ParamType::Label, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}"
+                    return Some((
+                        "ParamType::Label",
+                        format!("format!(\"{{}}\", {access})"),
+                        "vec![]".to_string(),
+                        no_flags(),
+                        0.0,
+                        0.0,
                     ));
                 }
             }
@@ -1693,10 +1774,22 @@ fn leaf_param_def_literal(
                         (v.name.clone(), label)
                     })
                     .collect();
-                let options: Vec<String> = display_map
+                // Hidden options never reach the dropdown; advanced ones are flagged.
+                let shown: Vec<(&EnumVariant, &(String, String))> = enum_info
+                    .variants
                     .iter()
-                    .map(|(_, d)| format!("\"{}\".to_string()", d))
+                    .zip(display_map.iter())
+                    .filter(|(v, _)| !v.visibility.is_hidden())
                     .collect();
+                let options: Vec<String> = shown
+                    .iter()
+                    .map(|(_, (_, d))| format!("\"{}\".to_string()", d))
+                    .collect();
+                let flags: Vec<String> = shown
+                    .iter()
+                    .map(|(v, _)| v.visibility.is_advanced().to_string())
+                    .collect();
+                let flags_expr = format!("vec![{}]", flags.join(", "));
                 let match_arms: String = enum_info
                     .variants
                     .iter()
@@ -1720,13 +1813,14 @@ fn leaf_param_def_literal(
                     .collect::<Vec<_>>()
                     .join(", ");
                 let value_expr = format!("match {access} {{ {match_arms} }}");
-                (
+                return Some((
                     "ParamType::Dropdown",
                     value_expr,
                     format!("vec![{}]", options.join(", ")),
+                    flags_expr,
                     0.0_f32,
                     0.0_f32,
-                )
+                ));
             } else {
                 // Unknown type (ImageAddress, etc.) - skip
                 return None;
@@ -1734,15 +1828,7 @@ fn leaf_param_def_literal(
         }
     };
 
-    let step = if param_type == "ParamType::Spinner" {
-        meta.step.unwrap_or(1.0)
-    } else {
-        1.0_f32
-    };
-
-    Some(format!(
-        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![] }}",
-    ))
+    Some((param_type, value_expr, options_expr, no_flags(), min, max))
 }
 
 /// Builds the additional ParameterDefs contributed by an enum field's *currently active*
@@ -1782,7 +1868,7 @@ fn enum_variant_param_defs(
                 let field_exprs: Vec<String> = v
                     .named_fields
                     .iter()
-                    .filter(|f| f.meta.visible)
+                    .filter(|f| !f.meta.visibility.is_hidden())
                     .flat_map(|f| {
                         let routing_name = format!("{routing_prefix}.{}", f.name);
                         let display_label = f
@@ -1802,6 +1888,7 @@ fn enum_variant_param_defs(
                                     &display_label,
                                     &description,
                                     enums,
+                                    Some(&field_default_expr(f, enums, &[])),
                                 )
                                 .expect("enum dropdown literal is always Some");
                                 let nested_fields = enum_variant_param_defs(
@@ -1821,6 +1908,7 @@ fn enum_variant_param_defs(
                             &display_label,
                             &description,
                             enums,
+                            Some(&field_default_expr(f, enums, &[])),
                         )
                         .map(|lit| vec![format!("vec![{lit}]")])
                         .unwrap_or_default()
@@ -1867,6 +1955,10 @@ fn tuple_variant_param_def_literal(
     description: &str,
     enums: &[EnumInfo],
 ) -> Option<String> {
+    // A tuple variant's payload has no settings field (and so no default value or
+    // visibility) of its own.
+    let default_expr = "String::new()";
+    let advanced = false;
     // Vec<ObjectClass> / Vec<SegmentationClass> → multi-select class picker, mirroring
     // the struct-field handling in `field_to_param_def` (a tuple variant's payload has
     // no field name to flatten a nested user struct through, so only these two
@@ -1879,7 +1971,7 @@ fn tuple_variant_param_def_literal(
             "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
         );
         return Some(format!(
-            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}"
+            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}"
         ));
     }
     if ty == "Vec<SegmentationClass>" {
@@ -1890,7 +1982,7 @@ fn tuple_variant_param_def_literal(
             "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
         );
         return Some(format!(
-            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}"
+            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}"
         ));
     }
     let meta = FieldMetadata::default();
@@ -1902,6 +1994,7 @@ fn tuple_variant_param_def_literal(
         display_label,
         description,
         enums,
+        None,
     )
 }
 
@@ -1922,7 +2015,7 @@ fn field_to_param_def(
     let name = &field.name;
     let meta = &field.meta;
 
-    if !meta.visible {
+    if meta.visibility.is_hidden() {
         return vec![];
     }
 
@@ -1935,9 +2028,17 @@ fn field_to_param_def(
     let description = escape_doc_comments(&field.doc_comments);
     let access = format!("{var}.{name}");
 
+    let advanced = meta.visibility.is_advanced();
+
     // Vec<UserStruct> → Group param
     if ty.starts_with("Vec<") && ty.ends_with('>') {
         let inner_ty = &ty[4..ty.len() - 1];
+        // The class list's default, rendered like its value (an empty `vec![]`
+        // needs its element type spelled out to compile on its own).
+        let default_list = match field_default_expr(field, enums, commands) {
+            expr if expr == "vec![]" => format!("Vec::<{inner_ty}>::new()"),
+            expr => expr,
+        };
         if let Some(inner_cmd) = commands.iter().find(|c| c.struct_name == inner_ty) {
             let inner_parts: Vec<String> = inner_cmd
                 .fields
@@ -1948,7 +2049,7 @@ fn field_to_param_def(
                 .collect();
             let inner_expr = concat_param_vecs(&inner_parts);
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: {access}.iter().map(|__item| {inner_expr}).collect() }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: {access}.iter().map(|__item| {inner_expr}).collect(), default_value: String::new(), advanced: {advanced}, option_advanced: vec![] }}]"
             )];
         }
         // Vec<ObjectClass> / Vec<SegmentationClass> → multi-select class picker.
@@ -1958,22 +2059,24 @@ fn field_to_param_def(
             let value_expr = format!(
                 "{access}.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(\",\")"
             );
+            let default_expr = value_expr.replace(&access, &format!("({default_list})"));
             let flags_expr = format!(
                 "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
             );
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}]"
             )];
         }
         if inner_ty == "SegmentationClass" {
             let value_expr = format!(
                 "{access}.iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(\",\")"
             );
+            let default_expr = value_expr.replace(&access, &format!("({default_list})"));
             let flags_expr = format!(
                 "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
             );
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}]"
             )];
         }
 
@@ -2012,6 +2115,7 @@ fn field_to_param_def(
                 &display_label,
                 &description,
                 enums,
+                Some(&field_default_expr(field, enums, commands)),
             )
             .expect("enum dropdown literal is always Some");
             let variant_fields = enum_variant_param_defs(enum_info, &access, &routing_name, enums);
@@ -2027,6 +2131,7 @@ fn field_to_param_def(
         &display_label,
         &description,
         enums,
+        Some(&field_default_expr(field, enums, commands)),
     ) {
         Some(literal) => vec![format!("vec![{literal}]")],
         None => vec![],
@@ -2045,7 +2150,7 @@ fn collect_summary_exprs(
     let name = &field.name;
     let meta = &field.meta;
 
-    if !meta.visible {
+    if meta.visibility.is_hidden() {
         return vec![];
     }
 
@@ -2127,7 +2232,7 @@ fn field_to_apply_change(
     let name = &field.name;
     let display_name = format!("{}{}", name_prefix, name);
 
-    if !field.meta.visible {
+    if field.meta.visibility.is_hidden() {
         return vec![];
     }
 
@@ -2396,7 +2501,7 @@ fn enum_variant_apply_change(
             let inner: Vec<String> = v
                 .named_fields
                 .iter()
-                .filter(|f| f.meta.visible)
+                .filter(|f| !f.meta.visibility.is_hidden())
                 .filter_map(|f| {
                     let condition = format!("{display_name}.{}", f.name);
                     let assign = format!("*{}", f.name);
@@ -2555,6 +2660,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("use crate::modules::parameter_def::{ParamType, ParameterDef};\n");
     out.push_str("use crate::types::classes::{ObjectClass, SegmentationClass};\n");
     out.push_str("use crate::core_types::{MemoryId, PixelUnits, SizeUnits, SizeUnitsRel};\n");
+    // Default values of `PathBuf` settings (`ParameterDef::default_value`).
+    out.push_str("#[allow(unused_imports)]\nuse std::path::PathBuf;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
 

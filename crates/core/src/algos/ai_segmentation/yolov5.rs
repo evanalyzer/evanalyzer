@@ -65,12 +65,12 @@ pub struct Yolov5 {
 
     /// Detections of the same class overlapping more than this (box
     /// intersection over union) are merged into the more confident one.
-    #[cmdsmeta(default = 0.45, min = 0.0, max = 1.0, step = 0.01)]
+    #[cmdsmeta(default = 0.45, min = 0.0, max = 1.0, step = 0.01, visibility = Advanced)]
     pub iou_threshold: f32,
 
     /// Mask probability above which a pixel belongs to its object
     /// (segmentation models only).
-    #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.01)]
+    #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.01, visibility = Advanced)]
     pub mask_threshold: f32,
 
     /// Factor the image is scaled by before it is given to the model, the
@@ -83,7 +83,7 @@ pub struct Yolov5 {
     /// Overlap of neighboring 640x640 windows, in pixels. Must be larger
     /// than the biggest object, so every object lies completely inside some
     /// window.
-    #[cmdsmeta(default = 128, min = 0, max = 512, step = 8)]
+    #[cmdsmeta(default = 128, min = 0, max = 512, step = 8, visibility = Advanced)]
     pub window_overlap: i32,
 
     /// Objects with fewer pixels than this (after overlapping objects were

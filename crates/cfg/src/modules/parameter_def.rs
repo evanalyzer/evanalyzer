@@ -46,4 +46,13 @@ pub struct ParameterDef {
     /// Non-empty only when param_type == Group.
     /// Each inner Vec is one item in the list (e.g. one ThresholdEntry).
     pub groups: Vec<Vec<ParameterDef>>,
+    /// The setting's default, formatted like `value`; empty when unknown. The UI
+    /// counts advanced settings whose value differs from it as "changed".
+    pub default_value: String,
+    /// `visibility = Advanced`: shown only while the step's advanced settings
+    /// are expanded.
+    pub advanced: bool,
+    /// Per entry of `options` (dropdowns): whether that option is advanced.
+    /// Empty when no option is.
+    pub option_advanced: Vec<bool>,
 }

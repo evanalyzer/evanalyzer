@@ -44,7 +44,7 @@ pub struct GaussianBlur {
     ///
     /// Higher values create a more significant blur effect.
     /// $$N \approx 6\sigma + 1$$
-    #[cmdsmeta(default = 0.34, min = 0.1, max = 5, summary = true, step = 0.1)]
+    #[cmdsmeta(default = 0.34, min = 0.1, max = 5, summary = true, step = 0.1, visibility = Advanced)]
     pub sigma: f32,
 }
 

@@ -39,7 +39,7 @@ pub struct LoadAnnotatedObjects {
     /// Keep the classes the objects were given while annotating.
     ///
     /// Turn off to start from `output_class` alone.
-    #[cmdsmeta(default = false)]
+    #[cmdsmeta(default = false, visibility = Advanced)]
     pub keep_annotated_classes: bool,
 }
 

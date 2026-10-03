@@ -41,7 +41,8 @@ pub struct ExtractObjects {
         min = 100000,
         max = 100000,
         step = 1,
-        optional = true
+        optional = true,
+        visibility = Advanced
     )]
     pub max_objects_before_fail: i32,
 }

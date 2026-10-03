@@ -70,7 +70,7 @@ pub struct AiObjectClassifier {
     /// The segmentation class value is assigned to each pixel in the image
     /// after a Threshold, Pixel classifier or AI classifier.
     /// If no seg class is selected the criteria are applied to all objects.
-    #[cmdsmeta(visible = false)]
+    #[cmdsmeta(visibility = Hidden)]
     pub origin_segmentation: Vec<SegmentationClass>,
 
     /// Restrict classification to objects that already carry one of these classes

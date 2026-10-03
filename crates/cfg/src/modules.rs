@@ -6,7 +6,7 @@ pub mod images_settings;
 pub mod meta_data;
 pub mod object_settings;
 pub mod parameter_def;
-#[allow(dead_code, unused_variables, unused_imports)]
+#[allow(dead_code, unused_variables, unused_imports, unused_parens)]
 pub mod pipeline_command;
 #[allow(dead_code, unused_variables, unused_imports)]
 pub mod pipeline_command_settings;

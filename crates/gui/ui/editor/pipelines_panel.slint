@@ -80,6 +80,16 @@ export struct PipelineCommand {
     enabled: bool,
         expanded: bool,
         parameters: [CommandParameter],
+        // Settings marked `visibility = Advanced`: shown below the "Advanced
+        // settings" row, and only while it is expanded (empty otherwise).
+        advanced-parameters: [CommandParameter],
+        // The advanced section of this step is expanded (kept per step).
+        show-advanced: bool,
+        // How many advanced settings the step has, and how many of them differ
+        // from their default (shown on the collapsed row so changed hidden
+        // values never go unnoticed).
+        advanced-count: int,
+        advanced-changed: int,
     }
 
 export struct Pipeline {
@@ -240,6 +250,75 @@ component DotPx inherits Rectangle {
 
 // ----------------------------------------------------------
 // Pipeline tab row
+
+// "Advanced settings (n) · m changed" row of a step card: expands/collapses
+// the step's advanced settings; "Always show" expands them in every step.
+component AdvancedRow inherits Rectangle {
+        in property <int> count;
+        in property <int> changed-count;
+        in property <bool> expanded;
+        in property <bool> always;
+        callback toggled;
+        callback always-toggled(bool);
+
+        height: 24px;
+
+        HorizontalLayout {
+            spacing: 6px;
+            row-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.toggled();
+                }
+                HorizontalLayout {
+                    spacing: 5px;
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: root.expanded ? @image-url("../icons/regular-white/caret-down.svg") : @image-url("../icons/regular-white/caret-right.svg");
+                            width: 10px;
+                            height: 10px;
+                            colorize: row-ta.has-hover ? Theme.text : Theme.text-dim;
+                        }
+                    }
+                    Text {
+                        text: "Advanced settings (\{root.count})";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: row-ta.has-hover ? Theme.text : Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                    if root.changed-count > 0: Text {
+                        text: "· \{root.changed-count} changed";
+                        font-size: 11px;
+                        color: Theme.warn;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 5px;
+                alignment: end;
+                VerticalLayout {
+                    alignment: center;
+                    SquareCheck {
+                        checked: root.always;
+                        toggled => {
+                            root.always-toggled(!root.always);
+                        }
+                    }
+                }
+                Text {
+                    text: "Always show";
+                    font-size: 10px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
 
 component PipelineTab inherits Rectangle {
         in property <Pipeline> pipeline;
@@ -1813,6 +1892,38 @@ component StepRow inherits Rectangle {
                         }
                     }
 
+                    if step.advanced-count > 0: AdvancedRow {
+                        count: step.advanced-count;
+                        changed-count: step.advanced-changed;
+                        expanded: step.show-advanced || PipelinesPanelState.always-show-advanced;
+                        always: PipelinesPanelState.always-show-advanced;
+                        toggled => {
+                            PipelinesPanelState.toggle-advanced(step.id);
+                        }
+                        always-toggled(on) => {
+                            PipelinesPanelState.always-show-advanced-toggled(on);
+                        }
+                    }
+
+                    for p in step.advanced-parameters: ParamRow {
+                        p: p;
+                        changed(v) => {
+                            root.param-changed(p.name, v);
+                        }
+                        item-field-changed(item_idx, field_name, v) => {
+                            root.param-changed("\{p.name}.\{item_idx}.\{field_name}", v);
+                        }
+                        add-item => {
+                            PipelinesPanelState.add-group-item(step.id, p.name);
+                        }
+                        remove-item(idx) => {
+                            PipelinesPanelState.remove-group-item(step.id, p.name, idx);
+                        }
+                        show-model-info => {
+                            PipelinesPanelState.show-model-info(step.id);
+                        }
+                    }
+
                     HorizontalLayout {
                         spacing: 6px;
                         padding-top: 2px;
@@ -2071,6 +2182,11 @@ export global PipelinesPanelState {
         callback insert-step(int, int);          // pipeline-id, after-idx
     callback param-changed(int, string, string);
         callback add-group-item(int, string);    // step-id, param-name
+        // Expands/collapses a step's advanced settings (step-id).
+        callback toggle-advanced(int);
+        // "Always show advanced settings" (user preference, every step).
+        in-out property <bool> always-show-advanced: false;
+        callback always-show-advanced-toggled(bool);
     callback remove-group-item(int, string, int); // step-id, param-name, item-idx
     callback show-model-info(int); // step-id
 

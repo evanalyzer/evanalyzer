@@ -29,22 +29,22 @@ use macros::CommandsMeta;
 
 #[derive(CommandsMeta)]
 pub enum ClassifyMatchHandling {
-    #[cmdsmeta(display_name = "Add class on match")]
+    #[cmdsmeta(display_name = "Add class on match", visibility = Advanced)]
     AddOutputClassIfMatch,
-    #[cmdsmeta(display_name = "Add class on mismatch")]
+    #[cmdsmeta(display_name = "Add class on mismatch", visibility = Advanced)]
     AddOutputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove class on match", visible = false)]
+    #[cmdsmeta(display_name = "Remove class on match", visibility = Hidden)]
     RemoveInputClassIfMatch,
-    #[cmdsmeta(display_name = "Remove class on mismatch", visible = false)]
+    #[cmdsmeta(display_name = "Remove class on mismatch", visibility = Hidden)]
     RemoveInputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove output class on match")]
+    #[cmdsmeta(display_name = "Remove output class on match", visibility = Advanced)]
     RemoveOutputClassIfMatch,
-    #[cmdsmeta(display_name = "Remove output class on mismatch")]
+    #[cmdsmeta(display_name = "Remove output class on mismatch", visibility = Advanced)]
     RemoveOutputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove objects matching criteria")]
+    #[cmdsmeta(display_name = "Remove objects matching criteria", visibility = Advanced)]
     RemoveAllClassesIfMatch,
     #[cmdsmeta(display_name = "Keep objects matching criteria")]
     RemoveAllClassesIfNotMatch,
@@ -68,7 +68,7 @@ pub struct ClassifyObjects {
     /// The segmentation class value is assigned to each pixel in the image
     /// after a Threshold, Pixel classifier or AI classifier.
     /// If no seg class is selected the criteria are applied to all objects.
-    #[cmdsmeta(visible = false)]
+    #[cmdsmeta(visibility = Advanced)]
     pub origin_segmentation: Vec<SegmentationClass>,
 
     /// Restrict classification to objects that already carry one of these classes
@@ -106,13 +106,13 @@ pub struct ClassifyObjects {
     /// class by at least `min_intersection_area`. Combine with e.g.
     /// `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
     /// or `AddOutputClassIfMatch` to tag objects that do.
-    #[cmdsmeta(default = ObjectClass::Unset, display_name = "Intersecting With")]
+    #[cmdsmeta(default = ObjectClass::Unset, display_name = "Intersecting With", visibility = Advanced)]
     pub overlapping_with: ObjectClass,
 
     /// Minimum intersection area with an `overlapping_with` object, in `size_unit`
     ///
     /// Has no effect while `overlapping_with` is Unset.
-    #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = false)]
+    #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = false, visibility = Advanced)]
     pub min_intersection_area: f32,
 
     /// Unit to use for object extraction
@@ -157,7 +157,7 @@ pub struct ClassifyObjects {
     ///
     /// Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.
     /// Solidity < 1.0: The object has irregular boundaries, deep "bays," protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = false)]
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = false, visibility = Advanced)]
     pub min_solidity: f32,
 
     /// Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex
@@ -168,14 +168,14 @@ pub struct ClassifyObjects {
     ///
     /// Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.
     /// Solidity < 1.0: The object has irregular boundaries, deep "bays," protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.
-    #[cmdsmeta(default = 1.0, min = 0.0, max = 1.0, step = 0.1, summary = false)]
+    #[cmdsmeta(default = 1.0, min = 0.0, max = 1.0, step = 0.1, summary = false, visibility = Advanced)]
     pub max_solidity: f32,
 
     /// Minimum proportional relationship between an object's width and its height
     ///
     /// This value is calculated by the object bounding box with and height and is defined with `a = with/height`.
     /// The value is without unit in the range of 0 to MAX_F32
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 2147483648.0, summary = false)]
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 2147483648.0, summary = false, visibility = Advanced)]
     pub min_aspect_ratio: f32,
 
     /// Maximum proportional relationship between an object's width and its height
@@ -189,6 +189,7 @@ pub struct ClassifyObjects {
         step = 1.0,
         summary = false
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub max_aspect_ratio: f32,
 
     /// Eccentricity: 0 = perfect circle, 1 = line
@@ -196,7 +197,7 @@ pub struct ClassifyObjects {
     /// Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.
     /// It imagines the shape as an ellipse and measures how far apart its focal points are.
     /// It is calculated with `sqrt(1-(b/a)^2)`
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = true)]
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = true, visibility = Advanced)]
     pub min_eccentricity: f32,
 
     /// Eccentricity: 0 = perfect circle, 1 = line
@@ -204,7 +205,7 @@ pub struct ClassifyObjects {
     /// Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.
     /// It imagines the shape as an ellipse and measures how far apart its focal points are.
     /// It is calculated with `sqrt(1-(b/a)^2)`
-    #[cmdsmeta(default = 1.0, min = 0.0, max = 1.0, step = 0.1, summary = true)]
+    #[cmdsmeta(default = 1.0, min = 0.0, max = 1.0, step = 0.1, summary = true, visibility = Advanced)]
     pub max_eccentricity: f32,
 
     /// Feret diameter threshold
@@ -215,7 +216,7 @@ pub struct ClassifyObjects {
     /// In image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.
     /// It mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.
     /// When analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.
-    #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = false, step = 1)]
+    #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = false, step = 1, visibility = Advanced)]
     pub min_feret: f32,
 
     /// Maximum feret diameter threshold in selected unit (px or nm)
@@ -233,6 +234,7 @@ pub struct ClassifyObjects {
         summary = false,
         step = 1
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub max_feret: f32,
 
     /// Whether object can touch image edge

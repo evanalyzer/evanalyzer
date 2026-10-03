@@ -35,6 +35,7 @@ pub struct RollingBall {
     /// The geometric shape of the rolling structural element.
     pub ball_type: BallType,
 
+    #[cmdsmeta(visibility = Advanced)]
     pub pre_smooth: bool,
 }
 

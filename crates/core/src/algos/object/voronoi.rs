@@ -43,6 +43,7 @@ pub struct Voronoi {
     ///
     /// Only center objects that carry all listed classes pass the filter.
     /// Leave empty to include all objects of `centers`.
+    #[cmdsmeta(visibility = Advanced)]
     pub center_filter_classes: Vec<ObjectClass>,
 
     /// Object class used to spatially constrain the Voronoi areas.
@@ -56,6 +57,7 @@ pub struct Voronoi {
     ///
     /// Only mask objects that carry all listed classes pass the filter.
     /// Leave empty to include all objects of `mask`.
+    #[cmdsmeta(visibility = Advanced)]
     pub mask_filter_classes: Vec<ObjectClass>,
 
     /// Object class assigned to the resulting Voronoi region ROIs.
@@ -74,6 +76,7 @@ pub struct Voronoi {
     pub exclude_areas_at_the_edges: bool,
 
     /// Discard Voronoi regions whose originating center object was filtered out or missing.
+    #[cmdsmeta(visibility = Advanced)]
     pub exclude_areas_with_no_center: bool,
 }
 

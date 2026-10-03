@@ -40,7 +40,8 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         "display_name",
         "summary",
         "optional",
-        "visible",
+        // Default | Advanced | Hidden - see the generator's `Visibility`.
+        "visibility",
         // Comma-separated file extensions (no dots, e.g. "pt,pth") for a
         // `PathBuf` field's native file-picker filter - see this module's
         // doc comment above for what a `PathBuf` field gets automatically
