@@ -15,9 +15,9 @@ export global PipelineFocusState {
     callback toggle-mode();
     // A pipeline was clicked in the list.
     callback pipeline-selected(int);
-    // A pipeline was double-clicked: quick focus on it (or leave the focus
-    // when it already is the focused one).
-    callback pipeline-double-clicked(int);
+    // Alt+click on a pipeline, or F for the selected one: quick focus on it
+    // (or leave the focus when it already is the focused one).
+    callback toggle-pipeline-focus(int);
     // "Show all" in the banner: leaves the focus.
     callback exit();
 }

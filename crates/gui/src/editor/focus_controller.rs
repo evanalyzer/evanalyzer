@@ -4,9 +4,10 @@
 //! - The header's Focus button switches focus mode on/off and is the only
 //!   thing that changes the remembered preference.
 //! - While focus mode is on, selecting a pipeline moves the focus to it.
-//! - Double-clicking a pipeline focuses it right away (and switches focus
-//!   mode on for this session); double-clicking the focused pipeline leaves
-//!   the focus again.
+//! - Alt+clicking a pipeline (or pressing F for the selected one) focuses
+//!   it right away and switches focus mode on for this session; doing it
+//!   again on the focused pipeline leaves the focus. (Double-click opens the
+//!   pipeline's edit dialog - the usual meaning of double-click.)
 //! - "Show all" in the banner leaves the focus for this session.
 //!
 //! The focus itself is a runtime overlay in the project (see
@@ -91,7 +92,7 @@ impl FocusController {
         });
 
         let this = self.clone();
-        state.on_pipeline_double_clicked(move |pipeline_id| {
+        state.on_toggle_pipeline_focus(move |pipeline_id| {
             let Some(ui) = this.ui.upgrade() else {
                 return;
             };
@@ -322,20 +323,38 @@ mod tests {
     }
 
     #[test]
-    fn double_click_focuses_quickly_and_again_leaves_without_changing_the_preference() {
+    fn quick_focus_focuses_and_again_leaves_without_changing_the_preference() {
         let f = fixture(false);
-        f.state().invoke_pipeline_double_clicked(1);
+        f.state().invoke_toggle_pipeline_focus(1);
         assert!(f.state().get_enabled());
         assert_eq!(f.focused(), Some(PipelineId(1)));
 
-        // Double-clicking another pipeline moves the focus ...
-        f.state().invoke_pipeline_double_clicked(2);
+        // Alt+click / F on another pipeline moves the focus ...
+        f.state().invoke_toggle_pipeline_focus(2);
         assert_eq!(f.focused(), Some(PipelineId(2)));
-        // ... double-clicking the focused one leaves it.
-        f.state().invoke_pipeline_double_clicked(2);
+        // ... on the focused one it leaves the focus.
+        f.state().invoke_toggle_pipeline_focus(2);
         assert_eq!(f.focused(), None);
         assert!(!f.state().get_enabled());
         assert!(f.saved.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_f_key_toggles_the_focus_of_the_selected_pipeline() {
+        use slint::platform::WindowEvent;
+        let f = fixture(false);
+        f.ui.global::<PipelinesPanelState>()
+            .set_active_pipeline_id(2);
+        let press_f = || {
+            f.ui.window()
+                .dispatch_event(WindowEvent::KeyPressed { text: "f".into() });
+            f.ui.window()
+                .dispatch_event(WindowEvent::KeyReleased { text: "f".into() });
+        };
+        press_f();
+        assert_eq!(f.focused(), Some(PipelineId(2)));
+        press_f();
+        assert_eq!(f.focused(), None);
     }
 
     #[test]

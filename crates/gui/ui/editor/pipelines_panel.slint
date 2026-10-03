@@ -246,6 +246,7 @@ component PipelineTab inherits Rectangle {
         in property <bool> active;
         callback selected;
         callback double-clicked;
+        callback alt-clicked;
         callback toggled;
         callback more-clicked;
         callback move-up;
@@ -277,6 +278,13 @@ component PipelineTab inherits Rectangle {
             }
             double-clicked => {
                 root.double-clicked();
+            }
+            // `clicked` carries no modifier keys - Alt+click is caught on
+            // the press itself.
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left && e.modifiers.alt) {
+                    root.alt-clicked();
+                }
             }
         }
 
@@ -2214,8 +2222,13 @@ export component PipelinesPanel inherits Rectangle {
                                     PipelinesPanelState.select-pipeline(p.id);
                                     PipelineFocusState.pipeline-selected(p.id);
                                 }
+                                // Double-click edits the pipeline (same dialog as
+                                // the "..." button), Alt+click focuses it.
                                 double-clicked => {
-                                    PipelineFocusState.pipeline-double-clicked(p.id);
+                                    PipelinesPanelState.pipeline-more(p.id);
+                                }
+                                alt-clicked => {
+                                    PipelineFocusState.toggle-pipeline-focus(p.id);
                                 }
                                 toggled => {
                                     PipelinesPanelState.toggle-pipeline(p.id);
