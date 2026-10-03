@@ -2220,6 +2220,7 @@ mod tests {
                 idx: 0,
                 color: slint::Color::from_rgb_u8(0, 0, 255),
                 emission_wave_length: 461.0,
+                wavelength_overridden: false,
             }])));
         ui.global::<AiLearningState>().invoke_open_requested();
         drain_ui_queue();

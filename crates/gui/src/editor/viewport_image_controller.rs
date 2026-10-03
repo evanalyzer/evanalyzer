@@ -801,6 +801,7 @@ mod tests {
             idx,
             color: slint::Color::from_rgb_u8(0, 0, 0),
             emission_wave_length: 0.0,
+            wavelength_overridden: false,
         }
     }
 

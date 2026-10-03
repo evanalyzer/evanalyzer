@@ -2,14 +2,25 @@ use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::color_generators::color_from_rgb;
 use crate::helper::size_formater::format_bits;
-use crate::{AppWindow, ChannelInfo, ChannelState, ImageMetaData, IntensityProjection, SeriesInfo};
+use crate::{
+    AppWindow, ChannelInfo, ChannelState, ImageMetaData, IntensityProjection, SeriesInfo,
+    WavelengthOption,
+};
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::utils::wavelength_to_rgb_float;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use log::warn;
-use slint::{ComponentHandle, Model};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use std::collections::BTreeMap;
 use std::sync::Arc;
+
+/// Emission wavelengths (nm) offered as colour tiles for a channel - spread
+/// over the visible range the viewer can draw (see `wavelength_to_rgb_float`:
+/// 420-700 nm, with exact pure blue/green/red at 450/532/635 nm).
+const WAVELENGTH_OPTIONS: [f32; 11] = [
+    420.0, 450.0, 470.0, 490.0, 532.0, 550.0, 570.0, 580.0, 600.0, 620.0, 635.0,
+];
 
 pub struct ImageMetaController {
     pub(crate) ui: slint::Weak<AppWindow>,
@@ -68,7 +79,49 @@ impl ImageMetaController {
             ui.global::<ImageMetaData>().on_reset_pixel_sizes(move || {
                 manager.reset_manual_pixel_sizes();
             });
+
+            // Channel colour chooser: the tiles, and setting/resetting a
+            // channel's emission wavelength for the project.
+            let options: Vec<WavelengthOption> = WAVELENGTH_OPTIONS
+                .iter()
+                .map(|&nm| WavelengthOption {
+                    nm,
+                    color: color_from_rgb(wavelength_to_rgb_float(nm)),
+                })
+                .collect();
+            ui.global::<ImageMetaData>()
+                .set_wavelength_options(ModelRc::new(VecModel::from(options)));
+
+            let manager = Arc::clone(self);
+            ui.global::<ImageMetaData>()
+                .on_emission_wave_length_changed(move |channel_idx, nm| {
+                    manager.set_channel_emission_wave_length(channel_idx, Some(nm));
+                });
+
+            let manager = Arc::clone(self);
+            ui.global::<ImageMetaData>()
+                .on_reset_emission_wave_length(move |channel_idx| {
+                    manager.set_channel_emission_wave_length(channel_idx, None);
+                });
         }
+    }
+
+    /// Sets (`Some`) or clears (`None`, back to the image's own value) the
+    /// project's emission wavelength for one channel, then shows the new
+    /// colour in the channel list and the viewer.
+    pub(crate) fn set_channel_emission_wave_length(&self, channel_idx: i32, nm: Option<f32>) {
+        {
+            let mut project = self.app_state.get_project_write();
+            match nm {
+                Some(nm) => project.set_global_emission_wavel_length(channel_idx, nm),
+                None => project.reset_global_emission_wavel_length(channel_idx),
+            }
+        }
+        self.app_state.mark_dirty();
+        if let Err(e) = self.sync_image_meta_to_slint() {
+            warn!("Could not refresh the channel list: {e}");
+        }
+        self.viewport_controller.trigger_image_redraw();
     }
 
     /// Synchronizes image metadata and channel settings from the Rust backend to the Slint UI.
@@ -130,6 +183,31 @@ impl ImageMetaController {
         };
 
         let image_meta = self.app_state.get_image_meta(&path)?;
+
+        // Per channel: the project's emission wavelength (its own setting if
+        // the user changed it, else the image's) and whether it was changed.
+        let channel_wavelengths: BTreeMap<i32, (f32, bool)> = {
+            let project = self.app_state.get_project();
+            image_meta
+                .series
+                .get(&selected_series)
+                .map(|series| {
+                    series
+                        .channels
+                        .keys()
+                        .map(|&idx| {
+                            let overridden = project
+                                .images
+                                .settings
+                                .channels
+                                .get(&idx)
+                                .is_some_and(|c| c.emission_wave_length.is_some());
+                            (idx, (project.get_emission_wave_length(idx), overridden))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         let ui_weak = self.ui.clone();
 
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -179,6 +257,7 @@ impl ImageMetaController {
                     idx: channel_copy.len() as i32,
                     color: slint::Color::from_rgb_u8(255, 0, 0),
                     emission_wave_length: 0.0,
+                    wavelength_overridden: false,
                 });
             }
             channel_copy.truncate(series_info.channels.len());
@@ -187,14 +266,24 @@ impl ImageMetaController {
                 .channels
                 .iter()
                 .filter_map(|(idx, channel)| {
+                    let (project_nm, overridden) = channel_wavelengths
+                        .get(idx)
+                        .copied()
+                        .unwrap_or((0.0, false));
+                    // The project's value; the file's own as a last resort
+                    // (e.g. a channel the project doesn't list yet).
+                    let nm = if project_nm > 0.0 {
+                        project_nm
+                    } else {
+                        channel.emission_wave_length
+                    };
                     channel_copy.get(*idx as usize).map(|_| ChannelInfo {
                         name: channel.name.clone().into(),
                         active: *channel_visibilities.get(idx).unwrap_or(&true),
                         idx: *idx,
-                        color: color_from_rgb(wavelength_to_rgb_float(
-                            channel.emission_wave_length,
-                        )),
-                        emission_wave_length: channel.emission_wave_length,
+                        color: color_from_rgb(wavelength_to_rgb_float(nm)),
+                        emission_wave_length: nm,
+                        wavelength_overridden: overridden,
                     })
                 })
                 .collect();
@@ -548,5 +637,55 @@ mod tests {
         // Back to the image's own series settings (0.5 x 0.5 x 1).
         assert_eq!(meta_ui.get_pixel_size_x(), 0.5);
         assert_eq!(ui_state.get_project().get_pixel_sizes().x, 0.5);
+    }
+
+    // -- channel colour chooser ------------------------------------------------
+
+    #[test]
+    fn the_chooser_offers_one_coloured_tile_per_wavelength() {
+        let (ui, _ui_state, _controller) = with_window(project_with_fixture_image());
+        let options = ui.global::<ImageMetaData>().get_wavelength_options();
+        assert_eq!(options.row_count(), WAVELENGTH_OPTIONS.len());
+        let green = options.iter().find(|o| o.nm == 532.0).unwrap();
+        assert_eq!(green.color, slint::Color::from_rgb_u8(0, 255, 0));
+    }
+
+    fn channel_row(ui: &AppWindow, idx: i32) -> ChannelInfo {
+        ui.global::<ChannelState>()
+            .get_channels()
+            .iter()
+            .find(|c| c.idx == idx)
+            .unwrap()
+    }
+
+    #[test]
+    fn choosing_a_channel_wavelength_overrides_it_and_reset_restores_it() {
+        let project = crate::editor::test_support::project_with_image_file(
+            crate::editor::test_support::grayscale_image_path(),
+        );
+        let (ui, ui_state, controller) = with_window(project);
+        controller.sync_image_meta_to_slint().unwrap();
+        drain_ui_queue();
+        // The project's own value for channel 0 (from the image entry).
+        let row = channel_row(&ui, 0);
+        assert_eq!(row.emission_wave_length, 488.0);
+        assert!(!row.wavelength_overridden);
+
+        ui.global::<ImageMetaData>()
+            .invoke_emission_wave_length_changed(0, 532.0);
+        drain_ui_queue();
+        let row = channel_row(&ui, 0);
+        assert_eq!(row.emission_wave_length, 532.0);
+        assert!(row.wavelength_overridden);
+        assert_eq!(row.color, slint::Color::from_rgb_u8(0, 255, 0));
+        assert_eq!(ui_state.get_project().get_emission_wave_length(0), 532.0);
+        assert!(ui_state.is_dirty(), "saved with the project");
+
+        ui.global::<ImageMetaData>()
+            .invoke_reset_emission_wave_length(0);
+        drain_ui_queue();
+        let row = channel_row(&ui, 0);
+        assert_eq!(row.emission_wave_length, 488.0);
+        assert!(!row.wavelength_overridden);
     }
 }

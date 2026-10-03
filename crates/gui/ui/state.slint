@@ -33,7 +33,7 @@ export global ConnectionState {
     in property <bool> connected: true;
     /// "alice @ workstation:7400", or "This computer".
     in property <string> label: "This computer";
-}
+    }
 
 export global GlobalAppState {
     // Global internal state
@@ -58,11 +58,11 @@ export global GlobalAppState {
 // by exact text, not just SPDX id - copyright lines differ crate to crate,
 // so e.g. "MIT" covers many distinct `text_paragraphs` groups).
 export struct ThirdPartyLicense {
-    id: string,
-    name: string,
-    crates: string,          // pre-joined, sorted "name version, name version, ..."
+        id: string,
+        name: string,
+        crates: string,          // pre-joined, sorted "name version, name version, ..."
     text_paragraphs: [string],
-}
+    }
 
 //
 // Static/host info shown in the About dialog. Set once from Rust at
@@ -79,8 +79,8 @@ export global AppInfoState {
     // past a size limit in the software-rendering fallback and rendered
     // garbled/mis-scrolled content instead of an error.
     in-out property <[string]> license_paragraphs: [];
-    in-out property <[ThirdPartyLicense]> third_party_licenses: [];
-    in-out property <int> third_party_package_count: 0;
+        in-out property <[ThirdPartyLicense]> third_party_licenses: [];
+        in-out property <int> third_party_package_count: 0;
     }
 
 //
@@ -149,7 +149,16 @@ export global HistogramState {
 //
 export enum IntensityProjection { single_stack, all_stacks, max, min, avg, sum, middle }
 
-export struct ChannelInfo { name: string, color: color, active: bool, idx: int, emission_wave_length: float }
+// `wavelength_overridden`: the project sets this channel's emission
+// wavelength itself (instead of taking the image's own) - shown as "edited".
+export struct ChannelInfo {
+        name: string,
+        color: color,
+        active: bool,
+        idx: int,
+        emission_wave_length: float,
+        wavelength_overridden: bool
+    }
 
 export global ChannelState {
 

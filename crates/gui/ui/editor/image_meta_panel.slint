@@ -17,6 +17,14 @@ export struct SeriesInfo {
     height: int,
 }
 
+// One tile of the channel colour chooser: an emission wavelength and the
+// colour the viewer draws it in (computed in Rust, so the tile shows exactly
+// what the channel will look like).
+export struct WavelengthOption {
+    nm: float,
+    color: color,
+}
+
 // ----------------------------------------------------------
 export global ImageMetaData {
     in property <string> image_name: "No image opened";
@@ -41,6 +49,32 @@ export global ImageMetaData {
 
     callback reset_pixel_sizes();
     callback pixel_size_changed(float, float, float);
+
+    // Channel colour chooser (per channel index): the wavelengths offered,
+    // set one for the project, or go back to the image's own.
+    in property <[WavelengthOption]> wavelength_options: [];
+    callback emission_wave_length_changed(int, float);
+    callback reset_emission_wave_length(int);
+}
+
+// A colour tile of the channel colour chooser.
+component WavelengthTile inherits Rectangle {
+    in property <WavelengthOption> option;
+    in property <bool> selected;
+    callback picked(float);
+    width: 18px;
+    height: 18px;
+    background: option.color;
+    border-radius: 4px;
+    border-width: selected ? 3px : 1px;
+    border-color: selected ? Theme.accent : Theme.border;
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.picked(option.nm);
+        }
+    }
 }
 
 // ----------------------------------------------------------
@@ -97,6 +131,8 @@ export component MetaGroup inherits VerticalLayout {
 // ----------------------------------------------------------
 export component ImageMetaPanel inherits Rectangle {
     property <bool> editing_px: false;
+    // Channel whose colour chooser is open, -1 for none.
+    property <int> editing_channel: -1;
 
     VerticalBox {
         alignment: start;
@@ -321,51 +357,184 @@ export component ImageMetaPanel inherits Rectangle {
                 height: 22px;
             }
 
-            for channel[i] in ChannelState.channels: Rectangle {
-                height: 24px;
+            for channel[i] in ChannelState.channels: VerticalLayout {
+                spacing: 0px;
 
-                HorizontalLayout {
-                    alignment: space-between;
-                    spacing: 8px;
-                    padding-top: 3px;
-                    padding-bottom: 3px;
+                Rectangle {
+                    height: 24px;
 
                     HorizontalLayout {
-                        spacing: 6px;
-                        alignment: start;
+                        alignment: space-between;
+                        spacing: 8px;
+                        padding-top: 3px;
+                        padding-bottom: 3px;
 
-                        Rectangle {
-                            width: 10px;
-                            height: 10px;
-                            border-radius: 2px;
-                            background: channel.color;
-                            y: (parent.height - self.height) / 2;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            // Click the swatch to change the channel's colour.
+                            Rectangle {
+                                width: 14px;
+                                height: 14px;
+                                border-radius: 3px;
+                                background: channel.color;
+                                border-width: swatch_ta.has-hover || root.editing_channel == channel.idx ? 2px : 1px;
+                                border-color: swatch_ta.has-hover || root.editing_channel == channel.idx ? Theme.accent : Theme.border;
+                                y: (parent.height - self.height) / 2;
+
+                                // RGB images keep their fixed channel colours.
+                                swatch_ta := TouchArea {
+                                    enabled: !ImageMetaData.is-rgb;
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.editing_channel = root.editing_channel == channel.idx ? -1 : channel.idx;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: channel.name;
+                                font-size: 11.5px;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
                         }
 
-                        Text {
-                            text: channel.name;
-                            font-size: 11.5px;
-                            color: Theme.text-dim;
-                            vertical-alignment: center;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: end;
+
+                            // Set for the project instead of read from the image.
+                            if channel.wavelength_overridden: Text {
+                                text: "edited";
+                                font-size: 9.5px;
+                                color: Theme.accent;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: channel.emission_wave_length > 0 ? channel.emission_wave_length + " nm" : "-";
+                                font-size: 11.5px;
+                                font-family: Theme.font-mono;
+                                color: channel.wavelength_overridden ? Theme.accent : channel.emission_wave_length > 0 ? Theme.text : Theme.text-mute;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                            }
                         }
                     }
 
-                    Text {
-                        text: channel.emission_wave_length > 0 ? channel.emission_wave_length + " nm" : "-";
-                        font-size: 11.5px;
-                        font-family: Theme.font-mono;
-                        color: channel.emission_wave_length > 0 ? Theme.text : Theme.text-mute;
-                        vertical-alignment: center;
-                        horizontal-alignment: right;
+                    if i < ChannelState.channels.length - 1 && root.editing_channel != channel.idx: Rectangle {
+                        x: 0px;
+                        y: parent.height - 1px;
+                        width: 100%;
+                        height: 1px;
+                        background: Theme.border-soft;
                     }
                 }
 
-                if i < ChannelState.channels.length - 1: Rectangle {
-                    x: 0px;
-                    y: parent.height - 1px;
-                    width: 100%;
-                    height: 1px;
-                    background: Theme.border-soft;
+                // Colour chooser for this channel.
+                if root.editing_channel == channel.idx: Rectangle {
+                    background: Theme.raised;
+                    border-width: 1px;
+                    border-color: Theme.border-soft;
+                    border-radius: Theme.radius-md;
+                    height: 96px;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 8px;
+
+                        HorizontalLayout {
+                            spacing: 5px;
+                            alignment: start;
+                            for option in ImageMetaData.wavelength_options: WavelengthTile {
+                                option: option;
+                                selected: option.nm == channel.emission_wave_length;
+                                picked(nm) => {
+                                    ImageMetaData.emission_wave_length_changed(channel.idx, nm);
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: stretch;
+
+                            Text {
+                                text: "Emission (nm)";
+                                font-size: 9.5px;
+                                letter-spacing: 0.5px;
+                                color: Theme.text-mute;
+                                vertical-alignment: center;
+                            }
+
+                            LineEdit {
+                                height: 28px;
+                                width: 72px;
+                                text: channel.emission_wave_length;
+                                accepted(t) => {
+                                    if (t.is-float() && t.to-float() > 0) {
+                                        ImageMetaData.emission_wave_length_changed(channel.idx, t.to-float());
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            if channel.wavelength_overridden: Rectangle {
+                                height: 22px;
+                                min-width: 44px;
+                                border-radius: 4px;
+                                background: wl_reset_ta.has-hover ? Theme.panel : transparent;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    Text {
+                                        text: "Reset";
+                                        font-size: 10.5px;
+                                        color: Theme.text-dim;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                wl_reset_ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        ImageMetaData.reset_emission_wave_length(channel.idx);
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                height: 22px;
+                                min-width: 44px;
+                                border-radius: 4px;
+                                background: wl_done_ta.has-hover ? Theme.panel : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    Text {
+                                        text: "Done";
+                                        font-size: 10.5px;
+                                        color: Theme.accent;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                wl_done_ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.editing_channel = -1;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

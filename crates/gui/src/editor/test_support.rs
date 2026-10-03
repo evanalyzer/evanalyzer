@@ -110,8 +110,20 @@ pub(crate) fn fixture_image_path() -> PathBuf {
 /// Like [`project_with_one_image`], but the current image is a real file
 /// ([`fixture_image_path`]) that can be opened, read and rendered.
 pub(crate) fn project_with_fixture_image() -> ProjectWithRuntime {
+    project_with_image_file(fixture_image_path())
+}
+
+/// A single-channel grayscale image from the core test fixtures.
+pub(crate) fn grayscale_image_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../core/tests/slice_Z0_C0_T0.tif")
+        .canonicalize()
+        .expect("fixture image exists")
+}
+
+/// Like [`project_with_fixture_image`], for the image file at `path`.
+pub(crate) fn project_with_image_file(path: PathBuf) -> ProjectWithRuntime {
     let mut project = project_with_one_image();
-    let path = fixture_image_path();
     let file_name = PathBuf::from(path.file_name().unwrap());
     let mut entry = project
         .images

@@ -333,11 +333,14 @@ impl ViewportWorker {
 
                 // STEP 6: Re-read histogram settings after potential write.
                 // Fresh read lock - safe because write lock was released above.
-                let hist_settings_fresh = self
-                    .app_state
-                    .get_project()
-                    .get_image_channel_histograms()
-                    .clone();
+                let (hist_settings_fresh, project_wavelengths) = {
+                    let project = self.app_state.get_project();
+                    let wavelengths: std::collections::BTreeMap<i32, f32> = render_src
+                        .iter()
+                        .map(|c| (c.c_stack, project.get_emission_wave_length(c.c_stack)))
+                        .collect();
+                    (project.get_image_channel_histograms().clone(), wavelengths)
+                };
 
                 // Build channel contexts for rendering
                 channel_contexts = Vec::with_capacity(render_src.len());
@@ -363,8 +366,13 @@ impl ViewportWorker {
                             // grayscale so it doesn't flash color during pan/zoom.
                             let color = if is_low_res && in_breakpoint_mode {
                                 [1.0f32, 1.0, 1.0]
-                            } else {
+                            } else if show_bp {
                                 channel.color
+                            } else {
+                                channel_display_color(
+                                    channel,
+                                    project_wavelengths.get(&idx).copied().unwrap_or(0.0),
+                                )
                             };
                             channel_contexts.push(ChannelCtx {
                                 image_data: slice,
@@ -623,6 +631,18 @@ impl RenderBuffers {
             screen_buffer_pool,
             screen_pool_idx,
         }
+    }
+}
+
+/// The colour a channel is drawn in: from the project's emission wavelength
+/// for it (which the user may have changed - see
+/// `ProjectExt::get_emission_wave_length`), or the reader's colour when the
+/// project knows none. RGB images keep their fixed per-channel colours.
+fn channel_display_color(channel: &ImageChannel, project_nm: f32) -> [f32; 3] {
+    if channel.is_rgb || project_nm <= 0.0 {
+        channel.color
+    } else {
+        evanalyzer_app::utils::wavelength_to_rgb_float(project_nm)
     }
 }
 
@@ -1317,5 +1337,55 @@ mod tests {
         }
         r.draw(TaskDispatch::LowRes, DrawingTask::default());
         assert!(r.ui.get_ghost_image().size().width > 0);
+    }
+
+    // -- channel colours -------------------------------------------------------
+
+    fn image_channel(is_rgb: bool, color: [f32; 3]) -> ImageChannel {
+        ImageChannel {
+            image: Arc::new(gray_container(vec![0.5])),
+            color,
+            c_stack: 0,
+            name: "C".into(),
+            is_rgb,
+            is_visible: true,
+        }
+    }
+
+    #[test]
+    fn channels_are_drawn_in_the_projects_wavelength_colour() {
+        let reader_red = [1.0, 0.0, 0.0];
+        assert_eq!(
+            channel_display_color(&image_channel(false, reader_red), 532.0),
+            [0.0, 1.0, 0.0],
+            "the project's wavelength wins"
+        );
+        assert_eq!(
+            channel_display_color(&image_channel(false, reader_red), 0.0),
+            reader_red,
+            "no project value: the reader's colour"
+        );
+        assert_eq!(
+            channel_display_color(&image_channel(true, reader_red), 532.0),
+            reader_red,
+            "RGB images keep their colours"
+        );
+    }
+
+    #[test]
+    fn a_changed_wavelength_recolours_the_rendered_image() {
+        let mut project = crate::editor::test_support::project_with_image_file(
+            crate::editor::test_support::grayscale_image_path(),
+        );
+        project.set_global_emission_wavel_length(0, 532.0); // pure green
+        let mut r = render_fixture(project);
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let pixels = r.ui.get_display_image().to_rgb8().expect("an RGB8 frame");
+        let lit: Vec<_> = pixels.as_slice().iter().filter(|p| p.g > 0).collect();
+        assert!(!lit.is_empty(), "something was drawn");
+        assert!(
+            lit.iter().all(|p| p.r == 0 && p.b == 0),
+            "drawn in green only"
+        );
     }
 }
