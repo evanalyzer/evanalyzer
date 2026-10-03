@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 pub struct AppSettings {
     #[serde(default)]
     pub dark_mode: bool,
+
+    /// Pipeline focus mode: selecting a pipeline shows only its image
+    /// channel and object classes.
+    #[serde(default)]
+    pub pipeline_focus_mode: bool,
 }
 
 /// Returns the application's per-user data directory (`<OS user data dir>/evanalyzer`),
@@ -66,7 +71,10 @@ mod tests {
 
     #[test]
     fn round_trips_through_json() {
-        let settings = AppSettings { dark_mode: true };
+        let settings = AppSettings {
+            dark_mode: true,
+            ..Default::default()
+        };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: AppSettings = serde_json::from_str(&json).unwrap();
         assert!(parsed.dark_mode);
@@ -97,12 +105,35 @@ mod tests {
     fn save_then_load_round_trip_preserves_dark_mode() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        let settings = AppSettings { dark_mode: true };
+        let settings = AppSettings {
+            dark_mode: true,
+            ..Default::default()
+        };
 
         save_to(&path, &settings);
         let loaded = load_from(&path);
 
         assert!(loaded.dark_mode);
+    }
+
+    #[test]
+    fn pipeline_focus_mode_round_trips_and_defaults_to_off_for_older_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        save_to(
+            &path,
+            &AppSettings {
+                pipeline_focus_mode: true,
+                ..Default::default()
+            },
+        );
+        assert!(load_from(&path).pipeline_focus_mode);
+
+        // A settings file written before the field existed.
+        std::fs::write(&path, r#"{ "darkMode": true }"#).unwrap();
+        let loaded = load_from(&path);
+        assert!(loaded.dark_mode);
+        assert!(!loaded.pipeline_focus_mode);
     }
 
     #[test]

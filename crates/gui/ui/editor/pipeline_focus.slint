@@ -1,0 +1,114 @@
+// pipeline_focus.slint
+// EVAnalyzer - Pipeline focus: show only the selected pipeline's image
+// channel and object classes. See `FocusController` on the Rust side.
+
+import { Theme } from "../style.slint";
+
+export global PipelineFocusState {
+    // Focus mode switch (header button). While on, selecting a pipeline
+    // focuses it.
+    in-out property <bool> enabled: false;
+    // Name of the focused pipeline; empty = no focus active.
+    in property <string> focused-pipeline-name: "";
+
+    // Header button: switches focus mode on/off (and remembers the choice).
+    callback toggle-mode();
+    // A pipeline was clicked in the list.
+    callback pipeline-selected(int);
+    // A pipeline was double-clicked: quick focus on it (or leave the focus
+    // when it already is the focused one).
+    callback pipeline-double-clicked(int);
+    // "Show all" in the banner: leaves the focus.
+    callback exit();
+}
+
+// Shown above the channel and class lists while a pipeline is focused, so
+// hidden channels/classes never look like a bug.
+export component FocusBanner inherits Rectangle {
+    visible: PipelineFocusState.focused-pipeline-name != "";
+    height: self.visible ? 26px : 0px;
+    border-radius: Theme.radius-md;
+    background: Theme.accent.with-alpha(0.12);
+    border-width: 1px;
+    border-color: Theme.accent.with-alpha(0.4);
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+        spacing: 6px;
+        alignment: space-between;
+
+        HorizontalLayout {
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    source: @image-url("../icons/regular-white/crosshair-simple.svg");
+                    width: 11px;
+                    height: 11px;
+                    colorize: Theme.accent;
+                }
+            }
+
+            Text {
+                text: "Focused on \"" + PipelineFocusState.focused-pipeline-name + "\"";
+                font-size: 11px;
+                color: Theme.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        show-all-ta := TouchArea {
+            width: show-all-text.preferred-width + 8px;
+            mouse-cursor: pointer;
+            clicked => {
+                PipelineFocusState.exit();
+            }
+            show-all-text := Text {
+                text: "Show all";
+                font-size: 11px;
+                font-weight: 600;
+                color: show-all-ta.has-hover ? Theme.text : Theme.accent;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// Header pill switching focus mode on/off; highlighted while on.
+export component FocusModeButton inherits Rectangle {
+    height: 24px;
+    width: 24px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: PipelineFocusState.enabled ? Theme.accent : Theme.border;
+    background: PipelineFocusState.enabled
+        ? Theme.accent.with-alpha(focus-ta.has-hover ? 0.28 : 0.18)
+        : (focus-ta.has-hover ? Theme.raised.brighter(0.06) : Theme.raised);
+    animate background { duration: 80ms; }
+
+    focus-row := HorizontalLayout {
+        x: 4px;
+        spacing: 0px;
+        alignment: start;
+        padding-left: 0px;
+        padding-right: 0px;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: @image-url("../icons/regular-white/crosshair-simple.svg");
+                width: 16px;
+                height: 16px;
+                colorize: PipelineFocusState.enabled ? Theme.accent : Theme.text;
+            }
+        }
+    }
+
+    focus-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            PipelineFocusState.toggle-mode();
+        }
+    }
+}

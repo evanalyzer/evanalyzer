@@ -10,6 +10,7 @@ pub mod parameter_def;
 pub mod pipeline_command;
 #[allow(dead_code, unused_variables, unused_imports)]
 pub mod pipeline_command_settings;
+pub mod pipeline_classes;
 pub mod pipeline_settings;
 pub mod plate_settings;
 pub mod project_settings;

@@ -5,6 +5,7 @@ import {
     Palette,
 } from "std-widgets.slint";
 import { Theme } from "../style.slint";
+import { FocusBanner } from "pipeline_focus.slint";
 import { ChannelState } from "../state.slint";
 
 // One entry per series: its index plus the dimensions of its first
@@ -356,6 +357,8 @@ export component ImageMetaPanel inherits Rectangle {
                 vertical-alignment: center;
                 height: 22px;
             }
+
+            FocusBanner { }
 
             for channel[i] in ChannelState.channels: VerticalLayout {
                 spacing: 0px;

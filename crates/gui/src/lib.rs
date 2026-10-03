@@ -684,9 +684,11 @@ fn load_user_settings(ui: &AppWindow, results_ui: &ResultsWindow) {
 
     let results_ui_handle = results_ui_handle.clone();
     ui.global::<Appearance>().on_dark_mode_toggled(move |dark| {
-        evanalyzer_app::global::save_app_settings(&evanalyzer_app::global::AppSettings {
-            dark_mode: dark,
-        });
+        // Load-modify-save: a fresh `AppSettings` would reset every other
+        // preference to its default.
+        let mut settings = evanalyzer_app::global::load_app_settings();
+        settings.dark_mode = dark;
+        evanalyzer_app::global::save_app_settings(&settings);
         if let Some(results_ui) = results_ui_handle.upgrade() {
             results_ui.global::<Appearance>().invoke_apply(dark);
         }

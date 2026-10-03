@@ -14,4 +14,6 @@ pub mod settings;
 pub mod templates;
 
 pub use frontend::Frontend;
-pub use project_owner::{AppHandle, ProjectOwner, ProjectTmpSettings, ProjectWithRuntime};
+pub use project_owner::{
+    AppHandle, FocusChannels, PipelineFocus, ProjectOwner, ProjectTmpSettings, ProjectWithRuntime,
+};

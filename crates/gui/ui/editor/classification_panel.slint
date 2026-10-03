@@ -6,6 +6,7 @@ import {
     Spinner,
 } from "std-widgets.slint";
 import { Theme } from "../style.slint";
+import { FocusBanner } from "pipeline_focus.slint";
 import { GlobalAppState, DialogType } from "../state.slint";
 import { ImagesListState } from "../editor/images_list_panel.slint";
 import {
@@ -299,6 +300,8 @@ export component ClassificationPanel inherits Rectangle {
                 }
             }
         }
+
+        FocusBanner { }
 
         // ----- CLASS LIST -----
         Rectangle {

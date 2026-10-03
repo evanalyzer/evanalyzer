@@ -6,6 +6,7 @@ use crate::workspace::ProjectWithRuntime;
 use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::extensions::object_ext::ObjectExt;
 use crate::workspace::extensions::utils::{get_relative_key, is_in_root, wavelength_to_rgb_u32};
+use crate::workspace::{FocusChannels, PipelineFocus};
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::ImageAddress;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId};
@@ -36,7 +37,7 @@ use evanalyzer_core::SUPPORTED_IMAGE_FORMATS;
 use human_sort::compare;
 use log::{info, trace, warn};
 use rayon::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -222,6 +223,10 @@ pub trait ProjectExt {
 
     fn toggle_class_visibility(&mut self, class_id: ObjectClass);
     fn is_class_visible(&self, class_id: &ObjectClass) -> bool;
+    fn focus_pipeline(&mut self, pipeline_id: PipelineId) -> bool;
+    fn refresh_pipeline_focus(&mut self);
+    fn clear_pipeline_focus(&mut self);
+    fn focused_pipeline(&self) -> Option<PipelineId>;
     fn count_objects_for_class(&self, class_id: &ObjectClass) -> usize;
 
     fn toggle_hide_unclassified_objects(&mut self);
@@ -438,6 +443,15 @@ impl ProjectExt for ProjectWithRuntime {
                 visibilities.insert(*idx, visible);
             }
         }
+        // Pipeline focus overrides the user's own settings while it is set.
+        if let Some(focus) = &self.tmp_settings.pipeline_focus {
+            for (idx, visible) in visibilities.iter_mut() {
+                *visible = match &focus.channels {
+                    FocusChannels::All => true,
+                    FocusChannels::Only(channels) => channels.contains(idx),
+                };
+            }
+        }
         visibilities
     }
 
@@ -493,7 +507,11 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     /// Updates channel visibility preferences for the current image series.
+    /// While a pipeline is focused, the focus overlay changes instead.
     fn set_image_preferences(&mut self, channel_visibility: &BTreeMap<i32, bool>) {
+        if self.set_focus_channels(channel_visibility) {
+            return;
+        }
         self.with_current_series_mut(|series| {
             for (id, visible) in channel_visibility {
                 if let Some(channel_arc) = series.channels.get_mut(id) {
@@ -503,8 +521,12 @@ impl ProjectExt for ProjectWithRuntime {
         });
     }
 
-    /// Updates global channel visibility preferences.
+    /// Updates global channel visibility preferences. While a pipeline is
+    /// focused, the focus overlay changes instead.
     fn set_global_preferences(&mut self, channel_visibility: &BTreeMap<i32, bool>) {
+        if self.set_focus_channels(channel_visibility) {
+            return;
+        }
         for (id, visible) in channel_visibility {
             let channel_arc =
                 self.images
@@ -1356,6 +1378,12 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     fn toggle_class_visibility(&mut self, class_id: ObjectClass) {
+        if let Some(focus) = &mut self.tmp_settings.pipeline_focus {
+            if !focus.visible_classes.remove(&class_id) {
+                focus.visible_classes.insert(class_id);
+            }
+            return;
+        }
         if self.tmp_settings.hidden_classes.contains(&class_id) {
             self.tmp_settings.hidden_classes.remove(&class_id);
         } else {
@@ -1364,7 +1392,69 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     fn is_class_visible(&self, class_id: &ObjectClass) -> bool {
-        !self.tmp_settings.hidden_classes.contains(class_id)
+        match &self.tmp_settings.pipeline_focus {
+            Some(focus) => focus.visible_classes.contains(class_id),
+            None => !self.tmp_settings.hidden_classes.contains(class_id),
+        }
+    }
+
+    /// Focuses the given pipeline: only its image channel (all channels for
+    /// a scratchpad or memory source) and its object classes are shown.
+    /// Returns `false` (and clears any focus) if there is no such pipeline.
+    fn focus_pipeline(&mut self, pipeline_id: PipelineId) -> bool {
+        let Some(pipeline) = self.pipelines.iter().find(|p| p.id == pipeline_id) else {
+            self.tmp_settings.pipeline_focus = None;
+            return false;
+        };
+        let channels = match pipeline.image_source {
+            ImageAddress::Channel(channel) => FocusChannels::Only(BTreeSet::from([channel])),
+            ImageAddress::Scratchpad | ImageAddress::Memory(_) => FocusChannels::All,
+        };
+        let pipeline_classes = pipeline.object_classes();
+        self.tmp_settings.pipeline_focus = Some(PipelineFocus {
+            pipeline_id,
+            channels,
+            visible_classes: pipeline_classes.iter().copied().collect(),
+            pipeline_classes,
+        });
+        true
+    }
+
+    /// Updates the focus after the focused pipeline was edited: a changed
+    /// image source or class list resets the focus to the new state (the
+    /// user's tweaks made while focused are kept otherwise); a deleted
+    /// pipeline ends the focus.
+    fn refresh_pipeline_focus(&mut self) {
+        let Some(focus) = self.tmp_settings.pipeline_focus.clone() else {
+            return;
+        };
+        let Some(pipeline) = self.pipelines.iter().find(|p| p.id == focus.pipeline_id) else {
+            self.tmp_settings.pipeline_focus = None;
+            return;
+        };
+        let source_channels = match pipeline.image_source {
+            ImageAddress::Channel(channel) => FocusChannels::Only(BTreeSet::from([channel])),
+            ImageAddress::Scratchpad | ImageAddress::Memory(_) => FocusChannels::All,
+        };
+        let source_changed = match (&source_channels, &focus.channels) {
+            (FocusChannels::Only(new), FocusChannels::Only(old)) => !new.is_subset(old),
+            (a, b) => a != b,
+        };
+        if source_changed || pipeline.object_classes() != focus.pipeline_classes {
+            self.focus_pipeline(focus.pipeline_id);
+        }
+    }
+
+    /// Ends the pipeline focus; the user's own visibility settings apply again.
+    fn clear_pipeline_focus(&mut self) {
+        self.tmp_settings.pipeline_focus = None;
+    }
+
+    fn focused_pipeline(&self) -> Option<PipelineId> {
+        self.tmp_settings
+            .pipeline_focus
+            .as_ref()
+            .map(|focus| focus.pipeline_id)
     }
 
     fn toggle_hide_unclassified_objects(&mut self) {
@@ -1389,6 +1479,29 @@ impl ProjectExt for ProjectWithRuntime {
             .filter(|r| r.object_class.contains(class_id))
             .count();
         manual + preview
+    }
+}
+
+impl ProjectWithRuntime {
+    /// While a pipeline is focused, a channel visibility change from the UI
+    /// updates the focus overlay instead of the saved settings. Returns
+    /// whether it did.
+    fn set_focus_channels(&mut self, channel_visibility: &BTreeMap<i32, bool>) -> bool {
+        let Some(focus) = &mut self.tmp_settings.pipeline_focus else {
+            return false;
+        };
+        focus.channels = if channel_visibility.values().all(|&visible| visible) {
+            FocusChannels::All
+        } else {
+            FocusChannels::Only(
+                channel_visibility
+                    .iter()
+                    .filter(|(_, visible)| **visible)
+                    .map(|(id, _)| *id)
+                    .collect(),
+            )
+        };
+        true
     }
 }
 
@@ -2499,6 +2612,147 @@ mod tests {
         let mut project = project_with_one_image();
         project.set_image_histogram_settings_for_channel(99, 0.0, 1.0, 0.0, 1.0);
         // No channel 99 exists - nothing to assert beyond "did not panic".
+    }
+
+    // -- pipeline focus ------------------------------------------------------
+
+    /// A pipeline on `source` whose Transform Objects step reads `input`
+    /// and writes `output`.
+    fn focus_test_pipeline(
+        id: u32,
+        source: ImageAddress,
+        input: u32,
+        output: u32,
+    ) -> PipelineSettings {
+        use evanalyzer_cfg::settings::pipeline_command_settings::TransformObjectsSettings;
+        PipelineSettings {
+            id: PipelineId(id),
+            name: format!("p{id}"),
+            description: None,
+            image_source: source,
+            enabled: true,
+            steps: vec![PipelineStepSettings {
+                enabled: true,
+                command: PipelineCommand::TransformObjects(TransformObjectsSettings {
+                    input_class: ObjectClass::Valid(input),
+                    output_class: ObjectClass::Valid(output),
+                    ..Default::default()
+                }),
+            }],
+        }
+    }
+
+    fn project_with_focus_pipelines() -> ProjectWithRuntime {
+        let mut project = project_with_one_image();
+        project
+            .pipelines
+            .push(focus_test_pipeline(1, ImageAddress::Channel(1), 3, 4));
+        project
+            .pipelines
+            .push(focus_test_pipeline(2, ImageAddress::Scratchpad, 5, 6));
+        project
+    }
+
+    #[test]
+    fn focus_shows_only_the_pipelines_channel_and_classes() {
+        let mut project = project_with_focus_pipelines();
+        assert!(project.focus_pipeline(PipelineId(1)));
+        assert_eq!(project.focused_pipeline(), Some(PipelineId(1)));
+        let channels = project.get_image_channel_visibilities();
+        assert_eq!(channels.get(&0), Some(&false));
+        assert_eq!(channels.get(&1), Some(&true));
+        assert!(project.is_class_visible(&ObjectClass::Valid(3)));
+        assert!(project.is_class_visible(&ObjectClass::Valid(4)));
+        assert!(!project.is_class_visible(&ObjectClass::Valid(5)));
+    }
+
+    #[test]
+    fn focus_on_a_scratchpad_pipeline_shows_every_channel() {
+        let mut project = project_with_focus_pipelines();
+        project.set_global_preferences(&BTreeMap::from([(0, false), (1, true)]));
+        project.focus_pipeline(PipelineId(2));
+        assert!(
+            project
+                .get_image_channel_visibilities()
+                .values()
+                .all(|&v| v)
+        );
+        assert!(project.is_class_visible(&ObjectClass::Valid(6)));
+        assert!(!project.is_class_visible(&ObjectClass::Valid(3)));
+    }
+
+    #[test]
+    fn clearing_the_focus_restores_the_users_settings_exactly() {
+        let mut project = project_with_focus_pipelines();
+        project.set_global_preferences(&BTreeMap::from([(0, true), (1, false)]));
+        project.toggle_class_visibility(ObjectClass::Valid(7));
+        let channels_before = project.get_image_channel_visibilities();
+
+        project.focus_pipeline(PipelineId(1));
+        // Changes while focused only touch the focus overlay ...
+        project.set_global_preferences(&BTreeMap::from([(0, true), (1, true)]));
+        project.toggle_class_visibility(ObjectClass::Valid(3));
+        assert!(
+            project
+                .get_image_channel_visibilities()
+                .values()
+                .all(|&v| v)
+        );
+        assert!(!project.is_class_visible(&ObjectClass::Valid(3)));
+
+        // ... so leaving the focus brings back what the user had.
+        project.clear_pipeline_focus();
+        assert_eq!(project.focused_pipeline(), None);
+        assert_eq!(project.get_image_channel_visibilities(), channels_before);
+        assert!(!project.is_class_visible(&ObjectClass::Valid(7)));
+        assert!(project.is_class_visible(&ObjectClass::Valid(3)));
+    }
+
+    #[test]
+    fn focusing_an_unknown_pipeline_clears_the_focus() {
+        let mut project = project_with_focus_pipelines();
+        project.focus_pipeline(PipelineId(1));
+        assert!(!project.focus_pipeline(PipelineId(99)));
+        assert_eq!(project.focused_pipeline(), None);
+    }
+
+    #[test]
+    fn refresh_keeps_tweaks_until_the_pipelines_classes_change() {
+        let mut project = project_with_focus_pipelines();
+        project.focus_pipeline(PipelineId(1));
+        project.toggle_class_visibility(ObjectClass::Valid(3));
+
+        // An edit that doesn't change the classes keeps the user's tweak.
+        project.pipelines[0].name = "renamed".into();
+        project.refresh_pipeline_focus();
+        assert!(!project.is_class_visible(&ObjectClass::Valid(3)));
+
+        // A new class in the pipeline resets the focus to the new classes.
+        project.pipelines[0] = focus_test_pipeline(1, ImageAddress::Channel(1), 3, 8);
+        project.refresh_pipeline_focus();
+        assert!(project.is_class_visible(&ObjectClass::Valid(3)));
+        assert!(project.is_class_visible(&ObjectClass::Valid(8)));
+        assert!(!project.is_class_visible(&ObjectClass::Valid(4)));
+    }
+
+    #[test]
+    fn refresh_follows_a_changed_image_source_and_ends_for_a_deleted_pipeline() {
+        let mut project = project_with_focus_pipelines();
+        project.focus_pipeline(PipelineId(1));
+        project.pipelines[0].image_source = ImageAddress::Channel(0);
+        project.refresh_pipeline_focus();
+        assert_eq!(
+            project.get_image_channel_visibilities().get(&0),
+            Some(&true)
+        );
+        assert_eq!(
+            project.get_image_channel_visibilities().get(&1),
+            Some(&false)
+        );
+
+        project.pipelines.remove(0);
+        project.refresh_pipeline_focus();
+        assert_eq!(project.focused_pipeline(), None);
     }
 
     // -- auto_add_classes_based_on_image_meta -------------------------------

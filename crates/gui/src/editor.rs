@@ -2,7 +2,7 @@ use crate::{
     AppWindow, ResultsWindow, UiState,
     editor::{
         ai_learning_controller::AiLearningController,
-        classification_controller::ClassificationController,
+        classification_controller::ClassificationController, focus_controller::FocusController,
         histogram_controller::HistogramController, image_meta_controller::ImageMetaController,
         images_list_controller::ImagesListController, object_list_controller::ObjectListController,
         pipeline_worker::PipelineWorker, pipelines_controller::PipelinesController,
@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 pub mod ai_learning_controller;
 pub mod classification_controller;
+pub mod focus_controller;
 pub mod histogram_controller;
 pub mod image_meta_controller;
 pub mod images_list_controller;
@@ -53,6 +54,7 @@ pub struct Editor {
     ai_learning_controller: Arc<AiLearningController>,
     object_list_controller: Arc<ObjectListController>,
     pipelines_controller: Arc<PipelinesController>,
+    focus_controller: Arc<FocusController>,
     pipeline_worker: Arc<PipelineWorker>,
     results_list_controller: Arc<ResultsListController>,
     template_controller: Arc<TemplateController>,
@@ -142,6 +144,20 @@ impl Editor {
             template_controller.clone(),
         ));
 
+        let focus_controller = Arc::new(FocusController::new(
+            ui.clone(),
+            app_state.clone(),
+            image_meta_controller.clone(),
+            classification_controller.clone(),
+            viewport_controller.clone(),
+            Box::new(|on| {
+                let mut settings = evanalyzer_app::global::load_app_settings();
+                settings.pipeline_focus_mode = on;
+                evanalyzer_app::global::save_app_settings(&settings);
+            }),
+        ));
+        pipelines_controller.set_focus_controller(focus_controller.clone());
+
         let project_controller = Arc::new(project_controller::ProjectController::new(
             ui.clone(),
             app_state.clone(),
@@ -202,6 +218,7 @@ impl Editor {
             ai_learning_controller,
             object_list_controller,
             pipelines_controller,
+            focus_controller,
             pipeline_worker,
             results_list_controller,
             template_controller,
@@ -222,6 +239,8 @@ impl Editor {
         self.viewport_object_controller.attach_callbacks();
         self.object_list_controller.attach_callbacks();
         self.pipelines_controller.attach_callbacks();
+        self.focus_controller
+            .attach_callbacks(evanalyzer_app::global::load_app_settings().pipeline_focus_mode);
         self.results_list_controller.attach_callbacks();
         self.template_controller.attach_callbacks();
         self.undo_redo_controller.attach_callbacks();

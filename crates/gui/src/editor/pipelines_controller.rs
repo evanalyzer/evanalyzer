@@ -80,6 +80,11 @@ pub struct PipelinesController {
     /// Pipeline templates currently shown in the command picker's "Templates"
     /// section. Reloaded from disk whenever the picker is opened.
     pipeline_templates: Mutex<Vec<PipelineTemplate>>,
+
+    /// Pipeline focus, told about every pipeline change (see
+    /// `pipeline_settings_changed`). Set once after construction - the focus
+    /// controller depends on controllers this one doesn't know about.
+    focus_controller: std::sync::OnceLock<Arc<crate::editor::focus_controller::FocusController>>,
 }
 
 impl PipelinesController {
@@ -101,6 +106,7 @@ impl PipelinesController {
             breakpoint: Arc::new(Mutex::new(None)),
             auto_preview_enabled: Mutex::new(false),
             pipeline_templates: Mutex::new(Vec::new()),
+            focus_controller: std::sync::OnceLock::new(),
         }
     }
 
@@ -1459,8 +1465,19 @@ impl PipelinesController {
     /// preview and restarts a single-shot timer, so the (expensive) preview
     /// only runs once the user has stopped editing for `PREVIEW_DEBOUNCE_MS`.
     /// This avoids a flood of preview refreshes while the user is still typing.
+    /// Connects the pipeline focus (see `focus_controller`).
+    pub fn set_focus_controller(
+        &self,
+        focus: Arc<crate::editor::focus_controller::FocusController>,
+    ) {
+        let _ = self.focus_controller.set(focus);
+    }
+
     fn pipeline_settings_changed(self: &Arc<Self>) {
         self.app_state.mark_dirty();
+        if let Some(focus) = self.focus_controller.get() {
+            focus.refresh();
+        }
 
         // Trigger preview if auto preview is enabled
         let auto_preview = *self.auto_preview_enabled.lock().expect("Poisned");
@@ -1626,6 +1643,11 @@ impl PipelinesController {
     ///
     /// Logs a `warn!` if the Slint event loop is unreachable.
     pub fn sync_pipelines_to_slint(self: &Arc<Self>) {
+        // Also runs when a project is opened or created: the focus banner
+        // must follow the (focus-less) new project.
+        if let Some(focus) = self.focus_controller.get() {
+            focus.refresh();
+        }
         let ui_weak = self.ui.clone();
 
         let slint_pipelines: Vec<Pipeline> = {

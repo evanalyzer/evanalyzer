@@ -13,6 +13,7 @@ import {
 } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ClassificationState, ClassItemData } from "classification_panel.slint";
+import { PipelineFocusState, FocusModeButton } from "pipeline_focus.slint";
 
 // ----------------------------------------------------------
 // Data model
@@ -244,6 +245,7 @@ component PipelineTab inherits Rectangle {
         in property <Pipeline> pipeline;
         in property <bool> active;
         callback selected;
+        callback double-clicked;
         callback toggled;
         callback more-clicked;
         callback move-up;
@@ -272,6 +274,9 @@ component PipelineTab inherits Rectangle {
             mouse-cursor: pointer;
             clicked => {
                 root.selected();
+            }
+            double-clicked => {
+                root.double-clicked();
             }
         }
 
@@ -2129,6 +2134,13 @@ export component PipelinesPanel inherits Rectangle {
                     // inside it gets its own centering VerticalLayout below,
                     // matching the "Duplicate"/"Remove" buttons further down
                     // in this file.
+                    HorizontalLayout {
+                    spacing: 6px;
+                    alignment: end;
+                    VerticalLayout {
+                        alignment: center;
+                        FocusModeButton { }
+                    }
                     VerticalLayout {
                         alignment: center;
                         Rectangle {
@@ -2171,6 +2183,7 @@ export component PipelinesPanel inherits Rectangle {
                             }
                         }
                     }
+                    }
                 }
             }
 
@@ -2199,6 +2212,10 @@ export component PipelinesPanel inherits Rectangle {
                                 selected => {
                                     PipelinesPanelState.active-pipeline-id = p.id;
                                     PipelinesPanelState.select-pipeline(p.id);
+                                    PipelineFocusState.pipeline-selected(p.id);
+                                }
+                                double-clicked => {
+                                    PipelineFocusState.pipeline-double-clicked(p.id);
                                 }
                                 toggled => {
                                     PipelinesPanelState.toggle-pipeline(p.id);

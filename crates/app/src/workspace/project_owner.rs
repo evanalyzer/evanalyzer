@@ -6,10 +6,10 @@ use crate::api::ImageSource;
 use crate::backend::LocalBackend;
 use crate::workspace::extensions::project_ext::ProjectExt;
 use evanalyzer_cfg::{
-    core_types::{InternalErrors, ObjectClass, ObjectId},
+    core_types::{InternalErrors, ObjectClass, ObjectId, PipelineId},
     settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
 };
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::{
     ops::{Deref, DerefMut},
     path::PathBuf,
@@ -44,6 +44,32 @@ fn lock_project_read(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Which image channels pipeline focus shows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FocusChannels {
+    /// Every channel of the image (pipelines starting from the scratchpad or
+    /// a memory slot, which may combine any channels).
+    All,
+    /// Only these channel indices.
+    Only(BTreeSet<i32>),
+}
+
+/// Pipeline focus: while set, only the selected pipeline's channel and
+/// object classes are shown. A runtime overlay on top of the user's own
+/// visibility settings - those are never changed by it, so clearing the
+/// focus brings them back exactly, and saving the project never stores the
+/// focused view. Visibility changes made while focused change this overlay.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PipelineFocus {
+    pub pipeline_id: PipelineId,
+    pub channels: FocusChannels,
+    /// The classes currently shown.
+    pub visible_classes: HashSet<ObjectClass>,
+    /// The pipeline's own classes when the focus was set, to tell whether a
+    /// pipeline edit changed them.
+    pub pipeline_classes: BTreeSet<ObjectClass>,
+}
+
 /// ProjectTmpSettings transient, never serialised
 /// Lives alongside ProjectSettings but owned by evanalyzer_app.
 #[derive(Debug)]
@@ -67,6 +93,10 @@ pub struct ProjectTmpSettings {
     /// pipeline output the user hasn't classified yet, not something worth
     /// cluttering the list/viewport with by default.
     pub hide_unclassified_objects: bool,
+
+    /// Pipeline focus overlay - see [`PipelineFocus`]. `None` = the user's
+    /// own visibility settings apply.
+    pub pipeline_focus: Option<PipelineFocus>,
 }
 
 impl Default for ProjectTmpSettings {
@@ -79,6 +109,7 @@ impl Default for ProjectTmpSettings {
             selected_object: None,
             hidden_classes: HashSet::new(),
             hide_unclassified_objects: true,
+            pipeline_focus: None,
         }
     }
 }
