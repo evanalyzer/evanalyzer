@@ -1664,6 +1664,11 @@ impl Default for ThresholdEntrySettings {
 /// foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU
 /// automatically if CUDA is available in the linked libtorch build, otherwise
 /// falls back to CPU.
+///
+/// Any tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets
+/// halve the image 4 times and fail otherwise) plus a 16 px border (context
+/// for the pixels at the tile edge, the "halo" bioimage.io models declare),
+/// and the prediction is cropped back to the tile.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]

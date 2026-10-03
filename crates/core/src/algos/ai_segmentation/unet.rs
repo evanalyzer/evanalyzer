@@ -44,6 +44,11 @@ pub enum UNetOutputMode {
 /// foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU
 /// automatically if CUDA is available in the linked libtorch build, otherwise
 /// falls back to CPU.
+///
+/// Any tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets
+/// halve the image 4 times and fail otherwise) plus a 16 px border (context
+/// for the pixels at the tile edge, the "halo" bioimage.io models declare),
+/// and the prediction is cropped back to the tile.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "segment", display_name = "AI UNet Segmentation")]
 pub struct UNet {
@@ -124,13 +129,40 @@ impl ImageAlgorithm for UNet {
             .to_device(device)
             .to_kind(Kind::Float)
             .reshape([1, 1, height as i64, width as i64]);
+        let (top, bottom) = Self::padding(height as i64);
+        let (left, right) = Self::padding(width as i64);
+        // Mirroring needs every pad to be smaller than the side it mirrors;
+        // a tiny tile repeats its edge pixels instead.
+        let mode = if top < height as i64
+            && bottom < height as i64
+            && left < width as i64
+            && right < width as i64
+        {
+            "reflect"
+        } else {
+            "replicate"
+        };
+        let padded = input.pad([left, right, top, bottom], mode, None);
 
         // Without `no_grad`, the model's own weights (loaded with
         // `requires_grad = true`, the default for `nn.Parameter`) make this
         // forward pass record a full autograd graph even though `.eval()`
         // was called - wasting memory that's never needed for inference.
-        let output = tch::no_grad(|| model.forward_ts(&[input]))
+        let output = tch::no_grad(|| model.forward_ts(&[padded]))
             .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))?;
+        let out_size = output.size();
+        if out_size.len() != 4
+            || out_size[2] < top + height as i64
+            || out_size[3] < left + width as i64
+        {
+            return Err(InternalErrors::Generic(format!(
+                "U-Net output has shape {out_size:?}; expected [1, C, H, W] the size of the \
+                 (padded) input"
+            )));
+        }
+        let output = output
+            .narrow(2, top, height as i64)
+            .narrow(3, left, width as i64);
 
         let channels = *output.size().get(1).unwrap_or(&1);
         let foreground = if channels > 1 {
@@ -194,6 +226,24 @@ impl ImageAlgorithm for UNet {
 }
 
 impl UNet {
+    /// Side lengths the model is run at must be a multiple of this: a
+    /// standard U-Net halves the image 4 times (2^4), and odd intermediate
+    /// sizes make its skip connections mismatch.
+    const SIZE_MULTIPLE: i64 = 16;
+
+    /// Mirrored context added around the tile, at least the halo bioimage.io
+    /// U-Nets declare (e.g. 16 px for romantic-shark, 8 px for joyful-pig).
+    const MARGIN: i64 = 16;
+
+    /// Padding `(before, after)` for one side of `len` pixels: `MARGIN`
+    /// before, and after whatever brings the total up to a multiple of
+    /// `SIZE_MULTIPLE` with at least `MARGIN` of context.
+    fn padding(len: i64) -> (i64, i64) {
+        let needed = len + 2 * Self::MARGIN;
+        let total = (needed + Self::SIZE_MULTIPLE - 1) / Self::SIZE_MULTIPLE * Self::SIZE_MULTIPLE;
+        (Self::MARGIN, total - len - Self::MARGIN)
+    }
+
     /// Moves a single-channel `[1, 1, H, W]` tensor to the CPU and flattens it
     /// into a `width * height` vector.
     fn channel_to_vec(
@@ -268,6 +318,156 @@ mod tests {
             boundary_channel: -1,
             boundary_threshold: 0.5,
         }
+    }
+
+    // ---- padding to a model-friendly size ----
+
+    #[test]
+    fn padding_reaches_a_multiple_of_16_with_at_least_16_px_of_context() {
+        for len in [1, 15, 16, 31, 250, 256, 1040, 1388] {
+            let (before, after) = UNet::padding(len);
+            assert_eq!(before, 16, "len {len}");
+            assert!(after >= 16, "len {len}: only {after} px after");
+            assert_eq!((before + len + after) % 16, 0, "len {len}");
+            assert!(
+                after < 32,
+                "len {len}: {after} px is more padding than needed"
+            );
+        }
+        assert_eq!(UNet::padding(250), (16, 22));
+        assert_eq!(UNet::padding(256), (16, 16));
+    }
+
+    #[test]
+    fn execute_crops_the_prediction_back_onto_an_odd_sized_tile() {
+        // An identity model on a 37x23 tile: the padded run must be cropped
+        // back exactly - every pixel, edges included, keeps its own value.
+        let (_dir, model_path) = trace_and_save_model(1, 2, 2, |x| x * 1.0);
+        let cmd = unet(model_path);
+        let (w, h) = (37usize, 23usize);
+        let values: Vec<f32> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let on_edge = x == 0 || y == 0 || x == w - 1 || y == h - 1;
+                if on_edge || (x * 7 + y * 3) % 5 == 0 {
+                    0.9
+                } else {
+                    0.1
+                }
+            })
+            .collect();
+        let expected: Vec<u32> = values
+            .iter()
+            .map(|&v| if v >= 0.5 { FG } else { bg() })
+            .collect();
+        let mut ctx = gray_ctx(w, h, values);
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        assert_eq!(
+            ctx.get_segmentation_map().unwrap().as_slice(),
+            expected.as_slice()
+        );
+    }
+
+    #[test]
+    fn execute_handles_tiles_smaller_than_the_padding() {
+        // Too small to mirror 16 px: the edge pixels are repeated instead.
+        let (_dir, model_path) = trace_and_save_model(1, 2, 2, |x| x * 1.0);
+        let cmd = unet(model_path);
+        let mut ctx = gray_ctx(3, 1, vec![0.9, 0.1, 0.9]);
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        assert_eq!(
+            ctx.get_segmentation_map().unwrap().as_slice(),
+            &[FG, bg(), FG]
+        );
+    }
+
+    // ---- real bioimage.io model ----
+
+    /// Reads a little-endian float32 `.npy` file (the bioimage.io test tensors).
+    fn read_npy_f32(path: &std::path::Path) -> Vec<f32> {
+        let bytes = std::fs::read(path)
+            .unwrap_or_else(|e| panic!("{}: {e} - see the test's doc comment", path.display()));
+        let header_len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
+        bytes[10 + header_len..]
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
+    }
+
+    /// The bioimage.io `joyful-pig` boundary U-Net (LiveCellSegmentationBoundaryModel)
+    /// on its own 512x512 test input, compared with its reference output -
+    /// at the full size and on an odd 250x250 cutout, which crashed in the
+    /// model before tiles were padded to a multiple of 16. Not checked into
+    /// git (~116 MB): download it from bioimage.io into `tests/joyful-pig/`.
+    /// Run with:
+    ///   cargo test -p evanalyzer_core --features ai --lib real_joyful_pig -- --ignored
+    #[test]
+    #[ignore]
+    fn real_joyful_pig_matches_its_reference_at_any_tile_size() {
+        let dir = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/joyful-pig"
+        ));
+        let raw = read_npy_f32(&dir.join("test_input_0.npy"));
+        let reference = read_npy_f32(&dir.join("test_output_0.npy"));
+        let n = 512usize;
+        // The model's declared preprocessing: zero mean, unit variance.
+        let mean = raw.iter().sum::<f32>() / raw.len() as f32;
+        let std = (raw.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / raw.len() as f32).sqrt();
+        let input: Vec<f32> = raw.iter().map(|v| (v - mean) / (std + 1e-6)).collect();
+        let cmd = UNet {
+            output_mode: UNetOutputMode::IndependentChannels,
+            foreground_channel: 0,
+            boundary_channel: 1,
+            ..unet(dir.join("weights-torchscript.pt"))
+        };
+        let expected =
+            UNet::classify_pixels(&reference[..n * n], Some(&reference[n * n..]), 0.5, 0.5, FG);
+
+        // Share of pixels of a `w x h` region at (x0, y0), at least 16 px away
+        // from the region's edges, that differ from the reference.
+        let mismatch = |seg: &[u32], x0: usize, y0: usize, w: usize, h: usize| -> f64 {
+            let (mut diff, mut total) = (0, 0);
+            for y in 16..h - 16 {
+                for x in 16..w - 16 {
+                    total += 1;
+                    if seg[y * w + x] != expected[(y0 + y) * n + x0 + x] {
+                        diff += 1;
+                    }
+                }
+            }
+            diff as f64 / total as f64
+        };
+
+        let mut ctx = gray_ctx(n, n, input.clone());
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        let full = mismatch(ctx.get_segmentation_map().unwrap().as_slice(), 0, 0, n, n);
+
+        let (x0, y0, w, h) = (100usize, 130usize, 250usize, 250usize);
+        let cutout: Vec<f32> = (0..h)
+            .flat_map(|y| input[(y0 + y) * n + x0..(y0 + y) * n + x0 + w].to_vec())
+            .collect();
+        let mut ctx = gray_ctx(w, h, cutout);
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .expect("an odd-sized tile must run (it is padded to a multiple of 16)");
+        let odd = mismatch(ctx.get_segmentation_map().unwrap().as_slice(), x0, y0, w, h);
+        // Not exact: the model normalizes each input it gets (InstanceNorm),
+        // so the mirrored border - and, for the cutout, seeing less of the
+        // image - shifts its statistics a little and flips pixels near the
+        // 0.5 threshold (measured: 0.5 % and 2.5 %).
+        assert!(
+            full < 0.01,
+            "{:.2} % of the pixels differ at 512x512",
+            full * 100.0
+        );
+        assert!(
+            odd < 0.05,
+            "{:.2} % of the pixels differ at 250x250",
+            odd * 100.0
+        );
     }
 
     // ---- execute() - real TorchScript load + inference, see `test_support` ----

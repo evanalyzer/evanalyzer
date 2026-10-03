@@ -132,6 +132,56 @@ outputs:
         assert_eq!(m.torchscript_source(), Some("model.pt"));
     }
 
+    /// Excerpt of bioimage.io's `joyful-pig` (LiveCellSegmentationBoundaryModel,
+    /// RDF 0.4.10): its output shape is given relative to the input.
+    const JOYFUL_PIG_04: &str = r#"
+format_version: 0.4.10
+type: model
+name: LiveCellSegmentationBoundaryModel
+description: Cell segmentation for phase-contrast microscopy.
+inputs:
+  - axes: bcyx
+    data_type: float32
+    name: input0
+    preprocessing:
+      - kwargs:
+          axes: cyx
+          mode: per_sample
+        name: zero_mean_unit_variance
+    shape:
+      min: [1, 1, 32, 32]
+      step: [0, 0, 16, 16]
+outputs:
+  - axes: bcyx
+    data_range: ['-inf', inf]
+    data_type: float32
+    halo: [0, 0, 8, 8]
+    name: output0
+    shape:
+      offset: [0, 0, 0, 0]
+      reference_tensor: input0
+      scale: [1, 2, 1, 1]
+weights:
+  torchscript:
+    source: weights-torchscript.pt
+"#;
+
+    #[test]
+    fn parses_04_output_shape_relative_to_an_input() {
+        let m = parse_str(JOYFUL_PIG_04).unwrap();
+        assert_eq!(m.input_channels(), Some(1));
+        // 1 input channel * scale 2 + 2 * offset 0.
+        assert_eq!(m.output_channels(), Some(2));
+        assert!(m.looks_like_boundary_model());
+        assert_eq!(m.torchscript_source(), Some("weights-torchscript.pt"));
+    }
+
+    #[test]
+    fn output_channels_of_a_relative_shape_with_an_unknown_reference_is_unknown() {
+        let yaml = JOYFUL_PIG_04.replace("reference_tensor: input0", "reference_tensor: nope");
+        assert_eq!(parse_str(&yaml).unwrap().output_channels(), None);
+    }
+
     #[test]
     fn rejects_non_model() {
         let yaml = "type: dataset\nname: foo\n";

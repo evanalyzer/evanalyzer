@@ -114,7 +114,8 @@ pub enum AxisSize {
     Other(serde_yaml::Value),
 }
 
-/// An RDF 0.4 tensor shape: an explicit list, or a `{min, step}` parameterization.
+/// An RDF 0.4 tensor shape: an explicit list, a `{min, step}`
+/// parameterization, or (outputs only) a size relative to an input tensor.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum Shape {
@@ -123,6 +124,15 @@ pub enum Shape {
         min: Vec<i64>,
         #[serde(default)]
         step: Vec<i64>,
+    },
+    /// Per axis: `size = reference size * scale + 2 * offset`, the reference
+    /// being the input tensor named `reference_tensor`.
+    Implicit {
+        reference_tensor: String,
+        #[serde(default)]
+        scale: Vec<f64>,
+        #[serde(default)]
+        offset: Vec<f64>,
     },
 }
 
@@ -168,8 +178,33 @@ impl RdfModel {
     }
 
     /// Number of channels the first output tensor produces, if determinable.
+    /// An output sized relative to an input (RDF 0.4 `reference_tensor`) is
+    /// resolved through that input.
     pub fn output_channels(&self) -> Option<i64> {
-        self.outputs.first().and_then(TensorDescr::channel_count)
+        let output = self.outputs.first()?;
+        if let Some(count) = output.channel_count() {
+            return Some(count);
+        }
+        let Some(Shape::Implicit {
+            reference_tensor,
+            scale,
+            offset,
+        }) = &output.shape
+        else {
+            return None;
+        };
+        let Axes::Compact(axes) = &output.axes else {
+            return None;
+        };
+        let idx = axes.to_lowercase().find('c')?;
+        let reference = self.inputs.iter().find(|t| {
+            t.name.as_deref() == Some(reference_tensor.as_str())
+                || t.id.as_deref() == Some(reference_tensor.as_str())
+        })?;
+        let input_channels = reference.channel_count()? as f64;
+        let scale = scale.get(idx).copied().unwrap_or(1.0);
+        let offset = offset.get(idx).copied().unwrap_or(0.0);
+        Some((input_channels * scale + 2.0 * offset).round() as i64)
     }
 
     /// Whether any input declares preprocessing (e.g. normalization) that
@@ -224,7 +259,8 @@ impl TensorDescr {
                 match &self.shape {
                     Some(Shape::Explicit(v)) => v.get(idx).copied(),
                     Some(Shape::Parameterized { min, .. }) => min.get(idx).copied(),
-                    None => None,
+                    // Needs the referenced tensor - see `RdfModel::output_channels`.
+                    Some(Shape::Implicit { .. }) | None => None,
                 }
             }
         }

@@ -285,6 +285,45 @@ outputs:
     }
 
     #[test]
+    fn boundary_unet_with_an_04_relative_output_shape_uses_independent_channels() {
+        // joyful-pig (RDF 0.4): the 2 output channels are only known through
+        // `reference_tensor` + `scale`.
+        let yaml = r#"
+format_version: 0.4.10
+type: model
+name: LiveCellSegmentationBoundaryModel
+inputs:
+  - axes: bcyx
+    name: input0
+    shape:
+      min: [1, 1, 32, 32]
+      step: [0, 0, 16, 16]
+outputs:
+  - axes: bcyx
+    name: output0
+    shape:
+      offset: [0, 0, 0, 0]
+      reference_tensor: input0
+      scale: [1, 2, 1, 1]
+weights:
+  torchscript:
+    source: weights-torchscript.pt
+"#;
+        let cfg = configure(&parse_str(yaml).unwrap(), None).unwrap();
+        match cfg.command {
+            PipelineCommand::UNet(s) => {
+                assert_eq!(s.foreground_channel, 0);
+                assert_eq!(s.boundary_channel, 1);
+                assert!(matches!(
+                    s.output_mode,
+                    AiSegmentationUnetUNetOutputModeSettings::IndependentChannels
+                ));
+            }
+            other => panic!("expected UNet, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn missing_torchscript_is_an_error() {
         let yaml = r#"
 type: model
