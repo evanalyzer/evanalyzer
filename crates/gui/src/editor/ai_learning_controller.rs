@@ -957,6 +957,7 @@ fn build_ai_learning_settings(
                     .map(feature_row_to_preprocessing_steps)
                     .collect(),
             },
+            input_color: Default::default(),
             class_labels: evanalyzer_app::ai_learning::pixel_class_labels_from_project(
                 project,
                 selected_classes,

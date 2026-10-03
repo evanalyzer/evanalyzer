@@ -10,7 +10,7 @@ use crate::algos::ImageAlgorithm;
 use crate::algos::Laplacian;
 use crate::algos::RankFilter;
 use crate::algos::StructureTensor;
-use crate::image::{ImageContainer, ImageReader, ImageTile, ReadMode};
+use crate::image::{ImageContainer, ImageReader, ImageTile, ManagedImage, ReadMode};
 use crate::object::Object;
 use crate::pipeline::pipeline::PipelineImageMeta;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
@@ -21,17 +21,20 @@ use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
 use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
 use evanalyzer_cfg::settings::ai_learning_pixel_settings::PreprocessingSteps;
 use evanalyzer_cfg::settings::ai_learning_settings::{
-    AiLearningClassifierSettings, AiLearningSettings, PixelClassLabel,
+    AiLearningClassifierSettings, AiLearningSettings, PixelClassLabel, PixelInputColor,
 };
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
-use kornia_image::ImageSize;
+use kornia_image::{Image, ImageSize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
-/// Computed feature channels for one image, in `FeatureSpec::channels` order.
+/// Computed feature channels for one image, in `compute_pixel_features`
+/// order. Every channel is a single-value-per-pixel `F32Gray` image of the
+/// bank's size - enforced when the bank is built, so `feature_vector_at`
+/// can never silently index into interleaved RGB data instead.
 pub struct FeatureBank {
     width: usize,
     height: usize,
@@ -39,20 +42,43 @@ pub struct FeatureBank {
 }
 
 impl FeatureBank {
+    fn new(
+        width: usize,
+        height: usize,
+        channels: Vec<Arc<ImageContainer>>,
+    ) -> Result<Self, InternalErrors> {
+        for channel in &channels {
+            let ImageContainer::F32Gray(img) = channel.as_ref() else {
+                return Err(InternalErrors::FormatMismatch {
+                    expected: "F32Gray feature channel".into(),
+                    found: format!("{:?}", channel),
+                });
+            };
+            if img.width() != width || img.height() != height {
+                return Err(InternalErrors::FormatMismatch {
+                    expected: format!("{width}x{height} feature channel"),
+                    found: format!("{}x{}", img.width(), img.height()),
+                });
+            }
+        }
+        Ok(Self {
+            width,
+            height,
+            channels,
+        })
+    }
+
     pub fn n_features(&self) -> usize {
         self.channels.len()
     }
 
     /// Feature vector for one pixel, one value per channel, in `channels` order.
-    /// Assumes every channel is single-channel (grayscale-derived) output.
     pub fn feature_vector_at(&self, x: usize, y: usize) -> Vec<f32> {
         self.channels
             .iter()
-            .map(|c| {
-                let slice = c
-                    .as_f32_slice()
-                    .expect("feature channel must be an f32 image");
-                slice[y * self.width + x]
+            .map(|c| match c.as_ref() {
+                ImageContainer::F32Gray(img) => img.as_slice()[y * self.width + x],
+                _ => unreachable!("FeatureBank::new only accepts F32Gray channels"),
             })
             .collect()
     }
@@ -66,22 +92,85 @@ impl FeatureBank {
 /// to construct fresh per-channel `PipelineContext`s. Each channel gets its own
 /// context sharing the same source `Arc` (cheap refcount bump, no pixel copy), so
 /// filters never step on each other's input.
+///
+/// A colour (`F32Rgb`) image is split into its R, G and B planes first and
+/// every recipe entry is computed on each of them, so the feature order is
+/// entry 0 (R, G, B), entry 1 (R, G, B), ... - three times as many features
+/// as for a greyscale image. That's why a model only fits the image kind it
+/// was trained on (see `PixelInputColor`).
 pub fn compute_pixel_features(
     template: &PipelineContext,
     spec: &AiLearningPixelFeatureSettings,
 ) -> Result<FeatureBank, InternalErrors> {
     let size = template.image.size();
-    let mut channels = Vec::with_capacity(spec.channels.len());
+    let mut channels = Vec::new();
 
-    for steps in &spec.channels {
-        channels.push(compute_channel(template, steps)?);
+    match template.image.as_ref() {
+        ImageContainer::F32Gray(_) => {
+            for steps in &spec.channels {
+                channels.push(compute_channel(template, steps)?);
+            }
+        }
+        ImageContainer::F32Rgb(rgb) => {
+            let planes = split_rgb(rgb)?
+                .into_iter()
+                .map(|plane| gray_ctx_from(template, plane))
+                .collect::<Result<Vec<_>, _>>()?;
+            for steps in &spec.channels {
+                for plane in &planes {
+                    channels.push(compute_channel(plane, steps)?);
+                }
+            }
+        }
+        ImageContainer::U32(_) => {
+            return Err(InternalErrors::FormatMismatch {
+                expected: "F32Gray or F32Rgb image for pixel features".into(),
+                found: format!("{:?}", template.image),
+            });
+        }
     }
 
-    Ok(FeatureBank {
-        width: size.width,
-        height: size.height,
-        channels,
-    })
+    FeatureBank::new(size.width, size.height, channels)
+}
+
+/// Splits an interleaved RGB image into its three colour planes, in R, G, B
+/// order.
+fn split_rgb(rgb: &ManagedImage<f32, 3>) -> Result<[Arc<ImageContainer>; 3], InternalErrors> {
+    let size = rgb.size();
+    let pixels = size.width * size.height;
+    let mut planes = [
+        Vec::with_capacity(pixels),
+        Vec::with_capacity(pixels),
+        Vec::with_capacity(pixels),
+    ];
+    for pixel in rgb.as_slice().chunks_exact(3) {
+        for (plane, value) in planes.iter_mut().zip(pixel) {
+            plane.push(*value);
+        }
+    }
+    let to_container = |values: Vec<f32>| -> Result<Arc<ImageContainer>, InternalErrors> {
+        Ok(Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1>::new(size, values).map_err(InternalErrors::from_kornia)?,
+            tile_offset: rgb.tile_offset,
+            plane: rgb.plane,
+        })))
+    };
+    let [r, g, b] = planes;
+    Ok([to_container(r)?, to_container(g)?, to_container(b)?])
+}
+
+/// A context like `template` but holding the greyscale `plane` as its image.
+fn gray_ctx_from(
+    template: &PipelineContext,
+    plane: Arc<ImageContainer>,
+) -> Result<PipelineContext, InternalErrors> {
+    let mut image_meta = template.image_meta.clone();
+    image_meta.is_rgb = false;
+    PipelineContext::new_from_image(
+        template.output_path.clone().unwrap_or_default(),
+        image_meta,
+        plane,
+    )
 }
 
 fn fresh_ctx(template: &PipelineContext) -> Result<PipelineContext, InternalErrors> {
@@ -143,7 +232,9 @@ pub struct PixelTrainingJob {
     /// Which image channel this classifier trains on - pixel-classifier
     /// feature computation operates on a single channel (see
     /// `compute_pixel_features`'s doc comment); multi-channel images are the
-    /// caller's responsibility to split beforehand.
+    /// caller's responsibility to split beforehand. A colour image is read
+    /// as one RGB channel (channel 0) and split into R, G and B by
+    /// `compute_pixel_features` itself.
     pub channel: i32,
     /// Which time frame to read, alongside `channel`. No multi-t-stack
     /// handling (unlike z) - a single scalar index; add a `TStackHandling`-
@@ -170,12 +261,15 @@ impl PixelTrainingJob {
         let AiLearningClassifierSettings::Pixel {
             feature_spec,
             class_labels,
+            ..
         } = &self.settings.classifier
         else {
             return Err(InternalErrors::Internal(
                 "PixelTrainingJob requires a Pixel classifier configuration".to_string(),
             ));
         };
+
+        let trained_input_color = self.training_input_color(class_labels)?;
 
         let _ = progress.send(TrainingProgressEvent::Started {
             total: self.images.len(),
@@ -335,7 +429,65 @@ impl PixelTrainingJob {
         )?;
         let _ = progress.send(TrainingProgressEvent::Finished { stats });
 
-        Ok(training_job::finish(self.settings.clone(), classifier))
+        let mut settings = self.settings.clone();
+        if let AiLearningClassifierSettings::Pixel { input_color, .. } = &mut settings.classifier {
+            *input_color = trained_input_color;
+        }
+        Ok(training_job::finish(settings, classifier))
+    }
+
+    /// The image kind every training image that contributes samples has in
+    /// common - what the model gets stamped with and is restricted to. A
+    /// mixed set is refused up front: colour and greyscale images produce
+    /// feature vectors of different lengths, which can't be trained into one
+    /// model. Images that can't be opened are left to the training loop,
+    /// which reports them as failed.
+    fn training_input_color(
+        &self,
+        class_labels: &[PixelClassLabel],
+    ) -> Result<PixelInputColor, InternalErrors> {
+        let mut first: Option<(&TrainingImage, bool)> = None;
+        for training_image in &self.images {
+            let has_samples = training_image
+                .labeled_objects
+                .iter()
+                .any(|o| resolve_label(class_labels, o.segmentation_class).is_some());
+            if !has_samples {
+                continue;
+            }
+            let Ok(reader) = ImageReader::new(&training_image.path, ReadMode::Default) else {
+                continue;
+            };
+            let Some(is_rgb) = reader
+                .get_image_meta()
+                .series
+                .get(&training_image.series)
+                .and_then(|series| series.resolutions.get(&0))
+                .map(|pyramid| pyramid.is_rgb)
+            else {
+                continue;
+            };
+            match first {
+                None => first = Some((training_image, is_rgb)),
+                Some((first_image, first_is_rgb)) if first_is_rgb != is_rgb => {
+                    let kind = |rgb: bool| if rgb { "a colour" } else { "a greyscale" };
+                    return Err(InternalErrors::InvalidArgument(format!(
+                        "The training images mix colour and greyscale images: '{}' is {} \
+                         image, '{}' is {} image. A pixel classifier is trained for one kind \
+                         only - annotate either only colour or only greyscale images.",
+                        first_image.path.display(),
+                        kind(first_is_rgb),
+                        training_image.path.display(),
+                        kind(is_rgb),
+                    )));
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(match first {
+            Some((_, true)) => PixelInputColor::Rgb,
+            _ => PixelInputColor::Gray,
+        })
     }
 
     /// Runs in a background thread, mirroring `JobExecutor::run_async`'s
@@ -367,6 +519,12 @@ mod tests {
     fn gray_context(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
         let img = Image::<f32, 1>::new(ImageSize { width, height }, values).unwrap();
         PipelineContext::new_from_image_test(img).unwrap()
+    }
+
+    /// `values` interleaved as R, G, B per pixel.
+    fn rgb_context(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
+        let img = Image::<f32, 3>::new(ImageSize { width, height }, values).unwrap();
+        PipelineContext::new_from_image_test_rgb(img).unwrap()
     }
 
     // -- resolve_label ---------------------------------------------------------
@@ -570,6 +728,112 @@ mod tests {
         assert_eq!(bank.feature_vector_at(1, 1), vec![5.0]);
     }
 
+    // -- compute_pixel_features on colour images --------------------------------
+
+    #[test]
+    fn compute_pixel_features_computes_every_entry_per_colour_in_entry_major_order() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::EdgeDetectionSobelSettings;
+
+        // Flat colour planes (R=1, G=2, B=3), so entry 1's Sobel is zero on
+        // every plane - the values alone pin which feature came from where.
+        let ctx = rgb_context(3, 3, [1.0, 2.0, 3.0].repeat(9));
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![
+                vec![],
+                vec![PreprocessingSteps::EdgeDetectionSobel(
+                    EdgeDetectionSobelSettings { kernel_size: 3 },
+                )],
+            ],
+        };
+
+        let bank = compute_pixel_features(&ctx, &spec).unwrap();
+
+        assert_eq!(bank.n_features(), 6);
+        assert_eq!(
+            bank.feature_vector_at(1, 1),
+            vec![1.0, 2.0, 3.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn compute_pixel_features_reads_each_pixel_of_an_rgb_image_not_interleaved_data() {
+        // The original bug: indexing the interleaved RGB buffer as if it
+        // were greyscale gave pixel 1 the value of pixel 0's green.
+        let ctx = rgb_context(2, 1, vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![vec![]],
+        };
+
+        let bank = compute_pixel_features(&ctx, &spec).unwrap();
+
+        assert_eq!(bank.feature_vector_at(0, 0), vec![0.1, 0.2, 0.3]);
+        assert_eq!(bank.feature_vector_at(1, 0), vec![0.4, 0.5, 0.6]);
+    }
+
+    #[test]
+    fn compute_pixel_features_runs_a_hessian_step_on_each_colour_of_an_rgb_image() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            FiltersHessianHessianModeSettings, HessianSettings,
+        };
+
+        // Hessian only supports greyscale input - on an RGB image it used
+        // to fail with a format mismatch. Each colour plane gets a
+        // different pattern; the RGB result must equal running the step on
+        // each plane as its own greyscale image.
+        let (w, h) = (5, 5);
+        let plane = |f: fn(usize, usize) -> f32| -> Vec<f32> {
+            (0..w * h).map(|i| f(i % w, i / w)).collect()
+        };
+        let r = plane(|x, y| (x * x + y) as f32);
+        let g = plane(|x, y| (x * y) as f32);
+        let b = plane(|x, y| (y * y) as f32 - x as f32);
+        let interleaved: Vec<f32> = (0..w * h).flat_map(|i| [r[i], g[i], b[i]]).collect();
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![vec![PreprocessingSteps::Hessian(HessianSettings {
+                mode: FiltersHessianHessianModeSettings::Determinant,
+            })]],
+        };
+
+        let rgb_bank = compute_pixel_features(&rgb_context(w, h, interleaved), &spec).unwrap();
+        let per_plane: Vec<FeatureBank> = [r, g, b]
+            .into_iter()
+            .map(|p| compute_pixel_features(&gray_context(w, h, p), &spec).unwrap())
+            .collect();
+
+        assert_eq!(rgb_bank.n_features(), 3);
+        for y in 0..h {
+            for x in 0..w {
+                let expected: Vec<f32> = per_plane
+                    .iter()
+                    .map(|bank| bank.feature_vector_at(x, y)[0])
+                    .collect();
+                assert_eq!(
+                    rgb_bank.feature_vector_at(x, y),
+                    expected,
+                    "pixel ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn feature_bank_refuses_a_non_greyscale_channel() {
+        let rgb = rgb_context(1, 1, vec![1.0, 2.0, 3.0]).image;
+
+        let err = FeatureBank::new(1, 1, vec![rgb]).err().unwrap();
+
+        assert!(matches!(err, InternalErrors::FormatMismatch { .. }));
+    }
+
+    #[test]
+    fn feature_bank_refuses_a_channel_of_the_wrong_size() {
+        let small = gray_context(1, 1, vec![1.0]).image;
+
+        let err = FeatureBank::new(2, 2, vec![small]).err().unwrap();
+
+        assert!(matches!(err, InternalErrors::FormatMismatch { .. }));
+    }
+
     // -- PixelTrainingJob::run (paths that need no image I/O) ------------------
 
     fn empty_pixel_job() -> PixelTrainingJob {
@@ -580,6 +844,7 @@ mod tests {
                 backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 classifier: AiLearningClassifierSettings::Pixel {
                     feature_spec: AiLearningPixelFeatureSettings { channels: vec![] },
+                    input_color: Default::default(),
                     class_labels: vec![PixelClassLabel {
                         class: SegmentationClass(1),
                         name: "Cell".into(),
@@ -754,6 +1019,7 @@ mod tests {
             feature_spec: AiLearningPixelFeatureSettings {
                 channels: vec![vec![]], // raw pixel value
             },
+            input_color: Default::default(),
             class_labels: vec![
                 PixelClassLabel {
                     class: SegmentationClass(1),
@@ -780,6 +1046,7 @@ mod tests {
             panic!("expected a Pixel classifier configuration to round-trip through `finish`");
         };
         assert_eq!(class_labels.len(), 2);
+        assert_eq!(trained_input_color(&saved), PixelInputColor::Gray);
 
         let events: Vec<_> = rx.iter().collect();
         assert!(
@@ -797,6 +1064,105 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, TrainingProgressEvent::ImageTilesScheduled { total_tiles, .. } if *total_tiles > 0)),
             "the fixture image must actually get tiled and read, not silently skipped"
+        );
+    }
+
+    fn trained_input_color(saved: &SavedClassifier) -> PixelInputColor {
+        let AiLearningClassifierSettings::Pixel { input_color, .. } = &saved.settings.classifier
+        else {
+            panic!("expected a Pixel classifier");
+        };
+        *input_color
+    }
+
+    /// A 16x16 8-bit TIFF: the left half one colour, the right half another,
+    /// so the two classes of `two_class_job` are separable.
+    fn write_rgb_tiff(path: &std::path::Path) {
+        let img = image::RgbImage::from_fn(16, 16, |x, _| {
+            if x < 8 {
+                image::Rgb([200, 20, 20])
+            } else {
+                image::Rgb([20, 200, 20])
+            }
+        });
+        img.save(path).unwrap();
+    }
+
+    fn write_gray_tiff(path: &std::path::Path) {
+        let img =
+            image::GrayImage::from_fn(16, 16, |x, _| image::Luma([if x < 8 { 30 } else { 220 }]));
+        img.save(path).unwrap();
+    }
+
+    /// Two classes, one 2x2 annotation per class (left half / right half)
+    /// on every image in `paths`.
+    fn two_class_job(paths: &[PathBuf]) -> PixelTrainingJob {
+        let mut job = empty_pixel_job();
+        job.settings.classifier = AiLearningClassifierSettings::Pixel {
+            feature_spec: AiLearningPixelFeatureSettings {
+                channels: vec![vec![]],
+            },
+            input_color: Default::default(),
+            class_labels: vec![
+                PixelClassLabel {
+                    class: SegmentationClass(1),
+                    name: "Left".into(),
+                },
+                PixelClassLabel {
+                    class: SegmentationClass(2),
+                    name: "Right".into(),
+                },
+            ],
+        };
+        for path in paths {
+            job.images.push(TrainingImage {
+                path: path.clone(),
+                series: 0,
+                labeled_objects: vec![
+                    full_square_object_settings(1, 2, 2, 2, SegmentationClass(1)),
+                    full_square_object_settings(2, 12, 12, 2, SegmentationClass(2)),
+                ],
+            });
+        }
+        job
+    }
+
+    #[test]
+    fn run_trains_on_colour_images_and_marks_the_model_as_rgb() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("colour.tif");
+        write_rgb_tiff(&path);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let saved = two_class_job(&[path])
+            .run(tx, Arc::new(AtomicBool::new(false)))
+            .unwrap();
+
+        assert_eq!(trained_input_color(&saved), PixelInputColor::Rgb);
+    }
+
+    #[test]
+    fn run_refuses_a_mix_of_colour_and_greyscale_training_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let colour = dir.path().join("colour.tif");
+        let gray = dir.path().join("gray.tif");
+        write_rgb_tiff(&colour);
+        write_gray_tiff(&gray);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let err = two_class_job(&[colour, gray])
+            .run(tx, Arc::new(AtomicBool::new(false)))
+            .err()
+            .unwrap();
+
+        let InternalErrors::InvalidArgument(message) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(
+            message.contains("mix colour and greyscale images")
+                && message.contains("colour.tif")
+                && message.contains("gray.tif"),
+            "{message}"
         );
     }
 }

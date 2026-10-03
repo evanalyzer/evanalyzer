@@ -288,6 +288,7 @@ mod tests {
                 backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 classifier: AiLearningClassifierSettings::Pixel {
                     feature_spec: AiLearningPixelFeatureSettings { channels: vec![] },
+                    input_color: Default::default(),
                     class_labels: Vec::<PixelClassLabel>::new(),
                 },
             },

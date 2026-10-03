@@ -87,6 +87,11 @@
                 },
                 "feature_spec": {
                   "$ref": "#/$defs/AiLearningPixelFeatureSettings"
+                },
+                "input_color": {
+                  "description": "Set by training from the training images; never configured by\nthe user.",
+                  "$ref": "#/$defs/PixelInputColor",
+                  "default": "GRAY"
                 }
               },
               "required": [
@@ -665,6 +670,14 @@
       "required": [
         "class",
         "name"
+      ]
+    },
+    "PixelInputColor": {
+      "description": "Which kind of image a pixel classifier was trained on, and therefore\nthe only kind it can be applied to: a greyscale model expects one value\nper feature recipe entry, a colour model three (R, G, B - see\n`compute_pixel_features`), so the feature vectors aren't interchangeable.\n\nSERIALIZATION-CRITICAL: part of the saved model artifact. Model files\nwritten before this existed carry no value and load as `Gray`, which is\nall training supported back then.",
+      "type": "string",
+      "enum": [
+        "GRAY",
+        "RGB"
       ]
     },
     "PreprocessingSteps": {

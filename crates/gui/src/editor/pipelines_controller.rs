@@ -23,6 +23,7 @@ use evanalyzer_cfg::core_types::SegmentationClass;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
 use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningClassifierSettings, AiLearningSettings, ObjectClassLabel, PixelClassLabel,
+    PixelInputColor,
 };
 use evanalyzer_cfg::settings::images_settings::{
     ImageEntry, ImageSettings, TStackHandling, TStackSettings,
@@ -2528,7 +2529,16 @@ fn format_classifier_model_info(settings: &AiLearningSettings) -> String {
         out.push_str(&format!("\nAuthor: {}\n", meta.authors.join(", ")));
     }
     match &settings.classifier {
-        AiLearningClassifierSettings::Pixel { class_labels, .. } => {
+        AiLearningClassifierSettings::Pixel {
+            input_color,
+            class_labels,
+            ..
+        } => {
+            let trained_on = match input_color {
+                PixelInputColor::Gray => "greyscale images",
+                PixelInputColor::Rgb => "colour images (RGB)",
+            };
+            out.push_str(&format!("\nTrained on: {trained_on}\n"));
             out.push_str("\nClasses:\n");
             for label in class_labels {
                 out.push_str(&format!(
@@ -3055,6 +3065,7 @@ mod tests {
                 feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
                     channels: vec![],
                 },
+                input_color: Default::default(),
                 class_labels: vec![
                     PixelClassLabel {
                         class: SegmentationClass(1),
@@ -3075,12 +3086,31 @@ mod tests {
         let info = format_classifier_model_info(&saved);
 
         assert!(info.starts_with("My Pixel Model\n"));
+        assert!(info.contains("Trained on: greyscale images"));
         assert!(info.contains("Classes:"));
         assert!(info.contains(&format!("- Nucleus (id {})", SegmentationClass(1).as_u32())));
         assert!(info.contains(&format!(
             "- Background (id {})",
             SegmentationClass(2).as_u32()
         )));
+    }
+
+    #[test]
+    fn format_classifier_model_info_says_when_a_pixel_model_was_trained_on_colour_images() {
+        let saved = saved_classifier_with(
+            AiLearningClassifierSettings::Pixel {
+                feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
+                    channels: vec![],
+                },
+                input_color: PixelInputColor::Rgb,
+                class_labels: vec![],
+            },
+            evanalyzer_cfg::settings::meta_data::MetaData::default(),
+        );
+
+        let info = format_classifier_model_info(&saved);
+
+        assert!(info.contains("Trained on: colour images (RGB)"), "{info}");
     }
 
     #[test]
@@ -3113,6 +3143,7 @@ mod tests {
                 feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
                     channels: vec![],
                 },
+                input_color: Default::default(),
                 class_labels: vec![],
             },
             evanalyzer_cfg::settings::meta_data::MetaData {
@@ -3138,6 +3169,7 @@ mod tests {
                 feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
                     channels: vec![],
                 },
+                input_color: Default::default(),
                 class_labels: vec![],
             },
             evanalyzer_cfg::settings::meta_data::MetaData {

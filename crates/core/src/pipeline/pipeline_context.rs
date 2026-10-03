@@ -387,6 +387,18 @@ impl PipelineContext {
             })
     }
 
+    /// The segmentation map, created on first use, for algorithms that write
+    /// it without needing the image in any particular format.
+    pub fn get_segmentation_map_mut(&mut self) -> Result<&mut Image<u32, 1>, InternalErrors> {
+        self.prepare_segmentation_map()?;
+        self.segmentation_map
+            .as_mut()
+            .ok_or(InternalErrors::FormatMismatch {
+                expected: "Initialized segmentation buffer".into(),
+                found: "None (Buffer not initialized)".into(),
+            })
+    }
+
     pub fn get_f32_gray_and_segmentation_mask_mut(
         &mut self,
     ) -> Result<(&Image<f32, 1>, &mut Image<u32, 1>), InternalErrors> {

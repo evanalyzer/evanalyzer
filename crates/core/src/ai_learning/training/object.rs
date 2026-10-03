@@ -351,6 +351,7 @@ mod tests {
         let mut job = object_job(vec![]);
         job.settings.classifier = AiLearningClassifierSettings::Pixel {
             feature_spec: AiLearningPixelFeatureSettings { channels: vec![] },
+            input_color: Default::default(),
             class_labels: vec![PixelClassLabel {
                 class: evanalyzer_cfg::core_types::SegmentationClass(1),
                 name: "X".into(),
