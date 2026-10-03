@@ -66,6 +66,23 @@ impl PipelineWorker {
         }
     }
 
+    /// A job that could not start (e.g. a pipeline reads a channel the images
+    /// don't have): logged, and shown to the user in the run status - the
+    /// same place "zoomed out too far to preview" is reported.
+    fn report_start_failure(&self, what: &str, e: &InternalErrors) {
+        error!("{what} could not be started: {e}");
+        let message = format!("{what} could not be started: {e}");
+        let ui_handle = self.app_state.ui_handle.clone();
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_handle.upgrade() {
+                let running = ui.global::<PipelineRunningState>();
+                running.set_status_message(message.into());
+                running.set_has_error(true);
+                running.set_done(true);
+            }
+        });
+    }
+
     /// Runs one preview or analysis job to the end, reporting its progress
     /// and result to the UI.
     fn run_task(self: &Arc<Self>, task: PipelineTask) {
@@ -125,7 +142,7 @@ impl PipelineWorker {
                         return;
                     }
                     Err(StartPreviewError::Failed(e)) => {
-                        error!("Could not execute job: {e:?}");
+                        self.report_start_failure("The preview", &e);
                         return;
                     }
                 }
@@ -138,7 +155,7 @@ impl PipelineWorker {
                 }) {
                     Ok(job) => job,
                     Err(e) => {
-                        error!("Could not execute job: {e:?}");
+                        self.report_start_failure("The analysis", &e);
                         return;
                     }
                 }
@@ -500,6 +517,12 @@ mod tests {
             objects.clone(),
             viewport.clone(),
             templates,
+            crate::editor::test_support::test_focus_controller(
+                w.clone(),
+                &ui_state,
+                &objects,
+                &viewport,
+            ),
         ));
         let classification = Arc::new(ClassificationController::new(
             w.clone(),
@@ -522,6 +545,7 @@ mod tests {
                 viewport.clone(),
             )),
             objects.clone(),
+            classification.clone(),
         ));
         let results_state = Arc::new(ResultsStateController::new(
             results_ui.as_weak(),
@@ -628,14 +652,48 @@ mod tests {
     /// gets no result and stays as it was. Flagged as a usability gap; if
     /// that changes, this test should assert the shown error instead.
     #[test]
-    fn a_job_that_cannot_start_is_only_logged() {
+    fn an_analysis_with_a_pipeline_on_a_missing_channel_is_refused_visibly() {
+        let f = fixture();
+        let mut task = f.task(false);
+        task.project_settings.pipelines.push(
+            evanalyzer_cfg::settings::pipeline_settings::PipelineSettings {
+                id: evanalyzer_cfg::core_types::PipelineId(1),
+                name: "Spots".into(),
+                description: None,
+                image_source: evanalyzer_cfg::core_types::ImageAddress::Channel(9),
+                enabled: true,
+                steps: vec![],
+            },
+        );
+        f.worker.run_task(task);
+        drain_ui_queue();
+
+        assert!(f.running().get_has_error());
+        let message = f.running().get_status_message().to_string();
+        assert!(
+            message.contains("pipeline 'Spots' reads channel 9"),
+            "{message}"
+        );
+        assert!(
+            !f.dir.path().join("results").exists(),
+            "nothing was started, so no results folder"
+        );
+    }
+
+    #[test]
+    fn a_job_that_cannot_start_tells_the_user_why() {
         let f = fixture();
         std::fs::write(f.dir.path().join("missing"), "a file, not a folder").unwrap();
         let mut task = f.task(false);
         task.project_path = f.dir.path().join("missing").join("deeper");
         f.worker.run_task(task);
         drain_ui_queue();
-        assert!(!f.running().get_done());
-        assert_eq!(f.running().get_status_message(), "");
+        assert!(f.running().get_done());
+        assert!(f.running().get_has_error());
+        let message = f.running().get_status_message().to_string();
+        assert!(
+            message.starts_with("The analysis could not be started:"),
+            "{message}"
+        );
     }
 }

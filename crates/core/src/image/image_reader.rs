@@ -651,6 +651,13 @@ impl ImageReader {
             .iter()
             .filter_map(|c_stack_to_read| {
                 if c_stack_to_read >= &series_info.nr_c_stacks {
+                    log::warn!(
+                        "Channel {c_stack_to_read} was requested, but {} has only {} \
+                         channel(s) (0-{}) - skipped, a pipeline reading it gets no image",
+                        primary.current_path.display(),
+                        series_info.nr_c_stacks,
+                        series_info.nr_c_stacks - 1
+                    );
                     return None;
                 }
                 if primary.read_mode == ReadMode::Default
@@ -1322,6 +1329,74 @@ mod tests {
         assert!(
             matches!(err, InternalErrors::Internal(msg) if msg.contains("Reader pool is empty"))
         );
+    }
+
+    #[test]
+    fn a_nonexistent_channel_is_skipped_not_an_error() {
+        // `read_image_tile_combined_impl` filters requested channels the image
+        // doesn't have (as it filters channels > 0 of an RGB image): the
+        // result simply holds no tile for them.
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let channels = reader
+            .read_image_tile_combined(
+                0,
+                0,
+                ZProjection::None,
+                &None,
+                0,
+                Some(&vec![99]),
+                &full_tile(),
+            )
+            .unwrap();
+        assert!(channels.is_empty());
+    }
+
+    #[test]
+    fn an_implausible_bit_depth_is_refused_before_reading() {
+        // Corrupt metadata (e.g. BitsPerPixel 40) must be an error, not a
+        // silently wrong normalization.
+        let mut reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let meta = Arc::make_mut(&mut reader.image_meta);
+        for info in meta.series.values_mut() {
+            for resolution in info.resolutions.values_mut() {
+                resolution.nr_bits = 40;
+            }
+        }
+        let err = reader
+            .read_image_tile_combined(0, 0, ZProjection::None, &None, 0, None, &full_tile())
+            .unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("implausible bit depth")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn per_sample_and_parallel_decoding_agree_for_every_bit_depth() {
+        for (bits, bytes) in [(8u16, 1usize), (12, 2), (16, 2), (24, 3), (32, 4)] {
+            let max = ((1u64 << bits) - 1) as f32;
+            let inv = 1.0 / max;
+            let buffer: Vec<u8> = (0..bytes * 5).map(|i| (i * 37 + 11) as u8).collect();
+            for little_endian in [true, false] {
+                let parallel = decode_samples_parallel(&buffer, bits, little_endian, inv);
+                assert_eq!(parallel.len(), 5, "{bits} bit");
+                for (i, &value) in parallel.iter().enumerate() {
+                    let single = sample_f32(&buffer, i * bytes, bits, little_endian, inv);
+                    assert_eq!(single, value, "{bits} bit, LE {little_endian}, sample {i}");
+                }
+            }
+            // The largest value of the bit depth normalizes to exactly 1.
+            let full: Vec<u8> = if bits == 12 {
+                vec![0xFF, 0x0F]
+            } else {
+                vec![0xFF; bytes]
+            };
+            assert_eq!(
+                decode_samples_parallel(&full, bits, true, inv),
+                vec![1.0],
+                "{bits} bit"
+            );
+        }
     }
 
     #[test]

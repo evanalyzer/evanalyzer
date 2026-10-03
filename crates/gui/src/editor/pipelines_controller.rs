@@ -1,6 +1,7 @@
 use crate::AppWindow;
 use crate::DialogType;
 use crate::FileRequest;
+use crate::editor::focus_controller::FocusController;
 use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::template_controller::TemplateController;
@@ -82,13 +83,8 @@ pub struct PipelinesController {
     pipeline_templates: Mutex<Vec<PipelineTemplate>>,
 
     /// Pipeline focus, told about every pipeline change (see
-    /// `pipeline_settings_changed`). Set once after construction - the focus
-    /// controller depends on controllers this one doesn't know about.
-    focus_controller: std::sync::OnceLock<Arc<crate::editor::focus_controller::FocusController>>,
-
-    /// Persists "Always show advanced settings" (the user's app settings in
-    /// production; unset in tests, so they never write the real settings file).
-    save_always_show_advanced: std::sync::OnceLock<Box<dyn Fn(bool) + Send + Sync>>,
+    /// `pipeline_settings_changed`).
+    pub(crate) focus_controller: Arc<FocusController>,
 }
 
 impl PipelinesController {
@@ -98,6 +94,7 @@ impl PipelinesController {
         object_list_controller: Arc<ObjectListController>,
         viewport_controller: Arc<ViewportController>,
         template_controller: Arc<TemplateController>,
+        focus_controller: Arc<FocusController>,
     ) -> Self {
         Self {
             ui,
@@ -110,14 +107,20 @@ impl PipelinesController {
             breakpoint: Arc::new(Mutex::new(None)),
             auto_preview_enabled: Mutex::new(false),
             pipeline_templates: Mutex::new(Vec::new()),
-            focus_controller: std::sync::OnceLock::new(),
-            save_always_show_advanced: std::sync::OnceLock::new(),
+            focus_controller,
         }
     }
 
     pub fn attach_callbacks(self: &Arc<Self>) {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
+            // The remembered "Always show advanced settings"
+            ui.global::<PipelinesPanelState>().set_always_show_advanced(
+                self.app_state
+                    .load_app_settings()
+                    .always_show_advanced_settings,
+            );
+
             // Save as template
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
@@ -228,9 +231,9 @@ impl PipelinesController {
                     };
                     let state = ui.global::<PipelinesPanelState>();
                     state.set_always_show_advanced(on);
-                    if let Some(save) = manager.save_always_show_advanced.get() {
-                        save(on);
-                    }
+                    manager.app_state.update_app_settings(|settings| {
+                        settings.always_show_advanced_settings = on
+                    });
                     let pipeline_id = PipelineId(state.get_active_pipeline_id() as u32);
                     manager.sync_steps_of_selected_pipeline_to_slint(pipeline_id, false);
                 });
@@ -1526,23 +1529,9 @@ impl PipelinesController {
     /// only runs once the user has stopped editing for `PREVIEW_DEBOUNCE_MS`.
     /// This avoids a flood of preview refreshes while the user is still typing.
     /// Connects the pipeline focus (see `focus_controller`).
-    /// Sets how "Always show advanced settings" is persisted.
-    pub fn set_always_show_advanced_saver(&self, save: Box<dyn Fn(bool) + Send + Sync>) {
-        let _ = self.save_always_show_advanced.set(save);
-    }
-
-    pub fn set_focus_controller(
-        &self,
-        focus: Arc<crate::editor::focus_controller::FocusController>,
-    ) {
-        let _ = self.focus_controller.set(focus);
-    }
-
     fn pipeline_settings_changed(self: &Arc<Self>) {
         self.app_state.mark_dirty();
-        if let Some(focus) = self.focus_controller.get() {
-            focus.refresh();
-        }
+        self.focus_controller.refresh();
 
         // Trigger preview if auto preview is enabled
         let auto_preview = *self.auto_preview_enabled.lock().expect("Poisned");
@@ -1710,9 +1699,7 @@ impl PipelinesController {
     pub fn sync_pipelines_to_slint(self: &Arc<Self>) {
         // Also runs when a project is opened or created: the focus banner
         // must follow the (focus-less) new project.
-        if let Some(focus) = self.focus_controller.get() {
-            focus.refresh();
-        }
+        self.focus_controller.refresh();
         let ui_weak = self.ui.clone();
 
         let slint_pipelines: Vec<Pipeline> = {
@@ -3362,11 +3349,17 @@ mod tests {
         ));
         let template_controller = Arc::new(TemplateController::new(ui.clone(), ui_state.clone()));
         let controller = Arc::new(PipelinesController::new(
-            ui,
+            ui.clone(),
             ui_state.clone(),
-            object_list_controller,
-            viewport_controller,
+            object_list_controller.clone(),
+            viewport_controller.clone(),
             template_controller,
+            crate::editor::test_support::test_focus_controller(
+                ui.clone(),
+                &ui_state,
+                &object_list_controller,
+                &viewport_controller,
+            ),
         ));
         (ui_state, controller)
     }
@@ -3652,6 +3645,20 @@ mod tests {
             .collect()
     }
 
+    /// The (basic, advanced) top-level setting names a command declares - so
+    /// these tests follow whatever split the command currently uses.
+    fn declared_split(command_name: &str) -> (Vec<String>, Vec<String>) {
+        let params = step(command_name).command.to_parameters();
+        let names = |advanced: bool| {
+            params
+                .iter()
+                .filter(|p| p.advanced == advanced)
+                .map(|p| p.name.clone())
+                .collect::<Vec<_>>()
+        };
+        (names(false), names(true))
+    }
+
     #[test]
     fn a_step_shows_its_basic_settings_and_counts_the_advanced_ones() {
         let (ui, _ui_state, _controller) = selected(vec![step("ClassifyObjects")]);
@@ -3660,27 +3667,26 @@ mod tests {
             .get_active_commands()
             .row_data(0)
             .unwrap();
-        assert_eq!(
-            ui_names(&cmd.parameters),
-            [
-                "input_classes",
-                "match_handling",
-                "output_class",
-                "size_unit",
-                "min_area",
-                "max_area",
-                "allow_edge_touching"
-            ]
-        );
+        let (basic, advanced) = declared_split("ClassifyObjects");
+        assert!(!advanced.is_empty());
+        assert_eq!(ui_names(&cmd.parameters), basic);
         assert_eq!(cmd.advanced_parameters.row_count(), 0, "collapsed");
-        assert_eq!((cmd.advanced_count, cmd.advanced_changed), (12, 0));
+        let expected = advanced_stats(&step("ClassifyObjects").command.to_parameters());
+        assert_eq!(
+            (cmd.advanced_count as usize, cmd.advanced_changed as usize),
+            expected
+        );
+        assert_eq!(expected.1, 0, "a fresh step has nothing changed");
     }
 
     #[test]
     fn changing_a_hidden_advanced_setting_shows_up_as_changed() {
         let (ui, _ui_state, _controller) = selected(vec![step("ClassifyObjects")]);
         let panel = ui.global::<PipelinesPanelState>();
-        panel.invoke_param_changed(0, "min_circularity".into(), "0.5".into());
+        // An advanced setting (solidity, kept advanced) set off its default.
+        let (_, advanced) = declared_split("ClassifyObjects");
+        assert!(advanced.contains(&"min_solidity".to_string()));
+        panel.invoke_param_changed(0, "min_solidity".into(), "0.5".into());
         assert_eq!(
             panel
                 .get_active_commands()
@@ -3702,10 +3708,11 @@ mod tests {
         drain_ui_queue();
         let classify = commands().row_data(0).unwrap();
         assert!(classify.show_advanced);
-        assert_eq!(classify.advanced_parameters.row_count(), 12);
+        let (basic, advanced) = declared_split("ClassifyObjects");
+        assert_eq!(ui_names(&classify.advanced_parameters), advanced);
         assert_eq!(
-            classify.parameters.row_count(),
-            7,
+            ui_names(&classify.parameters),
+            basic,
             "basic settings stay on top"
         );
         assert_eq!(
@@ -3720,6 +3727,10 @@ mod tests {
         panel.invoke_always_show_advanced_toggled(true);
         drain_ui_queue();
         assert!(panel.get_always_show_advanced());
+        assert!(
+            _ui_state.load_app_settings().always_show_advanced_settings,
+            "remembered in the user settings"
+        );
         let coloc = commands().row_data(1).unwrap();
         assert_eq!(
             ui_names(&coloc.advanced_parameters),

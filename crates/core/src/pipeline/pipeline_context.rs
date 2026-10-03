@@ -281,7 +281,8 @@ impl PipelineContext {
         if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)) {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::F32Rgb(ManagedImage {
-                data: Image::new(size, vec![0f32; size.width * size.height])
+                // Three values (R, G, B) per pixel.
+                data: Image::new(size, vec![0f32; size.width * size.height * 3])
                     .map_err(InternalErrors::from_kornia)?,
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
@@ -1039,6 +1040,128 @@ mod tests {
 
         let result = ctx.get_f32_gray_segmentation_and_instances_mut();
         assert!(matches!(result, Err(InternalErrors::FormatMismatch { .. })));
+    }
+
+    // ---- the wrong image type gives an error, never a panic ----
+
+    fn size(w: usize, h: usize) -> ImageSize {
+        ImageSize {
+            width: w,
+            height: h,
+        }
+    }
+
+    fn rgb_ctx() -> PipelineContext {
+        PipelineContext::new_from_image_test_rgb(
+            Image::<f32, 3>::new(size(2, 1), vec![0.5; 6]).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn gray_ctx() -> PipelineContext {
+        PipelineContext::new_from_image_test(
+            Image::<f32, 1>::new(size(2, 1), vec![0.5; 2]).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn label_ctx() -> PipelineContext {
+        PipelineContext::new_from_u32_image_test(
+            Image::<u32, 1>::new(size(2, 1), vec![1, 2]).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn is_format_mismatch<T>(result: Result<T, InternalErrors>) -> bool {
+        matches!(result, Err(InternalErrors::FormatMismatch { .. }))
+    }
+
+    #[test]
+    fn gray_accessors_reject_an_rgb_image() {
+        assert!(is_format_mismatch(rgb_ctx().get_f32_gray_image()));
+        assert!(is_format_mismatch(rgb_ctx().get_f32_gray_image_mut()));
+        assert!(is_format_mismatch(rgb_ctx().get_gray_img_gray_buf()));
+        assert!(is_format_mismatch(
+            rgb_ctx().get_f32_gray_and_segmentation_mask_mut()
+        ));
+        assert!(is_format_mismatch(
+            rgb_ctx().get_f32_gray_image_and_prep_scratch::<F32Gray>()
+        ));
+    }
+
+    #[test]
+    fn the_rgb_accessor_rejects_a_gray_image() {
+        assert!(is_format_mismatch(gray_ctx().get_rgb_img_rgb_buf()));
+    }
+
+    #[test]
+    fn an_rgb_image_gets_an_rgb_scratchpad_whatever_the_scratchpad_held_before() {
+        // E.g. an earlier step left a gray buffer in the scratchpad.
+        let mut ctx = rgb_ctx();
+        ctx.prepare_f32_gray_scratch().unwrap();
+        let (image, scratch) = ctx
+            .get_rgb_img_rgb_buf()
+            .expect("the RGB scratchpad must be allocated for all three channels");
+        assert_eq!(scratch.size(), image.size());
+        assert_eq!(scratch.as_slice().len(), 2 * 1 * 3);
+    }
+
+    #[test]
+    fn a_label_image_in_the_scratchpad_cannot_become_the_image() {
+        let mut ctx = gray_ctx();
+        ctx.scratch_pad = Arc::new(ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1>::new(size(2, 1), vec![0, 0]).unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }));
+        assert!(is_format_mismatch(ctx.swap()));
+    }
+
+    #[test]
+    fn swapping_segmentations_needs_a_label_scratchpad() {
+        let mut ctx = gray_ctx();
+        ctx.prepare_segmentation_map().unwrap();
+        // The scratchpad holds a gray image, not labels.
+        ctx.prepare_f32_gray_scratch().unwrap();
+        assert!(is_format_mismatch(ctx.swap_scratch_with_segmentations()));
+    }
+
+    #[test]
+    fn a_missing_segmentation_map_is_reported() {
+        let mut ctx = gray_ctx();
+        ctx.segmentation_map = None;
+        assert!(is_format_mismatch(ctx.get_segmentation_map()));
+        assert!(!ctx.does_segmentation_map_exist());
+    }
+
+    #[test]
+    fn size_offset_and_plane_are_read_from_every_image_type() {
+        let plane = Some(ImagePlane { z: 1, c: 2, t: 3 });
+        let offset = Point2d { x: 5, y: 6 };
+        let images = [
+            ImageContainer::F32Gray(ManagedImage {
+                data: Image::<f32, 1>::new(size(2, 1), vec![0.0; 2]).unwrap(),
+                tile_offset: offset,
+                plane,
+            }),
+            ImageContainer::F32Rgb(ManagedImage {
+                data: Image::<f32, 3>::new(size(2, 1), vec![0.0; 6]).unwrap(),
+                tile_offset: offset,
+                plane,
+            }),
+            ImageContainer::U32(ManagedImage {
+                data: Image::<u32, 1>::new(size(2, 1), vec![0; 2]).unwrap(),
+                tile_offset: offset,
+                plane,
+            }),
+        ];
+        for image in images {
+            let mut ctx = gray_ctx();
+            ctx.image = Arc::new(image);
+            assert_eq!(ctx.get_image_size(), size(2, 1));
+            assert_eq!(ctx.get_image_tile_offset(), offset);
+            assert_eq!(ctx.get_image_plane(), plane);
+        }
     }
 
     #[test]

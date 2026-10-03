@@ -3781,12 +3781,20 @@ mod tests {
             viewport_controller.clone(),
         ));
         let image_list_controller = Arc::new(ImagesListController::new(
-            ui,
+            ui.clone(),
             ui_state.clone(),
-            viewport_controller,
+            viewport_controller.clone(),
             histogram_controller,
             image_meta_controller,
-            object_list_controller,
+            object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    ui.clone(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
         ));
         Arc::new(ResultsStateController::new(
             results_ui,

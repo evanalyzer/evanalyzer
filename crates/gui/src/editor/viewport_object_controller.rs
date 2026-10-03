@@ -4,6 +4,7 @@ use crate::PointSlint;
 use crate::ToolState;
 use crate::UiState;
 use crate::ViewportObjectState;
+use crate::editor::classification_controller::ClassificationController;
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_cache::ViewportCache;
@@ -38,6 +39,7 @@ pub struct ViewPortObjectController {
     pub(crate) viewport_cache: Arc<ViewportCache>,
     pub(crate) image_list_controller: Arc<ImagesListController>,
     pub(crate) object_list_controller: Arc<ObjectListController>,
+    pub(crate) classification_controller: Arc<ClassificationController>,
 }
 
 impl ViewPortObjectController {
@@ -48,6 +50,7 @@ impl ViewPortObjectController {
         viewport_cache: Arc<ViewportCache>,
         image_list_controller: Arc<ImagesListController>,
         object_list_controller: Arc<ObjectListController>,
+        classification_controller: Arc<ClassificationController>,
     ) -> Self {
         Self {
             ui,
@@ -56,6 +59,7 @@ impl ViewPortObjectController {
             viewport_cache,
             image_list_controller,
             object_list_controller,
+            classification_controller,
         }
     }
 
@@ -79,6 +83,9 @@ impl ViewPortObjectController {
                     manager.viewport_controller.trigger_image_redraw_objects();
                     manager.image_list_controller.sync_image_list_to_slint();
                     manager.object_list_controller.sync_objects_to_slint();
+                    manager
+                        .classification_controller
+                        .sync_classification_to_slint();
                 },
             );
 
@@ -485,41 +492,63 @@ mod tests {
         Arc<ViewportCache>,
     ) {
         let ui_state = test_ui_state_with_project(project_with_one_image());
-        let viewport_controller = Arc::new(ViewportController::new(
-            slint::Weak::default(),
-            ui_state.clone(),
-        ));
+        let (controller, viewport_cache) = controller_for(slint::Weak::default(), &ui_state);
+        (ui_state, controller, viewport_cache)
+    }
+
+    /// A controller with all its collaborators, on `ui` (`Weak::default()`
+    /// for none).
+    fn controller_for(
+        ui: slint::Weak<AppWindow>,
+        ui_state: &Arc<UiState>,
+    ) -> (Arc<ViewPortObjectController>, Arc<ViewportCache>) {
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
         let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
         let object_list_controller = Arc::new(ObjectListController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             viewport_controller.clone(),
         ));
         let image_list_controller = Arc::new(ImagesListController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             viewport_controller.clone(),
             Arc::new(HistogramController::new(
-                slint::Weak::default(),
+                ui.clone(),
                 ui_state.clone(),
                 viewport_controller.clone(),
             )),
             Arc::new(ImageMetaController::new(
-                slint::Weak::default(),
+                ui.clone(),
                 ui_state.clone(),
                 viewport_controller.clone(),
             )),
             object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    ui.clone(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
+        ));
+        let classification_controller = Arc::new(ClassificationController::new(
+            ui.clone(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
         ));
         let controller = Arc::new(ViewPortObjectController::new(
-            slint::Weak::default(),
+            ui,
             ui_state.clone(),
             viewport_controller,
             viewport_cache.clone(),
             image_list_controller,
             object_list_controller,
+            classification_controller,
         ));
-        (ui_state, controller, viewport_cache)
+        (controller, viewport_cache)
     }
 
     // -- find_object_from_clicked_coordinates --------------------------------------
@@ -626,6 +655,49 @@ mod tests {
         assert_eq!(objects[0].bbox, [2, 2, 5, 5]);
         // A rectangle mask fills every pixel in its bbox.
         assert_eq!(objects[0].area, 4 * 4);
+    }
+
+    #[test]
+    fn painting_an_annotation_updates_the_class_counts_right_away() {
+        use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+        use crate::helper::ui_thread::drain_ui_queue;
+        use crate::{ClassificationState, ToolState, ViewportObjectState};
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, project_with_one_image());
+        let nuclei = {
+            use evanalyzer_app::prelude::classification_ext::ClassificationExt;
+            let mut project = ui_state.get_project_write();
+            let id = project.classification.add_class(
+                evanalyzer_cfg::settings::classification_settings::Class {
+                    name: "Nuclei".into(),
+                    ..Default::default()
+                },
+            );
+            project.set_selected_object_class(id);
+            id
+        };
+        assert!(matches!(
+            nuclei,
+            evanalyzer_cfg::core_types::ObjectClass::Valid(_)
+        ));
+        let (controller, viewport_cache) = controller_for(ui.as_weak(), &ui_state);
+        seed_image_cache(&viewport_cache);
+        controller.attach_callbacks();
+        let total = || {
+            ui.global::<ClassificationState>()
+                .get_total_visible_objects()
+        };
+        assert_eq!(total(), 0);
+
+        ui.global::<ViewportObjectState>()
+            .invoke_object_paint_finished(
+                points(&[(2.0, 2.0), (5.0, 5.0)]),
+                ToolState::PaintRectangle,
+                0,
+            );
+        drain_ui_queue();
+
+        assert_eq!(total(), 1, "counted without switching tabs");
     }
 
     #[test]

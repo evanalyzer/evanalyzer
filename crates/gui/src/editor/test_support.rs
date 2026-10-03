@@ -31,15 +31,26 @@ pub(crate) fn test_ui_state() -> Arc<UiState> {
 /// Same as [`test_ui_state`], but seeded with `project` instead of an empty
 /// default - see [`project_with_one_image`] for a ready-made single-image
 /// fixture.
+/// A settings file of its own for every test `UiState`, so a test saving a
+/// preference never touches the user's real `settings.json` (nor another
+/// test's).
+pub(crate) fn temp_settings_file() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    std::env::temp_dir().join(format!(
+        "evanalyzer-test-settings-{}-{}.json",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
 pub(crate) fn test_ui_state_with_project(project: ProjectWithRuntime) -> Arc<UiState> {
     let owner = ProjectOwner::new();
     let handle = owner.handle();
     *handle.get_project_write() = project;
-    Arc::new(UiState::new(
-        handle,
-        slint::Weak::default(),
-        slint::Weak::default(),
-    ))
+    let mut ui_state = UiState::new(handle, slint::Weak::default(), slint::Weak::default());
+    ui_state.app_settings_file = temp_settings_file();
+    Arc::new(ui_state)
 }
 
 /// A minimal project with one 2x2, 2-channel image set as "current" (i.e.
@@ -192,7 +203,9 @@ pub(crate) fn ui_state_with_windows(
     let handle = owner.handle();
     *handle.get_project_write() = project;
     use slint::ComponentHandle;
-    let ui_state = Arc::new(UiState::new(handle, ui.as_weak(), results_ui.as_weak()));
+    let mut ui_state = UiState::new(handle, ui.as_weak(), results_ui.as_weak());
+    ui_state.app_settings_file = temp_settings_file();
+    let ui_state = Arc::new(ui_state);
     ui_state.file_browser.attach(ui);
     ui_state.results_file_browser.attach(results_ui);
     ui_state
@@ -233,4 +246,36 @@ where
         }
     }
     drain_ui_queue();
+}
+
+/// A [`FocusController`](crate::editor::focus_controller::FocusController)
+/// with its collaborators, for tests building a `PipelinesController`.
+pub(crate) fn test_focus_controller(
+    ui: slint::Weak<crate::AppWindow>,
+    ui_state: &Arc<UiState>,
+    object_list: &Arc<crate::editor::object_list_controller::ObjectListController>,
+    viewport: &Arc<crate::editor::viewport_controller::ViewportController>,
+) -> Arc<crate::editor::focus_controller::FocusController> {
+    let image_meta = Arc::new(
+        crate::editor::image_meta_controller::ImageMetaController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport.clone(),
+        ),
+    );
+    let classification = Arc::new(
+        crate::editor::classification_controller::ClassificationController::new(
+            ui.clone(),
+            ui_state.clone(),
+            object_list.clone(),
+            viewport.clone(),
+        ),
+    );
+    Arc::new(crate::editor::focus_controller::FocusController::new(
+        ui,
+        ui_state.clone(),
+        image_meta,
+        classification,
+        viewport.clone(),
+    ))
 }

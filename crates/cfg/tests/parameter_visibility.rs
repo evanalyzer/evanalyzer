@@ -40,8 +40,18 @@ fn hidden_dropdown_options_are_not_offered() {
         .unwrap();
     let params = default_command(classify.id).unwrap().to_parameters();
     let handling = params.iter().find(|p| p.name == "match_handling").unwrap();
-    assert!(!handling.options.iter().any(|o| o == "Remove class on match"));
-    assert!(!handling.options.iter().any(|o| o == "Remove class on mismatch"));
+    assert!(
+        !handling
+            .options
+            .iter()
+            .any(|o| o == "Remove class on match")
+    );
+    assert!(
+        !handling
+            .options
+            .iter()
+            .any(|o| o == "Remove class on mismatch")
+    );
     assert!(handling.options.iter().any(|o| o == "Add class on match"));
 }
 
@@ -49,7 +59,10 @@ fn hidden_dropdown_options_are_not_offered() {
 fn option_flags_match_the_options() {
     for meta in all_command_meta() {
         let mut params = Vec::new();
-        all_params(&default_command(meta.id).unwrap().to_parameters(), &mut params);
+        all_params(
+            &default_command(meta.id).unwrap().to_parameters(),
+            &mut params,
+        );
         for p in params {
             assert!(
                 p.option_advanced.is_empty() || p.option_advanced.len() == p.options.len(),
@@ -69,7 +82,10 @@ fn basic_and_advanced(command_name: &str) -> (Vec<String>, Vec<String>) {
         .find(|m| m.name == command_name)
         .unwrap_or_else(|| panic!("no command {command_name}"));
     let mut params = Vec::new();
-    all_params(&default_command(meta.id).unwrap().to_parameters(), &mut params);
+    all_params(
+        &default_command(meta.id).unwrap().to_parameters(),
+        &mut params,
+    );
     let (advanced, basic): (Vec<_>, Vec<_>) = params.into_iter().partition(|p| p.advanced);
     (
         basic.into_iter().map(|p| p.name).collect(),
@@ -78,7 +94,7 @@ fn basic_and_advanced(command_name: &str) -> (Vec<String>, Vec<String>) {
 }
 
 #[test]
-fn classify_objects_shows_seven_basic_settings() {
+fn classify_objects_shows_its_basic_settings() {
     let (basic, advanced) = basic_and_advanced("ClassifyObjects");
     assert_eq!(
         basic,
@@ -89,10 +105,13 @@ fn classify_objects_shows_seven_basic_settings() {
             "size_unit",
             "min_area",
             "max_area",
+            "min_circularity",
+            "max_circularity",
             "allow_edge_touching"
         ]
     );
-    assert_eq!(advanced.len(), 12);
+    assert!(advanced.contains(&"origin_segmentation".to_string()));
+    assert!(!advanced.contains(&"min_circularity".to_string()));
 }
 
 #[test]

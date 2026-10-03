@@ -25,16 +25,12 @@ use log::warn;
 use slint::ComponentHandle;
 use std::sync::Arc;
 
-/// Persists the focus-mode switch.
-pub type SaveFocusMode = Box<dyn Fn(bool) + Send + Sync>;
-
 pub struct FocusController {
     ui: slint::Weak<AppWindow>,
     app_state: Arc<UiState>,
     image_meta_controller: Arc<ImageMetaController>,
     classification_controller: Arc<ClassificationController>,
     viewport_controller: Arc<ViewportController>,
-    save_mode: SaveFocusMode,
 }
 
 impl FocusController {
@@ -44,7 +40,6 @@ impl FocusController {
         image_meta_controller: Arc<ImageMetaController>,
         classification_controller: Arc<ClassificationController>,
         viewport_controller: Arc<ViewportController>,
-        save_mode: SaveFocusMode,
     ) -> Self {
         Self {
             ui,
@@ -52,17 +47,16 @@ impl FocusController {
             image_meta_controller,
             classification_controller,
             viewport_controller,
-            save_mode,
         }
     }
 
-    /// Wires the Slint callbacks; `initial_mode` is the remembered switch.
-    pub fn attach_callbacks(self: &Arc<Self>, initial_mode: bool) {
+    /// Wires the Slint callbacks and restores the remembered switch.
+    pub fn attach_callbacks(self: &Arc<Self>) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
         let state = ui.global::<PipelineFocusState>();
-        state.set_enabled(initial_mode);
+        state.set_enabled(self.app_state.load_app_settings().pipeline_focus_mode);
 
         let this = self.clone();
         state.on_toggle_mode(move || {
@@ -71,7 +65,8 @@ impl FocusController {
             };
             let on = !ui.global::<PipelineFocusState>().get_enabled();
             ui.global::<PipelineFocusState>().set_enabled(on);
-            (this.save_mode)(on);
+            this.app_state
+                .update_app_settings(|settings| settings.pipeline_focus_mode = on);
             if on {
                 let active = ui.global::<PipelinesPanelState>().get_active_pipeline_id();
                 this.focus(active);
@@ -121,7 +116,7 @@ impl FocusController {
     /// banner always.
     pub fn refresh(&self) {
         let changed = {
-            let mut project = self.app_state.get_project_write();
+            let mut project = self.app_state.get_project_runtime_write();
             let before = project.tmp_settings.pipeline_focus.clone();
             project.refresh_pipeline_focus();
             project.tmp_settings.pipeline_focus != before
@@ -138,13 +133,15 @@ impl FocusController {
             return;
         }
         self.app_state
-            .get_project_write()
+            .get_project_runtime_write()
             .focus_pipeline(pipeline_id_of(pipeline_id));
         self.apply();
     }
 
     fn clear(&self) {
-        self.app_state.get_project_write().clear_pipeline_focus();
+        self.app_state
+            .get_project_runtime_write()
+            .clear_pipeline_focus();
         self.apply();
     }
 
@@ -199,7 +196,6 @@ mod tests {
     use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
     use evanalyzer_cfg::settings::pipeline_command_settings::TransformObjectsSettings;
     use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
-    use std::sync::Mutex;
 
     fn pipeline(id: u32, name: &str, class: u32) -> PipelineSettings {
         PipelineSettings {
@@ -224,7 +220,6 @@ mod tests {
         _results_ui: crate::ResultsWindow,
         ui_state: Arc<UiState>,
         controller: Arc<FocusController>,
-        saved: Arc<Mutex<Vec<bool>>>,
     }
 
     fn fixture(initial_mode: bool) -> Fixture {
@@ -251,27 +246,29 @@ mod tests {
             ui_state.clone(),
             viewport.clone(),
         ));
-        let saved = Arc::new(Mutex::new(Vec::new()));
-        let saved_in = saved.clone();
+        // The remembered switch, in this test's own settings file.
+        ui_state.update_app_settings(|settings| settings.pipeline_focus_mode = initial_mode);
         let controller = Arc::new(FocusController::new(
             weak,
             ui_state.clone(),
             image_meta,
             classification,
             viewport,
-            Box::new(move |on| saved_in.lock().unwrap().push(on)),
         ));
-        controller.attach_callbacks(initial_mode);
+        controller.attach_callbacks();
         Fixture {
             ui,
             _results_ui: results_ui,
             ui_state,
             controller,
-            saved,
         }
     }
 
     impl Fixture {
+        /// The focus mode saved in the user settings.
+        fn remembered(&self) -> bool {
+            self.ui_state.load_app_settings().pipeline_focus_mode
+        }
         fn focused(&self) -> Option<PipelineId> {
             self.ui_state.get_project().focused_pipeline()
         }
@@ -282,6 +279,18 @@ mod tests {
             drain_ui_queue();
             self.state().get_focused_pipeline_name().to_string()
         }
+    }
+
+    #[test]
+    fn focusing_creates_no_undo_step() {
+        // The focus is runtime state: an undo checkpoint for it would be an
+        // empty undo step, and right after an undo it would clear the redo
+        // stack.
+        let f = fixture(true);
+        f.state().invoke_pipeline_selected(1);
+        f.controller.refresh();
+        f.state().invoke_exit();
+        assert!(!f.ui_state.undo(), "nothing to undo");
     }
 
     #[test]
@@ -314,12 +323,13 @@ mod tests {
         f.state().invoke_toggle_mode();
         assert!(f.state().get_enabled());
         assert_eq!(f.focused(), Some(PipelineId(2)));
+        assert!(f.remembered());
 
         f.state().invoke_toggle_mode();
         assert!(!f.state().get_enabled());
         assert_eq!(f.focused(), None);
         assert_eq!(f.banner(), "");
-        assert_eq!(*f.saved.lock().unwrap(), vec![true, false]);
+        assert!(!f.remembered());
     }
 
     #[test]
@@ -336,7 +346,7 @@ mod tests {
         f.state().invoke_toggle_pipeline_focus(2);
         assert_eq!(f.focused(), None);
         assert!(!f.state().get_enabled());
-        assert!(f.saved.lock().unwrap().is_empty());
+        assert!(!f.remembered(), "quick focus doesn't change the preference");
     }
 
     #[test]
@@ -364,7 +374,7 @@ mod tests {
         f.state().invoke_exit();
         assert_eq!(f.focused(), None);
         assert!(!f.state().get_enabled());
-        assert!(f.saved.lock().unwrap().is_empty());
+        assert!(f.remembered(), "\"Show all\" doesn't change the preference");
     }
 
     #[test]

@@ -786,6 +786,261 @@ mod tests {
         assert!(planes.iter().all(|p| p == &vec![0.25, 0.75]));
     }
 
+    // ---- decoding, masks and outputs with hand-built tensors ----
+
+    /// One prediction row: box (centre x/y, width, height, in window px),
+    /// objectness, `classes` class scores and `coefficients`.
+    fn row(
+        cx: f32,
+        cy: f32,
+        w: f32,
+        h: f32,
+        obj: f32,
+        classes: &[f32],
+        coefficients: &[f32],
+    ) -> Vec<f32> {
+        let mut r = vec![cx, cy, w, h, obj];
+        r.extend_from_slice(classes);
+        r.extend_from_slice(coefficients);
+        r
+    }
+
+    fn pred(rows: &[Vec<f32>]) -> Tensor {
+        let cols = rows[0].len() as i64;
+        let flat: Vec<f32> = rows.iter().flatten().copied().collect();
+        Tensor::from_slice(&flat).reshape([1, rows.len() as i64, cols])
+    }
+
+    /// `[1, 1, 160, 160]` prototypes of value `v`.
+    fn proto(v: f32) -> Tensor {
+        Tensor::full([1, 1, 160, 160], v as f64, (Kind::Float, Device::Cpu))
+    }
+
+    #[test]
+    fn decode_window_places_a_detection_and_its_mask_in_tile_coordinates() {
+        // A 100x100 box at (100..200, 140..240) in the window at (512, 0)
+        // of a 2000x700 tile; coefficient 5 on all-one prototypes: a full mask.
+        let p = pred(&[row(150.0, 190.0, 100.0, 100.0, 0.9, &[0.1, 0.8], &[5.0])]);
+        let out = yolo()
+            .decode_window(&p, Some(&proto(1.0)), 512, 0, 2000, 700)
+            .unwrap();
+        assert_eq!(out.len(), 1);
+        let d = &out[0];
+        assert_eq!(d.class, 1);
+        assert!((d.score - 0.72).abs() < 1e-6, "objectness x class score");
+        assert_eq!(d.bbox, [612.0, 140.0, 712.0, 240.0]);
+        let [rx, ry, rw, rh] = d.mask_rect;
+        assert!(rx <= 612 && ry <= 140 && rx + rw >= 712 && ry + rh >= 240);
+        let filled = d.mask.as_ref().unwrap().iter().filter(|&&m| m).count();
+        assert!(
+            (filled as i64 - 100 * 100).abs() <= 2 * 400,
+            "mask about the box: {filled}"
+        );
+    }
+
+    #[test]
+    fn decode_window_drops_unconfident_and_overlapping_detections() {
+        let p = pred(&[
+            row(100.0, 100.0, 40.0, 40.0, 0.2, &[0.9], &[]), // objectness too low
+            row(300.0, 300.0, 40.0, 40.0, 0.9, &[0.2], &[]), // 0.18 overall: too low
+            row(500.0, 500.0, 40.0, 40.0, 0.9, &[0.9], &[]), // kept
+            row(502.0, 500.0, 40.0, 40.0, 0.8, &[0.9], &[]), // same class, overlaps: merged
+        ]);
+        let out = yolo().decode_window(&p, None, 0, 0, 640, 640).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!((out[0].score - 0.81).abs() < 1e-6);
+        assert!(
+            out[0].mask.is_none(),
+            "a detection model gives filled boxes"
+        );
+    }
+
+    #[test]
+    fn decode_window_drops_boxes_cut_by_an_inner_window_edge_only() {
+        // A box touching the window's left edge: cut off if that edge lies
+        // inside the tile (window at x 512), real if it is the tile border.
+        let p = pred(&[row(20.0, 300.0, 40.0, 40.0, 0.9, &[0.9], &[])]);
+        assert!(
+            yolo()
+                .decode_window(&p, None, 512, 0, 2000, 640)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            yolo()
+                .decode_window(&p, None, 0, 0, 2000, 640)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn decode_window_clips_boxes_to_a_small_tile() {
+        // A 300x200 tile in a padded window: a box reaching into the padding
+        // is cut at the tile border.
+        let p = pred(&[row(280.0, 100.0, 80.0, 40.0, 0.9, &[0.9], &[])]);
+        let d = &yolo().decode_window(&p, None, 0, 0, 300, 200).unwrap()[0];
+        assert_eq!(d.bbox, [240.0, 80.0, 300.0, 120.0]);
+        assert_eq!(d.mask_rect, [240, 80, 60, 40]);
+    }
+
+    #[test]
+    fn decode_window_rejects_a_prediction_with_too_few_columns() {
+        let p = pred(&[vec![0.0; 5]]);
+        assert!(
+            yolo()
+                .decode_window(&p, Some(&proto(1.0)), 0, 0, 640, 640)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn negative_mask_coefficients_give_an_empty_mask() {
+        let p = pred(&[row(320.0, 320.0, 100.0, 100.0, 0.9, &[0.9], &[-5.0])]);
+        let d = &yolo()
+            .decode_window(&p, Some(&proto(1.0)), 0, 0, 640, 640)
+            .unwrap()[0];
+        assert!(d.mask.as_ref().unwrap().iter().all(|&m| !m));
+    }
+
+    #[test]
+    fn split_outputs_finds_prediction_and_prototypes() {
+        let tuple = IValue::Tuple(vec![
+            IValue::Tensor(proto(1.0)),
+            IValue::Tensor(pred(&[vec![0.0; 6]])),
+        ]);
+        let (p, prototypes) = Yolov5::split_outputs(tuple).unwrap();
+        assert_eq!(p.dim(), 3);
+        assert_eq!(prototypes.unwrap().dim(), 4);
+
+        let (_, none) = Yolov5::split_outputs(IValue::Tensor(pred(&[vec![0.0; 6]]))).unwrap();
+        assert!(none.is_none(), "a detection model has no prototypes");
+
+        assert!(Yolov5::split_outputs(IValue::Tensor(proto(1.0))).is_err());
+    }
+
+    // ---- execute() with a traced detection model ----
+
+    /// A detection model (single output) that always reports one 100x100
+    /// box of class 1 at the window centre.
+    fn centre_box_model() -> (tempfile::TempDir, PathBuf) {
+        crate::algos::ai_segmentation::test_support::trace_and_save_model(3, 640, 640, |x| {
+            // Built from the input with plain numbers: a tensor created inside
+            // the traced closure (e.g. `Tensor::from_slice`) is saved as zeros.
+            let one = x.mean(Kind::Float) * 0.0 + 1.0;
+            let values = [320.0, 320.0, 100.0, 100.0, 0.9, 0.1, 0.9];
+            let columns: Vec<Tensor> = values.iter().map(|&v| &one * v).collect();
+            Tensor::stack(&columns, 0).reshape([1, 1, 7])
+        })
+    }
+
+    fn objects(ctx: &PipelineContext) -> Vec<(u32, usize)> {
+        let inst = ctx.get_instance_map().unwrap().as_slice();
+        let seg = ctx.get_segmentation_map().unwrap().as_slice();
+        let max = inst.iter().copied().max().unwrap_or(0);
+        (1..=max)
+            .map(|id| {
+                let px: Vec<usize> = (0..inst.len()).filter(|&i| inst[i] == id).collect();
+                (seg[px[0]], px.len())
+            })
+            .collect()
+    }
+
+    fn gray(width: usize, height: usize) -> PipelineContext {
+        PipelineContext::new_from_image_test(
+            Image::<f32, 1>::new(ImageSize { width, height }, vec![0.5; width * height]).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn execute_segments_a_gray_tile_with_a_detection_model() {
+        let (_dir, model_path) = centre_box_model();
+        let cmd = Yolov5 {
+            model_path,
+            ..yolo()
+        };
+        let mut ctx = gray(640, 640);
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        // Model class 1 -> segmentation class 2; a filled 100x100 box.
+        assert_eq!(objects(&ctx), vec![(2, 100 * 100)]);
+    }
+
+    #[test]
+    fn execute_runs_one_detection_per_window_on_a_large_tile() {
+        // 1000x700: windows at x 0 and 360, y 0 and 60 - each reports its own
+        // centre box, so four objects at distinct places.
+        let (_dir, model_path) = centre_box_model();
+        let cmd = Yolov5 {
+            model_path,
+            ..yolo()
+        };
+        let mut ctx = gray(1000, 700);
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        let found = objects(&ctx);
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert!(found.iter().all(|&(class, _)| class == 2));
+    }
+
+    #[test]
+    fn execute_scales_the_image_and_the_masks_back() {
+        // A 1280x1280 RGB tile at scale 0.5 is one 640 window; the 100 px box
+        // there is 200 px in the tile.
+        let (_dir, model_path) = centre_box_model();
+        let cmd = Yolov5 {
+            model_path,
+            image_scale: 0.5,
+            ..yolo()
+        };
+        let mut ctx = PipelineContext::new_from_image_test_rgb(
+            Image::<f32, 3>::new(
+                ImageSize {
+                    width: 1280,
+                    height: 1280,
+                },
+                vec![0.5; 1280 * 1280 * 3],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        assert_eq!(objects(&ctx), vec![(2, 200 * 200)]);
+    }
+
+    #[test]
+    fn execute_drops_classes_the_mapping_leaves_out() {
+        let (_dir, model_path) = centre_box_model();
+        let cmd = Yolov5 {
+            model_path,
+            class_mapping: vec![YoloClassMapping {
+                model_class: 0,
+                segmentation_class: SegmentationClass(3),
+            }],
+            ..yolo()
+        };
+        let mut ctx = gray(640, 640);
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        assert!(objects(&ctx).is_empty());
+    }
+
+    #[test]
+    fn execute_explains_a_model_that_cannot_be_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = Yolov5 {
+            model_path: dir.path().join("missing.pt"),
+            ..yolo()
+        };
+        let err = cmd
+            .execute(&mut gray(64, 64), &mut GlobalPipelineCache::default())
+            .unwrap_err();
+        assert!(matches!(err, InternalErrors::Generic(msg) if msg.contains("TorchScript")));
+    }
+
     /// Reads a little-endian `.npy` file of 4-byte values.
     fn read_npy_4byte(path: &std::path::Path) -> Vec<[u8; 4]> {
         let bytes = std::fs::read(path)

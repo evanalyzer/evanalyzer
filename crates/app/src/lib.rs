@@ -18,7 +18,10 @@ pub mod global {
     pub use crate::workspace::crash_log;
     pub use crate::workspace::settings::AppSettings;
     pub use crate::workspace::settings::load_app_settings;
+    pub use crate::workspace::settings::load_app_settings_from;
     pub use crate::workspace::settings::save_app_settings;
+    pub use crate::workspace::settings::save_app_settings_to;
+    pub use crate::workspace::settings::settings_file_path;
 }
 
 pub mod system {

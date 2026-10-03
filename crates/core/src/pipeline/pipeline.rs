@@ -110,6 +110,26 @@ impl Pipeline {
         }
     }
 
+    /// Says which start image is missing - and what to do about it - when
+    /// the pipeline's image isn't available.
+    fn missing_start_image_message(&self) -> String {
+        match self.settings.start_image {
+            ImageAddress::Channel(channel) => format!(
+                "pipeline {} reads image channel {channel}, which this image doesn't have \
+                 (or which could not be read) - check the pipeline's image source",
+                self.id
+            ),
+            ImageAddress::Memory(slot) => format!(
+                "pipeline {} starts from memory slot {slot:?}, which no earlier pipeline \
+                 stored - add an Image Cache step that stores it to a pipeline running before",
+                self.id
+            ),
+            ImageAddress::Scratchpad => {
+                format!("pipeline {}: its start image is not available", self.id)
+            }
+        }
+    }
+
     /// Execute this pipeline's per-tile (`ExecutionScope::Tile`) commands.
     ///
     /// Called once per tile, before tile-merge has reconciled the image's
@@ -151,7 +171,9 @@ impl Pipeline {
         };
 
         let Some(initial_image) = cache.get_image_from_cache(&cache_idx, tile) else {
-            return Err(InternalErrors::CacheMiss("Image not found in cache".into()));
+            return Err(InternalErrors::CacheMiss(
+                self.missing_start_image_message(),
+            ));
         };
 
         let mut ctx = PipelineContext::new_from_image(

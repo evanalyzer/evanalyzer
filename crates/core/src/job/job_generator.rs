@@ -33,6 +33,7 @@ pub fn generate_preview_job_from_project_settings(
     config: ProjectSettings,
     project_path: PathBuf,
 ) -> Result<(JobExecutor, Arc<Mutex<Vec<ObjectMetricSettings>>>), InternalErrors> {
+    check_pipeline_channels(&config)?;
     let out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>> = Arc::new(Mutex::new(vec![]));
     let memory_storage = Arc::new(Mutex::new(MemoryExporter {
         out_objects: out_objects.clone(),
@@ -69,6 +70,9 @@ pub fn generate_analyze_job_from_project_settings(
     project_path: PathBuf,
     job_name: Option<String>,
 ) -> Result<JobExecutor, InternalErrors> {
+    // Before anything is created on disk: a refused start leaves no empty
+    // results folder behind.
+    check_pipeline_channels(&config)?;
     let class_names: std::collections::HashMap<_, _> = config
         .classification
         .classes()
@@ -115,6 +119,65 @@ pub fn generate_analyze_job_from_project_settings(
     write_project_snapshot(&config, &output_path, &job_name);
 
     generate_job_from_project_settings_intenal(config, project_path, output_path, database_storage)
+}
+
+/// Refuses to start when an enabled pipeline reads an image channel some of
+/// the images don't have - such a pipeline would silently produce nothing
+/// for them (the image reader skips channels an image lacks). Checked against
+/// the channels stored for each image in the project; images without that
+/// information are left to the run itself.
+pub fn check_pipeline_channels(config: &ProjectSettings) -> Result<(), InternalErrors> {
+    const LISTED: usize = 5;
+    let mut problems = Vec::new();
+    for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
+        let ImageAddress::Channel(channel) = pipeline.image_source else {
+            continue;
+        };
+        let missing: Vec<String> = config
+            .images
+            .list
+            .values()
+            .filter_map(|image| {
+                let series = image.series.get(&image.selected_series)?;
+                if series.channels.is_empty() || series.channels.contains_key(&channel) {
+                    return None;
+                }
+                let available: Vec<String> =
+                    series.channels.keys().map(|c| c.to_string()).collect();
+                Some(format!(
+                    "{} (channels {})",
+                    image.rel_path.display(),
+                    available.join(", ")
+                ))
+            })
+            .collect();
+        if missing.is_empty() {
+            continue;
+        }
+        let mut listed = missing
+            .iter()
+            .take(LISTED)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if missing.len() > LISTED {
+            listed.push_str(&format!(" and {} more", missing.len() - LISTED));
+        }
+        let message = format!(
+            "pipeline '{}' reads channel {channel}, which {} image(s) don't have: {listed}",
+            pipeline.name,
+            missing.len()
+        );
+        warn!("{message}");
+        problems.push(message);
+    }
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(InternalErrors::InvalidArgument(format!(
+        "Cannot start: {}. Change the pipeline's image source, or remove those images.",
+        problems.join("; ")
+    )))
 }
 
 /// Writes a full copy of `config` as `<job_name>.evaproj` next to the run's
@@ -281,6 +344,143 @@ mod tests {
         project.images.root = root;
         project.pipelines = pipelines;
         project
+    }
+
+    // ---- pipelines reading channels the images don't have ----
+
+    /// An image whose selected series has the given channels (empty = no
+    /// channel information stored).
+    fn image(
+        name: &str,
+        channels: &[i32],
+    ) -> evanalyzer_cfg::settings::images_settings::ImageEntry {
+        use evanalyzer_cfg::settings::images_settings::{
+            ChannelSettings, ImageEntry, SeriesSettings,
+        };
+        let series = SeriesSettings {
+            channels: channels
+                .iter()
+                .map(|&c| {
+                    (
+                        c,
+                        ChannelSettings {
+                            name: format!("C{c}"),
+                            emission_wave_length: None,
+                            visible: None,
+                            histogram: None,
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        };
+        ImageEntry {
+            rel_path: PathBuf::from(name),
+            file_size: 0,
+            selected_series: 0,
+            series: std::collections::BTreeMap::from([(0, series)]),
+        }
+    }
+
+    fn named(id: u32, name: &str, source: ImageAddress, enabled: bool) -> PipelineSettings {
+        PipelineSettings {
+            name: name.into(),
+            image_source: source,
+            ..pipeline(id, enabled, vec![blur_step(true)])
+        }
+    }
+
+    fn project_with_images(
+        pipelines: Vec<PipelineSettings>,
+        images: Vec<evanalyzer_cfg::settings::images_settings::ImageEntry>,
+    ) -> ProjectSettings {
+        let mut project = project_with(None, pipelines);
+        for img in images {
+            project.images.list.insert(img.rel_path.clone(), img);
+        }
+        project
+    }
+
+    #[test]
+    fn a_pipeline_reading_a_missing_channel_is_refused_with_a_clear_message() {
+        let project = project_with_images(
+            vec![named(1, "Spots", ImageAddress::Channel(2), true)],
+            vec![image("a.tif", &[0, 1, 2]), image("b.tif", &[0, 1])],
+        );
+        let err = check_pipeline_channels(&project).unwrap_err();
+        let InternalErrors::InvalidArgument(message) = err else {
+            panic!("expected InvalidArgument");
+        };
+        assert!(
+            message.contains("pipeline 'Spots' reads channel 2"),
+            "{message}"
+        );
+        assert!(message.contains("b.tif (channels 0, 1)"), "{message}");
+        assert!(!message.contains("a.tif"), "a.tif has channel 2: {message}");
+    }
+
+    #[test]
+    fn only_enabled_channel_pipelines_against_known_channels_are_checked() {
+        use evanalyzer_cfg::core_types::MemoryId;
+        let project = project_with_images(
+            vec![
+                named(1, "Off", ImageAddress::Channel(5), false),
+                named(2, "Scratch", ImageAddress::Scratchpad, true),
+                named(
+                    3,
+                    "Memory",
+                    ImageAddress::Memory(MemoryId::PipelineContext(1)),
+                    true,
+                ),
+                named(4, "Fine", ImageAddress::Channel(0), true),
+            ],
+            vec![image("a.tif", &[0]), image("unknown.tif", &[])],
+        );
+        assert!(check_pipeline_channels(&project).is_ok());
+    }
+
+    #[test]
+    fn many_affected_images_are_summarized() {
+        let images = (0..8)
+            .map(|i| image(&format!("img{i}.tif"), &[0]))
+            .collect();
+        let project = project_with_images(
+            vec![named(1, "Red", ImageAddress::Channel(1), true)],
+            images,
+        );
+        let InternalErrors::InvalidArgument(message) =
+            check_pipeline_channels(&project).unwrap_err()
+        else {
+            panic!("expected InvalidArgument");
+        };
+        assert!(message.contains("8 image(s)"), "{message}");
+        assert!(message.contains("and 3 more"), "{message}");
+    }
+
+    #[test]
+    fn a_refused_analysis_leaves_no_results_folder_behind() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let mut project = project_with_images(
+            vec![named(1, "Spots", ImageAddress::Channel(3), true)],
+            vec![image("a.tif", &[0])],
+        );
+        project.images.root = Some(image_root.path().to_path_buf());
+
+        assert!(
+            generate_analyze_job_from_project_settings(
+                project.clone(),
+                project_dir.path().to_path_buf(),
+                None
+            )
+            .is_err()
+        );
+        assert!(!project_dir.path().join("results").exists());
+        assert!(
+            generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
+                .is_err(),
+            "the preview is refused as well"
+        );
     }
 
     #[test]

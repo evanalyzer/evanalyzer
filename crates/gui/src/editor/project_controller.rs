@@ -1178,6 +1178,14 @@ mod tests {
                 viewport_controller.clone(),
             )),
             object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    ui.clone(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
         ));
         let project_settings_controller = Arc::new(ProjectSettingsController::new(
             ui.clone(),
@@ -1197,6 +1205,12 @@ mod tests {
             object_list_controller.clone(),
             viewport_controller.clone(),
             template_controller.clone(),
+            crate::editor::test_support::test_focus_controller(
+                ui.clone(),
+                &ui_state,
+                &object_list_controller,
+                &viewport_controller,
+            ),
         ));
         let results_table_controller = Arc::new(ResultsStateController::new(
             results_ui.clone(),

@@ -78,6 +78,10 @@ pub struct UiState {
     /// "Redo" could later resurrect a state that no longer follows from what
     /// the user just did.
     force_next_checkpoint: AtomicBool,
+    /// The user's settings file (`settings.json`) the editor's remembered
+    /// preferences are read from and written to. Tests point it at a
+    /// temporary file.
+    pub app_settings_file: std::path::PathBuf,
 }
 
 impl UiState {
@@ -98,7 +102,24 @@ impl UiState {
             redo_stack: Mutex::new(VecDeque::new()),
             last_checkpoint_at: Mutex::new(Instant::now()),
             force_next_checkpoint: AtomicBool::new(false),
+            app_settings_file: evanalyzer_app::global::settings_file_path(),
         }
+    }
+
+    /// The user's remembered preferences (see `app_settings_file`).
+    pub fn load_app_settings(&self) -> evanalyzer_app::global::AppSettings {
+        evanalyzer_app::global::load_app_settings_from(&self.app_settings_file)
+    }
+
+    /// Changes one preference and saves - loading first, so every other
+    /// preference keeps its value.
+    pub fn update_app_settings(
+        &self,
+        change: impl FnOnce(&mut evanalyzer_app::global::AppSettings),
+    ) {
+        let mut settings = self.load_app_settings();
+        change(&mut settings);
+        evanalyzer_app::global::save_app_settings_to(&self.app_settings_file, &settings);
     }
 
     /// Acquire a read guard for the project.
@@ -111,6 +132,14 @@ impl UiState {
     /// Exclusive - never hold a read guard on the same thread when calling this.
     pub fn get_project_write(&self) -> RwLockWriteGuard<'_, ProjectWithRuntime> {
         self.maybe_checkpoint_undo();
+        self.app.get_project_write()
+    }
+
+    /// Write access for runtime-only state (`tmp_settings`, e.g. the pipeline
+    /// focus) that is not part of the undo history: takes no undo checkpoint.
+    /// A checkpoint here would be an empty undo step - and right after an
+    /// undo it would even clear the redo stack.
+    pub fn get_project_runtime_write(&self) -> RwLockWriteGuard<'_, ProjectWithRuntime> {
         self.app.get_project_write()
     }
 

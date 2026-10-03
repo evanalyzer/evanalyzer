@@ -30,29 +30,33 @@ pub fn get_user_folder() -> PathBuf {
     folder
 }
 
-fn settings_file_path() -> std::path::PathBuf {
+/// The user's settings file (`<user folder>/settings.json`).
+pub fn settings_file_path() -> std::path::PathBuf {
     get_user_folder().join("settings.json")
 }
 
 /// Loads the persisted app settings, falling back to defaults if the file
 /// doesn't exist yet or fails to parse.
 pub fn load_app_settings() -> AppSettings {
-    load_from(&settings_file_path())
+    load_app_settings_from(&settings_file_path())
 }
 
 /// Persists the app settings, overwriting whatever was there before.
 pub fn save_app_settings(settings: &AppSettings) {
-    save_to(&settings_file_path(), settings)
+    save_app_settings_to(&settings_file_path(), settings)
 }
 
-fn load_from(path: &Path) -> AppSettings {
+/// Loads the app settings from `path` - defaults if it doesn't exist yet or
+/// fails to parse.
+pub fn load_app_settings_from(path: &Path) -> AppSettings {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|data| serde_json::from_str(&data).ok())
         .unwrap_or_default()
 }
 
-fn save_to(path: &Path, settings: &AppSettings) {
+/// Writes the app settings to `path`, overwriting whatever was there.
+pub fn save_app_settings_to(path: &Path, settings: &AppSettings) {
     match serde_json::to_string_pretty(settings) {
         Ok(json) => {
             if let Err(e) = std::fs::write(path, json) {
@@ -89,7 +93,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("does_not_exist.json");
 
-        let settings = load_from(&path);
+        let settings = load_app_settings_from(&path);
 
         assert!(!settings.dark_mode);
     }
@@ -100,7 +104,7 @@ mod tests {
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "{ not valid json").unwrap();
 
-        let settings = load_from(&path);
+        let settings = load_app_settings_from(&path);
 
         assert!(!settings.dark_mode);
     }
@@ -114,8 +118,8 @@ mod tests {
             ..Default::default()
         };
 
-        save_to(&path, &settings);
-        let loaded = load_from(&path);
+        save_app_settings_to(&path, &settings);
+        let loaded = load_app_settings_from(&path);
 
         assert!(loaded.dark_mode);
     }
@@ -124,18 +128,18 @@ mod tests {
     fn pipeline_focus_mode_round_trips_and_defaults_to_off_for_older_files() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        save_to(
+        save_app_settings_to(
             &path,
             &AppSettings {
                 pipeline_focus_mode: true,
                 ..Default::default()
             },
         );
-        assert!(load_from(&path).pipeline_focus_mode);
+        assert!(load_app_settings_from(&path).pipeline_focus_mode);
 
         // A settings file written before the field existed.
         std::fs::write(&path, r#"{ "darkMode": true }"#).unwrap();
-        let loaded = load_from(&path);
+        let loaded = load_app_settings_from(&path);
         assert!(loaded.dark_mode);
         assert!(!loaded.pipeline_focus_mode);
         assert!(!loaded.always_show_advanced_settings);

@@ -4,7 +4,7 @@ use crate::helper::color_generators::get_colors_from_class;
 use crate::{AppWindow, ObjectItemDataSlint, ObjectListState};
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::ProjectWithRuntime;
-use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, SegmentationClass};
+use evanalyzer_cfg::core_types::{ObjectId, SegmentationClass};
 use evanalyzer_cfg::settings::images_settings::PixelSizeSettings;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use log::warn;
@@ -35,7 +35,7 @@ struct ObjectModalBridge {
 /// the *combined* (manual ++ preview) list, not the manual list alone, so
 /// every callback must resolve it this way rather than indexing straight
 /// into `get_objects()`.
-fn resolve_object_id(project: &ProjectWithRuntime, object_id: i32) -> Option<ObjectId> {
+pub(crate) fn resolve_object_id(project: &ProjectWithRuntime, object_id: i32) -> Option<ObjectId> {
     if object_id <= 0 {
         return None;
     }
@@ -85,49 +85,6 @@ impl ObjectListController {
                     project.set_selected_object(selected);
                     drop(project);
                     manager.sync_selected_object_to_slint(false);
-                    manager.viewport_controller.trigger_image_redraw_objects();
-                });
-
-            // Add class to object
-            let manager = self.clone();
-            ui.global::<ObjectListState>()
-                .on_object_add_class(move |object_id| {
-                    let mut project = manager.app_state.get_project_write();
-                    if let Some(id) = resolve_object_id(&project, object_id) {
-                        let class_id = project.get_selected_object_class();
-                        project.add_class_to_object(id, class_id);
-                    }
-                    manager.sync_selected_object_to_slint(false);
-                    manager.sync_objects_to_slint();
-                    manager.viewport_controller.trigger_image_redraw_objects();
-                });
-
-            // Remove class from object
-            let manager = self.clone();
-            ui.global::<ObjectListState>()
-                .on_object_remove_class(move |object_id, class_id| {
-                    let mut project = manager.app_state.get_project_write();
-                    if let Some(id) = resolve_object_id(&project, object_id) {
-                        let class_id = ObjectClass::Valid(class_id as u32);
-                        project.remove_class_from_object(id, &class_id);
-                    }
-                    manager.sync_selected_object_to_slint(false);
-                    manager.sync_objects_to_slint();
-                    manager.viewport_controller.trigger_image_redraw_objects();
-                });
-
-            // Delete object
-            let manager = self.clone();
-            ui.global::<ObjectListState>()
-                .on_object_delete(move |object_id| {
-                    let mut project = manager.app_state.get_project_write();
-                    if let Some(id) = resolve_object_id(&project, object_id) {
-                        project.delete_object(id);
-                    }
-                    project.set_selected_object(None);
-                    drop(project);
-                    manager.app_state.mark_dirty();
-                    manager.sync_objects_to_slint();
                     manager.viewport_controller.trigger_image_redraw_objects();
                 });
         }
@@ -424,6 +381,7 @@ fn object_rust_to_object_slint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_cfg::core_types::ObjectClass;
     use evanalyzer_cfg::settings::object_settings::IntensitySettings;
     use indexmap::IndexMap;
 
@@ -914,61 +872,5 @@ mod tests {
             ui_state.get_project().get_selected_object_id(),
             Some(evanalyzer_cfg::core_types::ObjectId(2))
         );
-    }
-
-    #[test]
-    fn attach_callbacks_object_add_class_targets_the_manual_object_when_preview_objects_are_also_present()
-     {
-        let mut project = project_with_one_image();
-        project.add_object(&object_with_class(1, 1, false)); // manual, unclassified
-        project
-            .tmp_settings
-            .preview_objects
-            .push(object_with_class(2, 1, true)); // preview, combined index 1
-
-        let (ui, _results_ui) = test_ui_windows();
-        let (ui_state, controller) = make_controller_with_ui(ui.as_weak(), project);
-        let controller = Arc::new(controller);
-        controller.attach_callbacks();
-        ui_state
-            .get_project_write()
-            .set_selected_object_class(ObjectClass::Valid(1));
-
-        // id 1 is the manual object even though a preview object also exists
-        // in the combined list - regression coverage that the shared
-        // resolution logic still picks the right one when both lists are
-        // non-empty at once.
-        ui.global::<ObjectListState>().invoke_object_add_class(1);
-
-        let project = ui_state.get_project();
-        let manual_object = &project.get_objects().unwrap()[0];
-        assert!(
-            manual_object.object_class.contains(&ObjectClass::Valid(1)),
-            "the manual object should have had the class applied"
-        );
-    }
-
-    #[test]
-    fn attach_callbacks_object_delete_removes_the_manual_object_when_preview_objects_are_also_present()
-     {
-        let mut project = project_with_one_image();
-        project.add_object(&object_with_class(1, 1, true)); // manual, combined index 0
-        project
-            .tmp_settings
-            .preview_objects
-            .push(object_with_class(2, 1, true)); // preview, combined index 1
-
-        let (ui, _results_ui) = test_ui_windows();
-        let (ui_state, controller) = make_controller_with_ui(ui.as_weak(), project);
-        let controller = Arc::new(controller);
-        controller.attach_callbacks();
-
-        ui.global::<ObjectListState>().invoke_object_delete(1);
-
-        let project = ui_state.get_project();
-        assert!(project.get_objects().unwrap().is_empty());
-        // The preview object (not touched by delete_object, which only ever
-        // operates on the manual list) must be unaffected.
-        assert_eq!(project.get_preview_objects().len(), 1);
     }
 }

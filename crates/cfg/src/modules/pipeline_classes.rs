@@ -197,6 +197,98 @@ mod tests {
         assert_eq!(classify.object_classes(), vec![ObjectClass::Valid(7)]);
     }
 
+    fn sorted(command: PipelineCommand) -> Vec<ObjectClass> {
+        let mut classes = command.object_classes();
+        classes.sort();
+        classes
+    }
+
+    #[test]
+    fn ai_segmentation_reports_the_class_it_writes() {
+        let cellpose = PipelineCommand::Cellpose(CellposeSettings {
+            object_class_id: SegmentationClass(3),
+            ..Default::default()
+        });
+        let stardist = PipelineCommand::Stardist(StardistSettings {
+            object_class_id: SegmentationClass(4),
+            ..Default::default()
+        });
+        let unet = PipelineCommand::UNet(UNetSettings {
+            object_class_id: SegmentationClass(5),
+            ..Default::default()
+        });
+        assert_eq!(sorted(cellpose), [ObjectClass::Valid(3)]);
+        assert_eq!(sorted(stardist), [ObjectClass::Valid(4)]);
+        assert_eq!(sorted(unet), [ObjectClass::Valid(5)]);
+    }
+
+    #[test]
+    fn classifier_and_yolo_mappings_report_their_target_classes() {
+        let pixel = PipelineCommand::PixelClassifier(PixelClassifierSettings {
+            segmentation_mapping: vec![
+                SegmentationMappingSettings {
+                    segmentation_class: SegmentationClass(1),
+                    object_class_id: SegmentationClass(6),
+                },
+                SegmentationMappingSettings {
+                    segmentation_class: SegmentationClass(2),
+                    object_class_id: SegmentationClass(7),
+                },
+            ],
+            ..Default::default()
+        });
+        assert_eq!(sorted(pixel), [6, 7].map(ObjectClass::Valid));
+
+        let yolo = PipelineCommand::Yolov5(Yolov5Settings {
+            class_mapping: vec![YoloClassMappingSettings {
+                model_class: 0,
+                segmentation_class: SegmentationClass(8),
+            }],
+            ..Default::default()
+        });
+        assert_eq!(sorted(yolo), [ObjectClass::Valid(8)]);
+
+        let ai = PipelineCommand::AiObjectClassifier(AiObjectClassifierSettings {
+            origin_segmentation: vec![SegmentationClass(1)],
+            input_classes: vec![ObjectClass::Valid(2)],
+            segmentation_mapping: vec![ClassificationMappingSettings {
+                object_class: ObjectClass::Valid(0),
+                output_class: ObjectClass::Valid(9),
+            }],
+            ..Default::default()
+        });
+        assert_eq!(sorted(ai), [1, 2, 9].map(ObjectClass::Valid));
+    }
+
+    #[test]
+    fn object_commands_report_all_their_classes() {
+        let load = PipelineCommand::LoadAnnotatedObjects(LoadAnnotatedObjectsSettings {
+            input_classes: vec![ObjectClass::Valid(1)],
+            output_class: ObjectClass::Valid(2),
+            ..Default::default()
+        });
+        assert_eq!(sorted(load), [1, 2].map(ObjectClass::Valid));
+
+        let math = PipelineCommand::ObjectMath(ObjectMathSettings {
+            input_class: ObjectClass::Valid(1),
+            other_class: ObjectClass::Valid(2),
+            output_class: ObjectClass::Valid(3),
+            other_filter_classes: vec![ObjectClass::Valid(4)],
+            ..Default::default()
+        });
+        assert_eq!(sorted(math), [1, 2, 3, 4].map(ObjectClass::Valid));
+
+        let voronoi = PipelineCommand::Voronoi(VoronoiSettings {
+            centers: ObjectClass::Valid(1),
+            mask: ObjectClass::Valid(2),
+            output_class: ObjectClass::Valid(3),
+            center_filter_classes: vec![ObjectClass::Valid(4)],
+            mask_filter_classes: vec![ObjectClass::Valid(5)],
+            ..Default::default()
+        });
+        assert_eq!(sorted(voronoi), [1, 2, 3, 4, 5].map(ObjectClass::Valid));
+    }
+
     #[test]
     fn image_filters_have_no_classes() {
         let blur = PipelineCommand::GaussianBlur(GaussianBlurSettings::default());

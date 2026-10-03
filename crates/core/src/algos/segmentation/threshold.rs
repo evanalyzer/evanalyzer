@@ -1535,6 +1535,107 @@ fn method_citation(method: &ThresholdMethod) -> Option<&'static CitationMetadata
 mod tests {
     use super::*;
 
+    /// Every automatic method (all methods using `compute_auto_threshold`).
+    fn automatic_methods() -> Vec<ThresholdMethod> {
+        vec![
+            ThresholdMethod::Li,
+            ThresholdMethod::MinError,
+            ThresholdMethod::Triangle,
+            ThresholdMethod::Moments,
+            ThresholdMethod::Huang,
+            ThresholdMethod::Intermodes,
+            ThresholdMethod::IsoData,
+            ThresholdMethod::MaxEntropy,
+            ThresholdMethod::Mean,
+            ThresholdMethod::Minimum,
+            ThresholdMethod::Otsu {
+                classes: OtsuClasses::Two,
+            },
+            ThresholdMethod::Otsu {
+                classes: OtsuClasses::Three {
+                    middle_class: OtsuMiddleClass::Background,
+                },
+            },
+            ThresholdMethod::Otsu {
+                classes: OtsuClasses::Three {
+                    middle_class: OtsuMiddleClass::Foreground,
+                },
+            },
+            ThresholdMethod::Percentile,
+            ThresholdMethod::RenyiEntropy,
+            ThresholdMethod::Shanbhag,
+            ThresholdMethod::Yen,
+        ]
+    }
+
+    #[test]
+    fn every_automatic_method_copes_with_an_empty_histogram() {
+        // E.g. a tile without any pixel in range: no panic, no division by
+        // zero turning into an arbitrary threshold.
+        let empty = [0f32; 256];
+        for method in automatic_methods() {
+            let t = compute_auto_threshold(&method, &empty);
+            assert!(t <= 255, "{method:?}: {t}");
+        }
+    }
+
+    #[test]
+    fn every_automatic_method_copes_with_a_single_intensity() {
+        // A flat tile: all pixels in one bin.
+        let mut flat = [0f32; 256];
+        flat[100] = 1000.0;
+        for method in automatic_methods() {
+            let t = compute_auto_threshold(&method, &flat);
+            assert!(t <= 255, "{method:?}: {t}");
+        }
+    }
+
+    #[test]
+    fn manual_and_none_need_no_histogram_threshold() {
+        let mut hist = [0f32; 256];
+        hist[10] = 5.0;
+        assert_eq!(compute_auto_threshold(&ThresholdMethod::None, &hist), 0);
+        assert_eq!(compute_auto_threshold(&ThresholdMethod::Manual, &hist), 0);
+    }
+
+    #[test]
+    fn every_method_cites_its_paper() {
+        let robust = ThresholdMethod::RobustBackground {
+            lower_outlier_fraction: 0.05,
+            upper_outlier_fraction: 0.05,
+            averaging_method: Averaging::Mean,
+            deviations_above_average: 2.0,
+        };
+        let key = |m: &ThresholdMethod| method_citation(m).map(|c| c.cite_key);
+        assert_eq!(key(&ThresholdMethod::None), None);
+        assert_eq!(key(&ThresholdMethod::Manual), None);
+        assert_eq!(key(&robust), Some("mcquin2018cellprofiler"));
+        let expected = [
+            "li1993minimum",
+            "kittler1986minimum",
+            "zack1977automatic",
+            "tsai1985moment",
+            "huang1995image",
+            "prewitt1966analysis",
+            "ridler1978picture",
+            "kapur1985new",
+            "glasbey1993analysis",
+            "prewitt1966analysis",
+            "otsu1979threshold",
+            "otsu1979threshold",
+            "otsu1979threshold",
+            "doyle1962operations",
+            "kapur1985new",
+            "shanbhag1994utilization",
+            "yen1995new",
+        ];
+        let got: Vec<&str> = automatic_methods()
+            .iter()
+            .map(|m| key(m).unwrap())
+            .collect();
+        assert_eq!(got, expected);
+    }
+
     fn threshold_with(methods: &[ThresholdMethod]) -> Threshold {
         Threshold {
             thresholds: methods

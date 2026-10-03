@@ -1,5 +1,6 @@
 use crate::FileRequest;
 use crate::UiState;
+use crate::editor::classification_controller::ClassificationController;
 use crate::editor::histogram_controller::HistogramController;
 use crate::editor::image_meta_controller::ImageMetaController;
 use crate::editor::object_list_controller::ObjectListController;
@@ -25,6 +26,7 @@ pub struct ImagesListController {
     pub(crate) image_meta_controller: Arc<ImageMetaController>,
     pub(crate) image_controller_state: Arc<ImagesListControllerState>,
     pub(crate) object_list_controller: Arc<ObjectListController>,
+    pub(crate) classification_controller: Arc<ClassificationController>,
 }
 
 impl ImagesListController {
@@ -35,6 +37,7 @@ impl ImagesListController {
         histogram_controller: Arc<HistogramController>,
         image_meta_controller: Arc<ImageMetaController>,
         object_list_controller: Arc<ObjectListController>,
+        classification_controller: Arc<ClassificationController>,
     ) -> Self {
         Self {
             ui,
@@ -46,6 +49,7 @@ impl ImagesListController {
                 image_filter_text: RwLock::new(String::new()),
             }),
             object_list_controller,
+            classification_controller,
         }
     }
 
@@ -126,6 +130,10 @@ impl ImagesListController {
                     warn!("Failed to sync image meta to slint!");
                 }
                 manager.object_list_controller.sync_objects_to_slint();
+                // The class counts belong to the image shown.
+                manager
+                    .classification_controller
+                    .sync_classification_to_slint();
                 // Re-read the current path instead of using the path this
                 // thread was spawned for: if a newer `open_new_image` call
                 // has since superseded it (fast repeated selection), this
@@ -372,6 +380,10 @@ impl ImagesListController {
                 }
 
                 manager.object_list_controller.sync_objects_to_slint();
+                // The class counts belong to the image shown.
+                manager
+                    .classification_controller
+                    .sync_classification_to_slint();
                 manager.set_selected_image_index_in_slint_images_list(path, true);
                 manager.viewport_controller.trigger_new_image_redraw();
             }
@@ -635,11 +647,19 @@ mod tests {
         ));
         ImagesListController::new(
             slint::Weak::default(),
-            ui_state,
-            viewport_controller,
+            ui_state.clone(),
+            viewport_controller.clone(),
             histogram_controller,
             image_meta_controller,
-            object_list_controller,
+            object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    slint::Weak::default(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
         )
     }
 
@@ -735,12 +755,20 @@ mod tests {
             viewport_controller.clone(),
         ));
         ImagesListController::new(
-            ui,
-            ui_state,
-            viewport_controller,
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
             histogram_controller,
             image_meta_controller,
-            object_list_controller,
+            object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    ui.clone(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
         )
     }
 
@@ -788,6 +816,58 @@ mod tests {
                 .get_current_image_path_cloned()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn switching_images_shows_the_class_counts_of_the_new_image() {
+        use crate::ClassificationState;
+        use crate::helper::ui_thread::drain_ui_queue;
+        use evanalyzer_cfg::core_types::ObjectClass;
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
+        let classified = || {
+            let mut object = ObjectMetricSettings::default();
+            object.object_class.insert(ObjectClass::Valid(1));
+            object
+        };
+        {
+            let mut project = controller.app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+            project.classification.classes_mut().push(
+                evanalyzer_cfg::settings::classification_settings::Class {
+                    id: ObjectClass::Valid(1),
+                    name: "Nuclei".into(),
+                    ..Default::default()
+                },
+            );
+            for (name, objects) in [("a.tif", 1), ("b.tif", 2)] {
+                let series = SeriesSettings {
+                    objects: (0..objects).map(|_| classified()).collect(),
+                    ..Default::default()
+                };
+                project.images.list.insert(
+                    PathBuf::from(name),
+                    ImageEntry {
+                        rel_path: PathBuf::from(name),
+                        file_size: 0,
+                        selected_series: 0,
+                        series: BTreeMap::from([(0, series)]),
+                    },
+                );
+            }
+        }
+        let total = || {
+            ui.global::<ClassificationState>()
+                .get_total_visible_objects()
+        };
+
+        controller.open_new_image(&PathBuf::from("/data/images/a.tif"));
+        drain_ui_queue();
+        assert_eq!(total(), 1);
+
+        controller.open_new_image(&PathBuf::from("/data/images/b.tif"));
+        drain_ui_queue();
+        assert_eq!(total(), 2, "counts follow the image shown");
     }
 
     #[test]

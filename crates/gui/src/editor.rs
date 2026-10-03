@@ -112,6 +112,7 @@ impl Editor {
             histogram_controller.clone(),
             image_meta_controller.clone(),
             object_list_controller.clone(),
+            classification_controller.clone(),
         ));
 
         let results_state_controller = Arc::new(ResultsStateController::new(
@@ -132,17 +133,10 @@ impl Editor {
             view_port_cache.clone(),
             image_list_controller.clone(),
             object_list_controller.clone(),
+            classification_controller.clone(),
         ));
 
         let template_controller = Arc::new(TemplateController::new(ui.clone(), app_state.clone()));
-
-        let pipelines_controller = Arc::new(pipelines_controller::PipelinesController::new(
-            ui.clone(),
-            app_state.clone(),
-            object_list_controller.clone(),
-            viewport_controller.clone(),
-            template_controller.clone(),
-        ));
 
         let focus_controller = Arc::new(FocusController::new(
             ui.clone(),
@@ -150,18 +144,16 @@ impl Editor {
             image_meta_controller.clone(),
             classification_controller.clone(),
             viewport_controller.clone(),
-            Box::new(|on| {
-                let mut settings = evanalyzer_app::global::load_app_settings();
-                settings.pipeline_focus_mode = on;
-                evanalyzer_app::global::save_app_settings(&settings);
-            }),
         ));
-        pipelines_controller.set_focus_controller(focus_controller.clone());
-        pipelines_controller.set_always_show_advanced_saver(Box::new(|on| {
-            let mut settings = evanalyzer_app::global::load_app_settings();
-            settings.always_show_advanced_settings = on;
-            evanalyzer_app::global::save_app_settings(&settings);
-        }));
+
+        let pipelines_controller = Arc::new(pipelines_controller::PipelinesController::new(
+            ui.clone(),
+            app_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
+            template_controller.clone(),
+            focus_controller.clone(),
+        ));
 
         let project_controller = Arc::new(project_controller::ProjectController::new(
             ui.clone(),
@@ -244,15 +236,7 @@ impl Editor {
         self.viewport_object_controller.attach_callbacks();
         self.object_list_controller.attach_callbacks();
         self.pipelines_controller.attach_callbacks();
-        if let Some(ui) = self.pipelines_controller.ui.upgrade() {
-            use slint::ComponentHandle;
-            ui.global::<crate::PipelinesPanelState>()
-                .set_always_show_advanced(
-                    evanalyzer_app::global::load_app_settings().always_show_advanced_settings,
-                );
-        }
-        self.focus_controller
-            .attach_callbacks(evanalyzer_app::global::load_app_settings().pipeline_focus_mode);
+        self.focus_controller.attach_callbacks();
         self.results_list_controller.attach_callbacks();
         self.template_controller.attach_callbacks();
         self.undo_redo_controller.attach_callbacks();

@@ -726,9 +726,9 @@ fn parse_visibility(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Visibility
         "Default" => Ok(Visibility::Default),
         "Advanced" => Ok(Visibility::Advanced),
         "Hidden" => Ok(Visibility::Hidden),
-        other => panic!(
-            "cmdsmeta: unknown visibility `{other}` - use `Default`, `Advanced` or `Hidden`"
-        ),
+        other => {
+            panic!("cmdsmeta: unknown visibility `{other}` - use `Default`, `Advanced` or `Hidden`")
+        }
     }
 }
 

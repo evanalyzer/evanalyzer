@@ -581,39 +581,7 @@ impl<'a> JobExecutor {
         // to the viewport centre (in image-pixel space).  When no viewport
         // settings are available, fall back to the geometrically middle tile.
         let breakpoint_target: Option<(usize, usize)> = if self.breakpoint.is_some() {
-            match &self.preview_tile_settings {
-                Some(settings) => {
-                    let visible: Vec<&ImageTile> = tiles
-                        .iter()
-                        .filter(|t| settings.is_tile_visible(t))
-                        .collect();
-                    let candidates = if visible.is_empty() {
-                        tiles.iter().collect::<Vec<_>>()
-                    } else {
-                        visible
-                    };
-                    if candidates.len() == 1 {
-                        candidates.first().map(|t| (t.offset_x, t.offset_y))
-                    } else {
-                        // Viewport centre in image-pixel coordinates:
-                        //   screen_x = img_x * zoom + offset_x  →  img_x = (screen_x - offset_x) / zoom
-                        let cx =
-                            (settings.viewport_width / 2.0 - settings.offset_x) / settings.zoom;
-                        let cy =
-                            (settings.viewport_height / 2.0 - settings.offset_y) / settings.zoom;
-                        candidates
-                            .iter()
-                            .map(|t| {
-                                let tx = t.offset_x as f32 + t.width as f32 / 2.0;
-                                let ty = t.offset_y as f32 + t.height as f32 / 2.0;
-                                (t, (tx - cx).powi(2) + (ty - cy).powi(2))
-                            })
-                            .min_by(|(_, da), (_, db)| da.total_cmp(db))
-                            .map(|(t, _)| (t.offset_x, t.offset_y))
-                    }
-                }
-                None => tiles.get(tiles.len() / 2).map(|t| (t.offset_x, t.offset_y)),
-            }
+            Self::breakpoint_target_tile(&tiles, self.preview_tile_settings.as_ref())
         } else {
             None
         };
@@ -1382,6 +1350,46 @@ impl<'a> JobExecutor {
     /// of pixels the user can't see just to get the small visible patch. Shrinking
     /// the tile as zoom increases keeps the analyzed area closer to what's on
     /// screen, so feedback for that area arrives faster.
+    /// The tile a breakpoint captures (its offset): among the tiles visible in
+    /// the viewport (all tiles if none is), the one whose centre is closest
+    /// to the viewport centre; without viewport settings the middle tile.
+    fn breakpoint_target_tile(
+        tiles: &[ImageTile],
+        settings: Option<&PreviewTileSettings>,
+    ) -> Option<(usize, usize)> {
+        match settings {
+            Some(settings) => {
+                let visible: Vec<&ImageTile> = tiles
+                    .iter()
+                    .filter(|t| settings.is_tile_visible(t))
+                    .collect();
+                let candidates = if visible.is_empty() {
+                    tiles.iter().collect::<Vec<_>>()
+                } else {
+                    visible
+                };
+                if candidates.len() == 1 {
+                    candidates.first().map(|t| (t.offset_x, t.offset_y))
+                } else {
+                    // Viewport centre in image-pixel coordinates:
+                    //   screen_x = img_x * zoom + offset_x  →  img_x = (screen_x - offset_x) / zoom
+                    let cx = (settings.viewport_width / 2.0 - settings.offset_x) / settings.zoom;
+                    let cy = (settings.viewport_height / 2.0 - settings.offset_y) / settings.zoom;
+                    candidates
+                        .iter()
+                        .map(|t| {
+                            let tx = t.offset_x as f32 + t.width as f32 / 2.0;
+                            let ty = t.offset_y as f32 + t.height as f32 / 2.0;
+                            (t, (tx - cx).powi(2) + (ty - cy).powi(2))
+                        })
+                        .min_by(|(_, da), (_, db)| da.total_cmp(db))
+                        .map(|(t, _)| (t.offset_x, t.offset_y))
+                }
+            }
+            None => tiles.get(tiles.len() / 2).map(|t| (t.offset_x, t.offset_y)),
+        }
+    }
+
     fn preview_tile_size(&self) -> usize {
         let Some(zoom) = self.preview_tile_settings.as_ref().map(|s| s.zoom) else {
             return MAX_TILE_SIZE;
@@ -2406,6 +2414,29 @@ mod full_run_integration_tests {
     }
 
     #[test]
+    fn a_pipeline_reading_a_channel_the_image_lacks_fails_with_a_clear_message() {
+        // What the pre-start check catches for images with stored channel
+        // info - here it reaches the run itself.
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = make_single_image_job(out_objects);
+        let mut pipeline = threshold_connected_components_extract_pipeline();
+        pipeline.settings.start_image = ImageAddress::Channel(9);
+        job.pipelines_pre_process.clear();
+        job.add_pre_process_pipeline(pipeline);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let err = job
+            .run(1, tx, Arc::new(AtomicBool::new(false)))
+            .unwrap_err();
+        let message = format!("{err}");
+        assert!(message.contains("reads image channel 9"), "{message}");
+        assert!(
+            message.contains("check the pipeline's image source"),
+            "{message}"
+        );
+    }
+
+    #[test]
     fn run_on_a_real_fixture_image_writes_extracted_objects_through_the_exporter() {
         let out_objects = Arc::new(Mutex::new(Vec::new()));
         let job = make_single_image_job(out_objects.clone());
@@ -2587,6 +2618,115 @@ mod full_run_integration_tests {
     // guarantees `breakpoint_hit == true` only for `BreakpointMode::Stop`
     // (`pipeline.rs`'s early-return branch) - `Snapshot` always falls through
     // to the normal completion path with `breakpoint_hit: false`.
+
+    // ---- breakpoint capture ----
+
+    fn tile(x: usize, y: usize) -> ImageTile {
+        ImageTile {
+            offset_x: x,
+            offset_y: y,
+            width: 512,
+            height: 512,
+        }
+    }
+
+    fn viewport(offset_x: f32, offset_y: f32) -> PreviewTileSettings {
+        PreviewTileSettings {
+            offset_x,
+            offset_y,
+            viewport_width: 400.0,
+            viewport_height: 400.0,
+            zoom: 1.0,
+            process_all_tiles: false,
+        }
+    }
+
+    #[test]
+    fn the_breakpoint_captures_the_visible_tile_closest_to_the_viewport_centre() {
+        let tiles = [tile(0, 0), tile(512, 0), tile(0, 512), tile(512, 512)];
+        // The viewport (400x400 at zoom 1) panned so its centre lies at image
+        // pixel (700, 650): over the bottom-right tile, with others visible too.
+        let settings = viewport(200.0 - 700.0, 200.0 - 650.0);
+        assert_eq!(
+            JobExecutor::breakpoint_target_tile(&tiles, Some(&settings)),
+            Some((512, 512))
+        );
+    }
+
+    #[test]
+    fn the_breakpoint_falls_back_sensibly_without_a_usable_viewport() {
+        let tiles = [tile(0, 0), tile(512, 0), tile(0, 512), tile(512, 512)];
+        // No viewport settings: the middle tile of the list.
+        assert_eq!(
+            JobExecutor::breakpoint_target_tile(&tiles, None),
+            Some((0, 512))
+        );
+        // Viewport far away from the image: the closest of all tiles.
+        let away = viewport(-5000.0, -5000.0);
+        assert_eq!(
+            JobExecutor::breakpoint_target_tile(&tiles, Some(&away)),
+            Some((512, 512))
+        );
+        // A single visible tile is taken as is.
+        let only_first = viewport(0.0, 0.0);
+        assert_eq!(
+            JobExecutor::breakpoint_target_tile(&tiles[..1], Some(&only_first)),
+            Some((0, 0))
+        );
+        assert_eq!(JobExecutor::breakpoint_target_tile(&[], None), None);
+    }
+
+    fn breakpoint_events(mode: BreakpointMode) -> (Vec<ProgressEvent>, usize) {
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = make_single_image_job(out_objects.clone());
+        job.breakpoint = Some(BreakpointSettings {
+            pipeline_id: PipelineId(1),
+            pipeline_step_id: 0, // right after Threshold
+            mode,
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false)))
+            .expect("a breakpoint is not an error");
+        let events = rx.into_iter().collect();
+        let written = out_objects.lock().unwrap().len();
+        (events, written)
+    }
+
+    fn reached(events: &[ProgressEvent]) -> Vec<&ProgressEvent> {
+        events
+            .iter()
+            .filter(|e| matches!(e, ProgressEvent::BreakpointReached { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn a_stop_breakpoint_reports_the_captured_tile_and_writes_nothing() {
+        let (events, written) = breakpoint_events(BreakpointMode::Stop);
+        let reached = reached(&events);
+        assert_eq!(reached.len(), 1, "exactly one tile sends the capture");
+        let ProgressEvent::BreakpointReached {
+            segmentation,
+            tile_offset_x,
+            tile_offset_y,
+            tile_width,
+            tile_height,
+            ..
+        } = reached[0]
+        else {
+            unreachable!()
+        };
+        assert!(segmentation.is_some(), "captured after Threshold");
+        assert_eq!((*tile_offset_x, *tile_offset_y), (0, 0));
+        assert_eq!((*tile_width, *tile_height), (439, 167));
+        assert_eq!(written, 0, "the pipeline stopped before Extract Objects");
+    }
+
+    #[test]
+    fn a_snapshot_breakpoint_reports_the_capture_and_still_writes_the_objects() {
+        let (events, written) = breakpoint_events(BreakpointMode::Snapshot);
+        assert_eq!(reached(&events).len(), 1);
+        assert!(written > 0, "a snapshot lets the pipeline run to the end");
+    }
 
     #[test]
     fn breakpoint_stop_during_a_batch_run_skips_the_write_but_the_image_still_completes() {
