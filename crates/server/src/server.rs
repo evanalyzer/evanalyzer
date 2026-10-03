@@ -1,9 +1,7 @@
 use crate::{
     api::{Request, Response},
     session_management::SessionManagement,
-    user_management::{
-        AuthenticationStatus, UserManagement, linux_users::LinuxUsers, single_user::SingleUser,
-    },
+    user_management::{AuthenticationStatus, UserManagement, single_user::SingleUser},
 };
 use log::{error, info, warn};
 use std::{
@@ -28,8 +26,8 @@ pub type SessionId = u64;
 
 /// What the server knows about one open WebSocket connection.
 pub struct SessionInfo {
-    pub peer: SocketAddr,
-    pub connected_at: SystemTime,
+    pub _peer: SocketAddr,
+    pub _connected_at: SystemTime,
     /// Set once the client logged in.
     pub username: Option<String>,
 }
@@ -83,8 +81,8 @@ impl Server {
             self.sessions.lock().unwrap().insert(
                 session_id,
                 SessionInfo {
-                    peer,
-                    connected_at: SystemTime::now(),
+                    _peer: peer,
+                    _connected_at: SystemTime::now(),
                     username: None,
                 },
             );
@@ -205,7 +203,7 @@ impl Connection {
                     }
                     // Same answer for both, so clients can't probe which
                     // usernames exist.
-                    AuthenticationStatus::UserNotFound | AuthenticationStatus::PasswordWrong => {
+                    AuthenticationStatus::PasswordWrong => {
                         warn!("Session {}: failed login for '{username}'", self.session_id);
                         Response::error("Invalid username or password")
                     }
@@ -357,5 +355,117 @@ mod tests {
         });
         let (_client, _) = tungstenite::connect(url).unwrap();
         assert!(server.join().unwrap().is_err());
+    }
+
+    // -- the whole conversation, through the real accept loop ---------------
+
+    #[cfg(unix)]
+    mod conversation {
+        use super::super::*;
+        use crate::session_management::tests::fake_worker;
+        use std::net::TcpStream;
+        use tungstenite::stream::MaybeTlsStream;
+
+        type Client = WebSocket<MaybeTlsStream<TcpStream>>;
+
+        /// A server on a free port with the single "admin/1234" user and
+        /// workers replaced by a stand-in that just listens.
+        fn start_server(dir: &std::path::Path) -> String {
+            let port = TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            let server = Server {
+                user_management: Arc::new(SingleUser::default()),
+                session_management: Arc::new(
+                    SessionManagement::with_store(dir.join("sessions.json"), fake_worker(dir))
+                        .unwrap(),
+                ),
+                sessions: Arc::default(),
+                next_session_id: AtomicU64::new(1),
+            };
+            let listen = format!("127.0.0.1:{port}");
+            thread::spawn(move || server.serve(&listen));
+            let url = format!("ws://127.0.0.1:{port}");
+            for _ in 0..200 {
+                if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                    return url;
+                }
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("server did not start");
+        }
+
+        fn connect(url: &str) -> Client {
+            let (mut client, _) = tungstenite::connect(url).unwrap();
+            let greeting = client.read().unwrap().into_text().unwrap();
+            assert!(greeting.starts_with("Welcome"), "{greeting}");
+            client
+        }
+
+        fn ask(client: &mut Client, message: Message) -> serde_json::Value {
+            client.send(message).unwrap();
+            let reply = client.read().unwrap().into_text().unwrap();
+            serde_json::from_str(&reply).unwrap()
+        }
+
+        fn text(json: &str) -> Message {
+            Message::text(json.to_string())
+        }
+
+        #[test]
+        fn login_exit_and_the_errors_in_between() {
+            let dir = tempfile::tempdir().unwrap();
+            let url = start_server(dir.path());
+            let mut client = connect(&url);
+
+            let reply = ask(&mut client, Message::binary(vec![1, 2, 3]));
+            assert_eq!(reply["msg"], "Log in first");
+            let reply = ask(&mut client, text("not json"));
+            assert_eq!(reply["response"], "Error");
+            assert!(
+                reply["msg"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Invalid request")
+            );
+            let reply = ask(&mut client, text(r#"{"cmd":"exit"}"#));
+            assert_eq!(reply["msg"], "Not logged in");
+            let reply = ask(
+                &mut client,
+                text(r#"{"cmd":"login","username":"admin","password":"nope"}"#),
+            );
+            assert_eq!(reply["msg"], "Invalid username or password");
+
+            let reply = ask(
+                &mut client,
+                text(r#"{"cmd":"login","username":"admin","password":"1234"}"#),
+            );
+            assert_eq!(reply["response"], "Accepted");
+            let token = reply["session_token"].as_str().unwrap().to_string();
+            assert_eq!(token.len(), 48);
+
+            let reply = ask(
+                &mut client,
+                text(r#"{"cmd":"login","username":"admin","password":"1234"}"#),
+            );
+            assert_eq!(reply["msg"], "Already logged in");
+
+            // A second connection of the same user gets the same session.
+            let mut second = connect(&url);
+            let reply = ask(
+                &mut second,
+                text(r#"{"cmd":"login","username":"admin","password":"1234"}"#),
+            );
+            assert_eq!(reply["session_token"], token.as_str());
+
+            let reply = ask(&mut client, text(r#"{"cmd":"exit"}"#));
+            assert_eq!(reply["msg"], "Session closed");
+            // Logged out again: commands need a new login.
+            let reply = ask(&mut client, text(r#"{"cmd":"exit"}"#));
+            assert_eq!(reply["msg"], "Not logged in");
+            client.close(None).unwrap();
+        }
     }
 }

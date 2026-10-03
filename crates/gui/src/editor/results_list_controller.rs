@@ -78,7 +78,7 @@ impl ResultsListController {
         let slint_items: Vec<ResultItemData> = items.into_iter().map(|(_, d)| d).collect();
 
         let ui_handle = self.ui.clone();
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_handle.upgrade() {
                 ui.global::<ResultsListState>()
                     .set_results_list(slint::ModelRc::new(slint::VecModel::from(slint_items)));

@@ -686,3 +686,295 @@ fn a_dropped_connection_shows_as_disconnected() {
     }
     assert!(!remote.is_connected());
 }
+
+/// Every remaining results query gives the same answer remotely as locally,
+/// and toggling an image's "disabled" flag goes through to the database.
+#[test]
+fn remote_grouped_matrix_and_chart_queries_match_local_ones() {
+    use evanalyzer_app::results::*;
+    let remote = connect();
+    let (_dir, db_path) = analyzed_database(&remote);
+    let remote_db = remote.open_results(&db_path).unwrap();
+    let local_db = LocalBackend::default().open_results(&db_path).unwrap();
+    let same = |what: &str, r: serde_json::Value, l: serde_json::Value| {
+        assert_eq!(r, l, "{what} differs between remote and local");
+    };
+    let json = |v: &dyn erased::Json| v.json();
+
+    let plane = PlaneFilter {
+        z_stack: 0,
+        t_stack: 0,
+    };
+    let class = remote_db
+        .get_object_classes()
+        .unwrap()
+        .first()
+        .map(|c| c.id)
+        .unwrap_or(evanalyzer_cfg::core_types::ObjectClass::Unset);
+    let image = remote_db.get_images().unwrap()[0].rel_path.clone();
+
+    let grouped = GroupedByImageFilter {
+        plane: plane.clone(),
+        images: None,
+        object_classes: None,
+        columns: vec![Column::Count, Column::AreaSizePx],
+        aggregation: vec![Aggregation::Avg],
+        page: Pagination {
+            limit: 100,
+            after: None,
+        },
+        transpond_table: false,
+    };
+    same(
+        "grouped by image",
+        json(&remote_db.get_grouped_by_image(&grouped).unwrap()),
+        json(&local_db.get_grouped_by_image(&grouped).unwrap()),
+    );
+
+    let plate = PlateFilter {
+        plane: plane.clone(),
+        grouping_regex: String::new(),
+        aggregation: Aggregation::Avg,
+        object_class: class,
+        column: Column::AreaSizePx,
+        color_schema: ColorSchema::default(),
+        color_scale: ColorScale::Auto,
+        matrix_dimension: None,
+    };
+    for view in [View::List, View::Heatmap] {
+        same(
+            "plate",
+            json(&remote_db.get_group_by_plate(&plate, &view).unwrap()),
+            json(&local_db.get_group_by_plate(&plate, &view).unwrap()),
+        );
+    }
+    let well = WellFilter {
+        plane: plane.clone(),
+        group_name: String::new(),
+        grouping_regex: String::new(),
+        aggregation: Aggregation::Avg,
+        object_class: class,
+        column: Column::AreaSizePx,
+        color_schema: ColorSchema::default(),
+        color_scale: ColorScale::Auto,
+        well_size: None,
+        well_order: None,
+    };
+    same(
+        "well",
+        json(&remote_db.get_group_by_well(&well, &View::Heatmap).unwrap()),
+        json(&local_db.get_group_by_well(&well, &View::Heatmap).unwrap()),
+    );
+    let heatmap = ImageHeatmapFilter {
+        plane: plane.clone(),
+        image_rel_path: image.to_string_lossy().into_owned(),
+        aggregation: Aggregation::Avg,
+        object_class: class,
+        column: Column::AreaSizePx,
+        color_schema: ColorSchema::default(),
+        color_scale: ColorScale::Auto,
+        square_size: Some(64),
+    };
+    same(
+        "image heatmap",
+        json(
+            &remote_db
+                .get_image_heatmap(&heatmap, &View::Heatmap)
+                .unwrap(),
+        ),
+        json(
+            &local_db
+                .get_image_heatmap(&heatmap, &View::Heatmap)
+                .unwrap(),
+        ),
+    );
+    let boxplot = BoxplotFilter {
+        plane: plane.clone(),
+        images: None,
+        object_classes: None,
+        column: Column::AreaSizePx,
+    };
+    same(
+        "boxplot",
+        json(&remote_db.boxplot(&boxplot).unwrap()),
+        json(&local_db.boxplot(&boxplot).unwrap()),
+    );
+
+    // Disabling an image through the server is seen by a local reader.
+    let rel = image.to_string_lossy().into_owned();
+    remote_db.enable_image(&rel, true).unwrap();
+    let disabled = |db: &dyn ResultsSource| {
+        db.get_images()
+            .unwrap()
+            .into_iter()
+            .find(|i| i.rel_path == image)
+            .unwrap()
+            .disabled
+    };
+    assert!(disabled(remote_db.as_ref()));
+    assert!(disabled(local_db.as_ref()));
+    remote_db.enable_image(&rel, false).unwrap();
+    assert!(!disabled(local_db.as_ref()));
+}
+
+/// `serde_json::Value` of any serializable results type, for comparing
+/// remote and local answers structurally.
+mod erased {
+    pub trait Json {
+        fn json(&self) -> serde_json::Value;
+    }
+    impl<T: serde::Serialize> Json for T {
+        fn json(&self) -> serde_json::Value {
+            serde_json::to_value(self).unwrap()
+        }
+    }
+}
+
+#[test]
+fn remote_files_can_be_renamed() {
+    let remote = connect();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), b"x").unwrap();
+    remote
+        .files()
+        .rename(&dir.path().join("a.txt"), &dir.path().join("b.txt"))
+        .unwrap();
+    assert!(dir.path().join("b.txt").exists());
+    assert!(!dir.path().join("a.txt").exists());
+    assert!(
+        remote
+            .files()
+            .rename(&dir.path().join("missing"), &dir.path().join("c"))
+            .is_err()
+    );
+}
+
+// -- `evanalyzer server` login ------------------------------------------------
+
+/// A stand-in for `evanalyzer server`: greets, answers the login with
+/// `reply` (or a binary frame / close for the error cases) and, when the
+/// login succeeds, forwards the connection byte for byte to a real worker -
+/// exactly what the server crate does.
+enum GatewayReply {
+    Text(&'static str),
+    AcceptAndForward,
+    Binary,
+    Close,
+}
+
+fn start_login_gateway(reply: GatewayReply) -> String {
+    use std::io;
+    use std::net::{Shutdown, TcpListener, TcpStream};
+    use tungstenite::Message;
+    let worker_url = start_server();
+    let worker_addr = worker_url.trim_start_matches("ws://").to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut client = tungstenite::accept(stream).unwrap();
+        client
+            .send(Message::text("Welcome to EVAnalyzer server."))
+            .unwrap();
+        let login = client.read().unwrap().into_text().unwrap();
+        assert!(login.contains("\"cmd\":\"login\""), "{login}");
+        assert!(login.contains("alice"), "{login}");
+        match reply {
+            GatewayReply::Text(text) => {
+                client.send(Message::text(text)).unwrap();
+                let _ = client.read();
+            }
+            GatewayReply::Binary => {
+                client.send(Message::binary(vec![1, 2, 3])).unwrap();
+                let _ = client.read();
+            }
+            GatewayReply::Close => {
+                let _ = client.close(None);
+                let _ = client.flush();
+            }
+            GatewayReply::AcceptAndForward => {
+                client
+                    .send(Message::text(format!(
+                        r#"{{"response":"Accepted","msg":"Logged in","session_token":"{TOKEN}"}}"#
+                    )))
+                    .unwrap();
+                let hello = client.read().unwrap();
+                let worker_stream = TcpStream::connect(&worker_addr).unwrap();
+                let (mut worker, _) =
+                    tungstenite::client(format!("ws://{worker_addr}/"), worker_stream).unwrap();
+                worker.send(hello).unwrap();
+                let (c, w) = (
+                    client.get_ref().try_clone().unwrap(),
+                    worker.get_ref().try_clone().unwrap(),
+                );
+                let (mut c_read, mut w_write) = (c.try_clone().unwrap(), w.try_clone().unwrap());
+                std::thread::spawn(move || {
+                    let _ = io::copy(&mut c_read, &mut w_write);
+                    let _ = w_write.shutdown(Shutdown::Both);
+                });
+                let (mut w_read, mut c_write) = (w, c);
+                let _ = io::copy(&mut w_read, &mut c_write);
+                let _ = c_write.shutdown(Shutdown::Both);
+            }
+        }
+    });
+    url
+}
+
+#[test]
+fn logging_in_through_a_server_attaches_to_its_worker() {
+    let url = start_login_gateway(GatewayReply::AcceptAndForward);
+    let remote = RemoteBackend::connect_with_login(&url, "alice", "secret").unwrap();
+    assert_eq!(remote.user().as_deref(), Some("alice"));
+    assert!(remote.is_connected());
+    // Requests now reach the worker behind the server.
+    let image = remote.open_image(&fixture()).unwrap();
+    assert!(!image.meta().series.is_empty());
+}
+
+#[test]
+fn a_refused_login_reports_the_servers_reason() {
+    let url = start_login_gateway(GatewayReply::Text(
+        r#"{"response":"Error","msg":"Invalid username or password"}"#,
+    ));
+    let err = RemoteBackend::connect_with_login(&url, "alice", "wrong")
+        .err()
+        .expect("refused");
+    assert!(
+        err.to_string().contains("Invalid username or password"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_login_accepted_without_a_session_is_an_error() {
+    let url = start_login_gateway(GatewayReply::Text(
+        r#"{"response":"Accepted","msg":"Logged in"}"#,
+    ));
+    let err = RemoteBackend::connect_with_login(&url, "alice", "x")
+        .err()
+        .unwrap();
+    assert!(err.to_string().contains("sent no session"), "{err}");
+}
+
+#[test]
+fn logging_in_at_a_worker_or_a_closing_server_fails_clearly() {
+    let url = start_login_gateway(GatewayReply::Binary);
+    let err = RemoteBackend::connect_with_login(&url, "alice", "x")
+        .err()
+        .unwrap();
+    assert!(
+        err.to_string().contains("not an EVAnalyzer server"),
+        "{err}"
+    );
+
+    let url = start_login_gateway(GatewayReply::Close);
+    let err = RemoteBackend::connect_with_login(&url, "alice", "x")
+        .err()
+        .unwrap();
+    let text = err.to_string();
+    assert!(
+        text.contains("closed the connection") || text.contains("No answer"),
+        "{text}"
+    );
+}

@@ -55,15 +55,7 @@ pub use crate::job::job_executor::ProgressEvent;
 pub use crate::job::job_generator::generate_analyze_job_from_project_settings;
 pub use crate::job::job_generator::generate_preview_job_from_project_settings;
 pub use crate::storage::PipelineResultExporter;
-pub use crate::storage::duckdb::ClassRow;
 pub use crate::storage::duckdb::DuckDbExporter;
-pub use crate::storage::duckdb::ImageRow;
-pub use crate::storage::duckdb::ObjectFilter;
-pub use crate::storage::duckdb::ObjectRow;
-pub use crate::storage::duckdb::{AggregateSpec, AggregatedRow, GroupKeyMode};
-pub use crate::storage::duckdb::{
-    coloc_filter_label_any, coloc_filter_label_no, coloc_filter_label_with,
-};
 pub use crate::storage::file::CsvExporter;
 pub use crate::storage::memory::MemoryExporter;
 

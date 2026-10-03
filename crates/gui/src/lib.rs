@@ -212,7 +212,7 @@ impl UiState {
         let can_undo = !self.undo_stack.lock().expect("Poisoned").is_empty();
         let can_redo = !self.redo_stack.lock().expect("Poisoned").is_empty();
         let ui = self.ui_handle.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(w) = ui.upgrade() {
                 w.global::<ToolbarState>().set_can_undo(can_undo);
                 w.global::<ToolbarState>().set_can_redo(can_redo);
@@ -265,7 +265,7 @@ impl UiState {
     pub fn mark_dirty(&self) {
         self.dirty.store(true, Ordering::Relaxed);
         let ui = self.ui_handle.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(w) = ui.upgrade() {
                 w.global::<ToolbarState>().set_has_unsaved_changes(true);
             }
@@ -278,7 +278,7 @@ impl UiState {
     pub fn clear_dirty(&self) {
         self.dirty.store(false, Ordering::Relaxed);
         let ui = self.ui_handle.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(w) = ui.upgrade() {
                 w.global::<ToolbarState>().set_has_unsaved_changes(false);
             }
@@ -323,7 +323,7 @@ impl UiState {
         }
 
         let ui = self.ui_handle.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(w) = ui.upgrade() {
                 w.set_window_title(title.into());
             }
@@ -447,9 +447,9 @@ fn load_about_dialog_information(ui: &AppWindow) {
     )));
 
     let ui_weak = ui.as_weak();
-    std::thread::spawn(move || {
+    crate::helper::ui_thread::spawn(move || {
         let cuda_available = evanalyzer_app::system::cuda_is_available();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<AppInfoState>()
                     .set_cuda_available(cuda_available);

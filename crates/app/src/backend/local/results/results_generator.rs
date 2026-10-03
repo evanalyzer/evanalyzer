@@ -3021,6 +3021,7 @@ mod tests {
     #[test]
     #[ignore]
     fn bench_transposed_list() {
+        use super::super::test_support::seed_synthetic_db;
         use std::time::{Duration, Instant};
         let env = |name: &str, default: u32| {
             std::env::var(name)
@@ -3260,7 +3261,7 @@ mod tests {
         assert_eq!(generator.get_nr_of_c_stacks(), 1);
     }
 
-    use super::super::test_support::{ObjectSpec, seed_db, seed_synthetic_db};
+    use super::super::test_support::{ObjectSpec, seed_db};
 
     /// Opens a fresh `ResultsGenerator` over a temp `.evadb` seeded with
     /// `objects` (see `test_support::seed_db`). Leaks the backing `TempDir`

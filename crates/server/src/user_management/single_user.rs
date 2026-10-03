@@ -29,3 +29,28 @@ impl UserManagement for SingleUser {
         return super::AuthenticationStatus::PasswordWrong;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::user_management::AuthenticationStatus;
+
+    #[test]
+    fn only_the_configured_name_and_password_log_in() {
+        let users = SingleUser::default();
+        match users.login("admin".into(), "1234".into()) {
+            AuthenticationStatus::Authenticated(user) => {
+                assert_eq!(user.username, "admin");
+                assert_eq!(user.user_id, "user-id");
+                assert!(user.unix_account.is_none());
+            }
+            _ => panic!("expected a login"),
+        }
+        for (name, password) in [("admin", "12345"), ("root", "1234"), ("", "")] {
+            assert!(matches!(
+                users.login(name.into(), password.into()),
+                AuthenticationStatus::PasswordWrong
+            ));
+        }
+    }
+}

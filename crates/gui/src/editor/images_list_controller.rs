@@ -96,7 +96,7 @@ impl ImagesListController {
             // (500ms+) reader-open below instead, it would run *after* that
             // later highlight-set and silently erase it.
             let ui_weak = self.ui.clone();
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     let object_state = ui.global::<ViewportObjectState>();
                     object_state.set_markers(slint::ModelRc::new(slint::VecModel::default()));
@@ -105,7 +105,7 @@ impl ImagesListController {
             });
 
             let manager = self.clone();
-            std::thread::spawn(move || {
+            crate::helper::ui_thread::spawn(move || {
                 // Fired first, before the (slow) metadata sync below:
                 // `trigger_new_image_redraw` only enqueues worker tasks
                 // (`dispatch_worker_task`) and returns immediately, it
@@ -202,7 +202,7 @@ impl ImagesListController {
             paint_as_rectangle,
         };
         let ui_weak = self.ui.clone();
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<ViewportObjectState>()
                     .set_object_highlight(highlight);
@@ -236,7 +236,7 @@ impl ImagesListController {
             .change_images_root(&new_root);
         self.sync_image_list_to_slint(); // The list is now empty, we sync this to slint
 
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ImagesListState>()
@@ -286,7 +286,7 @@ impl ImagesListController {
 
         if result == SelectNewProjectRootAction::ImageNotFound {
             // Images not found, show the Missing image dialog
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui_ready) = ui_weak.upgrade() {
                     ui_ready
                         .global::<GlobalAppState>()
@@ -297,7 +297,7 @@ impl ImagesListController {
         } else {
             // Images found, set the new root dir
             let image_root_dir_str = new_root.to_string_lossy().into_owned();
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui_ready) = ui_weak.upgrade() {
                     ui_ready
                         .global::<ImagesListState>()
@@ -328,7 +328,7 @@ impl ImagesListController {
 
         // Show spinner
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<ImagesListState>().set_is_scanning(true);
             }
@@ -338,7 +338,7 @@ impl ImagesListController {
         let ui_weak = self.ui.clone();
         let manager = self.clone();
 
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             // Scan the filesystem without holding the project lock - opening
             // an `ImageReader` per file can take seconds on a plate-sized
             // folder, and holding the write guard for that long stalls every
@@ -377,7 +377,7 @@ impl ImagesListController {
             }
 
             // Hide spinner
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.global::<ImagesListState>().set_is_scanning(false);
                     info!("Folder scan complete.");
@@ -516,7 +516,7 @@ impl ImagesListController {
         let slint_items = build_image_list_items(images_guard, &filter_text);
 
         // The final assignment goes into the event loop
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui_ready) = ui_weak.upgrade() {
                     let model = slint::ModelRc::new(slint::VecModel::from(slint_items));
                     ui_ready.global::<ImagesListState>().set_images_list(model);
@@ -539,7 +539,7 @@ impl ImagesListController {
         let ui_weak = self.ui.clone();
 
         // The final assignment goes into the event loop
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                     let images_state = ui_ready.global::<ImagesListState>();
                    let images_list_model =  images_state.get_images_list();

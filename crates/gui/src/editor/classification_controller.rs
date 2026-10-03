@@ -179,7 +179,7 @@ impl ClassificationController {
         let ui_weak = self.ui.clone();
         let bridge_ptr = self.clone();
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let project = bridge_ptr.app_state.get_project();
                 let total_visible: i32 = project
@@ -259,7 +259,7 @@ impl ClassificationController {
         let Some(class) = class_cloned else {
             return;
         };
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let r = ((class.color >> 16) & 0xff) as u8;
                 let g = ((class.color >> 8) & 0xff) as u8;

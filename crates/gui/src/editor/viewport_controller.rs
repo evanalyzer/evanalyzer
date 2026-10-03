@@ -221,7 +221,7 @@ impl ViewportController {
         // The debounce-triggered trigger_image_redraw_objects() will re-enable it once
         // the overlay has been re-composited at the new viewport position.
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<ViewportSlintState>().set_object_ready(false);
             }
@@ -309,7 +309,7 @@ impl ViewportController {
         is_low_res: bool,
     ) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let view_state = ui.global::<ViewportSlintState>();
                 if is_low_res {
@@ -380,7 +380,7 @@ impl ViewportController {
             });
         }
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<PipelinesPanelState>()
                     .set_has_breakpoint_image(true);
@@ -431,7 +431,7 @@ impl ViewportController {
 
             // 3. Forward the true status to your Slint UI thread safely
             // Forward the false status to your Slint UI thread safely
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.global::<ViewportSlintState>().set_high_res_ready(true);
                     // object_ready is managed solely by trigger_redraw_low_res (sets false)
@@ -454,7 +454,7 @@ impl ViewportController {
                 .store(act_true, Ordering::SeqCst);
 
             // Forward the false status to your Slint UI thread safely
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.global::<ViewportSlintState>().set_high_res_ready(false);
                     // object_ready is managed solely by trigger_redraw_low_res (sets false)
@@ -579,7 +579,7 @@ impl ViewportController {
         buffer.make_mut_slice().copy_from_slice(&pixels);
 
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let image = slint::Image::from_rgba8(buffer);
                 ui.set_object_image(image);
@@ -614,7 +614,7 @@ impl ViewportController {
             state.offset_y = offset_y;
         }
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let view_state = ui.global::<ViewportSlintState>();
                 view_state.set_zoom_factor(zoom);
@@ -663,7 +663,7 @@ impl ViewportController {
             .zoom
             .clone();
 
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let full_w = full_image_width as f32;
                 let full_h = full_image_height as f32;
@@ -743,7 +743,7 @@ impl ViewportController {
         let final_bar_width_px = (scale_value_nanos / nanos_per_pixel_px) * zoom;
 
         // The final assignment goes into the event loop
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let view_state = ui_ready.global::<ViewportSlintState>();
                 view_state.set_scale_bar_width(final_bar_width_px);

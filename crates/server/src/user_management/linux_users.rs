@@ -34,17 +34,17 @@ impl UserManagement for LinuxUsers {
         // A `:` or newline in the name could never match a real entry, and
         // must not be able to confuse the field splitting.
         if username.is_empty() || username.contains([':', '\n', '\0']) {
-            return AuthenticationStatus::UserNotFound;
+            return AuthenticationStatus::PasswordWrong;
         }
         let hash = match find_field(&self.shadow_file, &username, 1) {
             Ok(Some(hash)) => hash,
-            Ok(None) => return AuthenticationStatus::UserNotFound,
+            Ok(None) => return AuthenticationStatus::PasswordWrong,
             Err(err) => {
                 log::error!(
                     "Cannot read {}: {err} (root or the shadow group is required)",
                     self.shadow_file.display()
                 );
-                return AuthenticationStatus::UserNotFound;
+                return AuthenticationStatus::PasswordWrong;
             }
         };
         if !verify_password(&password, &hash) {
@@ -66,21 +66,6 @@ impl UserManagement for LinuxUsers {
             username,
             unix_account,
         })
-    }
-}
-
-impl LinuxUsers {
-    fn get_user_count(&self) -> usize {
-        let file = match File::open(&self.shadow_file) {
-            Ok(f) => f,
-            Err(_) => return 0,
-        };
-        let reader = BufReader::new(file);
-        reader
-            .lines()
-            .filter_map(|line| line.ok())
-            .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
-            .count()
     }
 }
 
@@ -268,15 +253,15 @@ mod tests {
         let f = standard();
         assert!(matches!(
             login(&f, "mallory", "x"),
-            AuthenticationStatus::UserNotFound
+            AuthenticationStatus::PasswordWrong
         ));
         assert!(matches!(
             login(&f, "", ""),
-            AuthenticationStatus::UserNotFound
+            AuthenticationStatus::PasswordWrong
         ));
         assert!(matches!(
             login(&f, "alice:x", "correct horse"),
-            AuthenticationStatus::UserNotFound
+            AuthenticationStatus::PasswordWrong
         ));
     }
 
@@ -314,7 +299,7 @@ mod tests {
         };
         assert!(matches!(
             users.login("alice".into(), "correct horse".into()),
-            AuthenticationStatus::UserNotFound
+            AuthenticationStatus::PasswordWrong
         ));
     }
 }

@@ -77,13 +77,526 @@ impl ViewportWorker {
     }
 
     fn run_worker_loop(self: &Arc<Self>, scope: TaskDispatch) -> ! {
+        let mut buffers = RenderBuffers::new();
+        let drawing_task_container = self.task_container(scope);
+        loop {
+            let task = wait_for_task(drawing_task_container);
+            self.render_task(scope, task, &mut buffers);
+        }
+    }
+
+    /// The task slot this worker scope takes its drawing tasks from.
+    fn task_container(&self, scope: TaskDispatch) -> &Arc<DrawingTaskContainer> {
+        match scope {
+            TaskDispatch::LowRes => &self.viewport_controller.drawing_tasks.low_res_task,
+            TaskDispatch::HighRes => &self.viewport_controller.drawing_tasks.high_res_task,
+            _ => &self.viewport_controller.drawing_tasks.object_task,
+        }
+    }
+
+    /// Renders one drawing task and hands the result to the UI.
+    fn render_task(&self, scope: TaskDispatch, mut task: DrawingTask, b: &mut RenderBuffers) {
+        let drawing_task_container = self.task_container(scope);
+        let version_tracker = &drawing_task_container.task_count;
+        let is_low_res = scope == TaskDispatch::LowRes;
+        let task_start = Instant::now();
+
+        // --- object scope: simple path, no image processing ---
+        if scope == TaskDispatch::Objects {
+            self.viewport_controller.sync_objects_to_slint_viewport();
+            return;
+        }
+
+        // ----------------------------------------------------------------
+        // STEP 1: Extract all needed data from project - drop lock immediately
+        // This prevents holding the read lock during slow disk I/O or writes
+        // ----------------------------------------------------------------
+        let (
+            has_image,
+            series,
+            visible_channels,
+            z_stack,
+            t_stack,
+            hist_settings,
+            selected_channel,
+        ) = {
+            let project = self.app_state.get_project();
+            (
+                project.tmp_settings.current_image.is_some(),
+                project.get_selected_series_idx(),
+                project.get_image_channel_visibilities_vec(),
+                project.get_z_stack().cloned().unwrap_or_default(),
+                project.get_t_stack().cloned().unwrap_or_default(),
+                project.get_image_channel_histograms(),
+                project.get_selected_image_channel_idx(),
+            )
+        };
+
+        if !has_image {
+            //debug!("No current image");
+            return;
+        }
+
+        // ----------------------------------------------------------------
+        // STEP 2: Extract viewport state - separate lock, acquired after
+        // project lock is already dropped
+        // ----------------------------------------------------------------
+        let viewport_state = self
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap()
+            .clone();
+
+        let current_version = version_tracker.load(Ordering::SeqCst);
+
+        // Whether the user has the breakpoint-image toggle active.
+        let in_breakpoint_mode = self
+            .viewport_controller
+            .show_breakpoint
+            .load(Ordering::Relaxed);
+        // Both tiers skip disk I/O and render the in-memory breakpoint buffer
+        // when in breakpoint mode - the LowRes ghost renders it in grayscale
+        // (below) rather than being left showing the unrelated regular image.
+        let show_bp = in_breakpoint_mode;
+
+        // ----------------------------------------------------------------
+        // STEP 3: Disk I/O (skipped in breakpoint mode)
+        // ----------------------------------------------------------------
+        // Whether the buffer this frame renders is a U32 label map
+        // (Segmentation/Instances) rather than intensity data - set
+        // below when `show_bp` picks one. Declared outside the `if` so
+        // STEP 4 can branch on it after `read_result` is computed.
+        let mut is_label_render = false;
+        let read_result = if show_bp {
+            match &*self.viewport_controller.breakpoint_channel.read().unwrap() {
+                Some(bp) => {
+                    // Pick the buffer matching the user's selected view
+                    // mode, falling back to the intensity image if the
+                    // pipeline hadn't produced that buffer yet at this
+                    // breakpoint step (e.g. Segmentation selected but the
+                    // breakpoint is before `Threshold`).
+                    let source_image = match self.viewport_controller.breakpoint_view_mode() {
+                        crate::editor::viewport_controller::BreakpointViewMode::Image => {
+                            bp.image.clone()
+                        }
+                        crate::editor::viewport_controller::BreakpointViewMode::Segmentation => {
+                            bp.segmentation.clone().unwrap_or_else(|| bp.image.clone())
+                        }
+                        crate::editor::viewport_controller::BreakpointViewMode::Instances => {
+                            bp.instances.clone().unwrap_or_else(|| bp.image.clone())
+                        }
+                    };
+                    is_label_render = matches!(&*source_image, ImageContainer::U32(_));
+                    let is_rgb = matches!(&*source_image, ImageContainer::F32Rgb(_));
+                    let channel = ImageChannel {
+                        image: source_image,
+                        color: [1.0, 1.0, 1.0],
+                        // Must match the channel the breakpointed pipeline
+                        // actually started from - the render loop below
+                        // looks up histogram/LUT settings by `c_stack`,
+                        // and hardcoding 0 here made the breakpoint image
+                        // render using an unrelated channel's histogram
+                        // range whenever the pipeline started from any
+                        // other channel (usually all-black, since the
+                        // real data then falls outside that channel's
+                        // configured min/max window). Irrelevant for
+                        // label rendering (is_label_render bypasses the
+                        // histogram lookup entirely), but harmless there.
+                        c_stack: bp.channel_idx.unwrap_or(0),
+                        name: "Breakpoint".to_string(),
+                        is_rgb,
+                        is_visible: true,
+                    };
+                    let prepared = ReadContext {
+                        zoomed_w: bp.tile_width as f32 * viewport_state.zoom,
+                        zoomed_h: bp.tile_height as f32 * viewport_state.zoom,
+                        zoom: viewport_state.zoom,
+                        draw_x: bp.tile_offset_x as f32 * viewport_state.zoom
+                            + viewport_state.offset_x,
+                        draw_y: bp.tile_offset_y as f32 * viewport_state.zoom
+                            + viewport_state.offset_y,
+                        offset_x: viewport_state.offset_x,
+                        offset_y: viewport_state.offset_y,
+                        read_off_x: bp.tile_offset_x,
+                        read_off_y: bp.tile_offset_y,
+                        res_idx: 0,
+                        image_w: bp.tile_width,
+                        image_h: bp.tile_height,
+                        bit_depth: bp.nr_bits,
+                        _nr_color_channels: if is_rgb { 3 } else { 1 },
+                        viewport_width: viewport_state.viewport_width,
+                        viewport_height: viewport_state.viewport_height,
+                        full_image_w: bp.tile_offset_x + bp.tile_width,
+                        full_image_h: bp.tile_offset_y + bp.tile_height,
+                    };
+                    Ok((Arc::new(vec![channel]), prepared))
+                }
+                None => Err(InternalErrors::ImageReadError(
+                    "No breakpoint image captured yet".into(),
+                )),
+            }
+        } else {
+            self.viewport_cache.read_image_tile_combined(
+                series,
+                to_z_projection(z_stack.z_projection.clone()),
+                z_stack.z_range.clone(),
+                t_stack.t_stack.clone(),
+                task.fit_to_screen,
+                task.is_new_image,
+                is_low_res,
+                &viewport_state,
+            )
+        };
+        let read_duration = task_start.elapsed();
+        let step4_7_start = Instant::now();
+
+        // Cancel if a newer request came in during the slow disk read
+        if version_tracker.load(Ordering::SeqCst) > current_version {
+            return;
+        }
+
+        // ----------------------------------------------------------------
+        // STEP 4: Process loaded image
+        // ----------------------------------------------------------------
+        let mut pixel_buffer_to_send = None;
+        let mut svg_hists_to_send = Vec::new();
+        let mut render_info = None;
+
+        if let Ok((render_src, prepared)) = read_result {
+            if !is_low_res {
+                if let Ok(mut active) = self.viewport_cache.active_high_res_data.write() {
+                    *active = Some((render_src.clone(), prepared.clone()));
+                }
+            }
+
+            // Resize buffer from pool if needed
+            b.pool_idx = (b.pool_idx + 1) % b.buffer_pool.len();
+            if b.buffer_pool[b.pool_idx].width() != prepared.image_w as u32
+                || b.buffer_pool[b.pool_idx].height() != prepared.image_h as u32
+            {
+                b.buffer_pool[b.pool_idx] =
+                    SharedPixelBuffer::new(prepared.image_w as u32, prepared.image_h as u32);
+            }
+
+            let master_slice = b.buffer_pool[b.pool_idx].make_mut_slice();
+            master_slice.fill(Rgb8Pixel { r: 0, g: 0, b: 0 });
+
+            // ------------------------------------------------------------
+            // STEP 5-7: Render pixels + build histograms - pure CPU, no locks.
+            //
+            // Segmentation/Instances breakpoint views bypass all of this:
+            // label IDs aren't intensities, so a histogram min/max window
+            // is meaningless for them - `render_labels_to_rgb8` writes
+            // `master_slice` directly instead.
+            // ------------------------------------------------------------
+            let mut channel_contexts: Vec<ChannelCtx> = Vec::new();
+            let mut is_rgb = false;
+
+            let all_hists: Vec<Vec<f32>> = if is_label_render {
+                if let Some(channel) = render_src.first() {
+                    if let ImageContainer::U32(img) = &*channel.image {
+                        render_labels_to_rgb8(img.data.as_slice(), master_slice);
+                    }
+                }
+                Vec::new()
+            } else {
+                // STEP 5: Auto-adjust - write lock acquired AFTER read lock
+                // dropped. Safe because we dropped the project read lock in
+                // STEP 1. Skipped in breakpoint mode to preserve the
+                // original histogram.
+                if !show_bp && (task.auto_adjust_if_not_set || task.auto_adjust_selected) {
+                    for channel in render_src.iter() {
+                        let idx = channel.c_stack;
+                        if let Some(ch) = hist_settings.get(&idx) {
+                            if (!ch.is_some() && task.auto_adjust_if_not_set)
+                                || (task.auto_adjust_selected && idx == selected_channel)
+                            {
+                                let (min, max, min_range, max_range) =
+                                    apply_auto_adjust(&channel.image, channel.is_rgb);
+                                debug!(
+                                    "Auto-adjusting channel {} min={} max={} range=({},{})",
+                                    idx, min, max, min_range, max_range
+                                );
+                                self.app_state
+                                    .get_project_write()
+                                    .set_image_histogram_settings_for_channel(
+                                        idx, min, max, min_range, max_range,
+                                    );
+                            }
+                        }
+                    }
+                    self.histogram_controller.sync_histogram_settings_to_slint();
+                } else if task.is_new_image || task.is_new_series {
+                    self.histogram_controller.sync_histogram_settings_to_slint();
+                }
+
+                // STEP 6: Re-read histogram settings after potential write.
+                // Fresh read lock - safe because write lock was released above.
+                let hist_settings_fresh = self
+                    .app_state
+                    .get_project()
+                    .get_image_channel_histograms()
+                    .clone();
+
+                // Build channel contexts for rendering
+                channel_contexts = Vec::with_capacity(render_src.len());
+
+                for channel in render_src.iter() {
+                    let idx = channel.c_stack;
+                    if let Some(Some(histogram)) = hist_settings_fresh.get(&idx) {
+                        let data_slice = match &*channel.image {
+                            ImageContainer::F32Gray(img) => {
+                                is_rgb = false;
+                                Some(img.as_slice())
+                            }
+                            ImageContainer::F32Rgb(img) => {
+                                is_rgb = true;
+                                Some(img.as_slice())
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(slice) = data_slice {
+                            let inv_range = 1.0 / (histogram.max - histogram.min).max(0.001);
+                            // In breakpoint mode the LowRes ghost is rendered in
+                            // grayscale so it doesn't flash color during pan/zoom.
+                            let color = if is_low_res && in_breakpoint_mode {
+                                [1.0f32, 1.0, 1.0]
+                            } else {
+                                channel.color
+                            };
+                            channel_contexts.push(ChannelCtx {
+                                image_data: slice,
+                                histogram: (*histogram).clone(),
+                                color,
+                                r_factor: inv_range * color[0] * 255.0,
+                                g_factor: inv_range * color[1] * 255.0,
+                                b_factor: inv_range * color[2] * 255.0,
+                                offset: -histogram.min,
+                                h_mult: (NUM_BINS as f32 - 1.0)
+                                    / (histogram.max_limit - histogram.min_limit).max(f32::EPSILON),
+                                channel_idx: idx,
+                            });
+                        }
+                    }
+                }
+
+                // STEP 7: render
+                prepare_image_channels_for_slint(
+                    &channel_contexts,
+                    master_slice,
+                    NUM_BINS,
+                    !is_low_res,
+                    &visible_channels,
+                    is_rgb,
+                )
+            };
+            let step4_7_duration = step4_7_start.elapsed();
+
+            // ------------------------------------------------------------
+            // STEP 7b: Composite into a viewport-sized, screen-space buffer
+            // ------------------------------------------------------------
+            // Windows-only workaround. The native tile buffer (image_w x
+            // image_h) would otherwise be handed to Slint as a single
+            // Image element positioned at draw_x and stretched to
+            // zoomed_w/zoomed_h.  When zoomed/panned that element's
+            // origin sits far off-screen (draw_x can be thousands of px
+            // negative) and it is several thousand px wide.  The Slint
+            // SOFTWARE renderer (Windows build) stores scene coordinates
+            // as i16 and samples scaled images with an 8-bit fixed-point
+            // step; the per-step rounding error gets multiplied by the
+            // large off-screen offset, shifting the image by several
+            // pixels - and by a different amount at every zoom level.
+            // The GPU/Skia renderer (Linux/macOS) does not have this bug,
+            // so it skips the workaround entirely below: composing a
+            // *viewport-sized* buffer here means its cost tracks window
+            // size, not the size of the image actually being displayed
+            // (a small zoomed-out image in a huge window still pays for
+            // the whole window) - both the CPU resample and the GPU
+            // texture upload that follows scale with `vp_w * vp_h`.
+            // Skia can scale/position the much smaller native tile
+            // directly on the GPU, which is what `viewport.slint`'s
+            // Image layers (image-fit: fill + explicit width/height)
+            // were already designed to do - so on that path there is no
+            // reason to pre-composite at all.
+            if cfg!(target_os = "windows") {
+                let vp_w = prepared.viewport_width.max(1.0) as usize;
+                let vp_h = prepared.viewport_height.max(1.0) as usize;
+                b.screen_pool_idx = (b.screen_pool_idx + 1) % b.screen_buffer_pool.len();
+                if b.screen_buffer_pool[b.screen_pool_idx].width() as usize != vp_w
+                    || b.screen_buffer_pool[b.screen_pool_idx].height() as usize != vp_h
+                {
+                    b.screen_buffer_pool[b.screen_pool_idx] =
+                        SharedPixelBuffer::new(vp_w as u32, vp_h as u32);
+                }
+                let composite_start = Instant::now();
+                let slice_start = Instant::now();
+                let native = b.buffer_pool[b.pool_idx].as_slice();
+                let screen = b.screen_buffer_pool[b.screen_pool_idx].make_mut_slice();
+                let slice_duration = slice_start.elapsed();
+                {
+                    let img_w = prepared.image_w;
+                    let img_h = prepared.image_h;
+                    let inv_scale_x = prepared.image_w as f32 / prepared.zoomed_w.max(f32::EPSILON);
+                    let inv_scale_y = prepared.image_h as f32 / prepared.zoomed_h.max(f32::EPSILON);
+                    let draw_x = prepared.draw_x;
+                    let draw_y = prepared.draw_y;
+                    let black = Rgb8Pixel { r: 0, g: 0, b: 0 };
+                    // Each output row is independent (nearest-neighbor
+                    // resample, no cross-row state), so this is split
+                    // across rows and run in parallel, chunked into a
+                    // handful of multi-row groups per thread rather than
+                    // one task per row (measured: one-row chunks added
+                    // enough Rayon per-task scheduling overhead to cost
+                    // 11-25ms/frame on a real ~3000x2000 viewport, on top
+                    // of the actual memory-bound copy).
+                    use rayon::prelude::*;
+                    let rows_per_chunk = (vp_h / (rayon::current_num_threads() * 4)).max(1);
+                    screen
+                        .par_chunks_mut(vp_w * rows_per_chunk)
+                        .enumerate()
+                        .for_each(|(chunk_idx, rows)| {
+                            let base_sy = chunk_idx * rows_per_chunk;
+                            for (row_offset, row) in rows.chunks_mut(vp_w).enumerate() {
+                                let sy = base_sy + row_offset;
+                                let ty = (sy as f32 - draw_y) * inv_scale_y;
+                                if ty < 0.0 || ty >= img_h as f32 {
+                                    row.fill(black);
+                                    continue;
+                                }
+                                let ty_i = ty as usize * img_w;
+                                for (sx, out) in row.iter_mut().enumerate() {
+                                    let tx = (sx as f32 - draw_x) * inv_scale_x;
+                                    *out = if tx >= 0.0 && tx < img_w as f32 {
+                                        native[ty_i + tx as usize]
+                                    } else {
+                                        black
+                                    };
+                                }
+                            }
+                        });
+                }
+                let composite_duration = composite_start.elapsed();
+                info!(
+                    "Viewport frame ({}): read {:?}, render(4-7) {:?} [{} channels], composite {:?} [make_mut_slice {:?}, resample {:?}] ({}x{} native -> {}x{} viewport, {} threads), total so far {:?}",
+                    if is_low_res { "low-res" } else { "high-res" },
+                    read_duration,
+                    step4_7_duration,
+                    channel_contexts.len(),
+                    composite_duration,
+                    slice_duration,
+                    composite_duration.saturating_sub(slice_duration),
+                    prepared.image_w,
+                    prepared.image_h,
+                    vp_w,
+                    vp_h,
+                    rayon::current_num_threads(),
+                    task_start.elapsed()
+                );
+
+                // Display geometry is now screen-space: full viewport at
+                // (0,0). The logical transform (zoom/offset/full_image)
+                // in `prepared` is left untouched so sync_zoom, the
+                // navigator and the pixel-value HUD (which maps via
+                // active_high_res_data) keep working.
+                let mut display = prepared.clone();
+                display.draw_x = 0.0;
+                display.draw_y = 0.0;
+                display.zoomed_w = vp_w as f32;
+                display.zoomed_h = vp_h as f32;
+
+                pixel_buffer_to_send = Some(b.screen_buffer_pool[b.screen_pool_idx].clone());
+                render_info = Some(display);
+            } else {
+                info!(
+                    "Viewport frame ({}): read {:?}, render(4-7) {:?} [{} channels], no composite (direct GPU scale, {} threads), total so far {:?}",
+                    if is_low_res { "low-res" } else { "high-res" },
+                    read_duration,
+                    step4_7_duration,
+                    channel_contexts.len(),
+                    rayon::current_num_threads(),
+                    task_start.elapsed()
+                );
+
+                pixel_buffer_to_send = Some(b.buffer_pool[b.pool_idx].clone());
+                render_info = Some(prepared.clone());
+            }
+
+            if !is_low_res {
+                svg_hists_to_send = histogram_to_svg_fast(
+                    &all_hists
+                        .into_iter()
+                        .zip(channel_contexts.iter().map(|c| c.color))
+                        .collect(),
+                    NUM_BINS,
+                );
+            }
+        } else if let Err(e) = read_result {
+            warn!("Error reading image tile: {:?}", e);
+        }
+
+        // ----------------------------------------------------------------
+        // STEP 8: Dispatch to UI thread
+        // ----------------------------------------------------------------
+        let busy = b.ui_busy.clone();
+        busy.store(true, Ordering::SeqCst);
+
+        if let (Some(pb), Some(info)) = (pixel_buffer_to_send, render_info) {
+            self.viewport_controller.sync_viewport_state_to_slint(
+                pb,
+                svg_hists_to_send,
+                info.draw_x,
+                info.draw_y,
+                info.zoomed_w,
+                info.zoomed_h,
+                is_low_res,
+            );
+
+            if task.fit_to_screen {
+                self.viewport_controller.sync_zoom_to_slint(
+                    info.zoom,
+                    info.offset_x,
+                    info.offset_y,
+                );
+            }
+
+            if is_low_res {
+                self.viewport_controller.sync_high_res_ready_to_slint(false);
+                self.viewport_controller.sync_navigator_to_slint(
+                    info.full_image_w as i64,
+                    info.full_image_h as i64,
+                    info.viewport_width,
+                    info.viewport_height,
+                    info.offset_x,
+                    info.offset_y,
+                );
+            }
+        }
+
+        busy.store(false, Ordering::SeqCst);
+        task.reset_job();
+    }
+}
+
+/// Per-worker-thread state reused from frame to frame.
+struct RenderBuffers {
+    ui_busy: Arc<AtomicBool>,
+    buffer_pool: [SharedPixelBuffer<Rgb8Pixel>; 2],
+    pool_idx: usize,
+    screen_buffer_pool: [SharedPixelBuffer<Rgb8Pixel>; 2],
+    screen_pool_idx: usize,
+}
+
+impl RenderBuffers {
+    fn new() -> Self {
         let ui_busy = Arc::new(AtomicBool::new(false));
 
-        let mut buffer_pool = [
+        let buffer_pool = [
             SharedPixelBuffer::<Rgb8Pixel>::new(1, 1),
             SharedPixelBuffer::<Rgb8Pixel>::new(1, 1),
         ];
-        let mut pool_idx = 0;
+        let pool_idx = 0;
 
         // Viewport-sized buffer the native tile is composited into before being
         // handed to Slint.  See STEP 7b for why this screen-space step is needed.
@@ -97,524 +610,18 @@ impl ViewportWorker {
         // to every single frame. Alternating between two buffers makes it
         // very likely the "other" one has already been released by the time
         // it's reused.
-        let mut screen_buffer_pool = [
+        let screen_buffer_pool = [
             SharedPixelBuffer::<Rgb8Pixel>::new(1, 1),
             SharedPixelBuffer::<Rgb8Pixel>::new(1, 1),
         ];
-        let mut screen_pool_idx = 0;
+        let screen_pool_idx = 0;
 
-        let (version_tracker, drawing_task_container, is_low_res) = match scope {
-            TaskDispatch::LowRes => (
-                &self
-                    .viewport_controller
-                    .drawing_tasks
-                    .low_res_task
-                    .task_count,
-                &self.viewport_controller.drawing_tasks.low_res_task,
-                true,
-            ),
-            TaskDispatch::HighRes => (
-                &self
-                    .viewport_controller
-                    .drawing_tasks
-                    .high_res_task
-                    .task_count,
-                &self.viewport_controller.drawing_tasks.high_res_task,
-                false,
-            ),
-            _ => (
-                &self
-                    .viewport_controller
-                    .drawing_tasks
-                    .object_task
-                    .task_count,
-                &self.viewport_controller.drawing_tasks.object_task,
-                false,
-            ),
-        };
-
-        loop {
-            let mut task = wait_for_task(&drawing_task_container);
-            let task_start = Instant::now();
-
-            // --- object scope: simple path, no image processing ---
-            if scope == TaskDispatch::Objects {
-                self.viewport_controller.sync_objects_to_slint_viewport();
-                continue;
-            }
-
-            // ----------------------------------------------------------------
-            // STEP 1: Extract all needed data from project - drop lock immediately
-            // This prevents holding the read lock during slow disk I/O or writes
-            // ----------------------------------------------------------------
-            let (
-                has_image,
-                series,
-                visible_channels,
-                z_stack,
-                t_stack,
-                hist_settings,
-                selected_channel,
-            ) = {
-                let project = self.app_state.get_project();
-                (
-                    project.tmp_settings.current_image.is_some(),
-                    project.get_selected_series_idx(),
-                    project.get_image_channel_visibilities_vec(),
-                    project.get_z_stack().cloned().unwrap_or_default(),
-                    project.get_t_stack().cloned().unwrap_or_default(),
-                    project.get_image_channel_histograms(),
-                    project.get_selected_image_channel_idx(),
-                )
-            };
-
-            if !has_image {
-                //debug!("No current image");
-                continue;
-            }
-
-            // ----------------------------------------------------------------
-            // STEP 2: Extract viewport state - separate lock, acquired after
-            // project lock is already dropped
-            // ----------------------------------------------------------------
-            let viewport_state = self
-                .viewport_controller
-                .viewport_state
-                .read()
-                .unwrap()
-                .clone();
-
-            let current_version = version_tracker.load(Ordering::SeqCst);
-
-            // Whether the user has the breakpoint-image toggle active.
-            let in_breakpoint_mode = self
-                .viewport_controller
-                .show_breakpoint
-                .load(Ordering::Relaxed);
-            // Both tiers skip disk I/O and render the in-memory breakpoint buffer
-            // when in breakpoint mode - the LowRes ghost renders it in grayscale
-            // (below) rather than being left showing the unrelated regular image.
-            let show_bp = in_breakpoint_mode;
-
-            // ----------------------------------------------------------------
-            // STEP 3: Disk I/O (skipped in breakpoint mode)
-            // ----------------------------------------------------------------
-            // Whether the buffer this frame renders is a U32 label map
-            // (Segmentation/Instances) rather than intensity data - set
-            // below when `show_bp` picks one. Declared outside the `if` so
-            // STEP 4 can branch on it after `read_result` is computed.
-            let mut is_label_render = false;
-            let read_result = if show_bp {
-                match &*self.viewport_controller.breakpoint_channel.read().unwrap() {
-                    Some(bp) => {
-                        // Pick the buffer matching the user's selected view
-                        // mode, falling back to the intensity image if the
-                        // pipeline hadn't produced that buffer yet at this
-                        // breakpoint step (e.g. Segmentation selected but the
-                        // breakpoint is before `Threshold`).
-                        let source_image = match self.viewport_controller.breakpoint_view_mode() {
-                            crate::editor::viewport_controller::BreakpointViewMode::Image => {
-                                bp.image.clone()
-                            }
-                            crate::editor::viewport_controller::BreakpointViewMode::Segmentation => {
-                                bp.segmentation.clone().unwrap_or_else(|| bp.image.clone())
-                            }
-                            crate::editor::viewport_controller::BreakpointViewMode::Instances => {
-                                bp.instances.clone().unwrap_or_else(|| bp.image.clone())
-                            }
-                        };
-                        is_label_render = matches!(&*source_image, ImageContainer::U32(_));
-                        let is_rgb = matches!(&*source_image, ImageContainer::F32Rgb(_));
-                        let channel = ImageChannel {
-                            image: source_image,
-                            color: [1.0, 1.0, 1.0],
-                            // Must match the channel the breakpointed pipeline
-                            // actually started from - the render loop below
-                            // looks up histogram/LUT settings by `c_stack`,
-                            // and hardcoding 0 here made the breakpoint image
-                            // render using an unrelated channel's histogram
-                            // range whenever the pipeline started from any
-                            // other channel (usually all-black, since the
-                            // real data then falls outside that channel's
-                            // configured min/max window). Irrelevant for
-                            // label rendering (is_label_render bypasses the
-                            // histogram lookup entirely), but harmless there.
-                            c_stack: bp.channel_idx.unwrap_or(0),
-                            name: "Breakpoint".to_string(),
-                            is_rgb,
-                            is_visible: true,
-                        };
-                        let prepared = ReadContext {
-                            zoomed_w: bp.tile_width as f32 * viewport_state.zoom,
-                            zoomed_h: bp.tile_height as f32 * viewport_state.zoom,
-                            zoom: viewport_state.zoom,
-                            draw_x: bp.tile_offset_x as f32 * viewport_state.zoom
-                                + viewport_state.offset_x,
-                            draw_y: bp.tile_offset_y as f32 * viewport_state.zoom
-                                + viewport_state.offset_y,
-                            offset_x: viewport_state.offset_x,
-                            offset_y: viewport_state.offset_y,
-                            read_off_x: bp.tile_offset_x,
-                            read_off_y: bp.tile_offset_y,
-                            res_idx: 0,
-                            image_w: bp.tile_width,
-                            image_h: bp.tile_height,
-                            bit_depth: bp.nr_bits,
-                            _nr_color_channels: if is_rgb { 3 } else { 1 },
-                            viewport_width: viewport_state.viewport_width,
-                            viewport_height: viewport_state.viewport_height,
-                            full_image_w: bp.tile_offset_x + bp.tile_width,
-                            full_image_h: bp.tile_offset_y + bp.tile_height,
-                        };
-                        Ok((Arc::new(vec![channel]), prepared))
-                    }
-                    None => Err(InternalErrors::ImageReadError(
-                        "No breakpoint image captured yet".into(),
-                    )),
-                }
-            } else {
-                self.viewport_cache.read_image_tile_combined(
-                    series,
-                    to_z_projection(z_stack.z_projection.clone()),
-                    z_stack.z_range.clone(),
-                    t_stack.t_stack.clone(),
-                    task.fit_to_screen,
-                    task.is_new_image,
-                    is_low_res,
-                    &viewport_state,
-                )
-            };
-            let read_duration = task_start.elapsed();
-            let step4_7_start = Instant::now();
-
-            // Cancel if a newer request came in during the slow disk read
-            if version_tracker.load(Ordering::SeqCst) > current_version {
-                continue;
-            }
-
-            // ----------------------------------------------------------------
-            // STEP 4: Process loaded image
-            // ----------------------------------------------------------------
-            let mut pixel_buffer_to_send = None;
-            let mut svg_hists_to_send = Vec::new();
-            let mut render_info = None;
-
-            if let Ok((render_src, prepared)) = read_result {
-                if !is_low_res {
-                    if let Ok(mut active) = self.viewport_cache.active_high_res_data.write() {
-                        *active = Some((render_src.clone(), prepared.clone()));
-                    }
-                }
-
-                // Resize buffer from pool if needed
-                pool_idx = (pool_idx + 1) % buffer_pool.len();
-                if buffer_pool[pool_idx].width() != prepared.image_w as u32
-                    || buffer_pool[pool_idx].height() != prepared.image_h as u32
-                {
-                    buffer_pool[pool_idx] =
-                        SharedPixelBuffer::new(prepared.image_w as u32, prepared.image_h as u32);
-                }
-
-                let master_slice = buffer_pool[pool_idx].make_mut_slice();
-                master_slice.fill(Rgb8Pixel { r: 0, g: 0, b: 0 });
-
-                // ------------------------------------------------------------
-                // STEP 5-7: Render pixels + build histograms - pure CPU, no locks.
-                //
-                // Segmentation/Instances breakpoint views bypass all of this:
-                // label IDs aren't intensities, so a histogram min/max window
-                // is meaningless for them - `render_labels_to_rgb8` writes
-                // `master_slice` directly instead.
-                // ------------------------------------------------------------
-                let mut channel_contexts: Vec<ChannelCtx> = Vec::new();
-                let mut is_rgb = false;
-
-                let all_hists: Vec<Vec<f32>> = if is_label_render {
-                    if let Some(channel) = render_src.first() {
-                        if let ImageContainer::U32(img) = &*channel.image {
-                            render_labels_to_rgb8(img.data.as_slice(), master_slice);
-                        }
-                    }
-                    Vec::new()
-                } else {
-                    // STEP 5: Auto-adjust - write lock acquired AFTER read lock
-                    // dropped. Safe because we dropped the project read lock in
-                    // STEP 1. Skipped in breakpoint mode to preserve the
-                    // original histogram.
-                    if !show_bp && (task.auto_adjust_if_not_set || task.auto_adjust_selected) {
-                        for channel in render_src.iter() {
-                            let idx = channel.c_stack;
-                            if let Some(ch) = hist_settings.get(&idx) {
-                                if (!ch.is_some() && task.auto_adjust_if_not_set)
-                                    || (task.auto_adjust_selected && idx == selected_channel)
-                                {
-                                    let (min, max, min_range, max_range) =
-                                        apply_auto_adjust(&channel.image, channel.is_rgb);
-                                    debug!(
-                                        "Auto-adjusting channel {} min={} max={} range=({},{})",
-                                        idx, min, max, min_range, max_range
-                                    );
-                                    self.app_state
-                                        .get_project_write()
-                                        .set_image_histogram_settings_for_channel(
-                                            idx, min, max, min_range, max_range,
-                                        );
-                                }
-                            }
-                        }
-                        self.histogram_controller.sync_histogram_settings_to_slint();
-                    } else if task.is_new_image || task.is_new_series {
-                        self.histogram_controller.sync_histogram_settings_to_slint();
-                    }
-
-                    // STEP 6: Re-read histogram settings after potential write.
-                    // Fresh read lock - safe because write lock was released above.
-                    let hist_settings_fresh = self
-                        .app_state
-                        .get_project()
-                        .get_image_channel_histograms()
-                        .clone();
-
-                    // Build channel contexts for rendering
-                    channel_contexts = Vec::with_capacity(render_src.len());
-
-                    for channel in render_src.iter() {
-                        let idx = channel.c_stack;
-                        if let Some(Some(histogram)) = hist_settings_fresh.get(&idx) {
-                            let data_slice = match &*channel.image {
-                                ImageContainer::F32Gray(img) => {
-                                    is_rgb = false;
-                                    Some(img.as_slice())
-                                }
-                                ImageContainer::F32Rgb(img) => {
-                                    is_rgb = true;
-                                    Some(img.as_slice())
-                                }
-                                _ => None,
-                            };
-
-                            if let Some(slice) = data_slice {
-                                let inv_range = 1.0 / (histogram.max - histogram.min).max(0.001);
-                                // In breakpoint mode the LowRes ghost is rendered in
-                                // grayscale so it doesn't flash color during pan/zoom.
-                                let color = if is_low_res && in_breakpoint_mode {
-                                    [1.0f32, 1.0, 1.0]
-                                } else {
-                                    channel.color
-                                };
-                                channel_contexts.push(ChannelCtx {
-                                    image_data: slice,
-                                    histogram: (*histogram).clone(),
-                                    color,
-                                    r_factor: inv_range * color[0] * 255.0,
-                                    g_factor: inv_range * color[1] * 255.0,
-                                    b_factor: inv_range * color[2] * 255.0,
-                                    offset: -histogram.min,
-                                    h_mult: (NUM_BINS as f32 - 1.0)
-                                        / (histogram.max_limit - histogram.min_limit)
-                                            .max(f32::EPSILON),
-                                    channel_idx: idx,
-                                });
-                            }
-                        }
-                    }
-
-                    // STEP 7: render
-                    prepare_image_channels_for_slint(
-                        &channel_contexts,
-                        master_slice,
-                        NUM_BINS,
-                        !is_low_res,
-                        &visible_channels,
-                        is_rgb,
-                    )
-                };
-                let step4_7_duration = step4_7_start.elapsed();
-
-                // ------------------------------------------------------------
-                // STEP 7b: Composite into a viewport-sized, screen-space buffer
-                // ------------------------------------------------------------
-                // Windows-only workaround. The native tile buffer (image_w x
-                // image_h) would otherwise be handed to Slint as a single
-                // Image element positioned at draw_x and stretched to
-                // zoomed_w/zoomed_h.  When zoomed/panned that element's
-                // origin sits far off-screen (draw_x can be thousands of px
-                // negative) and it is several thousand px wide.  The Slint
-                // SOFTWARE renderer (Windows build) stores scene coordinates
-                // as i16 and samples scaled images with an 8-bit fixed-point
-                // step; the per-step rounding error gets multiplied by the
-                // large off-screen offset, shifting the image by several
-                // pixels - and by a different amount at every zoom level.
-                // The GPU/Skia renderer (Linux/macOS) does not have this bug,
-                // so it skips the workaround entirely below: composing a
-                // *viewport-sized* buffer here means its cost tracks window
-                // size, not the size of the image actually being displayed
-                // (a small zoomed-out image in a huge window still pays for
-                // the whole window) - both the CPU resample and the GPU
-                // texture upload that follows scale with `vp_w * vp_h`.
-                // Skia can scale/position the much smaller native tile
-                // directly on the GPU, which is what `viewport.slint`'s
-                // Image layers (image-fit: fill + explicit width/height)
-                // were already designed to do - so on that path there is no
-                // reason to pre-composite at all.
-                if cfg!(target_os = "windows") {
-                    let vp_w = prepared.viewport_width.max(1.0) as usize;
-                    let vp_h = prepared.viewport_height.max(1.0) as usize;
-                    screen_pool_idx = (screen_pool_idx + 1) % screen_buffer_pool.len();
-                    if screen_buffer_pool[screen_pool_idx].width() as usize != vp_w
-                        || screen_buffer_pool[screen_pool_idx].height() as usize != vp_h
-                    {
-                        screen_buffer_pool[screen_pool_idx] =
-                            SharedPixelBuffer::new(vp_w as u32, vp_h as u32);
-                    }
-                    let composite_start = Instant::now();
-                    let slice_start = Instant::now();
-                    let native = buffer_pool[pool_idx].as_slice();
-                    let screen = screen_buffer_pool[screen_pool_idx].make_mut_slice();
-                    let slice_duration = slice_start.elapsed();
-                    {
-                        let img_w = prepared.image_w;
-                        let img_h = prepared.image_h;
-                        let inv_scale_x =
-                            prepared.image_w as f32 / prepared.zoomed_w.max(f32::EPSILON);
-                        let inv_scale_y =
-                            prepared.image_h as f32 / prepared.zoomed_h.max(f32::EPSILON);
-                        let draw_x = prepared.draw_x;
-                        let draw_y = prepared.draw_y;
-                        let black = Rgb8Pixel { r: 0, g: 0, b: 0 };
-                        // Each output row is independent (nearest-neighbor
-                        // resample, no cross-row state), so this is split
-                        // across rows and run in parallel, chunked into a
-                        // handful of multi-row groups per thread rather than
-                        // one task per row (measured: one-row chunks added
-                        // enough Rayon per-task scheduling overhead to cost
-                        // 11-25ms/frame on a real ~3000x2000 viewport, on top
-                        // of the actual memory-bound copy).
-                        use rayon::prelude::*;
-                        let rows_per_chunk = (vp_h / (rayon::current_num_threads() * 4)).max(1);
-                        screen
-                            .par_chunks_mut(vp_w * rows_per_chunk)
-                            .enumerate()
-                            .for_each(|(chunk_idx, rows)| {
-                                let base_sy = chunk_idx * rows_per_chunk;
-                                for (row_offset, row) in rows.chunks_mut(vp_w).enumerate() {
-                                    let sy = base_sy + row_offset;
-                                    let ty = (sy as f32 - draw_y) * inv_scale_y;
-                                    if ty < 0.0 || ty >= img_h as f32 {
-                                        row.fill(black);
-                                        continue;
-                                    }
-                                    let ty_i = ty as usize * img_w;
-                                    for (sx, out) in row.iter_mut().enumerate() {
-                                        let tx = (sx as f32 - draw_x) * inv_scale_x;
-                                        *out = if tx >= 0.0 && tx < img_w as f32 {
-                                            native[ty_i + tx as usize]
-                                        } else {
-                                            black
-                                        };
-                                    }
-                                }
-                            });
-                    }
-                    let composite_duration = composite_start.elapsed();
-                    info!(
-                        "Viewport frame ({}): read {:?}, render(4-7) {:?} [{} channels], composite {:?} [make_mut_slice {:?}, resample {:?}] ({}x{} native -> {}x{} viewport, {} threads), total so far {:?}",
-                        if is_low_res { "low-res" } else { "high-res" },
-                        read_duration,
-                        step4_7_duration,
-                        channel_contexts.len(),
-                        composite_duration,
-                        slice_duration,
-                        composite_duration.saturating_sub(slice_duration),
-                        prepared.image_w,
-                        prepared.image_h,
-                        vp_w,
-                        vp_h,
-                        rayon::current_num_threads(),
-                        task_start.elapsed()
-                    );
-
-                    // Display geometry is now screen-space: full viewport at
-                    // (0,0). The logical transform (zoom/offset/full_image)
-                    // in `prepared` is left untouched so sync_zoom, the
-                    // navigator and the pixel-value HUD (which maps via
-                    // active_high_res_data) keep working.
-                    let mut display = prepared.clone();
-                    display.draw_x = 0.0;
-                    display.draw_y = 0.0;
-                    display.zoomed_w = vp_w as f32;
-                    display.zoomed_h = vp_h as f32;
-
-                    pixel_buffer_to_send = Some(screen_buffer_pool[screen_pool_idx].clone());
-                    render_info = Some(display);
-                } else {
-                    info!(
-                        "Viewport frame ({}): read {:?}, render(4-7) {:?} [{} channels], no composite (direct GPU scale, {} threads), total so far {:?}",
-                        if is_low_res { "low-res" } else { "high-res" },
-                        read_duration,
-                        step4_7_duration,
-                        channel_contexts.len(),
-                        rayon::current_num_threads(),
-                        task_start.elapsed()
-                    );
-
-                    pixel_buffer_to_send = Some(buffer_pool[pool_idx].clone());
-                    render_info = Some(prepared.clone());
-                }
-
-                if !is_low_res {
-                    svg_hists_to_send = histogram_to_svg_fast(
-                        &all_hists
-                            .into_iter()
-                            .zip(channel_contexts.iter().map(|c| c.color))
-                            .collect(),
-                        NUM_BINS,
-                    );
-                }
-            } else if let Err(e) = read_result {
-                warn!("Error reading image tile: {:?}", e);
-            }
-
-            // ----------------------------------------------------------------
-            // STEP 8: Dispatch to UI thread
-            // ----------------------------------------------------------------
-            let busy = ui_busy.clone();
-            busy.store(true, Ordering::SeqCst);
-
-            if let (Some(pb), Some(info)) = (pixel_buffer_to_send, render_info) {
-                self.viewport_controller.sync_viewport_state_to_slint(
-                    pb,
-                    svg_hists_to_send,
-                    info.draw_x,
-                    info.draw_y,
-                    info.zoomed_w,
-                    info.zoomed_h,
-                    is_low_res,
-                );
-
-                if task.fit_to_screen {
-                    self.viewport_controller.sync_zoom_to_slint(
-                        info.zoom,
-                        info.offset_x,
-                        info.offset_y,
-                    );
-                }
-
-                if is_low_res {
-                    self.viewport_controller.sync_high_res_ready_to_slint(false);
-                    self.viewport_controller.sync_navigator_to_slint(
-                        info.full_image_w as i64,
-                        info.full_image_h as i64,
-                        info.viewport_width,
-                        info.viewport_height,
-                        info.offset_x,
-                        info.offset_y,
-                    );
-                }
-            }
-
-            busy.store(false, Ordering::SeqCst);
-            task.reset_job();
+        Self {
+            ui_busy,
+            buffer_pool,
+            pool_idx,
+            screen_buffer_pool,
+            screen_pool_idx,
         }
     }
 }
@@ -1139,5 +1146,176 @@ mod tests {
 
         // val=1.0 -> y = (1.0 - 1.0) * 100.0 = 0.00 (top of a 100x100 viewBox)
         assert!(path.contains(" 0.00 0.00"), "path was: {path}");
+    }
+
+    // -- rendering real frames (UI updates applied via the test queue) -------
+
+    use crate::editor::test_support::{
+        project_with_fixture_image, test_ui_windows, ui_state_with_windows,
+    };
+    use crate::helper::ui_thread::drain_ui_queue;
+    use crate::{AppWindow, ViewportState as ViewportSlintState};
+    use evanalyzer_cfg::settings::images_settings::{ZStackHandling, ZStackSettings};
+    use slint::ComponentHandle;
+
+    struct Render {
+        ui: AppWindow,
+        _results_ui: crate::ResultsWindow,
+        app_state: Arc<UiState>,
+        worker: Arc<ViewportWorker>,
+        buffers: RenderBuffers,
+    }
+
+    fn render_fixture(project: evanalyzer_app::project::ProjectWithRuntime) -> Render {
+        let (ui, results_ui) = test_ui_windows();
+        let app_state = ui_state_with_windows(&ui, &results_ui, project);
+        let viewport = Arc::new(ViewportController::new(ui.as_weak(), app_state.clone()));
+        {
+            let mut vp = viewport.viewport_state.write().unwrap();
+            vp.viewport_width = 400.0;
+            vp.viewport_height = 300.0;
+            vp.zoom = 1.0;
+        }
+        let histogram = Arc::new(HistogramController::new(
+            ui.as_weak(),
+            app_state.clone(),
+            viewport.clone(),
+        ));
+        let cache = Arc::new(ViewportCache::new(app_state.clone()));
+        let worker = Arc::new(ViewportWorker::new(
+            app_state.clone(),
+            viewport,
+            histogram,
+            cache,
+        ));
+        Render {
+            ui,
+            _results_ui: results_ui,
+            app_state,
+            worker,
+            buffers: RenderBuffers::new(),
+        }
+    }
+
+    impl Render {
+        fn draw(&mut self, scope: TaskDispatch, task: DrawingTask) {
+            self.worker.render_task(scope, task, &mut self.buffers);
+            drain_ui_queue();
+        }
+        fn view(&self) -> ViewportSlintState<'_> {
+            self.ui.global::<ViewportSlintState>()
+        }
+    }
+
+    fn new_image_task() -> DrawingTask {
+        DrawingTask {
+            auto_adjust_if_not_set: true,
+            is_new_image: true,
+            fit_to_screen: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_new_image_is_auto_adjusted_fitted_and_drawn() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let image = r.ui.get_display_image();
+        assert!(image.size().width > 0 && image.size().height > 0);
+        assert!(r.view().get_high_res_ready());
+        assert!(r.view().get_tile_width() > 0.0);
+        // Auto-adjust stored a histogram window for the image's channels.
+        let histograms = r.app_state.get_project().get_image_channel_histograms();
+        assert!(histograms.values().any(|h| h.is_some()), "{histograms:?}");
+        // A second frame of the same image reuses the cache.
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        assert!(r.ui.get_display_image().size().width > 0);
+    }
+
+    #[test]
+    fn the_low_res_ghost_and_navigator_are_drawn() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        assert!(r.ui.get_ghost_image().size().width > 0);
+        assert!(r.view().get_tile_width_ghost() > 0.0);
+        // A low-res frame never takes back an already posted high-res one.
+        assert!(r.view().get_high_res_ready());
+    }
+
+    #[test]
+    fn every_z_projection_renders() {
+        for handling in [
+            ZStackHandling::MaxIntensity,
+            ZStackHandling::MinIntensity,
+            ZStackHandling::AvgIntensity,
+            ZStackHandling::SumIntensity,
+            ZStackHandling::TakeTheMiddle,
+            ZStackHandling::AllStacks,
+        ] {
+            let mut project = project_with_fixture_image();
+            project.settings.images.settings.z_stack = Some(ZStackSettings {
+                z_projection: handling.clone(),
+                ..Default::default()
+            });
+            let mut r = render_fixture(project);
+            r.draw(TaskDispatch::HighRes, new_image_task());
+            assert!(
+                r.ui.get_display_image().size().width > 0,
+                "{handling:?} drew nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn without_a_current_image_nothing_is_drawn() {
+        let mut r = render_fixture(evanalyzer_app::project::ProjectWithRuntime::default());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        assert_eq!(r.ui.get_display_image().size().width, 0);
+        // The objects scope only syncs objects, image or not.
+        r.draw(TaskDispatch::Objects, DrawingTask::default());
+    }
+
+    #[test]
+    fn breakpoint_images_render_instead_of_the_file() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.worker.viewport_controller.set_show_breakpoint(true);
+        // Nothing captured yet: no frame.
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        assert_eq!(r.ui.get_display_image().size().width, 0);
+
+        let labels = ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1>::new(
+                ImageSize {
+                    width: 4,
+                    height: 2,
+                },
+                vec![0, 1, 1, 2, 0, 2, 3, 3],
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        });
+        r.worker.viewport_controller.set_breakpoint_channel(
+            gray_container(vec![0.1, 0.5, 0.9, 0.2, 0.3, 0.4, 0.6, 0.7]),
+            Some(labels),
+            None,
+            0,
+            0,
+            8,
+            1,
+            8,
+            Some(0),
+        );
+        drain_ui_queue();
+        // Intensity view, then the label map, then instances (falls back to
+        // the intensity image - none were captured).
+        for mode in [0, 1, 2] {
+            r.worker.viewport_controller.set_breakpoint_view_mode(mode);
+            r.draw(TaskDispatch::HighRes, DrawingTask::default());
+            assert!(r.ui.get_display_image().size().width > 0, "mode {mode}");
+        }
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        assert!(r.ui.get_ghost_image().size().width > 0);
     }
 }

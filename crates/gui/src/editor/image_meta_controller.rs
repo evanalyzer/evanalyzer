@@ -132,7 +132,7 @@ impl ImageMetaController {
         let image_meta = self.app_state.get_image_meta(&path)?;
         let ui_weak = self.ui.clone();
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 warn!("Cannot update image meta data - UI upgrade failed");
                 return;
@@ -329,7 +329,7 @@ impl ImageMetaController {
         let project = self.app_state.get_project();
         let pixel_sizes = project.get_pixel_sizes();
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 // Pixel size
                 let px_size = format!(
@@ -428,5 +428,125 @@ mod tests {
         // `project_with_one_image()`'s "img.tif" doesn't exist on disk -
         // `get_image_meta` must surface that as an `Err`, not panic.
         assert!(controller.sync_image_meta_to_slint().is_err());
+    }
+
+    // -- with a window (UI updates applied via the test UI queue) ------------
+
+    use crate::editor::test_support::{
+        project_with_fixture_image, test_ui_state_with_project, test_ui_windows,
+    };
+    use crate::helper::ui_thread::drain_ui_queue;
+
+    fn with_window(
+        project: evanalyzer_app::project::ProjectWithRuntime,
+    ) -> (AppWindow, Arc<UiState>, Arc<ImageMetaController>) {
+        let (ui, _results_ui) = test_ui_windows();
+        let ui_state = test_ui_state_with_project(project);
+        let viewport_controller = Arc::new(ViewportController::new(ui.as_weak(), ui_state.clone()));
+        let controller = Arc::new(ImageMetaController::new(
+            ui.as_weak(),
+            ui_state.clone(),
+            viewport_controller,
+        ));
+        controller.attach_callbacks();
+        (ui, ui_state, controller)
+    }
+
+    #[test]
+    fn sync_image_meta_shows_the_real_images_dimensions_and_channels() {
+        let (ui, ui_state, controller) = with_window(project_with_fixture_image());
+        let meta = ui_state
+            .get_image_meta(&crate::editor::test_support::fixture_image_path())
+            .unwrap();
+        let series = meta.series.get(&0).unwrap();
+
+        controller.sync_image_meta_to_slint().unwrap();
+        drain_ui_queue();
+
+        let meta_ui = ui.global::<ImageMetaData>();
+        assert_eq!(meta_ui.get_image_name(), meta.name.as_str());
+        assert_eq!(
+            meta_ui.get_dimensions_str(),
+            format!(
+                "{}x{}x{}",
+                series.nr_c_stacks, series.nr_z_stacks, series.nr_t_stacks
+            )
+            .as_str()
+        );
+        assert_eq!(meta_ui.get_nr_series(), meta.series.len() as i32);
+        assert_eq!(meta_ui.get_series_list().row_count(), meta.series.len());
+        assert!(meta_ui.get_size().ends_with(" px"));
+        assert!(meta_ui.get_pixel_type().ends_with(" bits"));
+        // The fixture project overrides pixel sizes with 0.5 x 0.5 x 1.
+        assert_eq!(meta_ui.get_pixel_size_x(), 0.5);
+        assert_eq!(meta_ui.get_pixel_size_str(), "0.5x0.5x1.0 nm/px");
+
+        let channels = ui.global::<ChannelState>().get_channels();
+        assert_eq!(channels.row_count(), series.channels.len());
+        // The fixture is an RGB image: three channels named Red/Green/Blue.
+        assert!(meta_ui.get_is_rgb());
+        assert_eq!(
+            ui.global::<ChannelState>().get_intensity_projection(),
+            IntensityProjection::SingleStack
+        );
+    }
+
+    #[test]
+    fn sync_image_meta_shows_every_z_projection_mode() {
+        use evanalyzer_cfg::settings::images_settings::ZStackSettings;
+        for (handling, shown) in [
+            (ZStackHandling::AllStacks, IntensityProjection::AllStacks),
+            (ZStackHandling::MaxIntensity, IntensityProjection::Max),
+            (ZStackHandling::MinIntensity, IntensityProjection::Min),
+            (ZStackHandling::AvgIntensity, IntensityProjection::Avg),
+            (ZStackHandling::SumIntensity, IntensityProjection::Sum),
+            (ZStackHandling::TakeTheMiddle, IntensityProjection::Middle),
+        ] {
+            let mut project = project_with_fixture_image();
+            project.settings.images.settings.z_stack = Some(ZStackSettings {
+                z_projection: handling,
+                ..Default::default()
+            });
+            let (ui, _ui_state, controller) = with_window(project);
+            controller.sync_image_meta_to_slint().unwrap();
+            drain_ui_queue();
+            assert_eq!(
+                ui.global::<ChannelState>().get_intensity_projection(),
+                shown
+            );
+        }
+    }
+
+    #[test]
+    fn a_selected_series_the_image_lacks_leaves_the_ui_alone() {
+        let mut project = project_with_fixture_image();
+        for entry in project.images.list.values_mut() {
+            entry.selected_series = 99;
+        }
+        let (ui, _ui_state, controller) = with_window(project);
+        ui.global::<ImageMetaData>()
+            .set_image_name("untouched".into());
+        controller.sync_image_meta_to_slint().unwrap();
+        drain_ui_queue();
+        assert_eq!(ui.global::<ImageMetaData>().get_image_name(), "untouched");
+    }
+
+    #[test]
+    fn pixel_size_callbacks_override_and_reset_the_shown_sizes() {
+        let (ui, ui_state, _controller) = with_window(project_with_fixture_image());
+        let meta_ui = ui.global::<ImageMetaData>();
+
+        meta_ui.invoke_pixel_size_changed(2.0, 3.0, 4.0);
+        drain_ui_queue();
+        assert_eq!(meta_ui.get_pixel_size_x(), 2.0);
+        assert_eq!(meta_ui.get_pixel_size_z(), 4.0);
+        assert_eq!(meta_ui.get_pixel_size_str(), "2.0x3.0x4 nm/px");
+        assert_eq!(ui_state.get_project().get_pixel_sizes().y, 3.0);
+
+        meta_ui.invoke_reset_pixel_sizes();
+        drain_ui_queue();
+        // Back to the image's own series settings (0.5 x 0.5 x 1).
+        assert_eq!(meta_ui.get_pixel_size_x(), 0.5);
+        assert_eq!(ui_state.get_project().get_pixel_sizes().x, 0.5);
     }
 }

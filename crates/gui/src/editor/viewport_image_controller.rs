@@ -496,7 +496,7 @@ impl ViewportImageController {
             );
 
             let ui_weak = self.ui.clone();
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.global::<ImagePixelInfo>()
                         .set_pixel_value(pixel_values.join(" | ").into());

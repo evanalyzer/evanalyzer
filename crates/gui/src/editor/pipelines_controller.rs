@@ -262,7 +262,7 @@ impl PipelinesController {
                 manager.sync_pipelines_to_slint();
                 manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(new_id), true);
                 let ui_weak = manager.ui.clone();
-                slint::invoke_from_event_loop(move || {
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
                         ui.global::<PipelinesPanelState>()
                             .set_active_pipeline_id(new_id as i32);
@@ -348,7 +348,7 @@ impl PipelinesController {
                     manager.sync_pipelines_to_slint();
                     manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(new_id), true);
                     let ui_weak = manager.ui.clone();
-                    slint::invoke_from_event_loop(move || {
+                    crate::helper::ui_thread::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_weak.upgrade() {
                             ui.global::<PipelinesPanelState>()
                                 .set_active_pipeline_id(new_id as i32);
@@ -406,7 +406,7 @@ impl PipelinesController {
                         Some(nid) => {
                             manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(nid), true);
                             let ui_weak = manager.ui.clone();
-                            slint::invoke_from_event_loop(move || {
+                            crate::helper::ui_thread::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_weak.upgrade() {
                                     ui.global::<PipelinesPanelState>()
                                         .set_active_pipeline_id(nid as i32);
@@ -416,7 +416,7 @@ impl PipelinesController {
                         }
                         None => {
                             let ui_weak = manager.ui.clone();
-                            slint::invoke_from_event_loop(move || {
+                            crate::helper::ui_thread::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_weak.upgrade() {
                                     let ps = ui.global::<PipelinesPanelState>();
                                     ps.set_active_pipeline_id(0);
@@ -800,12 +800,12 @@ impl PipelinesController {
                         };
                         // The RDF is read through the backend, so a model on
                         // the server resolves to server paths.
-                        std::thread::spawn(move || {
+                        crate::helper::ui_thread::spawn(move || {
                             let result = evanalyzer_app::bioimageio::configure_from(
                                 manager.app_state.backend().files(),
                                 &path,
                             );
-                            let _ = slint::invoke_from_event_loop(move || {
+                            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                                 let Some(ui) = manager.ui.upgrade() else {
                                     return;
                                 };
@@ -1515,7 +1515,7 @@ impl PipelinesController {
     fn show_warning(&self, message: &str) {
         let message = message.to_owned();
         let ui_weak = self.ui.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let warning = ui.global::<WarningState>();
                 warning.set_info(false);
@@ -1536,7 +1536,7 @@ impl PipelinesController {
     pub(crate) fn disable_auto_preview(&self) {
         *self.auto_preview_enabled.lock().expect("Poisned") = false;
         let ui_weak = self.ui.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<PipelinesPanelState>()
                     .set_auto_preview_enabled(false);
@@ -1661,7 +1661,7 @@ impl PipelinesController {
 
         let enabled_count = slint_pipelines.iter().filter(|p| p.enabled).count() as i32;
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let model = ModelRc::new(VecModel::from(slint_pipelines));
                 let state = ui.global::<PipelinesPanelState>();
@@ -1806,7 +1806,7 @@ impl PipelinesController {
     /// completes.
     fn reload_pipeline_templates_async(self: &Arc<Self>) {
         let manager = self.clone();
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             let templates: Vec<PipelineTemplate> =
                 load_pipeline_templates(manager.app_state.backend().as_ref())
                     .into_iter()
@@ -1815,7 +1815,7 @@ impl PipelinesController {
             *manager.pipeline_templates.lock().expect("Poisoned") = templates;
 
             let manager = manager.clone();
-            if let Err(e) = slint::invoke_from_event_loop(move || {
+            if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 let Some(ui) = manager.ui.upgrade() else {
                     return;
                 };
@@ -1838,7 +1838,7 @@ impl PipelinesController {
         let raw = all_command_meta();
 
         let ui_weak = self.ui.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let all: Vec<CommandDef> = raw.iter().map(to_command_def).collect();
                 let shown_pre: Vec<CommandDef> = raw
@@ -1992,7 +1992,7 @@ impl PipelinesController {
         // Model files are read through the backend (the server's, remotely).
         let backend = Arc::clone(self.app_state.backend());
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let state = ui.global::<PipelinesPanelState>();
 
@@ -3326,5 +3326,808 @@ mod tests {
         let project = ui_state.get_project();
         assert_eq!(project.pipelines.len(), 2);
         assert!(project.pipelines.iter().any(|p| p.id == PipelineId(6)));
+    }
+
+    // -- callbacks + UI sync (via the test UI queue) ---------------------------
+
+    use crate::helper::ui_thread::drain_ui_queue;
+    use evanalyzer_cfg::settings::pipeline_command::{all_command_meta, default_command};
+
+    fn step(command_name: &str) -> PipelineStepSettings {
+        let meta = all_command_meta()
+            .into_iter()
+            .find(|m| m.name == command_name)
+            .unwrap_or_else(|| panic!("no command {command_name}"));
+        PipelineStepSettings {
+            enabled: true,
+            command: default_command(meta.id).unwrap(),
+        }
+    }
+
+    fn add_pipeline_with(
+        ui_state: &UiState,
+        id: u32,
+        source: ImageAddress,
+        steps: Vec<PipelineStepSettings>,
+    ) {
+        ui_state.get_project_write().add_pipeline(PipelineSettings {
+            id: PipelineId(id),
+            name: format!("Pipeline {id}"),
+            description: None,
+            image_source: source,
+            enabled: true,
+            steps,
+        });
+    }
+
+    /// A window with the controller attached and pipeline `id` selected
+    /// (steps synced into `active_commands`), the queue drained.
+    fn selected(
+        steps: Vec<PipelineStepSettings>,
+    ) -> (AppWindow, Arc<UiState>, Arc<PipelinesController>) {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(ui.as_weak());
+        add_pipeline_with(&ui_state, 1, ImageAddress::Channel(0), steps);
+        controller.attach_callbacks();
+        controller.sync_pipelines_to_slint();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.set_active_pipeline_id(1);
+        panel.invoke_select_pipeline(1);
+        drain_ui_queue();
+        (ui, ui_state, controller)
+    }
+
+    fn step_names(ui_state: &UiState, id: u32) -> Vec<String> {
+        let project = ui_state.get_project();
+        project
+            .pipelines
+            .iter()
+            .find(|p| p.id.0 == id)
+            .unwrap()
+            .steps
+            .iter()
+            .map(|s| s.command.name().to_string())
+            .collect()
+    }
+
+    fn active_dialog(ui: &AppWindow) -> DialogType {
+        ui.global::<GlobalAppState>().get_active_dialog()
+    }
+
+    fn ui_param(ui: &AppWindow, step_idx: usize, name: &str) -> CommandParameter {
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let cmd = commands.row_data(step_idx).expect("step in UI model");
+        let params = cmd.parameters.clone();
+        (0..params.row_count())
+            .filter_map(|i| params.row_data(i))
+            .find(|p| p.name.as_str() == name)
+            .unwrap_or_else(|| panic!("no UI parameter {name}"))
+    }
+
+    #[test]
+    fn selecting_a_pipeline_pushes_its_steps_name_and_counts_to_the_ui() {
+        let (ui, _ui_state, _controller) =
+            selected(vec![step("Threshold"), step("Colocalization")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        assert_eq!(panel.get_active_pipeline_name(), "Pipeline 1");
+        assert_eq!(panel.get_active_pipeline_image_source(), "Channel 0");
+        let commands = panel.get_active_commands();
+        assert_eq!(commands.row_count(), 2);
+        assert_eq!(commands.row_data(1).unwrap().name, "Colocalization");
+        assert_eq!(panel.get_total_enabled_steps(), 2);
+        let pipelines = panel.get_pipelines();
+        assert_eq!(pipelines.row_count(), 1);
+        assert_eq!(pipelines.row_data(0).unwrap().total_step_count, 2);
+        assert_eq!(panel.get_enabled_pipeline_count(), 1);
+    }
+
+    #[test]
+    fn selecting_an_unknown_pipeline_shows_an_empty_step_list() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Threshold")]);
+        ui.global::<PipelinesPanelState>()
+            .invoke_select_pipeline(99);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        assert_eq!(panel.get_active_commands().row_count(), 0);
+        assert_eq!(panel.get_active_pipeline_name(), "");
+    }
+
+    #[test]
+    fn pipeline_list_shows_each_image_source_kind() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(ui.as_weak());
+        add_pipeline_with(&ui_state, 1, ImageAddress::Scratchpad, vec![]);
+        add_pipeline_with(
+            &ui_state,
+            2,
+            ImageAddress::Memory(MemoryId::PipelineContext(3)),
+            vec![],
+        );
+        add_pipeline_with(
+            &ui_state,
+            3,
+            ImageAddress::Memory(MemoryId::ProjectCache(4)),
+            vec![],
+        );
+        add_pipeline_with(&ui_state, 4, ImageAddress::Channel(2), vec![]);
+        controller.sync_pipelines_to_slint();
+        drain_ui_queue();
+        let pipelines = ui.global::<PipelinesPanelState>().get_pipelines();
+        let sources: Vec<String> = (0..pipelines.row_count())
+            .map(|i| pipelines.row_data(i).unwrap().image_source.to_string())
+            .collect();
+        assert_eq!(
+            sources,
+            ["Scratchpad", "Memory[3]", "Cache[4]", "Channel 2"]
+        );
+    }
+
+    #[test]
+    fn new_pipeline_opens_the_edit_dialog_prefilled_for_it() {
+        let (ui, _ui_state, _controller) = selected(vec![]);
+        ui.global::<PipelinesPanelState>().invoke_new_pipeline();
+        drain_ui_queue();
+        let edit = ui.global::<PipelineEditState>();
+        assert_eq!(edit.get_pipeline_id(), 2);
+        assert_eq!(edit.get_pipeline_name(), "Pipeline 2");
+        assert_eq!(edit.get_source_type(), 2, "channel source");
+        assert_eq!(
+            ui.global::<PipelinesPanelState>().get_active_pipeline_id(),
+            2
+        );
+        assert_eq!(active_dialog(&ui), DialogType::PipelineEdit);
+    }
+
+    #[test]
+    fn pipeline_more_fills_the_edit_dialog_for_every_source_kind() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(ui.as_weak());
+        add_pipeline_with(&ui_state, 1, ImageAddress::Scratchpad, vec![]);
+        add_pipeline_with(
+            &ui_state,
+            2,
+            ImageAddress::Memory(MemoryId::PipelineContext(3)),
+            vec![],
+        );
+        add_pipeline_with(
+            &ui_state,
+            3,
+            ImageAddress::Memory(MemoryId::ProjectCache(4)),
+            vec![],
+        );
+        add_pipeline_with(&ui_state, 4, ImageAddress::Channel(2), vec![]);
+        controller.attach_callbacks();
+        let edit = ui.global::<PipelineEditState>();
+        let panel = ui.global::<PipelinesPanelState>();
+        for (id, expected) in [
+            (1, (0, 1, 0)),
+            (2, (1, 3, 0)),
+            (3, (1, 4, 0)),
+            (4, (2, 1, 2)),
+        ] {
+            panel.invoke_pipeline_more(id);
+            assert_eq!(
+                (
+                    edit.get_source_type(),
+                    edit.get_source_slot(),
+                    edit.get_source_channel()
+                ),
+                expected,
+                "pipeline {id}"
+            );
+            assert_eq!(edit.get_pipeline_name(), format!("Pipeline {id}").as_str());
+        }
+        assert_eq!(active_dialog(&ui), DialogType::PipelineEdit);
+
+        // Unknown pipeline: dialog state untouched.
+        edit.set_pipeline_id(-5);
+        panel.invoke_pipeline_more(42);
+        assert_eq!(edit.get_pipeline_id(), -5);
+    }
+
+    #[test]
+    fn edit_dialog_confirm_renames_and_changes_the_source() {
+        let (ui, ui_state, _controller) = selected(vec![]);
+        let edit = ui.global::<PipelineEditState>();
+        for (stype, slot, channel, expected, shown) in [
+            (0, 1, 0, ImageAddress::Scratchpad, "Scratchpad"),
+            (
+                1,
+                0,
+                0,
+                ImageAddress::Memory(MemoryId::PipelineContext(1)),
+                "Memory[1]",
+            ),
+            (2, 1, 3, ImageAddress::Channel(3), "Channel 3"),
+        ] {
+            ui.global::<GlobalAppState>()
+                .set_active_dialog(DialogType::PipelineEdit);
+            edit.set_pipeline_id(1);
+            edit.set_pipeline_name("Nuclei".into());
+            edit.set_source_type(stype);
+            edit.set_source_slot(slot);
+            edit.set_source_channel(channel);
+            edit.invoke_confirm();
+            let project = ui_state.get_project();
+            assert_eq!(project.pipelines[0].name, "Nuclei");
+            assert_eq!(project.pipelines[0].image_source, expected);
+            drop(project);
+            // It's the active pipeline: the "EDITING" bar follows at once.
+            let panel = ui.global::<PipelinesPanelState>();
+            assert_eq!(panel.get_active_pipeline_name(), "Nuclei");
+            assert_eq!(panel.get_active_pipeline_image_source(), shown);
+            assert_eq!(active_dialog(&ui), DialogType::None);
+        }
+        assert!(ui_state.is_dirty());
+    }
+
+    #[test]
+    fn edit_dialog_confirm_of_another_pipeline_leaves_the_editing_bar_alone() {
+        let (ui, ui_state, _controller) = selected(vec![]);
+        add_pipeline_with(&ui_state, 2, ImageAddress::Channel(0), vec![]);
+        let edit = ui.global::<PipelineEditState>();
+        edit.set_pipeline_id(2);
+        edit.set_pipeline_name("".into());
+        edit.set_source_type(7); // unknown kind: default source
+        edit.invoke_confirm();
+        assert_eq!(
+            ui_state.get_project().pipelines[1].image_source,
+            ImageAddress::default()
+        );
+        assert_eq!(
+            ui.global::<PipelinesPanelState>()
+                .get_active_pipeline_name(),
+            "Pipeline 1"
+        );
+    }
+
+    #[test]
+    fn dialog_cancel_buttons_just_close_their_dialog() {
+        let (ui, ui_state, _controller) = selected(vec![step("Threshold")]);
+        let close = |open: DialogType, cancel: &dyn Fn()| {
+            ui.global::<GlobalAppState>().set_active_dialog(open);
+            cancel();
+            assert_eq!(active_dialog(&ui), DialogType::None, "{open:?}");
+        };
+        close(DialogType::PipelineEdit, &|| {
+            ui.global::<PipelineEditState>().invoke_cancel()
+        });
+        close(DialogType::PipelineDeleteConfirm, &|| {
+            ui.global::<PipelineDeleteConfirmState>().invoke_cancel()
+        });
+        close(DialogType::CommandSelectionDialog, &|| {
+            ui.global::<CommandPickerState>().invoke_cancel()
+        });
+        close(DialogType::RunAnalysisConfirm, &|| {
+            ui.global::<RunAnalysisState>().invoke_cancel()
+        });
+        assert_eq!(step_names(&ui_state, 1), ["Threshold"], "nothing changed");
+    }
+
+    #[test]
+    fn duplicate_pipeline_appends_a_copy_and_selects_it() {
+        let (ui, ui_state, _controller) = selected(vec![step("Threshold")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_duplicate_pipeline(1);
+        drain_ui_queue();
+        {
+            let project = ui_state.get_project();
+            assert_eq!(project.pipelines.len(), 2);
+            assert_eq!(project.pipelines[1].id, PipelineId(2));
+            assert_eq!(project.pipelines[1].name, "Pipeline 1 (Copy)");
+            assert_eq!(project.pipelines[1].steps.len(), 1);
+        }
+        assert_eq!(panel.get_active_pipeline_id(), 2);
+        assert_eq!(panel.get_pipelines().row_count(), 2);
+
+        panel.invoke_duplicate_pipeline(99);
+        assert_eq!(
+            ui_state.get_project().pipelines.len(),
+            2,
+            "unknown id: no-op"
+        );
+    }
+
+    #[test]
+    fn deleting_a_pipeline_asks_first_then_selects_the_next_one() {
+        let (ui, ui_state, _controller) = selected(vec![]);
+        add_pipeline_with(
+            &ui_state,
+            2,
+            ImageAddress::Channel(0),
+            vec![step("Threshold")],
+        );
+        let panel = ui.global::<PipelinesPanelState>();
+
+        panel.invoke_delete_pipeline(1);
+        let confirm = ui.global::<PipelineDeleteConfirmState>();
+        assert_eq!(confirm.get_pipeline_name(), "Pipeline 1");
+        assert_eq!(active_dialog(&ui), DialogType::PipelineDeleteConfirm);
+        assert_eq!(ui_state.get_project().pipelines.len(), 2, "not deleted yet");
+
+        confirm.invoke_confirm();
+        drain_ui_queue();
+        assert_eq!(ui_state.get_project().pipelines.len(), 1);
+        assert_eq!(active_dialog(&ui), DialogType::None);
+        assert_eq!(panel.get_active_pipeline_id(), 2);
+        assert_eq!(panel.get_active_commands().row_count(), 1);
+
+        // Deleting the last one clears the editor.
+        panel.invoke_delete_pipeline(2);
+        confirm.invoke_confirm();
+        drain_ui_queue();
+        assert!(ui_state.get_project().pipelines.is_empty());
+        assert_eq!(panel.get_active_pipeline_id(), 0);
+        assert_eq!(panel.get_active_pipeline_name(), "");
+        assert_eq!(panel.get_active_commands().row_count(), 0);
+    }
+
+    #[test]
+    fn deleting_an_unknown_pipeline_names_it_by_id() {
+        let (ui, _ui_state, _controller) = selected(vec![]);
+        ui.global::<PipelinesPanelState>().invoke_delete_pipeline(7);
+        assert_eq!(
+            ui.global::<PipelineDeleteConfirmState>()
+                .get_pipeline_name(),
+            "Pipeline 7"
+        );
+    }
+
+    #[test]
+    fn toggle_remove_and_duplicate_step_change_the_active_pipeline() {
+        let (ui, ui_state, _controller) = selected(vec![step("Threshold"), step("Colocalization")]);
+        let panel = ui.global::<PipelinesPanelState>();
+
+        panel.invoke_toggle_step(0);
+        drain_ui_queue();
+        assert!(!ui_state.get_project().pipelines[0].steps[0].enabled);
+        assert!(!panel.get_active_commands().row_data(0).unwrap().enabled);
+        assert_eq!(panel.get_total_enabled_steps(), 1);
+
+        panel.invoke_duplicate_step(1);
+        drain_ui_queue();
+        assert_eq!(
+            step_names(&ui_state, 1),
+            ["Threshold", "Colocalization", "Colocalization"]
+        );
+
+        panel.invoke_remove_step(0);
+        drain_ui_queue();
+        assert_eq!(
+            step_names(&ui_state, 1),
+            ["Colocalization", "Colocalization"]
+        );
+        assert_eq!(panel.get_active_commands().row_count(), 2);
+
+        // Out of range: ignored.
+        panel.invoke_remove_step(9);
+        panel.invoke_duplicate_step(9);
+        panel.invoke_expand_step(0);
+        assert_eq!(step_names(&ui_state, 1).len(), 2);
+    }
+
+    #[test]
+    fn insert_step_opens_the_picker_with_the_next_categories_suggested() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Threshold")]);
+        ui.global::<PipelinesPanelState>().invoke_insert_step(1, 0);
+        let picker = ui.global::<CommandPickerState>();
+        assert_eq!(active_dialog(&ui), DialogType::CommandSelectionDialog);
+        assert_eq!(picker.get_target_pipeline(), "Pipeline 1");
+        assert_eq!(picker.get_total_steps(), 1);
+        assert_eq!(picker.get_insert_after_idx(), 0);
+        // Threshold is a segmentation step: something follows it.
+        assert!(picker.get_context_category() >= 0);
+        let any_chip = picker.get_fcat_pre()
+            || picker.get_fcat_seg()
+            || picker.get_fcat_obj()
+            || picker.get_fcat_mea()
+            || picker.get_fcat_cls();
+        assert!(any_chip, "suggested follow-up categories are pre-selected");
+        assert!(picker.get_total_shown() > 0);
+    }
+
+    #[test]
+    fn insert_step_into_an_empty_or_unknown_pipeline_shows_all_categories() {
+        let (ui, _ui_state, _controller) = selected(vec![]);
+        let picker = ui.global::<CommandPickerState>();
+        for pipeline_id in [1, 42] {
+            ui.global::<PipelinesPanelState>()
+                .invoke_insert_step(pipeline_id, -1);
+            assert_eq!(picker.get_context_category(), -1);
+            assert!(!picker.get_fcat_seg() && !picker.get_fcat_pre());
+        }
+        assert_eq!(picker.get_target_pipeline(), "");
+    }
+
+    #[test]
+    fn picker_select_shows_a_command_and_confirm_inserts_it_after_the_given_step() {
+        let (ui, ui_state, _controller) = selected(vec![step("Threshold"), step("Threshold")]);
+        let coloc_id = all_command_meta()
+            .into_iter()
+            .find(|m| m.name == "Colocalization")
+            .unwrap()
+            .id;
+        let picker = ui.global::<CommandPickerState>();
+
+        picker.invoke_select(coloc_id);
+        assert!(picker.get_has_detail());
+        assert_eq!(picker.get_detail().name, "Colocalization");
+
+        // After step 0.
+        picker.set_pipeline_id(1);
+        picker.set_insert_after_idx(0);
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::CommandSelectionDialog);
+        picker.invoke_confirm(coloc_id);
+        drain_ui_queue();
+        assert_eq!(
+            step_names(&ui_state, 1),
+            ["Threshold", "Colocalization", "Threshold"]
+        );
+        assert_eq!(active_dialog(&ui), DialogType::None);
+
+        // Before everything, and past the end.
+        picker.set_insert_after_idx(-1);
+        picker.invoke_confirm(coloc_id);
+        picker.set_insert_after_idx(99);
+        picker.invoke_confirm(coloc_id);
+        let names = step_names(&ui_state, 1);
+        assert_eq!(names.first().unwrap(), "Colocalization");
+        assert_eq!(names.last().unwrap(), "Colocalization");
+        assert_eq!(names.len(), 5);
+
+        // Unknown command / template ids are ignored.
+        picker.invoke_confirm(99_999);
+        picker.invoke_confirm(-7);
+        picker.invoke_select(99_999);
+        picker.invoke_select(-7);
+        assert_eq!(step_names(&ui_state, 1).len(), 5);
+    }
+
+    #[test]
+    fn picker_template_entries_insert_all_their_steps() {
+        let (ui, ui_state, controller) = selected(vec![]);
+        *controller.pipeline_templates.lock().unwrap() = vec![template(
+            "Nuclei",
+            vec![step("Threshold"), step("Colocalization")],
+        )];
+        let picker = ui.global::<CommandPickerState>();
+        picker.invoke_select(-1);
+        assert!(picker.get_has_detail());
+        picker.set_pipeline_id(1);
+        picker.set_insert_after_idx(-1);
+        picker.invoke_confirm(-1);
+        assert_eq!(step_names(&ui_state, 1), ["Threshold", "Colocalization"]);
+    }
+
+    #[test]
+    fn picker_query_filters_the_list() {
+        let (ui, _ui_state, _controller) = selected(vec![]);
+        let picker = ui.global::<CommandPickerState>();
+        picker.invoke_query_changed("".into());
+        let all = picker.get_total_shown();
+        picker.invoke_query_changed("coloc".into());
+        let filtered = picker.get_total_shown();
+        assert!(filtered >= 1 && filtered < all, "{filtered} of {all}");
+    }
+
+    #[test]
+    fn attach_fills_the_picker_with_every_command_once() {
+        let (ui, _ui_state, _controller) = selected(vec![]);
+        let picker = ui.global::<CommandPickerState>();
+        let all = picker.get_all_commands().row_count();
+        assert_eq!(all, all_command_meta().len());
+        let per_category = picker.get_cat_count_pre()
+            + picker.get_cat_count_seg()
+            + picker.get_cat_count_obj()
+            + picker.get_cat_count_mea()
+            + picker.get_cat_count_cls();
+        assert_eq!(per_category as usize, all);
+    }
+
+    #[test]
+    fn changing_a_flat_parameter_updates_the_project_and_the_shown_value() {
+        let (ui, ui_state, _controller) = selected(vec![step("Colocalization")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        let summary_before = panel.get_active_commands().row_data(0).unwrap().summary;
+
+        panel.invoke_param_changed(0, "min_coloc_area".into(), "5".into());
+        assert_eq!(ui_param(&ui, 0, "min_coloc_area").value, "5");
+        let project = ui_state.get_project();
+        let PipelineCommand::Colocalization(settings) = &project.pipelines[0].steps[0].command
+        else {
+            panic!("expected coloc");
+        };
+        assert_eq!(settings.min_coloc_area, 5.0);
+        drop(project);
+        assert!(ui_state.is_dirty());
+        let _ = summary_before;
+    }
+
+    #[test]
+    fn toggling_a_multi_select_parameter_updates_its_flags() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Colocalization")]);
+        ui.global::<PipelinesPanelState>().invoke_param_changed(
+            0,
+            "classes_to_coloc".into(),
+            "toggle:3".into(),
+        );
+        let param = ui_param(&ui, 0, "classes_to_coloc");
+        assert_eq!(param.value, "3");
+        let flags: Vec<String> = (0..param.options.row_count())
+            .map(|i| param.options.row_data(i).unwrap().to_string())
+            .collect();
+        assert_eq!(flags[3], "1");
+        assert_eq!(flags.iter().filter(|f| *f == "1").count(), 1);
+    }
+
+    #[test]
+    fn switching_a_variant_that_changes_the_fields_resyncs_the_step() {
+        let (ui, _ui_state, _controller) = selected(vec![step("TransformObjects")]);
+        let names = |ui: &AppWindow| -> Vec<String> {
+            let params = ui
+                .global::<PipelinesPanelState>()
+                .get_active_commands()
+                .row_data(0)
+                .unwrap()
+                .parameters;
+            (0..params.row_count())
+                .map(|i| params.row_data(i).unwrap().name.to_string())
+                .collect()
+        };
+        let before = names(&ui);
+        assert!(before.contains(&"function.factor".to_string()));
+        ui.global::<PipelinesPanelState>().invoke_param_changed(
+            0,
+            "function".into(),
+            "Expand".into(),
+        );
+        drain_ui_queue();
+        let after = names(&ui);
+        assert_ne!(before, after, "the Expand variant has other fields");
+        assert_eq!(ui_param(&ui, 0, "function").value, "Expand");
+    }
+
+    #[test]
+    fn group_items_can_be_added_changed_and_removed() {
+        let (ui, ui_state, _controller) = selected(vec![step("Threshold")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_add_group_item(0, "thresholds".into());
+        panel.invoke_add_group_item(0, "thresholds".into());
+        drain_ui_queue();
+        let thresholds = ui_param(&ui, 0, "thresholds");
+        assert_eq!(thresholds.group_items.row_count(), 2);
+
+        // Change a nested field that keeps the field set: patched in place.
+        let fields = thresholds.group_items.row_data(0).unwrap().fields;
+        let (name, numeric) = (0..fields.row_count())
+            .filter_map(|k| fields.row_data(k))
+            .find(|f| f.value.parse::<f64>().is_ok())
+            .map(|f| (f.name.to_string(), f.value.to_string()))
+            .expect("a numeric field");
+        let new_value = if numeric == "7" { "8" } else { "7" };
+        panel.invoke_param_changed(0, format!("thresholds.0.{name}").into(), new_value.into());
+        drain_ui_queue();
+        let fields = ui_param(&ui, 0, "thresholds")
+            .group_items
+            .row_data(0)
+            .unwrap()
+            .fields;
+        let shown = (0..fields.row_count())
+            .filter_map(|k| fields.row_data(k))
+            .find(|f| f.name.as_str() == name)
+            .unwrap()
+            .value;
+        assert_eq!(
+            shown.parse::<f64>().unwrap(),
+            new_value.parse::<f64>().unwrap()
+        );
+
+        panel.invoke_remove_group_item(0, "thresholds".into(), 0);
+        drain_ui_queue();
+        assert_eq!(ui_param(&ui, 0, "thresholds").group_items.row_count(), 1);
+        let project = ui_state.get_project();
+        let params = project.pipelines[0].steps[0].command.to_parameters();
+        assert_eq!(
+            params
+                .iter()
+                .find(|p| p.name == "thresholds")
+                .unwrap()
+                .groups
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn param_change_for_an_unknown_step_or_pipeline_is_ignored() {
+        let (ui, ui_state, _controller) = selected(vec![step("Colocalization")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_param_changed(5, "min_coloc_area".into(), "9".into());
+        panel.set_active_pipeline_id(42);
+        panel.invoke_param_changed(0, "min_coloc_area".into(), "9".into());
+        let project = ui_state.get_project();
+        let PipelineCommand::Colocalization(settings) = &project.pipelines[0].steps[0].command
+        else {
+            panic!("expected coloc");
+        };
+        assert_eq!(settings.min_coloc_area, 0.0);
+    }
+
+    #[test]
+    fn show_model_info_reports_a_model_that_cannot_be_loaded() {
+        let mut classifier = step(PIXEL_CLASSIFIER_COMMAND_NAME);
+        if let PipelineCommand::PixelClassifier(settings) = &mut classifier.command {
+            settings.model_path = PathBuf::from("/nonexistent/model.evamodel");
+        }
+        let (ui, _ui_state, _controller) = selected(vec![classifier, step("Threshold")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_show_model_info(0);
+        let warning = ui.global::<WarningState>();
+        assert_eq!(warning.get_title(), "Could not load model");
+        assert!(warning.get_message().contains("model.evamodel"));
+        assert_eq!(active_dialog(&ui), DialogType::Warning);
+
+        // Not a classifier step / unknown step: nothing happens.
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::None);
+        panel.invoke_show_model_info(1);
+        panel.invoke_show_model_info(9);
+        assert_eq!(active_dialog(&ui), DialogType::None);
+    }
+
+    #[test]
+    fn run_all_without_a_saved_project_warns_instead_of_asking_for_a_job_name() {
+        let (ui, _ui_state, _controller) = selected(vec![]);
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::Warning);
+        assert!(
+            ui.global::<WarningState>()
+                .get_message()
+                .contains("save the project")
+        );
+    }
+
+    #[test]
+    fn run_all_asks_for_a_job_name_and_dispatches_a_full_run() {
+        let (ui, ui_state, controller) = selected(vec![]);
+        ui_state.get_project_write().tmp_settings.current_project =
+            Some(PathBuf::from("/data/exp/project.evaproj"));
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        assert_eq!(active_dialog(&ui), DialogType::RunAnalysisConfirm);
+
+        ui.global::<RunAnalysisState>()
+            .set_job_name("  run 1  ".into());
+        ui.global::<RunAnalysisState>().invoke_confirm();
+        let task = controller
+            .task_request
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("dispatched");
+        assert!(!task.preview);
+        assert_eq!(task.job_name.as_deref(), Some("  run 1  "));
+        assert_eq!(task.project_path, PathBuf::from("/data/exp"));
+
+        // A blank job name means none.
+        ui.global::<RunAnalysisState>().set_job_name("   ".into());
+        ui.global::<RunAnalysisState>().invoke_confirm();
+        let task = controller.task_request.0.lock().unwrap().take().unwrap();
+        assert_eq!(task.job_name, None);
+    }
+
+    #[test]
+    fn dry_run_needs_a_saved_project_and_a_selected_image() {
+        let (ui, ui_state, controller) = selected(vec![]);
+        let dry_run = || {
+            ui.global::<GlobalAppState>()
+                .set_active_dialog(DialogType::None);
+            ui.global::<PipelinesPanelState>().invoke_dry_run();
+            drain_ui_queue();
+        };
+        dry_run();
+        assert!(
+            ui.global::<WarningState>()
+                .get_message()
+                .contains("No project is open")
+        );
+
+        ui_state.get_project_write().tmp_settings.current_project =
+            Some(PathBuf::from("/data/project.evaproj"));
+        dry_run();
+        assert!(
+            ui.global::<WarningState>()
+                .get_message()
+                .contains("No image is selected")
+        );
+        assert!(controller.task_request.0.lock().unwrap().is_none());
+
+        // With an image selected a preview task is dispatched.
+        {
+            let mut project = ui_state.get_project_write();
+            let mut with_image = crate::editor::test_support::project_with_one_image();
+            with_image.tmp_settings.current_project = project.tmp_settings.current_project.clone();
+            with_image.settings.pipelines = project.settings.pipelines.clone();
+            *project = with_image;
+        }
+        *controller.breakpoint.lock().unwrap() =
+            Some((1, 0, evanalyzer_cfg::core_types::BreakpointMode::Stop));
+        dry_run();
+        let task = controller
+            .task_request
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("preview dispatched");
+        assert!(task.preview);
+        assert_eq!(task.project_settings.images.list.len(), 1);
+        assert!(task.breakpoint.is_some());
+    }
+
+    #[test]
+    fn running_dialog_cancel_and_close() {
+        let (ui, _ui_state, controller) = selected(vec![]);
+        let cancel = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        *controller.pipeline_cancel_flag.lock().unwrap() = Some(cancel.clone());
+        let running = ui.global::<PipelineRunningState>();
+        running.invoke_cancel();
+        assert!(cancel.is_cancelled());
+
+        running.set_done(true);
+        running.set_status_message("done".into());
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::PipelineRunning);
+        running.invoke_close();
+        assert!(!running.get_done());
+        assert_eq!(running.get_status_message(), "");
+        assert_eq!(active_dialog(&ui), DialogType::None);
+    }
+
+    #[test]
+    fn disable_auto_preview_turns_the_toggle_off_in_the_ui() {
+        let (ui, _ui_state, controller) = selected(vec![]);
+        ui.global::<PipelinesPanelState>().invoke_auto_preview(true);
+        ui.global::<PipelinesPanelState>()
+            .set_auto_preview_enabled(true);
+        controller.disable_auto_preview();
+        drain_ui_queue();
+        assert!(!*controller.auto_preview_enabled.lock().unwrap());
+        assert!(
+            !ui.global::<PipelinesPanelState>()
+                .get_auto_preview_enabled()
+        );
+    }
+
+    #[test]
+    fn settings_changes_with_auto_preview_arm_the_debounce_instead_of_running_at_once() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold")]);
+        ui.global::<PipelinesPanelState>().invoke_auto_preview(true);
+        ui.global::<PipelinesPanelState>().invoke_toggle_step(0);
+        assert!(ui_state.is_dirty());
+        assert!(
+            controller.task_request.0.lock().unwrap().is_none(),
+            "preview waits for the debounce timer"
+        );
+    }
+
+    #[test]
+    fn browse_file_and_bioimageio_import_do_nothing_when_cancelled() {
+        // The test UiState's file browser has no window: it reports
+        // "cancelled" right away.
+        let (ui, ui_state, _controller) = selected(vec![]);
+        let token_before = ui.global::<PipelinesPanelState>().get_browse_result_token();
+        ui.global::<PipelinesPanelState>()
+            .invoke_browse_file("pt, onnx".into(), "/tmp".into(), 3);
+        assert_eq!(
+            ui.global::<PipelinesPanelState>().get_browse_result_token(),
+            token_before
+        );
+        ui.global::<CommandPickerState>().set_pipeline_id(1);
+        ui.global::<CommandPickerState>().invoke_import_bioimageio();
+        drain_ui_queue();
+        assert!(step_names(&ui_state, 1).is_empty());
     }
 }

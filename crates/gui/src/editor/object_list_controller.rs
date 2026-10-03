@@ -137,7 +137,7 @@ impl ObjectListController {
         let ui_weak = self.ui.clone();
         let bridge_ptr = self.clone();
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let label_counts = precompute_label_counts(&bridge_ptr.app_state);
                 let visible_rows = compute_visible_rows(&bridge_ptr.app_state);
@@ -158,7 +158,7 @@ impl ObjectListController {
     pub fn sync_selected_object_to_slint(self: &Arc<Self>, scroll_to: bool) {
         let ui_weak = self.ui.clone();
         let bridge_ptr = self.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let class_state = ui.global::<ObjectListState>();
                 let project = bridge_ptr.app_state.get_project();

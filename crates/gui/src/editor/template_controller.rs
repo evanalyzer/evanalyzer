@@ -99,7 +99,7 @@ impl TemplateController {
         // without blocking on disk IO.
         let ui_weak = self.ui.clone();
         let backend = Arc::clone(self.app_state.backend());
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             let mut categories: BTreeSet<String> = BTreeSet::new();
             for (_path, template) in load_project_templates(backend.as_ref()) {
                 if !template.meta.category.is_empty() {
@@ -113,7 +113,7 @@ impl TemplateController {
             }
             let categories: Vec<SharedString> = categories.into_iter().map(Into::into).collect();
 
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.global::<TemplateMetaState>()
                         .set_known_categories(ModelRc::new(VecModel::from(categories)));
@@ -198,7 +198,7 @@ impl TemplateController {
         meta: MetaData,
         path: std::path::PathBuf,
     ) {
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             let result =
                 match target {
                     TemplateTarget::Pipeline(pipeline_id) => {
@@ -264,5 +264,113 @@ mod tests {
     #[test]
     fn parse_tags_of_only_whitespace_is_an_empty_list() {
         assert!(parse_tags("   ").is_empty());
+    }
+
+    // -- the save flow, with a window ---------------------------------------
+
+    use crate::editor::test_support::{choose_file, test_ui_windows, ui_state_with_windows};
+    use crate::helper::ui_thread::drain_ui_queue;
+    use evanalyzer_cfg::core_types::ImageAddress;
+    use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
+
+    fn controller() -> (crate::AppWindow, Arc<UiState>, Arc<TemplateController>) {
+        let (ui, results_ui) = test_ui_windows();
+        let mut project = evanalyzer_app::project::ProjectWithRuntime::default();
+        project.add_pipeline(PipelineSettings {
+            id: PipelineId(1),
+            name: "Nuclei".into(),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![],
+        });
+        let ui_state = ui_state_with_windows(&ui, &results_ui, project);
+        let controller = Arc::new(TemplateController::new(ui.as_weak(), ui_state.clone()));
+        controller.attach_callbacks();
+        (ui, ui_state, controller)
+    }
+
+    fn fill_meta(ui: &crate::AppWindow) {
+        let state = ui.global::<TemplateMetaState>();
+        let mut meta = state.get_meta();
+        meta.short_description = "Finds nuclei".into();
+        meta.author_name = "  Ada  ".into();
+        meta.category = "Segmentation".into();
+        meta.tags = "nuclei, dapi,".into();
+        state.set_meta(meta);
+    }
+
+    #[test]
+    fn saving_a_pipeline_template_writes_the_chosen_file_with_the_metadata() {
+        let (ui, _ui_state, controller) = controller();
+        let dir = tempfile::tempdir().unwrap();
+
+        controller.start_pipeline_template_save(PipelineId(1), "Nuclei".into());
+        drain_ui_queue();
+        let state = ui.global::<TemplateMetaState>();
+        assert_eq!(state.get_dialog_title(), "Save Pipeline as Template");
+        assert_eq!(state.get_meta().name, "Nuclei");
+        assert_eq!(
+            ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::TemplateMeta
+        );
+
+        fill_meta(&ui);
+        state.invoke_confirm();
+        assert_eq!(
+            ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::None
+        );
+        let target = dir.path().join(format!("nuclei.{PIPELINE_EXTENSIONS}"));
+        choose_file(&ui, &target);
+
+        let written = std::fs::read_to_string(&target).expect("template written");
+        assert!(written.contains("Finds nuclei"));
+        assert!(written.contains("Ada"));
+        assert!(written.contains("dapi"));
+    }
+
+    #[test]
+    fn saving_a_project_template_writes_the_chosen_file() {
+        let (ui, _ui_state, controller) = controller();
+        let dir = tempfile::tempdir().unwrap();
+        controller.start_project_template_save("".into());
+        assert_eq!(
+            ui.global::<TemplateMetaState>().get_dialog_title(),
+            "Save Project as Template"
+        );
+        ui.global::<TemplateMetaState>().invoke_confirm();
+        let target = dir
+            .path()
+            .join(format!("project.{PROJECT_FILE_TEMPLATE_EXTENSIONS}"));
+        choose_file(&ui, &target);
+        assert!(target.exists());
+    }
+
+    #[test]
+    fn cancelling_closes_the_dialog_and_forgets_what_was_being_saved() {
+        let (ui, _ui_state, controller) = controller();
+        controller.start_pipeline_template_save(PipelineId(1), "Nuclei".into());
+        ui.global::<TemplateMetaState>().invoke_cancel();
+        assert_eq!(
+            ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::None
+        );
+        assert!(controller.target.lock().unwrap().is_none());
+
+        // Confirm without a pending save does nothing (no file dialog).
+        ui.global::<TemplateMetaState>().invoke_confirm();
+        assert!(!ui.global::<crate::FileBrowserState>().get_visible());
+    }
+
+    #[test]
+    fn cancelling_the_file_dialog_writes_nothing() {
+        let (ui, _ui_state, controller) = controller();
+        controller.start_pipeline_template_save(PipelineId(1), "Nuclei".into());
+        ui.global::<TemplateMetaState>().invoke_confirm();
+        drain_ui_queue();
+        ui.global::<crate::FileBrowserState>().invoke_cancel();
+        drain_ui_queue();
+        assert!(!ui.global::<crate::FileBrowserState>().get_visible());
     }
 }

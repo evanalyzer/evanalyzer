@@ -510,7 +510,7 @@ impl AiLearningController {
         self.set_training_in_progress(true);
         *self.training_cancel_flag.lock().unwrap() = Some(training.cancel_handle());
         let manager = self.clone();
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             // Captured here (rather than re-derived after `wait()`,
             // which only returns the `SavedClassifier`/error, not the
             // backend stats) so the final banner below can report it - see
@@ -590,7 +590,7 @@ impl AiLearningController {
     fn set_training_status(self: &Arc<Self>, message: &str, is_error: bool) {
         let message = message.to_owned();
         let ui_weak = self.ui.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let state = ui.global::<AiLearningState>();
                 state.set_training_status(message.into());
@@ -608,7 +608,7 @@ impl AiLearningController {
     /// never leaves the Train button stuck disabled.
     fn set_training_in_progress(self: &Arc<Self>, in_progress: bool) {
         let ui_weak = self.ui.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<AiLearningState>()
                     .set_training_in_progress(in_progress);
@@ -623,7 +623,7 @@ impl AiLearningController {
     pub fn sync_class_names_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
         let app_state = self.app_state.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
@@ -650,7 +650,7 @@ impl AiLearningController {
     pub fn sync_class_selection_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
         let app_state = self.app_state.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
@@ -684,7 +684,7 @@ impl AiLearningController {
     /// uses for its per-channel intensity metric rows.
     pub fn sync_channel_names_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
@@ -703,7 +703,7 @@ impl AiLearningController {
 
     pub fn sync_object_metrics_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
@@ -743,7 +743,7 @@ impl AiLearningController {
     pub fn sync_training_images_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
         let app_state = self.app_state.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
@@ -798,7 +798,7 @@ impl AiLearningController {
     pub fn sync_training_objects_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
         let app_state = self.app_state.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
@@ -2037,5 +2037,448 @@ mod tests {
             .invoke_assign_object_class(0, 0);
         ui.global::<AiLearningState>()
             .invoke_toggle_object_excluded(0);
+    }
+
+    // -- progress / stats texts ----------------------------------------------
+
+    #[test]
+    fn describe_training_progress_has_a_line_for_every_event_but_finished() {
+        use evanalyzer_cfg::core_types::TrainingStats;
+        let line = |e: TrainingProgressEvent| describe_training_progress(&e);
+        assert_eq!(
+            line(TrainingProgressEvent::Started { total: 3 }).unwrap(),
+            "Training started - 3 item(s) to process..."
+        );
+        assert_eq!(
+            line(TrainingProgressEvent::ImageTilesScheduled {
+                image_index: 0,
+                total_tiles: 4
+            })
+            .unwrap(),
+            "Image 1: scanning 4 tile(s)..."
+        );
+        assert_eq!(
+            line(TrainingProgressEvent::TileProcessed {
+                image_index: 1,
+                tile_index: 2,
+                total_tiles: 4
+            })
+            .unwrap(),
+            "Image 2: tile 3/4"
+        );
+        assert_eq!(
+            line(TrainingProgressEvent::ItemCompleted { index: 2, total: 5 }).unwrap(),
+            "Processed 2/5 item(s)..."
+        );
+        assert!(
+            line(TrainingProgressEvent::ImageFailed {
+                path: "/x/a.tif".into()
+            })
+            .unwrap()
+            .contains("failed to read /x/a.tif")
+        );
+        assert_eq!(
+            line(TrainingProgressEvent::ObjectSkipped {
+                index: 7,
+                reason: "ambiguous".into()
+            })
+            .unwrap(),
+            "Warning: object 7 skipped (ambiguous)"
+        );
+        assert_eq!(
+            line(TrainingProgressEvent::Training).unwrap(),
+            "Fitting model..."
+        );
+        assert_eq!(
+            line(TrainingProgressEvent::Epoch {
+                epoch: 0,
+                total_epochs: 10,
+                train_loss: 0.5,
+                val_loss: Some(0.25)
+            })
+            .unwrap(),
+            "Epoch 1/10 - train loss 0.5000, validation loss 0.2500"
+        );
+        assert_eq!(
+            line(TrainingProgressEvent::Epoch {
+                epoch: 9,
+                total_epochs: 10,
+                train_loss: 0.125,
+                val_loss: None
+            })
+            .unwrap(),
+            "Epoch 10/10 - train loss 0.1250"
+        );
+        assert!(
+            line(TrainingProgressEvent::Finished {
+                stats: TrainingStats::Knn { k: 3, n_samples: 9 }
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn format_training_stats_per_backend_and_flags_overfitting() {
+        use evanalyzer_cfg::core_types::TrainingStats;
+        assert_eq!(
+            format_training_stats(&TrainingStats::RandomForest {
+                n_trees: 10,
+                n_samples: 50
+            }),
+            "10 tree(s), trained on 50 sample(s)."
+        );
+        assert_eq!(
+            format_training_stats(&TrainingStats::Knn {
+                k: 5,
+                n_samples: 20
+            }),
+            "k=5, trained on 20 sample(s)."
+        );
+        let mlp = |final_val: Option<f32>, best_val: Option<f32>, best_epoch: Option<usize>| {
+            format_training_stats(&TrainingStats::Mlp {
+                epochs_run: 100,
+                total_epochs: 100,
+                final_train_loss: 0.1,
+                final_val_loss: final_val,
+                best_val_loss: best_val,
+                best_val_epoch: best_epoch,
+            })
+        };
+        assert_eq!(
+            mlp(None, None, None),
+            "100/100 epoch(s), final train loss 0.1000."
+        );
+        assert_eq!(
+            mlp(Some(0.2), Some(0.2), Some(99)),
+            "100/100 epoch(s), final train loss 0.1000, validation loss 0.2000."
+        );
+        let overfit = mlp(Some(0.5), Some(0.2), Some(10));
+        assert!(overfit.contains("possible overfitting"), "{overfit}");
+        assert!(overfit.contains("epoch 11"), "{overfit}");
+    }
+
+    // -- dialog sync and training, with a window -----------------------------
+
+    use crate::editor::test_support::{choose_file, ui_state_with_windows};
+    use crate::helper::ui_thread::drain_ui_queue;
+
+    const CELL: ObjectClass = ObjectClass::Valid(1);
+    const NUCLEUS: ObjectClass = ObjectClass::Valid(2);
+
+    /// One image with labeled objects of two classes (areas well apart),
+    /// plus a second, unselected image with one labeled object.
+    fn labeled_project() -> evanalyzer_app::project::ProjectWithRuntime {
+        let mut project = project_with_one_image();
+        for (id, name) in [(CELL, "Cell"), (NUCLEUS, "Nucleus")] {
+            project.classification.classes_mut().push(Class {
+                id,
+                name: name.into(),
+                ..Default::default()
+            });
+        }
+        for i in 0..6u32 {
+            let class = if i % 2 == 0 { CELL } else { NUCLEUS };
+            project.add_object(&ObjectMetricSettings {
+                id: ObjectId((i + 1).into()),
+                area: if class == CELL {
+                    10 + i as usize
+                } else {
+                    1000 + i as usize
+                },
+                object_class: [class].into(),
+                ..Default::default()
+            });
+        }
+        let mut other = project.images.list[std::path::Path::new("img.tif")].clone();
+        other.rel_path = PathBuf::from("other.tif");
+        for series in other.series.values_mut() {
+            series.objects.truncate(1);
+        }
+        project
+            .images
+            .list
+            .insert(PathBuf::from("other.tif"), other);
+        project
+    }
+
+    struct Dialog {
+        ui: AppWindow,
+        _results_ui: crate::ResultsWindow,
+        ui_state: Arc<UiState>,
+        controller: Arc<AiLearningController>,
+    }
+
+    fn opened(project: evanalyzer_app::project::ProjectWithRuntime) -> Dialog {
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, project);
+        let controller = make_controller_with_ui(ui.as_weak(), ui_state.clone());
+        controller.attach_callbacks();
+        ui.global::<ChannelState>()
+            .set_channels(ModelRc::new(VecModel::from(vec![crate::ChannelInfo {
+                name: "DAPI".into(),
+                active: true,
+                idx: 0,
+                color: slint::Color::from_rgb_u8(0, 0, 255),
+                emission_wave_length: 461.0,
+            }])));
+        ui.global::<AiLearningState>().invoke_open_requested();
+        drain_ui_queue();
+        Dialog {
+            ui,
+            _results_ui: results_ui,
+            ui_state,
+            controller,
+        }
+    }
+
+    impl Dialog {
+        fn state(&self) -> AiLearningState<'_> {
+            self.ui.global::<AiLearningState>()
+        }
+
+        fn train(&self) {
+            let s = self.state();
+            s.invoke_train_clicked(
+                s.get_settings(),
+                s.get_feature_rows(),
+                s.get_object_metrics(),
+                s.get_training_images(),
+                s.get_training_objects(),
+                s.get_class_selection(),
+            );
+            drain_ui_queue();
+        }
+    }
+
+    #[test]
+    fn opening_the_dialog_fills_it_from_the_project() {
+        let d = opened(labeled_project());
+        let s = d.state();
+        assert_eq!(
+            d.ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::AiLearning
+        );
+        let names: Vec<String> = s.get_class_names().iter().map(|n| n.to_string()).collect();
+        assert!(names.contains(&"Cell".to_string()) && names.contains(&"Nucleus".to_string()));
+        assert_eq!(s.get_channel_names().row_count(), 1);
+        assert_eq!(
+            s.get_object_metrics().row_count(),
+            OBJECT_METRICS.len() + INTENSITY_STATS.len(),
+            "fixed metrics + one intensity block for the one channel"
+        );
+        // The current image is not offered as "another" image.
+        let images: Vec<TrainingImageRowSlint> = s.get_training_images().iter().collect();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].name, "other.tif");
+        assert_eq!(images[0].annotated_object_count, 1);
+        assert_eq!(s.get_training_objects().row_count(), 6);
+        // Classes with labeled objects start checked.
+        let selected: Vec<String> = s
+            .get_class_selection()
+            .iter()
+            .filter(|r| r.selected)
+            .map(|r| r.name.to_string())
+            .collect();
+        assert_eq!(selected, ["Cell", "Nucleus"]);
+        assert_eq!(s.get_training_status(), "");
+    }
+
+    #[test]
+    fn selecting_another_image_adds_its_objects() {
+        let d = opened(labeled_project());
+        d.state().invoke_toggle_image_selected(0);
+        drain_ui_queue();
+        assert_eq!(d.state().get_training_objects().row_count(), 7);
+        d.state().invoke_toggle_image_selected(0);
+        drain_ui_queue();
+        assert_eq!(d.state().get_training_objects().row_count(), 6);
+    }
+
+    #[test]
+    fn reopening_during_training_keeps_the_progress_banner() {
+        let d = opened(labeled_project());
+        d.state().set_training_in_progress(true);
+        d.state().set_training_status("Fitting model...".into());
+        d.state().invoke_open_requested();
+        drain_ui_queue();
+        assert_eq!(d.state().get_training_status(), "Fitting model...");
+    }
+
+    #[test]
+    fn training_needs_a_model_name_and_a_saved_project() {
+        let d = opened(labeled_project());
+        let mut settings = d.state().get_settings();
+        settings.model_name = "  ".into();
+        d.state().set_settings(settings);
+        d.train();
+        assert!(d.state().get_training_status().contains("model name"));
+        assert!(d.state().get_training_status_is_error());
+
+        let mut settings = d.state().get_settings();
+        settings.model_name = "m".into();
+        d.state().set_settings(settings);
+        d.train();
+        assert!(d.state().get_training_status().contains("Save the project"));
+    }
+
+    fn set_up_object_training(d: &Dialog, dir: &std::path::Path) {
+        d.ui_state.get_project_write().tmp_settings.current_project =
+            Some(dir.join("study.evaproj"));
+        let s = d.state();
+        let mut settings = s.get_settings();
+        settings.model_name = "cells".into();
+        settings.mode = 1;
+        settings.algorithm = 0;
+        settings.rf_n_trees = 5;
+        s.set_settings(settings);
+        let metrics: Vec<ObjectMetricRowSlint> = s
+            .get_object_metrics()
+            .iter()
+            .map(|mut m| {
+                m.selected = m.metric_id == 0; // Area
+                m
+            })
+            .collect();
+        s.set_object_metrics(ModelRc::new(VecModel::from(metrics)));
+    }
+
+    #[test]
+    fn training_an_object_classifier_saves_it_and_it_can_be_loaded_back() {
+        let d = opened(labeled_project());
+        let dir = tempfile::tempdir().unwrap();
+        set_up_object_training(&d, dir.path());
+        d.train();
+        let s = d.state();
+        let status = s.get_training_status().to_string();
+        assert!(status.starts_with("Training complete."), "{status}");
+        assert!(status.contains("tree(s)"), "{status}");
+        assert!(!s.get_training_status_is_error());
+        assert!(!s.get_training_in_progress());
+        let model = dir.path().join("models").join(format!(
+            "cells.{}",
+            evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS
+        ));
+        assert!(model.exists(), "{model:?}");
+
+        // Load it back: settings repopulate from the file.
+        let mut settings = s.get_settings();
+        settings.mode = 0;
+        settings.model_name = "".into();
+        s.set_settings(settings);
+        let cleared: Vec<ObjectMetricRowSlint> = s
+            .get_object_metrics()
+            .iter()
+            .map(|mut m| {
+                m.selected = false;
+                m
+            })
+            .collect();
+        s.set_object_metrics(ModelRc::new(VecModel::from(cleared)));
+        s.invoke_browse_existing_model_clicked();
+        choose_file(&d.ui, &model);
+        let settings = s.get_settings();
+        assert_eq!(settings.mode, 1);
+        assert_eq!(settings.model_name, "cells", "falls back to the file name");
+        assert_eq!(settings.loaded_model_path, model.to_string_lossy().as_ref());
+        assert!(s.get_training_status().starts_with("Loaded settings"));
+        let area = s
+            .get_object_metrics()
+            .iter()
+            .find(|m| m.metric_id == 0)
+            .unwrap();
+        assert!(area.selected);
+    }
+
+    #[test]
+    fn loading_a_broken_model_reports_it() {
+        let d = opened(labeled_project());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!(
+            "bad.{}",
+            evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS
+        ));
+        std::fs::write(&path, "nope").unwrap();
+        d.state().invoke_browse_existing_model_clicked();
+        choose_file(&d.ui, &path);
+        assert!(
+            d.state()
+                .get_training_status()
+                .starts_with("Could not load")
+        );
+        assert!(d.state().get_training_status_is_error());
+    }
+
+    #[test]
+    fn training_without_labels_for_the_chosen_classes_fails_with_a_message() {
+        let d = opened(labeled_project());
+        let dir = tempfile::tempdir().unwrap();
+        set_up_object_training(&d, dir.path());
+        let none: Vec<ClassSelectionRowSlint> = d
+            .state()
+            .get_class_selection()
+            .iter()
+            .map(|mut r| {
+                r.selected = false;
+                r
+            })
+            .collect();
+        d.state()
+            .set_class_selection(ModelRc::new(VecModel::from(none)));
+        d.train();
+        assert!(d.state().get_training_status_is_error());
+        assert!(!d.state().get_training_in_progress());
+    }
+
+    #[test]
+    fn cancel_training_cancels_the_running_job() {
+        let d = opened(labeled_project());
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&cancelled);
+        *d.controller.training_cancel_flag.lock().unwrap() =
+            Some(CancelHandle::with_callback(move || {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst)
+            }));
+        d.state().invoke_cancel_training_clicked();
+        assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn build_ai_learning_settings_maps_the_forest_and_mlp_fields() {
+        let project = ProjectSettings::default();
+        let mut s = default_settings();
+        s.algorithm = 0;
+        s.rf_criterion = 1;
+        s.rf_max_depth = 0;
+        s.rf_max_features = 3;
+        let built = build_ai_learning_settings(&s, &[], &[], &Default::default(), &project);
+        let AiLearningBackendSettings::RandomForest(rf) = built.backend else {
+            panic!("forest");
+        };
+        assert!(matches!(rf.criterion, SplitCriterion::Entropy));
+        assert_eq!(rf.max_depth, None, "0 means unlimited");
+        assert_eq!(rf.m, Some(3));
+
+        s.algorithm = 2;
+        s.mlp_hidden_layers = "8, 4".into();
+        for (index, activation) in [
+            (1, MlpActivation::Sigmoid),
+            (2, MlpActivation::Tanh),
+            (0, MlpActivation::Relu),
+        ] {
+            s.mlp_activation = index;
+            s.mlp_epsilon = 0.0;
+            let built =
+                build_ai_learning_settings(&s, &[row(1)], &[], &Default::default(), &project);
+            let AiLearningBackendSettings::Mlp(mlp) = built.backend else {
+                panic!("mlp");
+            };
+            assert_eq!(mlp.activation, activation);
+            assert_eq!(mlp.hidden_layers, [8, 4]);
+            assert_eq!(mlp.epsilon, 1e-5, "invalid epsilon falls back");
+            assert!(matches!(
+                built.classifier,
+                AiLearningClassifierSettings::Pixel { .. }
+            ));
+        }
     }
 }

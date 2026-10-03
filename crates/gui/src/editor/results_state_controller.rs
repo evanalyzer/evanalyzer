@@ -877,7 +877,7 @@ impl ResultsStateController {
                     manager.refresh_active_matrix_view();
 
                     let manager = manager.clone();
-                    slint::invoke_from_event_loop(move || {
+                    crate::helper::ui_thread::invoke_from_event_loop(move || {
                         let Some(ui_ready) = manager.ui.upgrade() else {
                             warn!(
                                 "Failed to upgrade UI handle re-selecting field after toggling disabled"
@@ -1427,7 +1427,7 @@ impl ResultsStateController {
                     default_matrix_column.display_label(&classes_for_charts);
 
                 let ui_weak = self.ui.clone();
-                slint::invoke_from_event_loop(move || {
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
                     if let Some(ui_ready) = ui_weak.upgrade() {
                         let state = ui_ready.global::<ResultsState>();
                         state.set_list_with_coloc_details(false);
@@ -1491,7 +1491,7 @@ impl ResultsStateController {
 
     pub fn show_results_window(&self) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 if let Err(e) = ui_ready.show() {
                     error!("Failed to show results window: {e}");
@@ -1578,7 +1578,7 @@ impl ResultsStateController {
 
     fn push_chart_error(&self, message: String) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_chart_error(message.into());
@@ -1612,7 +1612,7 @@ impl ResultsStateController {
         let max_label = format_chart_value(result.max);
 
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_chart_error("".into());
@@ -1646,7 +1646,7 @@ impl ResultsStateController {
         let y_max_label = format_chart_value(result.y_max);
 
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_chart_error("".into());
@@ -1709,7 +1709,7 @@ impl ResultsStateController {
             .collect();
 
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 let boxes: Vec<ChartBoxplotBox> = rows
@@ -1910,7 +1910,7 @@ impl ResultsStateController {
             row_cells.iter().map(|(cells, _, _)| cells.as_slice()),
         );
         *self.list_row_locations.lock().expect("Poisned") = result.row_locations.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 let rows: Vec<ResultRow> = row_cells
@@ -2119,7 +2119,7 @@ impl ResultsStateController {
             .map(|cell| (cell.key.to_string(), cell.clone()))
             .collect();
 
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 // The previously selected well (if any) belonged to the old
@@ -2167,7 +2167,7 @@ impl ResultsStateController {
             .map(|cell| (cell.key.to_string(), cell.clone()))
             .collect();
 
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 // The previously selected field (if any) belonged to the
@@ -2265,7 +2265,7 @@ impl ResultsStateController {
             .map(|cell| (cell.key.to_string(), cell.clone()))
             .collect();
 
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 // The previously selected tile (if any) belonged to the old
@@ -2292,7 +2292,7 @@ impl ResultsStateController {
 
     pub fn set_max_z_and_t_stack_in_slint(&self, t_stack_max: u32, z_stack_max: u32) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_z_stack_max(z_stack_max.saturating_sub(1) as i32);
@@ -2319,7 +2319,7 @@ impl ResultsStateController {
             items.len(),
             "Classes",
         );
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2373,7 +2373,7 @@ impl ResultsStateController {
                 item
             })
             .collect();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2400,7 +2400,7 @@ impl ResultsStateController {
             .map(|item| item.value.clone())
             .unwrap_or_default();
         let stops = color_scale_gradient_slint(&ColorSchema::default());
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_matrix_color_schema_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2432,7 +2432,7 @@ impl ResultsStateController {
             .find(|item| item.selected)
             .map(|item| item.value.clone())
             .unwrap_or_default();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_matrix_plate_size_items(ModelRc::from(Rc::new(VecModel::from(
@@ -2461,7 +2461,7 @@ impl ResultsStateController {
             items.iter().filter(|item| item.selected).count(),
             items.len(),
         );
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2484,7 +2484,7 @@ impl ResultsStateController {
         let total = self.images.lock().expect("Poisened").len();
         let text = image_summary_text(selected, total);
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ResultsState>()
@@ -2499,7 +2499,7 @@ impl ResultsStateController {
     fn push_aggregation_summary(&self, selected: usize) {
         let text = list_summary(selected, AGGREGATIONS.len(), "Aggregations");
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready.global::<ResultsState>().set_list_aggregate(text);
             } else {
@@ -2528,7 +2528,7 @@ impl ResultsStateController {
 
     fn push_aggregation_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_aggregation_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2544,7 +2544,7 @@ impl ResultsStateController {
         let total = self.classes.lock().expect("Poisened").len();
         let text = list_summary(selected, total, "Classes");
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ResultsState>()
@@ -2560,7 +2560,7 @@ impl ResultsStateController {
         let total = self.available_columns.lock().expect("Poisened").len();
         let text = list_summary(selected, total, "Columns");
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ResultsState>()
@@ -2600,7 +2600,7 @@ impl ResultsStateController {
 
     fn push_image_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2632,7 +2632,7 @@ impl ResultsStateController {
         drop(images);
 
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ResultsState>()
@@ -2675,7 +2675,7 @@ impl ResultsStateController {
     // toggle should overwrite.
     fn push_class_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2716,7 +2716,7 @@ impl ResultsStateController {
     // separate, single-column aggregation picker for the Matrix view.
     fn push_columns_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -3120,7 +3120,7 @@ impl ResultsStateController {
         let cancel = Arc::new(AtomicBool::new(false));
         *self.export_cancel_flag.lock().expect("Poisened") = Some(cancel.clone());
         let manager = self.clone();
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             let manager_for_progress = manager.clone();
             let result = database.export(&export, &cancel, &mut |message, current, total| {
                 manager_for_progress.push_export_progress(message.to_string(), current, total);
@@ -3136,7 +3136,7 @@ impl ResultsStateController {
 
     fn push_export_progress(&self, message: String, current: usize, total: usize) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ExportDialogState>();
                 state.set_progress_message(message.into());
@@ -3151,7 +3151,7 @@ impl ResultsStateController {
 
     fn push_export_done(&self) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ExportDialogState>();
                 state.set_is_exporting(false);
@@ -3165,7 +3165,7 @@ impl ResultsStateController {
 
     fn push_export_error(&self, message: String) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ExportDialogState>();
                 state.set_is_exporting(false);
@@ -3183,7 +3183,7 @@ impl ResultsStateController {
     // dialog doesn't flash red for something the user explicitly asked for.
     fn push_export_cancelled(&self) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ExportDialogState>();
                 state.set_is_exporting(false);
@@ -3756,7 +3756,14 @@ mod tests {
         ui: slint::Weak<AppWindow>,
         results_ui: slint::Weak<ResultsWindow>,
     ) -> Arc<ResultsStateController> {
-        let ui_state = test_ui_state();
+        make_controller_with_state(ui, results_ui, test_ui_state())
+    }
+
+    fn make_controller_with_state(
+        ui: slint::Weak<AppWindow>,
+        results_ui: slint::Weak<ResultsWindow>,
+        ui_state: Arc<UiState>,
+    ) -> Arc<ResultsStateController> {
         let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
@@ -4691,5 +4698,260 @@ mod tests {
         let plane = controller.plane_filter.lock().unwrap();
         assert_eq!(plane.selected_z_stack, 2);
         assert_eq!(plane.selected_t_stack, 3);
+    }
+
+    // -- what the results window shows (UI updates applied) ------------------
+
+    use crate::editor::test_support::{choose_file, ui_state_with_windows};
+    use crate::helper::ui_thread::drain_ui_queue;
+
+    struct Opened {
+        _ui: AppWindow,
+        results_ui: ResultsWindow,
+        controller: Arc<ResultsStateController>,
+        _dir: tempfile::TempDir,
+    }
+
+    /// An opened database with the results-window file browser wired up,
+    /// every queued UI update applied.
+    fn opened() -> Opened {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        Opened {
+            _ui: ui,
+            results_ui,
+            controller,
+            _dir: dir,
+        }
+    }
+
+    impl Opened {
+        fn state(&self) -> ResultsState<'_> {
+            self.results_ui.global::<ResultsState>()
+        }
+        fn export(&self) -> ExportDialogState<'_> {
+            self.results_ui.global::<ExportDialogState>()
+        }
+    }
+
+    #[test]
+    fn opening_a_database_fills_every_results_panel() {
+        let o = opened();
+        let s = o.state();
+        assert_eq!(
+            s.get_list_rows().row_count(),
+            3,
+            "one row per seeded object"
+        );
+        assert!(s.get_list_column_headers().row_count() > 0);
+        assert_eq!(
+            s.get_list_column_widths().row_count(),
+            s.get_list_column_headers().row_count()
+        );
+        assert_eq!(s.get_list_class_items().row_count(), 2);
+        assert_eq!(s.get_list_image_items().row_count(), 3);
+        assert_eq!(s.get_list_image_summary(), "All Images");
+        assert!(s.get_list_columns().row_count() > 0);
+        assert!(s.get_list_aggregation_items().row_count() > 0);
+        assert!(s.get_matrix_column_items().row_count() > 0);
+        assert!(s.get_matrix_class_items().row_count() > 0);
+        assert!(s.get_matrix_color_schema_items().row_count() > 0);
+        assert!(s.get_matrix_plate_size_items().row_count() > 0);
+        assert!(s.get_matrix_square_size_items().row_count() > 0);
+        assert!(s.get_plate_cells().row_count() > 0);
+        assert!(s.get_chart_column_items().row_count() > 0);
+        assert!(s.get_chart_histogram_bins().row_count() > 0);
+        assert_eq!(s.get_chart_error(), "");
+    }
+
+    #[test]
+    fn drilling_down_shows_the_well_and_image_heatmap() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        s.invoke_plate_cell_clicked("A1".into());
+        s.invoke_open_well_clicked("A1".into());
+        drain_ui_queue();
+        // (`matrix_level` itself is switched by the Slint UI.)
+        assert!(s.get_well_fields().row_count() >= 2);
+
+        s.invoke_well_field_clicked("A1_01.tif".into());
+        drain_ui_queue();
+        assert!(s.get_image_heatmap_cells().row_count() > 0);
+        assert!(s.get_breadcrumb().row_count() >= 3);
+
+        s.invoke_toggle_active_well_disabled();
+        drain_ui_queue();
+
+        s.invoke_breadcrumb_nav(0);
+        drain_ui_queue();
+        assert!(o.controller.current_well.lock().unwrap().is_none());
+        assert!(s.get_plate_cells().row_count() > 0);
+    }
+
+    #[test]
+    fn every_chart_kind_draws_into_the_window() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_chart_kind_selected(ResultsChartKind2::Scatter);
+        s.invoke_chart_y_column_selected("area_px".into());
+        drain_ui_queue();
+        assert!(s.get_chart_scatter_points().row_count() > 0);
+        assert!(s.get_chart_scatter_total_count() > 0);
+
+        s.invoke_chart_kind_selected(ResultsChartKind2::Boxplot);
+        drain_ui_queue();
+        assert!(s.get_chart_boxplot_boxes().row_count() > 0);
+
+        s.invoke_chart_kind_selected(ResultsChartKind2::Histogram);
+        s.invoke_chart_class_selected("ClassA".into(), true);
+        drain_ui_queue();
+        assert!(s.get_chart_histogram_object_count() > 0);
+    }
+
+    #[test]
+    fn matrix_and_list_controls_refresh_the_window() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        s.invoke_matrix_aggregate_selected("Maximum".into());
+        s.invoke_matrix_color_schema_selected("Viridis".into(), true);
+        s.invoke_matrix_scale_set_manual(0.0, 10.0);
+        s.invoke_matrix_scale_set_auto();
+        drain_ui_queue();
+        assert!(s.get_plate_cells().row_count() > 0);
+
+        s.invoke_rail_mode_selected(ResultsRailMode::List);
+        s.invoke_list_group_by_selected("images".into());
+        s.invoke_list_aggregation_item_selected("min".into(), true);
+        drain_ui_queue();
+        assert!(s.get_list_rows().row_count() > 0);
+        s.invoke_list_transpond_changed(true);
+        drain_ui_queue();
+        assert!(s.get_list_rows().row_count() > 0);
+        s.invoke_list_group_by_selected("objects".into());
+        s.invoke_list_class_select_none();
+        drain_ui_queue();
+        assert_eq!(s.get_list_rows().row_count(), 0, "no class selected");
+        s.invoke_list_class_select_all();
+        s.invoke_list_image_selected("A1_01.tif".into(), true);
+        drain_ui_queue();
+        assert!(s.get_list_image_summary().starts_with("1 of"));
+    }
+
+    fn start_export(o: &Opened, folder: &std::path::Path) {
+        let export = o.export();
+        o.state().invoke_export_dialog_open();
+        drain_ui_queue();
+        export.invoke_pick_output_dir();
+        choose_file(&o.results_ui, folder);
+        assert_eq!(export.get_output_dir(), folder.to_string_lossy().as_ref());
+        export.invoke_start_clicked();
+        drain_ui_queue();
+    }
+
+    #[test]
+    fn export_writes_the_chosen_views_into_the_picked_folder() {
+        let o = opened();
+        let dir = tempfile::tempdir().unwrap();
+        let export = o.export();
+        o.state().invoke_export_dialog_open();
+        export.set_with_list_view(true);
+        export.set_with_grouped_by_image_list(true);
+        export.set_output_file_prefix("run1".into());
+        start_export(&o, dir.path());
+        assert!(!export.get_has_error(), "{}", export.get_error_message());
+        assert!(export.get_done());
+        assert!(!export.get_is_exporting());
+        let written: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(!written.is_empty());
+        assert!(
+            written.iter().all(|f| f.starts_with("run1_")),
+            "{written:?}"
+        );
+    }
+
+    #[test]
+    fn export_reports_invalid_settings_instead_of_starting() {
+        let o = opened();
+        let export = o.export();
+        o.state().invoke_export_dialog_open();
+        export.set_output_dir("/tmp".into());
+        let fields = [
+            "Z start",
+            "Z end",
+            "T start",
+            "T end",
+            "well row count",
+            "well column count",
+        ];
+        for (broken, label) in fields.iter().enumerate() {
+            o.state().invoke_export_dialog_open();
+            let value = |i: usize| -> slint::SharedString {
+                if i == broken { "x".into() } else { "1".into() }
+            };
+            export.set_z_start(value(0));
+            export.set_z_end(value(1));
+            export.set_t_start(value(2));
+            export.set_t_end(value(3));
+            export.set_well_rows(value(4));
+            export.set_well_cols(value(5));
+            export.invoke_start_clicked();
+            assert!(export.get_has_error());
+            assert!(
+                export.get_error_message().contains(label),
+                "{}",
+                export.get_error_message()
+            );
+        }
+    }
+
+    #[test]
+    fn export_without_an_open_database_reports_it() {
+        let (_ui, results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(slint::Weak::default(), results_ui.as_weak());
+        controller.run_export(ResultExport::default());
+        drain_ui_queue();
+        let export = results_ui.global::<ExportDialogState>();
+        assert!(export.get_has_error());
+        assert_eq!(export.get_error_message(), "No database is open.");
+    }
+
+    #[test]
+    fn export_progress_cancel_and_failure_are_shown() {
+        let o = opened();
+        o.controller.push_export_progress("Working".into(), 2, 5);
+        drain_ui_queue();
+        let export = o.export();
+        assert_eq!(export.get_progress_message(), "Working");
+        assert_eq!(export.get_progress_current(), 2);
+        assert_eq!(export.get_progress_total(), 5);
+
+        export.set_is_exporting(true);
+        o.controller.push_export_cancelled();
+        drain_ui_queue();
+        assert!(!export.get_is_exporting());
+        assert_eq!(export.get_progress_message(), "Export cancelled.");
+
+        // An export into a folder that can't be created fails visibly.
+        let file = o._dir.path().join("a-file");
+        std::fs::write(&file, "").unwrap();
+        o.controller.run_export(ResultExport {
+            output_dir: file.join("sub"),
+            with_list_view: true,
+            ..Default::default()
+        });
+        drain_ui_queue();
+        assert!(export.get_has_error());
     }
 }

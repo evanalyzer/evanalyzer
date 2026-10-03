@@ -227,7 +227,7 @@ impl ProjectSettingsController {
             )
         };
 
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             // Each window has its own independent `ProjectSettingsState`
             // instance (see the struct-level doc comment), so each needs its
             // own `ProjectSettingsSlint` value - in particular its own

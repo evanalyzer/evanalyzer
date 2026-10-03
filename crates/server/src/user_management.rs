@@ -16,7 +16,6 @@ pub struct UnixAccount {
 
 pub enum AuthenticationStatus {
     Authenticated(User),
-    UserNotFound,
     PasswordWrong,
 }
 

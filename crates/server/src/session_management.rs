@@ -56,12 +56,6 @@ pub struct SessionEntry {
     pub start_date: SystemTime,
 }
 
-impl SessionEntry {
-    pub fn worker_url(&self) -> String {
-        format!("ws://127.0.0.1:{}", self.port)
-    }
-}
-
 pub struct SessionManagement {
     pub path_to_session_store: PathBuf,
     /// Executable started as worker, with `serve --listen 127.0.0.1:<port>`.
@@ -128,16 +122,6 @@ impl SessionManagement {
         let entry = self.create_session(&mut state, user)?;
         self.persist(&state.sessions)?;
         Ok(entry)
-    }
-
-    /// Looks up an open session by the token the client got at login.
-    pub fn find_session(&self, session_token: &str) -> Option<SessionEntry> {
-        let state = self.state.lock().unwrap();
-        state
-            .sessions
-            .iter()
-            .find(|s| constant_time_eq(s.session_token.as_bytes(), session_token.as_bytes()))
-            .cloned()
     }
 
     /// Stops the session's worker and forgets the session.
@@ -359,18 +343,14 @@ fn generate_token() -> io::Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
 #[cfg(all(test, unix))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
     /// Stand-in for `evanalyzer serve --listen 127.0.0.1:<port>`: just
     /// listens on the port.
-    fn fake_worker(dir: &Path) -> PathBuf {
+    pub(crate) fn fake_worker(dir: &Path) -> PathBuf {
         let path = dir.join("fake-worker");
         fs::write(
             &path,
@@ -429,10 +409,12 @@ mod tests {
             .mode();
         assert_eq!(dir_mode & 0o777, 0o700);
 
-        // A new server process finds the running worker again.
+        // The store records the session...
+        let stored: Vec<SessionEntry> = serde_json::from_slice(&fs::read(store).unwrap()).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].pid, entry.pid);
+        // ...so a new server process finds the running worker again.
         let restarted = manager(dir.path());
-        let restored = restarted.find_session(&entry.session_token).unwrap();
-        assert_eq!(restored.pid, entry.pid);
         assert_eq!(
             restarted
                 .open_or_create_session(&user("alice"))
@@ -451,12 +433,16 @@ mod tests {
         let entry = sessions.open_or_create_session(&user("alice")).unwrap();
 
         sessions.close_session(&entry.session_token).unwrap();
-        assert!(sessions.find_session(&entry.session_token).is_none());
+        assert!(sessions.state.lock().unwrap().sessions.is_empty());
         assert!(!worker_responds(entry.port));
+        // Gone from the store too: a restarted server doesn't bring it back.
         assert!(
             manager(dir.path())
-                .find_session(&entry.session_token)
-                .is_none()
+                .state
+                .lock()
+                .unwrap()
+                .sessions
+                .is_empty()
         );
     }
 

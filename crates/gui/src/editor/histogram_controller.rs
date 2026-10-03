@@ -121,7 +121,7 @@ impl HistogramController {
             .get_histograms_from_selected_channel()
             .cloned();
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let Some(task) = histogram_settings else {
                     warn!(

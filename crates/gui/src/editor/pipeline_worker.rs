@@ -60,9 +60,17 @@ impl PipelineWorker {
 
     fn run_worker_loop(self: &Arc<Self>) -> ! {
         let task_request = &self.pipeline_controller.task_request;
-        let self_handle = Arc::clone(self);
         loop {
             let task = wait_for_task(task_request.clone());
+            self.run_task(task);
+        }
+    }
+
+    /// Runs one preview or analysis job to the end, reporting its progress
+    /// and result to the UI.
+    fn run_task(self: &Arc<Self>, task: PipelineTask) {
+        let self_handle = Arc::clone(self);
+        {
             let is_preview = task.preview;
 
             let job = if is_preview {
@@ -106,7 +114,7 @@ impl PipelineWorker {
                              (max {MAX_PREVIEW_VISIBLE_TILES}). Zoom in, then run the preview again. \
                              Auto preview has been turned off."
                         );
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>()
                                     .set_status_message(message.into());
@@ -114,11 +122,11 @@ impl PipelineWorker {
                                 ui.global::<PipelineRunningState>().set_done(true);
                             }
                         });
-                        continue;
+                        return;
                     }
                     Err(StartPreviewError::Failed(e)) => {
                         error!("Could not execute job: {e:?}");
-                        continue;
+                        return;
                     }
                 }
             } else {
@@ -131,7 +139,7 @@ impl PipelineWorker {
                     Ok(job) => job,
                     Err(e) => {
                         error!("Could not execute job: {e:?}");
-                        continue;
+                        return;
                     }
                 }
             };
@@ -150,7 +158,7 @@ impl PipelineWorker {
                     ProgressEvent::TilesScheduled { total_tiles } => {
                         let ui_handle = self.app_state.ui_handle.clone();
                         let total = total_tiles as i32;
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>().set_total(total);
                                 ui.global::<PipelineRunningState>().set_processed(0);
@@ -174,7 +182,7 @@ impl PipelineWorker {
                         }
                         let ui_handle = self.app_state.ui_handle.clone();
                         let total = total as i32;
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>().set_done(false);
                                 ui.global::<PipelineRunningState>().set_has_error(false);
@@ -208,7 +216,7 @@ impl PipelineWorker {
                                 .trigger_image_redraw_objects();
                         }
                         let ui_handle = self.app_state.ui_handle.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>()
                                     .set_processed(tile_index as i32);
@@ -233,7 +241,7 @@ impl PipelineWorker {
                         // not recompute the total.
                         info!("Whole-image phase completed ({completed}/{total_tiles})");
                         let ui_handle = self.app_state.ui_handle.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>()
                                     .set_processed(completed as i32);
@@ -262,7 +270,7 @@ impl PipelineWorker {
                             let ui_handle = self.app_state.ui_handle.clone();
                             let index = index as i32;
                             let total = total as i32;
-                            let _ = slint::invoke_from_event_loop(move || {
+                            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_handle.upgrade() {
                                     ui.global::<PipelineRunningState>().set_processed(index);
                                     ui.global::<PipelineRunningState>().set_total(total);
@@ -357,7 +365,7 @@ impl PipelineWorker {
             };
             let ui_handle = self.app_state.ui_handle.clone();
             let is_preview = task.preview;
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_handle.upgrade() {
                     ui.global::<PipelineRunningState>()
                         .set_status_message(status_message.into());
@@ -441,5 +449,193 @@ mod tests {
 
         assert_eq!(task.job_name.as_deref(), Some("posted-from-another-thread"));
         handle.join().unwrap();
+    }
+
+    // -- running real jobs (UI updates applied via the test queue) -----------
+
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::image_meta_controller::ImageMetaController;
+    use crate::editor::images_list_controller::ImagesListController;
+    use crate::editor::results_state_controller::ResultsStateController;
+    use crate::editor::template_controller::TemplateController;
+    use crate::editor::test_support::{fixture_image_path, test_ui_windows, ui_state_with_windows};
+    use crate::helper::ui_thread::drain_ui_queue;
+    use crate::{AppWindow, ResultsWindow};
+    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::project::{ProjectExt, ProjectWithRuntime};
+
+    struct Fixture {
+        ui: AppWindow,
+        _results_ui: ResultsWindow,
+        worker: Arc<PipelineWorker>,
+        dir: tempfile::TempDir,
+        settings: evanalyzer_cfg::settings::project_settings::ProjectSettings,
+    }
+
+    /// A worker wired to real windows and a project with a copy of the
+    /// fixture image in a temp folder.
+    fn fixture() -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let images = dir.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        std::fs::copy(fixture_image_path(), images.join("fixture.ome.tif")).unwrap();
+        let mut project = ProjectWithRuntime::default();
+        project.images.root = Some(images);
+        project.scan_image_folder_and_add(&LocalBackend::default());
+        let settings = project.settings.clone();
+
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, project);
+        let w = ui.as_weak();
+        let viewport = Arc::new(ViewportController::new(w.clone(), ui_state.clone()));
+        let objects = Arc::new(ObjectListController::new(
+            w.clone(),
+            ui_state.clone(),
+            viewport.clone(),
+        ));
+        let templates = Arc::new(TemplateController::new(w.clone(), ui_state.clone()));
+        let pipelines = Arc::new(PipelinesController::new(
+            w.clone(),
+            ui_state.clone(),
+            objects.clone(),
+            viewport.clone(),
+            templates,
+        ));
+        let classification = Arc::new(ClassificationController::new(
+            w.clone(),
+            ui_state.clone(),
+            objects.clone(),
+            viewport.clone(),
+        ));
+        let images_list = Arc::new(ImagesListController::new(
+            w.clone(),
+            ui_state.clone(),
+            viewport.clone(),
+            Arc::new(HistogramController::new(
+                w.clone(),
+                ui_state.clone(),
+                viewport.clone(),
+            )),
+            Arc::new(ImageMetaController::new(
+                w.clone(),
+                ui_state.clone(),
+                viewport.clone(),
+            )),
+            objects.clone(),
+        ));
+        let results_state = Arc::new(ResultsStateController::new(
+            results_ui.as_weak(),
+            ui_state.clone(),
+            images_list,
+        ));
+        let results_list = Arc::new(ResultsListController::new(
+            w,
+            ui_state.clone(),
+            results_state,
+        ));
+        {
+            let mut vp = viewport.viewport_state.write().unwrap();
+            vp.viewport_width = 256.0;
+            vp.viewport_height = 256.0;
+            vp.zoom = 1.0;
+        }
+        let worker = Arc::new(PipelineWorker::new(
+            ui_state,
+            pipelines,
+            viewport,
+            objects,
+            classification,
+            results_list,
+        ));
+        Fixture {
+            ui,
+            _results_ui: results_ui,
+            worker,
+            dir,
+            settings,
+        }
+    }
+
+    impl Fixture {
+        fn task(&self, preview: bool) -> PipelineTask {
+            PipelineTask {
+                project_settings: self.settings.clone(),
+                project_path: self.dir.path().to_path_buf(),
+                preview,
+                breakpoint: None,
+                job_name: Some("worker_test".into()),
+            }
+        }
+        fn running(&self) -> PipelineRunningState<'_> {
+            self.ui.global::<PipelineRunningState>()
+        }
+    }
+
+    #[test]
+    fn an_analysis_run_reports_progress_and_completion() {
+        let f = fixture();
+        f.ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::PipelineRunning);
+        f.worker.run_task(f.task(false));
+        drain_ui_queue();
+        let running = f.running();
+        assert!(running.get_done());
+        assert!(!running.get_has_error());
+        assert_eq!(
+            running.get_status_message(),
+            "Analysis completed successfully."
+        );
+        assert!(running.get_total() >= 1);
+        assert_eq!(running.get_processed(), running.get_total());
+        assert!(
+            !f.ui
+                .global::<PipelinesPanelState>()
+                .get_eta_seconds_per_image()
+                .is_empty()
+        );
+        // The full run's dialog stays open to show the result.
+        assert_eq!(
+            f.ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::PipelineRunning
+        );
+        assert!(
+            f.worker
+                .pipeline_controller
+                .pipeline_cancel_flag
+                .lock()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_preview_run_closes_its_dialog_when_done() {
+        let f = fixture();
+        f.ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::PreviewRendering);
+        f.worker.run_task(f.task(true));
+        drain_ui_queue();
+        assert!(f.running().get_done());
+        assert!(!f.running().get_has_error());
+        assert_eq!(
+            f.ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::None
+        );
+    }
+
+    /// Pins down today's behaviour: a job that can't even start (here its
+    /// results folder can't be created) is only logged - the running dialog
+    /// gets no result and stays as it was. Flagged as a usability gap; if
+    /// that changes, this test should assert the shown error instead.
+    #[test]
+    fn a_job_that_cannot_start_is_only_logged() {
+        let f = fixture();
+        std::fs::write(f.dir.path().join("missing"), "a file, not a folder").unwrap();
+        let mut task = f.task(false);
+        task.project_path = f.dir.path().join("missing").join("deeper");
+        f.worker.run_task(task);
+        drain_ui_queue();
+        assert!(!f.running().get_done());
+        assert_eq!(f.running().get_status_message(), "");
     }
 }

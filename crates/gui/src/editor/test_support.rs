@@ -99,6 +99,32 @@ pub(crate) fn project_with_one_image() -> ProjectWithRuntime {
     project
 }
 
+/// The 4D multi-channel OME-TIFF fixture shared with the core tests.
+pub(crate) fn fixture_image_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../core/tests/multi-channel-4D-series.ome.tif")
+        .canonicalize()
+        .expect("fixture image exists")
+}
+
+/// Like [`project_with_one_image`], but the current image is a real file
+/// ([`fixture_image_path`]) that can be opened, read and rendered.
+pub(crate) fn project_with_fixture_image() -> ProjectWithRuntime {
+    let mut project = project_with_one_image();
+    let path = fixture_image_path();
+    let file_name = PathBuf::from(path.file_name().unwrap());
+    let mut entry = project
+        .images
+        .list
+        .shift_remove(&PathBuf::from("img.tif"))
+        .unwrap();
+    entry.rel_path = file_name.clone();
+    project.images.list.insert(file_name, entry);
+    project.images.root = Some(path.parent().unwrap().to_path_buf());
+    project.set_current_image_path(&path);
+    project
+}
+
 /// Ensures the Slint headless testing platform is set up on the *calling
 /// thread* before constructing a real `AppWindow`/`ResultsWindow`.
 ///
@@ -134,9 +160,65 @@ pub(crate) fn ensure_slint_test_platform() {
 /// any number of unit tests.
 pub(crate) fn test_ui_windows() -> (AppWindow, ResultsWindow) {
     ensure_slint_test_platform();
+    crate::helper::ui_thread::fresh_test_queue();
     let ui =
         AppWindow::new().expect("AppWindow::new must succeed under the headless test platform");
     let results_ui = ResultsWindow::new()
         .expect("ResultsWindow::new must succeed under the headless test platform");
     (ui, results_ui)
+}
+
+/// A [`UiState`] wired to real windows (see [`test_ui_windows`]), with both
+/// file browsers attached - so dialogs a controller opens can be driven with
+/// [`choose_file`].
+pub(crate) fn ui_state_with_windows(
+    ui: &AppWindow,
+    results_ui: &ResultsWindow,
+    project: ProjectWithRuntime,
+) -> Arc<UiState> {
+    let owner = ProjectOwner::new();
+    let handle = owner.handle();
+    *handle.get_project_write() = project;
+    use slint::ComponentHandle;
+    let ui_state = Arc::new(UiState::new(handle, ui.as_weak(), results_ui.as_weak()));
+    ui_state.file_browser.attach(ui);
+    ui_state.results_file_browser.attach(results_ui);
+    ui_state
+}
+
+/// Completes the file dialog currently open in `ui` with `path`, the way a
+/// user would: typing a file to open, picking a folder, or entering a save
+/// name (answering "replace" if the file exists). Applies all resulting UI
+/// updates.
+pub(crate) fn choose_file<W>(ui: &W, path: &std::path::Path)
+where
+    W: slint::ComponentHandle + 'static,
+    for<'a> crate::FileBrowserState<'a>: slint::Global<'a, W>,
+{
+    use crate::helper::ui_thread::drain_ui_queue;
+    use crate::{FileBrowserMode, FileBrowserState};
+    drain_ui_queue();
+    let browser = ui.global::<FileBrowserState>();
+    assert!(browser.get_visible(), "no file dialog is open");
+    let text = |p: &std::path::Path| slint::SharedString::from(p.to_string_lossy().as_ref());
+    match browser.get_mode() {
+        FileBrowserMode::OpenFile => browser.invoke_path_entered(text(path)),
+        FileBrowserMode::OpenFolder => {
+            browser.invoke_navigate(text(path));
+            drain_ui_queue();
+            browser.invoke_accept();
+        }
+        FileBrowserMode::SaveFile => {
+            browser.invoke_navigate(text(path.parent().unwrap()));
+            drain_ui_queue();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            browser.invoke_file_name_edited(name.into());
+            browser.invoke_accept();
+            drain_ui_queue();
+            if !browser.get_overwrite_name().is_empty() {
+                browser.invoke_overwrite_answered(true);
+            }
+        }
+    }
+    drain_ui_queue();
 }

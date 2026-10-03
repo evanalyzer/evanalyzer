@@ -287,7 +287,7 @@ where
 
         // Places and the start folder load in the background.
         let this = Arc::clone(self);
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             let places = this.backend.files().places();
             let start_dir = match start {
                 Some(dir) => this.resolve_start(dir),
@@ -299,7 +299,7 @@ where
                 .and_then(|p| p.first())
                 .map(|p| p.path.clone());
             let ui_this = Arc::clone(&this);
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 match &places {
                     Ok(places) => {
                         let rows: Vec<FileBrowserPlace> = places
@@ -365,10 +365,10 @@ where
         });
 
         let this = Arc::clone(self);
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             let result = this.backend.files().list_dir(&dir);
             let ui_this = Arc::clone(&this);
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 {
                     let mut s = ui_this.session.lock().unwrap();
                     if s.generation != generation || s.request.is_none() {
@@ -554,19 +554,21 @@ where
                 let target = current_dir.join(&name);
                 // Ask before replacing an existing file.
                 let this = Arc::clone(self);
-                std::thread::spawn(move || {
+                crate::helper::ui_thread::spawn(move || {
                     let existing = this.backend.files().stat(&target);
                     let ui_this = Arc::clone(&this);
-                    let _ = slint::invoke_from_event_loop(move || match existing {
-                        Ok(Some(entry)) if entry.is_dir => ui_this
-                            .with_state(|s| s.set_error(format!("“{name}” is a folder").into())),
-                        Ok(Some(_)) => {
-                            ui_this.session.lock().unwrap().pending_overwrite = Some(target);
-                            ui_this.with_state(|s| s.set_overwrite_name(name.into()));
-                        }
-                        Ok(None) => ui_this.close(Some(target)),
-                        Err(e) => ui_this.with_state(|s| s.set_error(e.to_string().into())),
-                    });
+                    let _ =
+                        crate::helper::ui_thread::invoke_from_event_loop(move || match existing {
+                            Ok(Some(entry)) if entry.is_dir => ui_this.with_state(|s| {
+                                s.set_error(format!("“{name}” is a folder").into())
+                            }),
+                            Ok(Some(_)) => {
+                                ui_this.session.lock().unwrap().pending_overwrite = Some(target);
+                                ui_this.with_state(|s| s.set_overwrite_name(name.into()));
+                            }
+                            Ok(None) => ui_this.close(Some(target)),
+                            Err(e) => ui_this.with_state(|s| s.set_error(e.to_string().into())),
+                        });
                 });
             }
         }
@@ -588,10 +590,10 @@ where
         }
         let path = PathBuf::from(text);
         let this = Arc::clone(self);
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             let stat = this.backend.files().stat(&path);
             let ui_this = Arc::clone(&this);
-            let _ = slint::invoke_from_event_loop(move || match stat {
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || match stat {
                 Ok(Some(entry)) if entry.is_dir => ui_this.navigate(path),
                 Ok(Some(_)) => {
                     let mode = ui_this
@@ -622,10 +624,10 @@ where
         }
         let target = self.session.lock().unwrap().current_dir.join(name);
         let this = Arc::clone(self);
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             let result = this.backend.files().create_dir_all(&target);
             let ui_this = Arc::clone(&this);
-            let _ = slint::invoke_from_event_loop(move || match result {
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || match result {
                 Ok(()) => ui_this.navigate(target),
                 Err(e) => ui_this.with_state(|s| s.set_error(e.to_string().into())),
             });
@@ -837,5 +839,351 @@ mod tests {
         let mut dir = file("d");
         dir.is_dir = true;
         assert_eq!(summary(&[dir, file("a"), file("b")]), "1 folder, 2 files");
+    }
+
+    // -- the dialog, driven through its UI callbacks -------------------------
+
+    use crate::AppWindow;
+    use crate::editor::test_support::test_ui_windows;
+    use crate::helper::ui_thread::drain_ui_queue;
+    use evanalyzer_app::backends::local::LocalBackend;
+    use slint::Model;
+    use std::sync::mpsc;
+
+    /// A temp folder with a project, a text file, a hidden file and a
+    /// subfolder, plus a browser attached to a real window.
+    struct Fixture {
+        dir: tempfile::TempDir,
+        ui: AppWindow,
+        browser: Arc<FileBrowser<AppWindow>>,
+    }
+
+    fn fixture() -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.evaproj"), "{}").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "hello").unwrap();
+        std::fs::write(dir.path().join(".hidden"), "").unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub").join("b.evaproj"), "{}").unwrap();
+        let (ui, _results_ui) = test_ui_windows();
+        let browser = Arc::new(FileBrowser::new(
+            ui.as_weak(),
+            Arc::new(LocalBackend::default()) as Arc<dyn Backend>,
+        ));
+        browser.attach(&ui);
+        Fixture { dir, ui, browser }
+    }
+
+    impl Fixture {
+        fn state(&self) -> FileBrowserState<'_> {
+            self.ui.global::<FileBrowserState>()
+        }
+
+        /// Opens `request` in the fixture folder; returns where the result goes.
+        fn open(&self, request: FileRequest) -> mpsc::Receiver<Option<PathBuf>> {
+            let (tx, rx) = mpsc::channel();
+            self.browser
+                .open(request.start_in(self.dir.path()), move |path| {
+                    tx.send(path).unwrap()
+                });
+            drain_ui_queue();
+            rx
+        }
+
+        fn shown(&self) -> Vec<String> {
+            let entries = self.state().get_entries();
+            (0..entries.row_count())
+                .map(|i| entries.row_data(i).unwrap().name.to_string())
+                .collect()
+        }
+
+        fn index_of(&self, name: &str) -> i32 {
+            self.shown().iter().position(|n| n == name).unwrap() as i32
+        }
+    }
+
+    fn sorted(mut names: Vec<String>) -> Vec<String> {
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn opening_shows_the_start_folder_filtered_and_without_hidden_files() {
+        let f = fixture();
+        let _rx = f.open(FileRequest::open_file("Open project").filter("Projects", &["evaproj"]));
+        let state = f.state();
+        assert!(state.get_visible());
+        assert_eq!(state.get_title(), "Open project");
+        assert_eq!(state.get_accept_label(), "Open");
+        assert_eq!(state.get_location(), "Files on this computer");
+        assert!(!state.get_remote());
+        assert_eq!(
+            state.get_current_path(),
+            f.dir.path().to_string_lossy().as_ref()
+        );
+        assert!(state.get_crumbs().row_count() >= 1);
+        assert!(state.get_places().row_count() >= 1);
+        assert!(!state.get_loading());
+        assert_eq!(sorted(f.shown()), ["a.evaproj", "sub"]);
+        assert!(!state.get_can_accept(), "nothing selected yet");
+        assert!(state.get_status().contains('1'), "{}", state.get_status());
+    }
+
+    #[test]
+    fn hidden_files_search_and_filters_change_the_shown_rows() {
+        let f = fixture();
+        let _rx = f.open(
+            FileRequest::open_file("Open")
+                .filter("Projects", &["evaproj"])
+                .filter("All files", &[]),
+        );
+        let state = f.state();
+        assert_eq!(state.get_filter_names().row_count(), 2);
+
+        state.invoke_filter_selected("All files".into());
+        assert_eq!(state.get_filter_name(), "All files");
+        assert_eq!(sorted(f.shown()), ["a.evaproj", "notes.txt", "sub"]);
+
+        state.invoke_hidden_toggled(true);
+        assert!(state.get_show_hidden());
+        assert_eq!(f.shown().len(), 4);
+
+        state.invoke_search_edited("NOTE".into());
+        assert_eq!(f.shown(), ["notes.txt"]);
+
+        // Unknown filter names are ignored.
+        state.invoke_filter_selected("nope".into());
+        assert_eq!(state.get_filter_name(), "All files");
+    }
+
+    #[test]
+    fn opening_a_file_by_selecting_and_accepting_it() {
+        let f = fixture();
+        let rx = f.open(FileRequest::open_file("Open").filter("Projects", &["evaproj"]));
+        let state = f.state();
+        state.invoke_select(f.index_of("a.evaproj"));
+        assert_eq!(state.get_selected(), f.index_of("a.evaproj"));
+        assert!(state.get_can_accept());
+        assert!(state.get_status().starts_with("a.evaproj - "));
+        state.invoke_accept();
+        assert_eq!(rx.try_recv().unwrap(), Some(f.dir.path().join("a.evaproj")));
+        assert!(!state.get_visible());
+    }
+
+    #[test]
+    fn activating_a_folder_enters_it_and_a_file_opens_it() {
+        let f = fixture();
+        let rx = f.open(FileRequest::open_file("Open").filter("Projects", &["evaproj"]));
+        let state = f.state();
+        state.invoke_select(f.index_of("sub"));
+        assert_eq!(state.get_status(), "sub - folder");
+        state.invoke_activate(f.index_of("sub"));
+        drain_ui_queue();
+        assert_eq!(f.shown(), ["b.evaproj"]);
+
+        state.invoke_go_up();
+        drain_ui_queue();
+        assert!(f.shown().contains(&"a.evaproj".to_string()));
+        state.invoke_navigate(f.dir.path().join("sub").to_string_lossy().as_ref().into());
+        drain_ui_queue();
+        state.invoke_refresh();
+        drain_ui_queue();
+        state.invoke_activate(0);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Some(f.dir.path().join("sub").join("b.evaproj"))
+        );
+
+        // Out-of-range rows do nothing.
+        let _rx = f.open(FileRequest::open_file("Open"));
+        state.invoke_select(99);
+        state.invoke_activate(-1);
+        assert_eq!(state.get_selected(), -1);
+    }
+
+    #[test]
+    fn accepting_a_selected_folder_in_open_file_mode_enters_it() {
+        let f = fixture();
+        let rx = f.open(FileRequest::open_file("Open"));
+        let state = f.state();
+        state.invoke_accept(); // nothing selected: nothing happens
+        state.invoke_select(f.index_of("sub"));
+        state.invoke_accept();
+        drain_ui_queue();
+        assert!(rx.try_recv().is_err(), "still open");
+        assert_eq!(f.shown(), ["b.evaproj"]);
+    }
+
+    #[test]
+    fn picking_a_folder_returns_the_selected_or_current_one() {
+        let f = fixture();
+        let rx = f.open(FileRequest::open_folder("Choose folder"));
+        let state = f.state();
+        assert_eq!(state.get_accept_label(), "Select folder");
+        assert_eq!(f.shown(), ["sub"], "only folders in folder mode");
+        assert!(state.get_can_accept());
+        state.invoke_select(0);
+        state.invoke_accept();
+        assert_eq!(rx.try_recv().unwrap(), Some(f.dir.path().join("sub")));
+
+        let rx = f.open(FileRequest::open_folder("Choose folder"));
+        f.state().invoke_accept();
+        assert_eq!(rx.try_recv().unwrap(), Some(f.dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn saving_appends_the_extension_and_asks_before_replacing() {
+        let f = fixture();
+        let rx = f.open(
+            FileRequest::save_file("Save project")
+                .filter("Projects", &["evaproj"])
+                .file_name("new"),
+        );
+        let state = f.state();
+        assert_eq!(state.get_accept_label(), "Save");
+        assert_eq!(state.get_file_name(), "new");
+        assert!(state.get_can_accept());
+        state.invoke_accept();
+        drain_ui_queue();
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Some(f.dir.path().join("new.evaproj"))
+        );
+
+        // Existing file: asks first. "No" keeps the dialog open.
+        let rx = f.open(FileRequest::save_file("Save").filter("Projects", &["evaproj"]));
+        state.invoke_select(f.index_of("a.evaproj"));
+        assert_eq!(
+            state.get_file_name(),
+            "a.evaproj",
+            "selecting a file fills the name"
+        );
+        state.invoke_accept();
+        drain_ui_queue();
+        assert_eq!(state.get_overwrite_name(), "a.evaproj");
+        state.invoke_overwrite_answered(false);
+        assert_eq!(state.get_overwrite_name(), "");
+        assert!(rx.try_recv().is_err());
+        state.invoke_accept();
+        drain_ui_queue();
+        state.invoke_overwrite_answered(true);
+        assert_eq!(rx.try_recv().unwrap(), Some(f.dir.path().join("a.evaproj")));
+    }
+
+    #[test]
+    fn saving_over_a_folder_or_with_an_invalid_name_is_refused() {
+        let f = fixture();
+        let rx = f.open(FileRequest::save_file("Save"));
+        let state = f.state();
+        state.invoke_file_name_edited("sub".into());
+        state.invoke_accept();
+        drain_ui_queue();
+        assert!(state.get_error().contains("is a folder"));
+
+        state.invoke_file_name_edited("a/b".into());
+        assert!(!state.get_can_accept());
+        state.invoke_accept();
+        drain_ui_queue();
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn typing_a_path_opens_folders_and_files_and_reports_missing_ones() {
+        let f = fixture();
+        let rx = f.open(FileRequest::open_file("Open"));
+        let state = f.state();
+        let typed = |p: PathBuf| state.invoke_path_entered(p.to_string_lossy().as_ref().into());
+
+        state.invoke_path_entered("".into());
+        typed(f.dir.path().join("missing.txt"));
+        drain_ui_queue();
+        assert!(state.get_error().contains("does not exist"));
+
+        typed(f.dir.path().join("sub"));
+        drain_ui_queue();
+        assert_eq!(f.shown(), ["b.evaproj"]);
+
+        typed(f.dir.path().join("notes.txt"));
+        drain_ui_queue();
+        assert_eq!(rx.try_recv().unwrap(), Some(f.dir.path().join("notes.txt")));
+
+        // In save mode a typed file only navigates to its folder.
+        let rx = f.open(FileRequest::save_file("Save"));
+        typed(f.dir.path().join("sub").join("b.evaproj"));
+        drain_ui_queue();
+        assert_eq!(f.shown(), ["b.evaproj"]);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn creating_a_folder_enters_it_and_bad_names_are_refused() {
+        let f = fixture();
+        let _rx = f.open(FileRequest::open_folder("Choose"));
+        let state = f.state();
+        state.invoke_create_folder("new folder".into());
+        drain_ui_queue();
+        assert!(f.dir.path().join("new folder").is_dir());
+        assert!(state.get_current_path().ends_with("new folder"));
+
+        state.invoke_create_folder("a/b".into());
+        assert!(state.get_error().contains("can't contain"));
+    }
+
+    #[test]
+    fn cancelling_or_a_second_request_reports_no_path() {
+        let f = fixture();
+        let first = f.open(FileRequest::open_file("First"));
+        let second = f.open(FileRequest::open_file("Second"));
+        assert_eq!(first.try_recv().unwrap(), None, "replaced by the second");
+        f.state().invoke_cancel();
+        assert_eq!(second.try_recv().unwrap(), None);
+        assert!(!f.state().get_visible());
+
+        // Navigating with no dialog open is ignored.
+        f.state()
+            .invoke_navigate(f.dir.path().to_string_lossy().as_ref().into());
+        drain_ui_queue();
+        assert!(f.shown().is_empty());
+    }
+
+    #[test]
+    fn the_next_dialog_starts_where_the_last_one_ended() {
+        let f = fixture();
+        let rx = f.open(FileRequest::open_file("Open"));
+        f.state()
+            .invoke_navigate(f.dir.path().join("sub").to_string_lossy().as_ref().into());
+        drain_ui_queue();
+        f.state().invoke_cancel();
+        assert_eq!(rx.try_recv().unwrap(), None);
+
+        let (tx, _rx) = mpsc::channel();
+        f.browser.open(FileRequest::open_file("Again"), move |p| {
+            tx.send(p).unwrap()
+        });
+        drain_ui_queue();
+        assert_eq!(f.shown(), ["b.evaproj"]);
+    }
+
+    #[test]
+    fn a_start_path_pointing_at_a_file_opens_its_folder() {
+        let f = fixture();
+        let (tx, _rx) = mpsc::channel();
+        f.browser.open(
+            FileRequest::open_file("Open").start_in(f.dir.path().join("sub").join("b.evaproj")),
+            move |p| tx.send(p).unwrap(),
+        );
+        drain_ui_queue();
+        assert_eq!(f.shown(), ["b.evaproj"]);
+    }
+
+    #[test]
+    fn listing_a_missing_folder_shows_the_error() {
+        let f = fixture();
+        let _rx = f.open(FileRequest::open_file("Open"));
+        f.state()
+            .invoke_navigate(f.dir.path().join("gone").to_string_lossy().as_ref().into());
+        drain_ui_queue();
+        assert!(!f.state().get_error().is_empty());
+        assert!(f.shown().is_empty());
     }
 }
