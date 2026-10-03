@@ -22,6 +22,11 @@ pub use self::ai_segmentation::stardist::Stardist;
 pub use self::ai_segmentation::unet::UNet;
 #[cfg(feature = "ai")]
 pub use self::ai_segmentation::unet::UNetOutputMode;
+#[cfg(feature = "ai")]
+pub use self::ai_segmentation::yolov5::YoloClassMapping;
+#[cfg(feature = "ai")]
+pub use self::ai_segmentation::yolov5::Yolov5;
+
 pub use self::filters::blur::Blur;
 pub use self::filters::blur_gaussian::GaussianBlur;
 pub use self::filters::color_filter::ColorFilterCommand;

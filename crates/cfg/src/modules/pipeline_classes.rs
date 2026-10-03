@@ -35,6 +35,13 @@ impl PipelineCommand {
                     seg(&mapping.object_class_id, &mut classes);
                 }
             }
+            // An empty mapping writes model class i as i + 1 - how many
+            // classes that is, only the model file knows.
+            PipelineCommand::Yolov5(s) => {
+                for mapping in &s.class_mapping {
+                    seg(&mapping.segmentation_class, &mut classes);
+                }
+            }
 
             // Object commands: inputs, filters and outputs.
             PipelineCommand::AiObjectClassifier(s) => {

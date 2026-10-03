@@ -355,7 +355,7 @@ fn command_category_suggested_next_advances_and_terminates_at_object() {
 #[test]
 fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
-    let expected: [(&str, &[CommandCategory]); 37] = [
+    let expected: [(&str, &[CommandCategory]); 38] = [
         ("AI Object Classifier", &[Object]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Measure]),
@@ -400,6 +400,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("Threshold", &[InstanceSegmentation]),
         ("TransformObjects", &[Object]),
         ("AI UNet Segmentation", &[InstanceSegmentation]),
+        ("AI YOLOv5 Segmentation", &[Measure]),
         ("Voronoi", &[Object]),
         ("Watershed", &[Measure]),
         ("WeightedDeviation", &[Segment, Preprocess]),

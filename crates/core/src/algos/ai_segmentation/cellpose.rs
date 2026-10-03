@@ -179,7 +179,7 @@ impl ImageAlgorithm for Cellpose {
 
         let mut labels = self.masks_from_flows(&flow_y, &flow_x, &cell_prob, w, h);
         if resized {
-            labels = Self::resize_labels_nearest(&labels, w, h, width, height);
+            labels = super::resize_labels_nearest(&labels, w, h, width, height);
         }
 
         self.write_instances(
@@ -440,27 +440,6 @@ impl Cellpose {
             return 1.0;
         }
         self.max_resize as f64 / longest as f64
-    }
-
-    /// Nearest-neighbor resize of a label map (OpenCV's `INTER_NEAREST`, as
-    /// used by Cellpose to scale masks back up): target pixel `d` takes source
-    /// pixel `floor(d * src / dst)`.
-    fn resize_labels_nearest(
-        labels: &[u32],
-        src_width: usize,
-        src_height: usize,
-        dst_width: usize,
-        dst_height: usize,
-    ) -> Vec<u32> {
-        let src_x: Vec<usize> = (0..dst_width)
-            .map(|x| (x * src_width / dst_width).min(src_width - 1))
-            .collect();
-        let mut out = Vec::with_capacity(dst_width * dst_height);
-        for y in 0..dst_height {
-            let row = (y * src_height / dst_height).min(src_height - 1) * src_width;
-            out.extend(src_x.iter().map(|&x| labels[row + x]));
-        }
-        out
     }
 
     /// Cellpose's flow-error quality control (`dynamics.remove_bad_flow_masks`):
@@ -1380,17 +1359,6 @@ mod tests {
             "never enlarges"
         );
         assert_eq!(cmd(1000).resize_factor(size(2000, 4000)), 0.25);
-    }
-
-    #[test]
-    fn resize_labels_nearest_matches_opencv_inter_nearest() {
-        // 2x2 -> 4x3: column d takes floor(d * 2 / 4), row d floor(d * 2 / 3).
-        let labels = vec![1, 2, 3, 4];
-        let out = Cellpose::resize_labels_nearest(&labels, 2, 2, 4, 3);
-        assert_eq!(out, vec![1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4]);
-        // Shrinking takes every other pixel.
-        let out = Cellpose::resize_labels_nearest(&[1, 2, 3, 4], 4, 1, 2, 1);
-        assert_eq!(out, vec![1, 3]);
     }
 
     #[test]

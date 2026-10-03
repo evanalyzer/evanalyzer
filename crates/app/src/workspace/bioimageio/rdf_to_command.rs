@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::{
     AiSegmentationUnetUNetOutputModeSettings, CellposeSettings, StardistSettings, UNetSettings,
+    Yolov5Settings,
 };
 
 use super::rdf_model::{ModelKind, RdfModel};
@@ -20,7 +21,11 @@ pub enum ConfigureError {
     /// The model ships no TorchScript weights, so it cannot be loaded directly.
     /// `has_state_dict` indicates whether a convertible `pytorch_state_dict` is
     /// available (see `docs/convert_cellpose.py`).
-    NoTorchscriptWeights { name: String, has_state_dict: bool },
+    NoTorchscriptWeights {
+        name: String,
+        has_state_dict: bool,
+        has_onnx: bool,
+    },
 }
 
 impl fmt::Display for ConfigureError {
@@ -30,12 +35,19 @@ impl fmt::Display for ConfigureError {
             ConfigureError::NoTorchscriptWeights {
                 name,
                 has_state_dict,
+                has_onnx,
             } => {
                 write!(
                     f,
                     "model '{name}' ships no TorchScript weights, which EVAnalyzer requires"
                 )?;
-                if *has_state_dict {
+                if *has_onnx {
+                    write!(
+                        f,
+                        " — it only lists ONNX weights; add the TorchScript export to the \
+                         RDF (for YOLOv5: export.py --include torchscript)"
+                    )?;
+                } else if *has_state_dict {
                     write!(
                         f,
                         " — it only provides a pytorch_state_dict; convert it with \
@@ -105,6 +117,7 @@ pub fn configure(
         .ok_or_else(|| ConfigureError::NoTorchscriptWeights {
             name: rdf.name.clone(),
             has_state_dict: rdf.has_state_dict(),
+            has_onnx: rdf.has_onnx(),
         })?;
 
     let mut notes = Vec::new();
@@ -139,6 +152,19 @@ pub fn configure(
                 s.nms_threshold = nms.clamp(0.0, 1.0);
             }
             PipelineCommand::Stardist(s)
+        }
+        ModelKind::Yolov5 => {
+            notes.push(
+                "YOLOv5: every model class i is written as segmentation class i + 1 (set \
+                 'class_mapping' to choose). If the model was trained on downscaled images \
+                 (YOLOv5 shrinks them to 640 px by default), set 'image_scale' to 640 / the \
+                 training image size, e.g. 0.3125 for 2048 px images."
+                    .to_string(),
+            );
+            PipelineCommand::Yolov5(Yolov5Settings {
+                model_path: model_path.clone(),
+                ..Default::default()
+            })
         }
         ModelKind::UNet => {
             let mut s = UNetSettings {
@@ -321,6 +347,49 @@ weights:
             }
             other => panic!("expected UNet, got {other:?}"),
         }
+    }
+
+    /// Excerpt of the University of Salzburg YOLOv5 test RDF: it still
+    /// carries a Cellpose description and citation, but is tagged `yolov5`.
+    fn yolo_rdf(weights: &str) -> String {
+        format!(
+            r#"
+format_version: 0.5.3
+type: model
+name: Cell Detector
+description: CellPose 'cyto3' model
+cite:
+  - text: "Stringer, C. et al. (2021). Cellpose: a generalist algorithm"
+tags: [yolov5, Cell Segmentation, Segmentation]
+weights:
+{weights}
+"#
+        )
+    }
+
+    #[test]
+    fn a_yolov5_rdf_is_configured_as_yolov5_even_when_it_mentions_cellpose() {
+        let yaml = yolo_rdf("  torchscript:\n    source: weights.pt");
+        let cfg = configure(&parse_str(&yaml).unwrap(), None).unwrap();
+        assert_eq!(cfg.kind, ModelKind::Yolov5);
+        match cfg.command {
+            PipelineCommand::Yolov5(s) => {
+                assert_eq!(s.model_path, PathBuf::from("weights.pt"));
+                assert!(s.class_mapping.is_empty());
+                assert_eq!(s.image_scale, 1.0);
+            }
+            other => panic!("expected Yolov5, got {other:?}"),
+        }
+        assert!(cfg.notes.iter().any(|n| n.contains("image_scale")));
+    }
+
+    #[test]
+    fn an_onnx_only_model_explains_the_torchscript_export() {
+        let yaml = yolo_rdf("  onnx:\n    source: weights.onnx");
+        let err = configure(&parse_str(&yaml).unwrap(), None).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("ONNX"), "{message}");
+        assert!(message.contains("--include torchscript"), "{message}");
     }
 
     #[test]
@@ -605,12 +674,14 @@ inputs:
     #[test]
     fn configure_error_display_mentions_the_conversion_script_only_with_a_state_dict() {
         let with_state_dict = ConfigureError::NoTorchscriptWeights {
+            has_onnx: false,
             name: "m".into(),
             has_state_dict: true,
         };
         assert!(with_state_dict.to_string().contains("convert_cellpose.py"));
 
         let without_state_dict = ConfigureError::NoTorchscriptWeights {
+            has_onnx: false,
             name: "m".into(),
             has_state_dict: false,
         };
@@ -640,6 +711,7 @@ inputs:
         assert!(rdf_err.source().is_some());
 
         let weights_err = ConfigureError::NoTorchscriptWeights {
+            has_onnx: false,
             name: "m".into(),
             has_state_dict: false,
         };

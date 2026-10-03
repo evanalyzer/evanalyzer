@@ -861,6 +861,32 @@ impl From<WeightedDeviationSettings> for WeightedDeviation {
     }
 }
 
+#[cfg(feature = "ai")]
+impl From<YoloClassMappingSettings> for YoloClassMapping {
+    fn from(_s: YoloClassMappingSettings) -> Self {
+        YoloClassMapping {
+            model_class: _s.model_class,
+            segmentation_class: _s.segmentation_class,
+        }
+    }
+}
+
+#[cfg(feature = "ai")]
+impl From<Yolov5Settings> for Yolov5 {
+    fn from(_s: Yolov5Settings) -> Self {
+        Yolov5 {
+            model_path: _s.model_path,
+            class_mapping: _s.class_mapping.into_iter().map(|v| v.into()).collect(),
+            confidence_threshold: _s.confidence_threshold.clamp(0.0, 1.0),
+            iou_threshold: _s.iou_threshold.clamp(0.0, 1.0),
+            mask_threshold: _s.mask_threshold.clamp(0.0, 1.0),
+            image_scale: _s.image_scale.clamp(0.05, 4.0),
+            window_overlap: _s.window_overlap,
+            min_object_size: _s.min_object_size,
+        }
+    }
+}
+
 // ============ INTO ALGORITHM ============
 
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -994,5 +1020,11 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::WeightedDeviation(settings) => {
             Ok(Box::new(crate::algos::WeightedDeviation::from(settings)))
         }
+        #[cfg(feature = "ai")]
+        PipelineCommand::Yolov5(settings) => Ok(Box::new(crate::algos::Yolov5::from(settings))),
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::Yolov5(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; Yolov5 is unavailable.".into(),
+        )),
     }
 }

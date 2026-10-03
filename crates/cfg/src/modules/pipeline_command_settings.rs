@@ -1730,6 +1730,97 @@ impl Default for UNetSettings {
     }
 }
 
+/// Which project segmentation class the objects of one model class get.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct YoloClassMappingSettings {
+    /// Index of the class in the model (`0` = its first class).
+    #[schemars(range(min = 0, max = 1000))]
+    pub model_class: i32,
+    /// The project's segmentation class objects of `model_class` are written as.
+    pub segmentation_class: SegmentationClass,
+}
+
+impl Default for YoloClassMappingSettings {
+    fn default() -> Self {
+        Self {
+            model_class: 0i32,
+            segmentation_class: SegmentationClass(1),
+        }
+    }
+}
+
+fn _serde_default_yolov5_image_scale() -> f32 {
+    1.0f32
+}
+/// Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.
+///
+/// [AI YOLOv5 Segmentation] -> [Extract Objects]
+///
+/// Takes a YOLOv5 TorchScript export (`export.py --include torchscript`) with
+/// a fixed 640x640 input. Segmentation models (`yolov5*-seg`) give every
+/// object its mask; plain detection models give filled boxes. Any number of
+/// model classes is supported.
+///
+/// Tiles larger than 640 px are analyzed in overlapping 640x640 windows at
+/// full resolution (small tiles are padded), so small objects stay
+/// detectable; objects seen by several windows are merged. Gray images are
+/// given to the model as RGB with equal channels.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct Yolov5Settings {
+    /// Path to a YOLOv5 model exported as TorchScript.
+    pub model_path: PathBuf,
+    /// Maps the model's classes to this project's segmentation classes;
+    /// objects of classes not listed are dropped. Leave empty to write model
+    /// class `i` as segmentation class `i + 1`, for every class.
+    pub class_mapping: Vec<YoloClassMappingSettings>,
+    /// Minimum confidence (objectness x class score) of a detection.
+    #[schemars(range(min = 0, max = 1))]
+    pub confidence_threshold: f32,
+    /// Detections of the same class overlapping more than this (box
+    /// intersection over union) are merged into the more confident one.
+    #[schemars(range(min = 0, max = 1))]
+    pub iou_threshold: f32,
+    /// Mask probability above which a pixel belongs to its object
+    /// (segmentation models only).
+    #[schemars(range(min = 0, max = 1))]
+    pub mask_threshold: f32,
+    /// Factor the image is scaled by before it is given to the model, the
+    /// masks are scaled back afterwards. Use it when the model was trained on
+    /// downscaled images: `640 / training image size`, e.g. `0.3125` for
+    /// 2048 px images YOLOv5 shrank to 640. `1` = full resolution.
+    #[schemars(range(min = 0.05, max = 4))]
+    #[serde(default = "_serde_default_yolov5_image_scale")]
+    pub image_scale: f32,
+    /// Overlap of neighboring 640x640 windows, in pixels. Must be larger
+    /// than the biggest object, so every object lies completely inside some
+    /// window.
+    #[schemars(range(min = 0, max = 512))]
+    pub window_overlap: i32,
+    /// Objects with fewer pixels than this (after overlapping objects were
+    /// resolved) are removed. `0` keeps every object.
+    #[schemars(range(min = 0, max = 100000))]
+    pub min_object_size: i32,
+}
+
+impl Default for Yolov5Settings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            class_mapping: vec![],
+            confidence_threshold: 0.25f32,
+            iou_threshold: 0.45f32,
+            mask_threshold: 0.5f32,
+            image_scale: 1.0f32,
+            window_overlap: 128i32,
+            min_object_size: 15i32,
+        }
+    }
+}
+
 // ============ INSTANCESEGMENTATION ============
 
 fn _serde_default_connectedcomponents_min_size() -> i32 {

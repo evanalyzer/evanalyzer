@@ -19,6 +19,8 @@ pub enum ModelKind {
     /// Generic semantic-segmentation network (the default when nothing more
     /// specific is detected).
     UNet,
+    /// YOLOv5 instance segmentation / detection.
+    Yolov5,
 }
 
 /// A parsed bioimage.io model RDF.
@@ -172,6 +174,11 @@ impl RdfModel {
         self.weights.contains_key("pytorch_state_dict")
     }
 
+    /// Whether the model ships ONNX weights (which EVAnalyzer can't run).
+    pub fn has_onnx(&self) -> bool {
+        self.weights.contains_key("onnx")
+    }
+
     /// Number of channels the first input tensor expects, if determinable.
     pub fn input_channels(&self) -> Option<i64> {
         self.inputs.first().and_then(TensorDescr::channel_count)
@@ -224,7 +231,11 @@ impl RdfModel {
             self.description.to_lowercase(),
             self.tags.join(" ").to_lowercase(),
         );
-        if haystack.contains("stardist") {
+        // YOLO first: a YOLO model's RDF may well mention other tools (e.g.
+        // cite Cellpose for its training data).
+        if haystack.contains("yolo") {
+            ModelKind::Yolov5
+        } else if haystack.contains("stardist") {
             ModelKind::StarDist
         } else if haystack.contains("cellpose") {
             ModelKind::Cellpose

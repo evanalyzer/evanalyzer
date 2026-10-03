@@ -2140,6 +2140,19 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "YOLOV5"
+            }
+          },
+          "$ref": "#/$defs/Yolov5Settings",
+          "required": [
+            "type"
+          ]
         }
       ]
     },
@@ -3032,6 +3045,92 @@
         "kernelSize",
         "sigma"
       ]
+    },
+    "YoloClassMappingSettings": {
+      "description": "Which project segmentation class the objects of one model class get.",
+      "type": "object",
+      "properties": {
+        "modelClass": {
+          "description": "Index of the class in the model (`0` = its first class).",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0
+        },
+        "segmentationClass": {
+          "description": "The project's segmentation class objects of `model_class` are written as.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
+        }
+      }
+    },
+    "Yolov5Settings": {
+      "description": "Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.\n\n[AI YOLOv5 Segmentation] -> [Extract Objects]\n\nTakes a YOLOv5 TorchScript export (`export.py --include torchscript`) with\na fixed 640x640 input. Segmentation models (`yolov5*-seg`) give every\nobject its mask; plain detection models give filled boxes. Any number of\nmodel classes is supported.\n\nTiles larger than 640 px are analyzed in overlapping 640x640 windows at\nfull resolution (small tiles are padded), so small objects stay\ndetectable; objects seen by several windows are merged. Gray images are\ngiven to the model as RGB with equal channels.",
+      "type": "object",
+      "properties": {
+        "classMapping": {
+          "description": "Maps the model's classes to this project's segmentation classes;\nobjects of classes not listed are dropped. Leave empty to write model\nclass `i` as segmentation class `i + 1`, for every class.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/YoloClassMappingSettings"
+          }
+        },
+        "confidenceThreshold": {
+          "description": "Minimum confidence (objectness x class score) of a detection.",
+          "type": "number",
+          "format": "float",
+          "default": 0.25,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "imageScale": {
+          "description": "Factor the image is scaled by before it is given to the model, the\nmasks are scaled back afterwards. Use it when the model was trained on\ndownscaled images: `640 / training image size`, e.g. `0.3125` for\n2048 px images YOLOv5 shrank to 640. `1` = full resolution.",
+          "type": "number",
+          "format": "float",
+          "default": 1.0,
+          "maximum": 4,
+          "minimum": 0.05
+        },
+        "iouThreshold": {
+          "description": "Detections of the same class overlapping more than this (box\nintersection over union) are merged into the more confident one.",
+          "type": "number",
+          "format": "float",
+          "default": 0.44999998807907104,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "maskThreshold": {
+          "description": "Mask probability above which a pixel belongs to its object\n(segmentation models only).",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "minObjectSize": {
+          "description": "Objects with fewer pixels than this (after overlapping objects were\nresolved) are removed. `0` keeps every object.",
+          "type": "integer",
+          "format": "int32",
+          "default": 15,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "modelPath": {
+          "description": "Path to a YOLOv5 model exported as TorchScript.",
+          "type": "string",
+          "default": ""
+        },
+        "windowOverlap": {
+          "description": "Overlap of neighboring 640x640 windows, in pixels. Must be larger\nthan the biggest object, so every object lies completely inside some\nwindow.",
+          "type": "integer",
+          "format": "int32",
+          "default": 128,
+          "maximum": 512,
+          "minimum": 0
+        }
+      }
     }
   }
 }
