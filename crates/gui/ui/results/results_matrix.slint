@@ -86,6 +86,27 @@ component MatrixCellView inherits Rectangle {
     // gray/strike treatment above, since this cell's own value/color is
     // still a real aggregate, just missing whatever that one image would
     // have added.
+    // Small top-left warning badge for a cell whose own image failed, or
+    // that contains a failed image - opposite corner from the disabled
+    // badge, so a cell can show both.
+    if root.cell.failed || root.cell.any-failed: Rectangle {
+        x: 2px;
+        y: 2px;
+        width: 13px;
+        height: 13px;
+        border-radius: self.width / 2;
+        background: Theme.warn;
+        border-width: 1px;
+        border-color: #00000040;
+
+        Image {
+            source: @image-url("../icons/regular-black/warning.svg");
+            colorize: #0B0C0F;
+            width: 8px;
+            height: 8px;
+        }
+    }
+
     if root.cell.any-disabled && !root.cell.disabled: Rectangle {
         x: parent.width - self.width - 2px;
         y: 2px;

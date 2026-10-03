@@ -28,6 +28,51 @@ impl ResultsGenerator {
         })
     }
 
+    /// SQL condition that the `images` row `alias` was analysed
+    /// successfully on `plane` - i.e. a missing object there really means
+    /// "none found", so a Count/Sum of 0 is a real result (see
+    /// [`fill_zero_sql`]). A failed image, or a plane the run never
+    /// analysed, has no value.
+    ///
+    /// Which planes a run analysed isn't stored; it's taken from the
+    /// objects themselves: every plane between the lowest and highest Z/T
+    /// any object was found on (a Z-projection run only produces plane 0),
+    /// and within the image's own plane count. So a plane at the edge of
+    /// the analysed range on which no image found anything at all, or a
+    /// run without a single object, counts as not analysed (empty).
+    fn measured_on_plane_sql(
+        &self,
+        alias: &str,
+        plane: &PlaneFilter,
+    ) -> Result<String, InternalErrors> {
+        let (z, t) = (plane.z_stack as i64, plane.t_stack as i64);
+        let range: Option<(i64, i64, i64, i64)> = self
+            .database
+            .query_row(
+                "SELECT MIN(z_stack), MAX(z_stack), MIN(t_stack), MAX(t_stack) FROM objects",
+                [],
+                |row| {
+                    Ok(match (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?) {
+                        (Some(z_min), Some(z_max), Some(t_min), Some(t_max)) => {
+                            Some((z_min, z_max, t_min, t_max))
+                        }
+                        _ => None,
+                    })
+                },
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        Ok(match range {
+            Some((z_min, z_max, t_min, t_max))
+                if (z_min..=z_max).contains(&z) && (t_min..=t_max).contains(&t) =>
+            {
+                format!(
+                    "({alias}.successful AND {z} < {alias}.z_stacks AND {t} < {alias}.t_stacks)"
+                )
+            }
+            _ => "false".to_string(),
+        })
+    }
+
     /// A second, independent connection to the same already-open database -
     /// for handing to a background thread (e.g. a potentially long-running
     /// export) that shouldn't have to either hold this `ResultsGenerator`'s
@@ -178,10 +223,7 @@ impl ResultsGenerator {
             );
         }
         if let Some(ids) = &class_ids {
-            conditions.push(format!(
-                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
-                sql_int_array_literal(ids)
-            ));
+            conditions.push(object_class_filter_sql("object_class_id", ids));
         }
         // Keyset pagination (see the doc comment on `Pagination::after`):
         // narrowing to `object_id > cursor` here, in the same WHERE clause
@@ -312,18 +354,16 @@ impl ResultsGenerator {
         let classes = self.get_object_classes()?;
         let mut ordered_columns = filter.columns.clone();
         ordered_columns.sort();
+        // One (column, aggregation) statistic per value, in output order.
+        let stats: Vec<(&Column, &Aggregation)> = ordered_columns
+            .iter()
+            .flat_map(|column| filter.aggregation.iter().map(move |agg| (column, agg)))
+            .collect();
 
         let mut column_names = vec!["image".to_string(), "class".to_string()];
-        let mut value_exprs = Vec::new();
-        for column in &ordered_columns {
-            for aggregation in &filter.aggregation {
-                let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
-                column_names.push(format!("{} ({agg_fn})", column.display_label(&classes)));
-                value_exprs.push(format!(
-                    "{agg_fn}({value_expr}) AS value_{}",
-                    value_exprs.len()
-                ));
-            }
+        for (column, aggregation) in &stats {
+            let (agg_fn, _) = aggregate_sql(column, aggregation)?;
+            column_names.push(format!("{} ({agg_fn})", column.display_label(&classes)));
         }
 
         let empty_result = || DatabaseResult {
@@ -338,58 +378,62 @@ impl ResultsGenerator {
         // Nothing selected to aggregate - no query can produce a
         // meaningful answer, same as `get_object_list`'s empty-filter
         // short-circuits below.
-        if value_exprs.is_empty() {
+        if stats.is_empty() {
             return Ok(empty_result());
         }
 
-        let mut conditions = vec![
+        // Conditions on the objects before their class lists are unpacked
+        // (`pre`) and on the unpacked (object, class) rows (`post`) - see
+        // `per_image_class_sql`.
+        let mut pre = vec![
             format!("z_stack = {}", filter.plane.z_stack),
             format!("t_stack = {}", filter.plane.t_stack),
         ];
+        let mut post = Vec::new();
+        let mut image_conditions = vec!["true".to_string()];
         if let Some(rel_paths) = &filter.images {
             if rel_paths.is_empty() {
                 return Ok(empty_result());
             }
-            conditions.push(format!(
-                "image_rel_path IN ({})",
-                sql_string_in_list(rel_paths)
-            ));
+            let in_list = format!("image_rel_path IN ({})", sql_string_in_list(rel_paths));
+            pre.push(in_list.clone());
+            image_conditions.push(in_list);
         }
-        if let Some(wanted) = &filter.object_classes {
-            let ids: Vec<u32> = wanted
+        let selected_ids: Option<Vec<u32>> = filter.object_classes.as_ref().map(|wanted| {
+            wanted
                 .iter()
                 .filter_map(|id| match id {
                     ObjectClass::Valid(n) => Some(*n),
                     ObjectClass::Unset => None,
                 })
-                .collect();
+                .collect()
+        });
+        if let Some(ids) = &selected_ids {
             if ids.is_empty() {
                 return Ok(empty_result());
             }
-            conditions.push(format!(
-                "class_id IN ({})",
-                ids.iter()
-                    .map(|id| id.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+            pre.push(object_class_filter_sql("object_class_id", ids));
+            post.push(format!("class_id IN ({})", sql_u32_list(ids)));
         }
+        // The classes every analysed image gets a row (or, transposed, a
+        // column block) for, even without objects of that class: its Count
+        // is a real 0 then. The selected classes, or every class of the
+        // project the results were written for - except Background, which
+        // every project has and no object ever gets, so it would only add a
+        // 0 row per image (still shown when explicitly selected).
+        let mut row_classes = class_blocks(selected_ids.as_deref(), &classes);
+        if selected_ids.is_none() {
+            row_classes.retain(|id| ObjectClass::Valid(*id) != ObjectClass::BACKGROUND);
+        }
+        let measured = self.measured_on_plane_sql("images", &filter.plane)?;
         if filter.transpond_table {
-            let ids: Option<Vec<u32>> = filter.object_classes.as_ref().map(|wanted| {
-                wanted
-                    .iter()
-                    .filter_map(|id| match id {
-                        ObjectClass::Valid(n) => Some(*n),
-                        ObjectClass::Unset => None,
-                    })
-                    .collect()
-            });
-            let blocks = class_blocks(ids.as_deref(), &classes);
             return self.get_grouped_by_image_transposed(
                 filter,
-                &conditions,
-                &blocks,
-                &ordered_columns,
+                &stats,
+                pre,
+                image_conditions,
+                &measured,
+                &row_classes,
                 &classes,
             );
         }
@@ -397,79 +441,106 @@ impl ResultsGenerator {
         // one row here), not over individual objects like
         // `get_object_list` - ordered the same way (`image_rel_path`, then
         // `class_id`), so a row-value comparison against the last page's
-        // final group can never split a group across pages.
+        // final group can never split a group across pages. Applied to the
+        // objects too, so later pages don't re-aggregate earlier ones.
+        let mut key_conditions = vec!["true".to_string()];
         if let Some(cursor) = &filter.page.after {
             let (cursor_path, cursor_class) = cursor
                 .split_once('\u{1}')
                 .unwrap_or((cursor.as_str(), "-1"));
-            conditions.push(format!(
-                "(image_rel_path, class_id) > ('{}', {})",
-                cursor_path.replace('\'', "''"),
+            let cursor_path = cursor_path.replace('\'', "''");
+            let cursor = format!(
+                "('{cursor_path}', {})",
                 cursor_class.parse::<i64>().unwrap_or(-1)
-            ));
+            );
+            pre.push(format!("image_rel_path >= '{cursor_path}'"));
+            post.push(format!("(image_rel_path, class_id) > {cursor}"));
+            key_conditions.push(format!("(keys.image_rel_path, keys.class_id) > {cursor}"));
         }
-        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+        let per_image_class = per_image_class_sql(&stats, &pre, &post)?;
+        let image_where = image_conditions.join(" AND ");
+        let key_where = key_conditions.join(" AND ");
         let limit = filter.page.limit.max(0);
-        let value_exprs_sql = value_exprs.join(",\n                ");
+        let value_cols_sql = stats
+            .iter()
+            .enumerate()
+            .map(|(i, (column, aggregation))| {
+                fill_zero_sql(
+                    &format!("agg.value_{i}"),
+                    column,
+                    aggregation,
+                    "agg.n_objects IS NULL",
+                    "img.measured",
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",\n                ");
+        // Every analysed image x every row class, plus whatever (image,
+        // class) pairs actually have objects - the latter also covers an
+        // image missing from `images` (a run that crashed before
+        // finalizing it) or a class missing from `classes`.
+        let measured_keys = if row_classes.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "SELECT image_rel_path, class_id\n\
+                 FROM img, (SELECT UNNEST({}) AS class_id)\n\
+                 WHERE img.measured\n\
+                 UNION\n",
+                sql_int_array_literal(&row_classes)
+            )
+        };
 
-        // `object_class_id` is a per-object array (multi-class objects
-        // exist), so it's unnested into one `class_id` per (object, class)
-        // pair *before* grouping — an object with no class at all
-        // (`object_class_id = []`) contributes no `class_id` row and so
-        // never appears in the output, same as every other view in this
-        // file that filters by class rather than treating "no class" as a
-        // group of its own.
         let sql = format!(
-            "SELECT\n\
-                image_rel_path,\n\
-                MIN(image_name) AS image_name,\n\
-                class_id,\n\
-                {value_exprs_sql}\n\
-             FROM objects, UNNEST(CAST(object_class_id AS INTEGER[])) AS u(class_id)\n\
-             {where_clause}\n\
-             GROUP BY image_rel_path, class_id\n\
-             ORDER BY image_rel_path, class_id\n\
+            "WITH agg AS (\n\
+                 {per_image_class}\n\
+             ), img AS (\n\
+                 SELECT image_rel_path, image_name, NOT successful AS failed,\n\
+                     {measured} AS measured\n\
+                 FROM images\n\
+                 WHERE {image_where}\n\
+             ), keys AS (\n\
+                 {measured_keys}\
+                 SELECT image_rel_path, class_id FROM agg\n\
+             )\n\
+             SELECT\n\
+                 keys.image_rel_path,\n\
+                 COALESCE(img.image_name, agg.image_name),\n\
+                 keys.class_id,\n\
+                 COALESCE(img.failed, false),\n\
+                 {value_cols_sql}\n\
+             FROM keys\n\
+             LEFT JOIN img ON img.image_rel_path = keys.image_rel_path\n\
+             LEFT JOIN agg ON agg.image_rel_path = keys.image_rel_path\n\
+                 AND agg.class_id = keys.class_id\n\
+             WHERE {key_where}\n\
+             ORDER BY keys.image_rel_path, keys.class_id\n\
              LIMIT {limit}"
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let n = value_exprs.len();
-        let groups: Vec<(String, String, u32, Vec<Option<f64>>)> = stmt
+        let n = stats.len();
+        let groups: Vec<(String, String, u32, bool, Vec<Option<f64>>)> = stmt
             .query_map([], |row| {
-                let image_rel_path: String = row.get(0)?;
-                let image_name: String = row.get(1)?;
-                let class_id: u32 = row.get(2)?;
                 let mut values = Vec::with_capacity(n);
                 for i in 0..n {
-                    values.push(row.get::<_, Option<f64>>(3 + i)?);
+                    values.push(row.get::<_, Option<f64>>(4 + i)?);
                 }
-                Ok((image_rel_path, image_name, class_id, values))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, values))
             })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
 
-        let mut min = f64::INFINITY;
-        let mut max = f64::NEG_INFINITY;
-        for (_, _, _, values) in &groups {
-            for value in values.iter().flatten() {
-                min = min.min(*value);
-                max = max.max(*value);
-            }
-        }
-        if !min.is_finite() || !max.is_finite() {
-            min = 0.0;
-            max = 0.0;
-        }
-
+        let (min, max) = value_range(groups.iter().flat_map(|(_, _, _, _, values)| values.iter()));
         let row_names = groups
             .iter()
-            .map(|(rel_path, _, class_id, _)| format!("{rel_path}\u{1}{class_id}"))
+            .map(|(rel_path, _, class_id, _, _)| format!("{rel_path}\u{1}{class_id}"))
             .collect();
         let source_object_count = groups.len();
         let rows: Vec<Vec<Cell>> = groups
             .into_iter()
-            .map(|(image_rel_path, image_name, class_id, values)| {
+            .map(|(image_rel_path, image_name, class_id, failed, values)| {
                 // Lets the GUI navigate straight to the source image, same
                 // as any other image-bearing search key in this file.
                 let search_key = Some((image_name.clone(), image_rel_path));
@@ -483,31 +554,27 @@ impl ResultsGenerator {
                 let mut cells = vec![
                     Cell {
                         value: CellValue::String(image_name),
-                        bg_color: 0,
-                        alternating_color: false,
                         search_key: search_key.clone(),
-                        disabled: false,
-                        any_disabled: false,
+                        failed,
+                        ..plain_cell()
                     },
                     Cell {
                         value: CellValue::Class((label, color)),
                         bg_color: color,
-                        alternating_color: false,
                         search_key: search_key.clone(),
-                        disabled: false,
-                        any_disabled: false,
+                        failed,
+                        ..plain_cell()
                     },
                 ];
-                for value in values {
-                    cells.push(Cell {
-                        value: CellValue::Float(value.unwrap_or(0.0) as f32),
-                        bg_color: 0,
-                        alternating_color: false,
-                        search_key: search_key.clone(),
-                        disabled: false,
-                        any_disabled: false,
-                    });
-                }
+                cells.extend(values.into_iter().map(|value| Cell {
+                    // No value (an average without objects, a spread of a
+                    // single object, ...): empty, not 0 - see
+                    // `fill_zero_sql` for when 0 *is* the answer.
+                    value: value.map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
+                    search_key: search_key.clone(),
+                    failed,
+                    ..plain_cell()
+                }));
                 cells
             })
             .collect();
@@ -516,99 +583,178 @@ impl ResultsGenerator {
             column_names,
             row_names,
             rows,
-            min: min as f32,
-            max: max as f32,
+            min,
+            max,
             source_object_count,
             row_locations: Vec::new(),
         })
     }
 
     /// `get_grouped_by_image` with `transpond_table`: one row per image, and
-    /// per class in `blocks` one column per (column x aggregation) - the
-    /// (image, class) rows of the normal view placed side by side.
+    /// per class in `blocks` one column per statistic - the (image, class)
+    /// rows of the normal view placed side by side.
     ///
-    /// Done in the query itself in one pass: a single `GROUP BY image` with
-    /// one `agg(...) FILTER (WHERE class_id = c)` per output column, so
-    /// DuckDB aggregates every class at once instead of us re-shaping
-    /// (image, class) rows afterwards. Pages over images (`row_names` holds
-    /// each row's `image_rel_path`, the next page's cursor).
+    /// The query only aggregates per (image, class), exactly like the normal
+    /// view, for one page of images; placing a class's values side by side
+    /// happens here. Doing that in SQL - one `agg(...) FILTER (WHERE
+    /// class_id = c)` per output column, over the objects or even over the
+    /// grouped rows - cost DuckDB far more than the aggregation itself
+    /// (~345 ms / ~125 ms vs ~45 ms for 21 classes x 4 statistics on a
+    /// 3.8M-object file). Pages over images (`row_names` holds each row's
+    /// `image_rel_path`, the next page's cursor).
+    #[allow(clippy::too_many_arguments)]
     fn get_grouped_by_image_transposed(
         &self,
         filter: &GroupedByImageFilter,
-        base_conditions: &[String],
+        stats: &[(&Column, &Aggregation)],
+        mut pre: Vec<String>,
+        mut image_conditions: Vec<String>,
+        measured: &str,
         blocks: &[u32],
-        ordered_columns: &[Column],
         classes: &[Class],
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let mut column_names = vec!["image".to_string()];
-        let mut value_exprs = Vec::new();
         for class_id in blocks {
             let class_label = class_display_label(ObjectClass::Valid(*class_id), classes);
-            for column in ordered_columns {
-                for aggregation in &filter.aggregation {
-                    let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
-                    column_names.push(format!(
-                        "{} ({agg_fn}) ({class_label})",
-                        column.display_label(classes)
-                    ));
-                    value_exprs.push(format!(
-                        "{agg_fn}({value_expr}) FILTER (WHERE class_id = {class_id}) AS value_{}",
-                        value_exprs.len()
-                    ));
-                }
+            for (column, aggregation) in stats {
+                let (agg_fn, _) = aggregate_sql(column, aggregation)?;
+                column_names.push(format!(
+                    "{} ({agg_fn}) ({class_label})",
+                    column.display_label(classes)
+                ));
             }
         }
-        if value_exprs.is_empty() {
+        if blocks.is_empty() || stats.is_empty() {
             return Ok(empty_database_result(column_names));
         }
 
-        let mut conditions = base_conditions.to_vec();
-        conditions.push(format!("class_id IN ({})", sql_u32_list(blocks)));
+        let post = vec![format!("class_id IN ({})", sql_u32_list(blocks))];
         if let Some(cursor) = &filter.page.after {
-            conditions.push(format!("image_rel_path > '{}'", cursor.replace('\'', "''")));
+            let after = format!("image_rel_path > '{}'", cursor.replace('\'', "''"));
+            pre.push(after.clone());
+            image_conditions.push(after);
         }
+        let per_image_class = per_image_class_sql(stats, &pre, &post)?;
         let limit = filter.page.limit.max(0);
+        let values = (0..stats.len())
+            .map(|i| format!("agg.value_{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // The page's images: every analysed one, plus any with objects (an
+        // image missing from `images` - a run that crashed before
+        // finalizing it - still shows), so an analysed image without
+        // objects gets its row, with a Count of 0 per class
+        // (`zero_when_no_objects`).
         let sql = format!(
-            "SELECT image_rel_path, MIN(image_name), {}\n\
-             FROM objects, UNNEST(CAST(object_class_id AS INTEGER[])) AS u(class_id)\n\
-             WHERE {}\n\
-             GROUP BY image_rel_path\n\
-             ORDER BY image_rel_path\n\
-             LIMIT {limit}",
-            value_exprs.join(", "),
-            conditions.join(" AND ")
+            "WITH agg AS (\n\
+                 {per_image_class}\n\
+             ), img AS (\n\
+                 SELECT image_rel_path, image_name, NOT successful AS failed,\n\
+                     {measured} AS measured\n\
+                 FROM images\n\
+                 WHERE {image_where}\n\
+             ), page AS (\n\
+                 SELECT image_rel_path FROM (\n\
+                     SELECT image_rel_path FROM img WHERE measured\n\
+                     UNION\n\
+                     SELECT image_rel_path FROM agg\n\
+                 )\n\
+                 ORDER BY image_rel_path\n\
+                 LIMIT {limit}\n\
+             )\n\
+             SELECT page.image_rel_path, COALESCE(img.image_name, agg.image_name),\n\
+                 COALESCE(img.failed, false), COALESCE(img.measured, false),\n\
+                 agg.class_id, {values}\n\
+             FROM page\n\
+             LEFT JOIN img ON img.image_rel_path = page.image_rel_path\n\
+             LEFT JOIN agg ON agg.image_rel_path = page.image_rel_path\n\
+             ORDER BY page.image_rel_path",
+            image_where = image_conditions.join(" AND "),
         );
-        let n = value_exprs.len();
+        let n = stats.len();
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let groups: Vec<(String, String, Vec<Option<f64>>)> = stmt
-            .query_map([], |row| {
-                let mut values = Vec::with_capacity(n);
-                for i in 0..n {
-                    values.push(row.get::<_, Option<f64>>(2 + i)?);
+        // One result row per (image, class) with objects, or a single
+        // class-less one for an image without any, ordered by image. Read
+        // as a stream and pivoted one image at a time, so only the output
+        // rows are ever held, never the grouped rows on top of them.
+        let mut result_rows = stmt.query([]).map_err(err)?;
+        // (image, name, failed, values in output column order)
+        let mut groups: Vec<(String, String, bool, Vec<Option<f64>>)> = Vec::new();
+        // The image being collected: its row so far and whether it was
+        // analysed, plus which block classes it had objects of.
+        let mut current: Option<(String, String, bool, Vec<Option<f64>>, bool)> = None;
+        let mut seen_classes: Vec<bool> = vec![false; blocks.len()];
+        let finish = |(path, name, failed, mut values, measured): (
+            String,
+            String,
+            bool,
+            Vec<Option<f64>>,
+            bool,
+        ),
+                      seen_classes: &[bool]| {
+            // A block class without any object in an analysed image: 0
+            // where that's the real answer (`zero_when_no_objects`).
+            for (block, seen) in seen_classes.iter().enumerate() {
+                if *seen || !measured {
+                    continue;
                 }
-                Ok((row.get(0)?, row.get(1)?, values))
-            })
-            .map_err(err)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(err)?;
+                for (i, (column, aggregation)) in stats.iter().enumerate() {
+                    if zero_when_no_objects(column, aggregation) {
+                        values[block * n + i] = Some(0.0);
+                    }
+                }
+            }
+            (path, name, failed, values)
+        };
+        while let Some(row) = result_rows.next().map_err(err)? {
+            let image_rel_path: String = row.get(0).map_err(err)?;
+            if current.as_ref().is_none_or(|c| c.0 != image_rel_path) {
+                if let Some(done) = current.take() {
+                    groups.push(finish(done, &seen_classes));
+                }
+                seen_classes.fill(false);
+                current = Some((
+                    image_rel_path,
+                    row.get(1).map_err(err)?,
+                    row.get(2).map_err(err)?,
+                    vec![None; blocks.len() * n],
+                    row.get(3).map_err(err)?,
+                ));
+            }
+            let class_id: Option<u32> = row.get(4).map_err(err)?;
+            let Some(block) = class_id.and_then(|id| blocks.iter().position(|b| *b == id)) else {
+                continue;
+            };
+            seen_classes[block] = true;
+            let values = &mut current.as_mut().expect("set above").3;
+            for i in 0..n {
+                values[block * n + i] = row.get(5 + i).map_err(err)?;
+            }
+        }
+        if let Some(done) = current.take() {
+            groups.push(finish(done, &seen_classes));
+        }
 
-        let (min, max) = value_range(groups.iter().flat_map(|(_, _, values)| values.iter()));
-        let row_names = groups.iter().map(|(path, _, _)| path.clone()).collect();
+        let (min, max) = value_range(groups.iter().flat_map(|(_, _, _, values)| values.iter()));
+        let row_names = groups.iter().map(|(path, ..)| path.clone()).collect();
         let source_object_count = groups.len();
         let rows = groups
             .into_iter()
-            .map(|(image_rel_path, image_name, values)| {
+            .map(|(image_rel_path, image_name, failed, values)| {
                 let search_key = Some((image_name.clone(), image_rel_path));
                 let mut cells = vec![Cell {
                     value: CellValue::String(image_name),
                     search_key: search_key.clone(),
+                    failed,
                     ..plain_cell()
                 }];
                 cells.extend(values.into_iter().map(|value| Cell {
-                    // No objects of that class in this image: empty, not 0.
+                    // No value of that class in this image: empty, unless
+                    // 0 is the real answer (`zero_when_no_objects`).
                     value: value.map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
                     search_key: search_key.clone(),
+                    failed,
                     ..plain_cell()
                 }));
                 cells
@@ -845,6 +991,8 @@ impl ResultsGenerator {
             search_key: None,
             disabled,
             any_disabled: false,
+            failed: false,
+            any_failed: false,
         };
 
         let mut partner_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -983,10 +1131,7 @@ impl ResultsGenerator {
             format!("o.t_stack = {}", filter.plane.t_stack),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            object_conditions.push(format!(
-                "list_has_any(CAST(o.object_class_id AS INTEGER[]), {})",
-                sql_int_array_literal(&[id])
-            ));
+            object_conditions.push(object_class_filter_sql("o.object_class_id", &[id]));
         }
         let object_where = object_conditions.join(" AND ");
         // `column_aggregate_expr`'s bare column names (e.g. "area_px") need
@@ -1010,20 +1155,38 @@ impl ResultsGenerator {
         // from `images`, took ~40ms - see `examples/bench_group_by_plate.rs`.
         //
         // A disabled image's objects are always excluded from `value` (the
-        // aggregate), but the image itself is never dropped: every well
+        // aggregate), and so are a failed image's (`NOT successful`: its
+        // analysis stopped with an error, so its objects are incomplete and
+        // would undercount the well), but the image itself is never
+        // dropped: every well
         // still appears (even one made up only of disabled images, via
         // `img` never filtering on `disabled`), and `any_disabled` -
         // `bool_or(disabled)` per well - tells the caller whether at least
         // one of that well's images was excluded from `value`, so the UI can
         // mark the well without hiding it.
+        //
+        // `any_measured`: at least one enabled image of the well was
+        // analysed on this plane, so a well without objects has a real
+        // Count/Sum of 0 (`fill_zero_sql`); a well made up only of
+        // disabled, failed or not-analysed images stays empty.
+        let value = fill_zero_sql(
+            "agg.value",
+            &filter.column,
+            &filter.aggregation,
+            "agg.n_objects IS NULL",
+            "img.any_measured",
+        );
+        let measured = self.measured_on_plane_sql("images", &filter.plane)?;
         let sql = format!(
-            "SELECT img.group_prefix, img.row, img.col, agg.value, img.any_disabled\n\
+            "SELECT img.group_prefix, img.row, img.col, {value}, img.any_disabled, img.any_failed\n\
              FROM (\n\
                  SELECT\n\
                      regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
                      regexp_extract(image_name, '{regex}', 2) AS row,\n\
                      regexp_extract(image_name, '{regex}', 3) AS col,\n\
-                     bool_or(disabled) AS any_disabled\n\
+                     bool_or(disabled) AS any_disabled,\n\
+                     bool_or(NOT successful) AS any_failed,\n\
+                     bool_or(NOT disabled AND {measured}) AS any_measured\n\
                  FROM images\n\
                  GROUP BY group_prefix, row, col\n\
              ) img\n\
@@ -1032,10 +1195,11 @@ impl ResultsGenerator {
                      regexp_extract(o.image_name, '{regex}', 1) AS group_prefix,\n\
                      regexp_extract(o.image_name, '{regex}', 2) AS row,\n\
                      regexp_extract(o.image_name, '{regex}', 3) AS col,\n\
+                     COUNT(*) AS n_objects,\n\
                      {agg_fn}({value_expr_sql}) AS value\n\
                  FROM objects o\n\
                  JOIN images i ON i.image_rel_path = o.image_rel_path\n\
-                 WHERE NOT i.disabled AND {object_where}\n\
+                 WHERE NOT i.disabled AND i.successful AND {object_where}\n\
                  GROUP BY group_prefix, row, col\n\
              ) agg USING (group_prefix, row, col)\n\
              ORDER BY img.group_prefix",
@@ -1043,14 +1207,17 @@ impl ResultsGenerator {
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let groups: Vec<(String, String, String, Option<f64>, bool)> = stmt
+        let groups: Vec<(String, String, String, Option<f64>, ImageFlags)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
                     row.get(2)?,
                     row.get(3)?,
-                    row.get(4)?,
+                    ImageFlags {
+                        disabled: row.get(4)?,
+                        failed: row.get(5)?,
+                    },
                 ))
             })
             .map_err(err)?
@@ -1092,8 +1259,16 @@ impl ResultsGenerator {
         let classes = self.get_object_classes()?;
 
         let mut value_exprs = Vec::with_capacity(filter.column.len() * filter.aggregation.len());
+        let mut agg_value_cols = Vec::with_capacity(value_exprs.capacity());
         for column in &filter.column {
             for aggregation in &filter.aggregation {
+                agg_value_cols.push(fill_zero_sql(
+                    &format!("agg.value_{}", agg_value_cols.len()),
+                    column,
+                    aggregation,
+                    "agg.n_objects IS NULL",
+                    "img.any_measured",
+                ));
                 let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
                 // Qualified against `objects o` - see `get_group_by_plate`.
                 let value_expr_sql = if value_expr == "*" {
@@ -1117,6 +1292,7 @@ impl ResultsGenerator {
         };
         let regex = regex.replace('\'', "''");
 
+        let measured = self.measured_on_plane_sql("images", &filter.plane)?;
         let mut results = Vec::with_capacity(filter.object_class.len() * n);
         for object_class in &filter.object_class {
             let mut object_conditions = vec![
@@ -1124,29 +1300,27 @@ impl ResultsGenerator {
                 format!("o.t_stack = {}", filter.plane.t_stack),
             ];
             if let ObjectClass::Valid(id) = object_class {
-                object_conditions.push(format!(
-                    "list_has_any(CAST(o.object_class_id AS INTEGER[]), {})",
-                    sql_int_array_literal(&[*id])
-                ));
+                object_conditions.push(object_class_filter_sql("o.object_class_id", &[*id]));
             }
             let object_where = object_conditions.join(" AND ");
-            let agg_value_cols = (0..n)
-                .map(|i| format!("agg.value_{i}"))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let agg_value_cols = agg_value_cols.join(", ");
 
             // Same "filter+aggregate `objects` before joining" shape as
             // `get_group_by_plate` - see its comment for why (benchmarked
             // ~4x faster than a flat `images LEFT JOIN objects` on a real
-            // multi-million-object database) and for `any_disabled`.
+            // multi-million-object database) and for `any_disabled`/
+            // `any_measured`.
             let sql = format!(
-                "SELECT img.group_prefix, img.row, img.col, {agg_value_cols}, img.any_disabled\n\
+                "SELECT img.group_prefix, img.row, img.col, {agg_value_cols}, img.any_disabled,\n\
+                     img.any_failed\n\
                  FROM (\n\
                      SELECT\n\
                          regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
                          regexp_extract(image_name, '{regex}', 2) AS row,\n\
                          regexp_extract(image_name, '{regex}', 3) AS col,\n\
-                         bool_or(disabled) AS any_disabled\n\
+                         bool_or(disabled) AS any_disabled,\n\
+                         bool_or(NOT successful) AS any_failed,\n\
+                         bool_or(NOT disabled AND {measured}) AS any_measured\n\
                      FROM images\n\
                      GROUP BY group_prefix, row, col\n\
                  ) img\n\
@@ -1155,17 +1329,18 @@ impl ResultsGenerator {
                          regexp_extract(o.image_name, '{regex}', 1) AS group_prefix,\n\
                          regexp_extract(o.image_name, '{regex}', 2) AS row,\n\
                          regexp_extract(o.image_name, '{regex}', 3) AS col,\n\
+                         COUNT(*) AS n_objects,\n\
                          {value_exprs_sql}\n\
                      FROM objects o\n\
                      JOIN images i ON i.image_rel_path = o.image_rel_path\n\
-                     WHERE NOT i.disabled AND {object_where}\n\
+                     WHERE NOT i.disabled AND i.successful AND {object_where}\n\
                      GROUP BY group_prefix, row, col\n\
                  ) agg USING (group_prefix, row, col)\n\
                  ORDER BY img.group_prefix"
             );
 
             let mut stmt = self.database.prepare(&sql).map_err(err)?;
-            let raw: Vec<(String, String, String, Vec<Option<f64>>, bool)> = stmt
+            let raw: Vec<(String, String, String, Vec<Option<f64>>, ImageFlags)> = stmt
                 .query_map([], |row| {
                     let group_prefix: String = row.get(0)?;
                     let group_row: String = row.get(1)?;
@@ -1174,8 +1349,11 @@ impl ResultsGenerator {
                     for i in 0..n {
                         values.push(row.get::<_, Option<f64>>(3 + i)?);
                     }
-                    let any_disabled: bool = row.get(3 + n)?;
-                    Ok((group_prefix, group_row, group_col, values, any_disabled))
+                    let flags = ImageFlags {
+                        disabled: row.get(3 + n)?,
+                        failed: row.get(4 + n)?,
+                    };
+                    Ok((group_prefix, group_row, group_col, values, flags))
                 })
                 .map_err(err)?
                 .collect::<Result<Vec<_>, _>>()
@@ -1184,16 +1362,10 @@ impl ResultsGenerator {
             let mut combo = 0;
             for column in &filter.column {
                 for _aggregation in &filter.aggregation {
-                    let groups: Vec<(String, String, String, Option<f64>, bool)> = raw
+                    let groups: Vec<(String, String, String, Option<f64>, ImageFlags)> = raw
                         .iter()
-                        .map(|(g, r, c, values, any_disabled)| {
-                            (
-                                g.clone(),
-                                r.clone(),
-                                c.clone(),
-                                values[combo],
-                                *any_disabled,
-                            )
+                        .map(|(g, r, c, values, flags)| {
+                            (g.clone(), r.clone(), c.clone(), values[combo], *flags)
                         })
                         .collect();
                     results.push(plate_groups_to_result(
@@ -1247,10 +1419,7 @@ impl ResultsGenerator {
             format!("t_stack = {}", filter.plane.t_stack),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            object_conditions.push(format!(
-                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
-                sql_int_array_literal(&[id])
-            ));
+            object_conditions.push(object_class_filter_sql("object_class_id", &[id]));
         }
         let object_where = object_conditions.join(" AND ");
 
@@ -1265,16 +1434,28 @@ impl ResultsGenerator {
         // happens at this single-image granularity), just flagged via
         // `i.disabled` so the UI can mark it as excluded from any
         // *plate*-level statistic.
+        //
+        // A field without objects gets a Count/Sum of 0 if it was analysed
+        // on this plane (`fill_zero_sql`) - its own value, so disabled or
+        // not doesn't matter here either.
+        let value = fill_zero_sql(
+            "agg.value",
+            &filter.column,
+            &filter.aggregation,
+            "agg.n_objects IS NULL",
+            &self.measured_on_plane_sql("i", &filter.plane)?,
+        );
         let sql = format!(
             "SELECT\n\
                 regexp_extract(i.image_name, '{regex}', 4) AS idx,\n\
                 i.image_rel_path,\n\
                 i.image_name,\n\
-                agg.value,\n\
-                i.disabled\n\
+                {value},\n\
+                i.disabled,\n\
+                NOT i.successful\n\
              FROM images i\n\
              LEFT JOIN (\n\
-                 SELECT image_rel_path, {agg_fn}({value_expr}) AS value\n\
+                 SELECT image_rel_path, COUNT(*) AS n_objects, {agg_fn}({value_expr}) AS value\n\
                  FROM objects\n\
                  WHERE {object_where}\n\
                  GROUP BY image_rel_path\n\
@@ -1290,14 +1471,17 @@ impl ResultsGenerator {
         // `Cell::search_key` on every cell for this field so the GUI can
         // select/open the underlying image from a well-view tile (see
         // `ImageEntry`, which the GUI matches images against by `rel_path`).
-        let fields: Vec<(String, String, String, Option<f64>, bool)> = stmt
+        let fields: Vec<(String, String, String, Option<f64>, ImageFlags)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
                     row.get(2)?,
                     row.get(3)?,
-                    row.get(4)?,
+                    ImageFlags {
+                        disabled: row.get(4)?,
+                        failed: row.get(5)?,
+                    },
                 ))
             })
             .map_err(err)?
@@ -1348,10 +1532,7 @@ impl ResultsGenerator {
             format!("t_stack = {}", filter.plane.t_stack),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            object_conditions.push(format!(
-                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
-                sql_int_array_literal(&[id])
-            ));
+            object_conditions.push(object_class_filter_sql("object_class_id", &[id]));
         }
         let object_where = object_conditions.join(" AND ");
 
@@ -1359,17 +1540,25 @@ impl ResultsGenerator {
         // objects filtered+aggregated before the join, disabled images
         // shown - not dropped - and flagged via `i.disabled`), just without
         // the single-well filter - every well's fields in one query.
+        let value = fill_zero_sql(
+            "agg.value",
+            &filter.column,
+            &filter.aggregation,
+            "agg.n_objects IS NULL",
+            &self.measured_on_plane_sql("i", &filter.plane)?,
+        );
         let sql = format!(
             "SELECT\n\
                 regexp_extract(i.image_name, '{regex}', 1) AS group_prefix,\n\
                 regexp_extract(i.image_name, '{regex}', 4) AS idx,\n\
                 i.image_rel_path,\n\
                 i.image_name,\n\
-                agg.value,\n\
-                i.disabled\n\
+                {value},\n\
+                i.disabled,\n\
+                NOT i.successful\n\
              FROM images i\n\
              LEFT JOIN (\n\
-                 SELECT image_rel_path, {agg_fn}({value_expr}) AS value\n\
+                 SELECT image_rel_path, COUNT(*) AS n_objects, {agg_fn}({value_expr}) AS value\n\
                  FROM objects\n\
                  WHERE {object_where}\n\
                  GROUP BY image_rel_path\n\
@@ -1378,8 +1567,10 @@ impl ResultsGenerator {
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let mut fields_by_well: HashMap<String, Vec<(String, String, String, Option<f64>, bool)>> =
-            HashMap::new();
+        let mut fields_by_well: HashMap<
+            String,
+            Vec<(String, String, String, Option<f64>, ImageFlags)>,
+        > = HashMap::new();
         let rows = stmt
             .query_map([], |row| {
                 Ok((
@@ -1388,19 +1579,22 @@ impl ResultsGenerator {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, Option<f64>>(4)?,
-                    row.get::<_, bool>(5)?,
+                    ImageFlags {
+                        disabled: row.get(5)?,
+                        failed: row.get(6)?,
+                    },
                 ))
             })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
-        for (group_prefix, idx, image_rel_path, image_name, value, disabled) in rows {
+        for (group_prefix, idx, image_rel_path, image_name, value, flags) in rows {
             fields_by_well.entry(group_prefix).or_default().push((
                 idx,
                 image_rel_path,
                 image_name,
                 value,
-                disabled,
+                flags,
             ));
         }
 
@@ -1443,9 +1637,18 @@ impl ResultsGenerator {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = self.get_object_classes()?;
 
+        let measured = self.measured_on_plane_sql("i", &filter.plane)?;
         let mut value_exprs = Vec::with_capacity(filter.column.len() * filter.aggregation.len());
+        let mut agg_value_cols = Vec::with_capacity(value_exprs.capacity());
         for column in &filter.column {
             for aggregation in &filter.aggregation {
+                agg_value_cols.push(fill_zero_sql(
+                    &format!("agg.value_{}", agg_value_cols.len()),
+                    column,
+                    aggregation,
+                    "agg.n_objects IS NULL",
+                    &measured,
+                ));
                 let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
                 value_exprs.push(format!(
                     "{agg_fn}({value_expr}) AS value_{}",
@@ -1455,6 +1658,7 @@ impl ResultsGenerator {
         }
         let n = value_exprs.len();
         let value_exprs_sql = value_exprs.join(",\n                ");
+        let agg_value_cols = agg_value_cols.join(", ");
 
         let regex = if filter.grouping_regex.trim().is_empty() {
             DEFAULT_GROUPING_REGEX
@@ -1470,16 +1674,9 @@ impl ResultsGenerator {
                 format!("t_stack = {}", filter.plane.t_stack),
             ];
             if let ObjectClass::Valid(id) = object_class {
-                object_conditions.push(format!(
-                    "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
-                    sql_int_array_literal(&[*id])
-                ));
+                object_conditions.push(object_class_filter_sql("object_class_id", &[*id]));
             }
             let object_where = object_conditions.join(" AND ");
-            let agg_value_cols = (0..n)
-                .map(|i| format!("agg.value_{i}"))
-                .collect::<Vec<_>>()
-                .join(", ");
 
             // Same shape as `get_wells_for_plate` (one row per field/image,
             // objects filtered+aggregated before the join, disabled images
@@ -1493,10 +1690,11 @@ impl ResultsGenerator {
                     i.image_rel_path,\n\
                     i.image_name,\n\
                     {agg_value_cols},\n\
-                    i.disabled\n\
+                    i.disabled,\n\
+                    NOT i.successful\n\
                  FROM images i\n\
                  LEFT JOIN (\n\
-                     SELECT image_rel_path, {value_exprs_sql}\n\
+                     SELECT image_rel_path, COUNT(*) AS n_objects, {value_exprs_sql}\n\
                      FROM objects\n\
                      WHERE {object_where}\n\
                      GROUP BY image_rel_path\n\
@@ -1507,7 +1705,7 @@ impl ResultsGenerator {
             let mut stmt = self.database.prepare(&sql).map_err(err)?;
             let mut fields_by_well: HashMap<
                 String,
-                Vec<(String, String, String, Vec<Option<f64>>, bool)>,
+                Vec<(String, String, String, Vec<Option<f64>>, ImageFlags)>,
             > = HashMap::new();
             let rows = stmt
                 .query_map([], |row| {
@@ -1519,26 +1717,22 @@ impl ResultsGenerator {
                     for i in 0..n {
                         values.push(row.get::<_, Option<f64>>(4 + i)?);
                     }
-                    let disabled: bool = row.get(4 + n)?;
-                    Ok((
-                        group_prefix,
-                        idx,
-                        image_rel_path,
-                        image_name,
-                        values,
-                        disabled,
-                    ))
+                    let flags = ImageFlags {
+                        disabled: row.get(4 + n)?,
+                        failed: row.get(5 + n)?,
+                    };
+                    Ok((group_prefix, idx, image_rel_path, image_name, values, flags))
                 })
                 .map_err(err)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(err)?;
-            for (group_prefix, idx, image_rel_path, image_name, values, disabled) in rows {
+            for (group_prefix, idx, image_rel_path, image_name, values, flags) in rows {
                 fields_by_well.entry(group_prefix).or_default().push((
                     idx,
                     image_rel_path,
                     image_name,
                     values,
-                    disabled,
+                    flags,
                 ));
             }
 
@@ -1548,19 +1742,24 @@ impl ResultsGenerator {
                     let by_well: HashMap<String, DatabaseResult> = fields_by_well
                         .iter()
                         .map(|(well_id, fields)| {
-                            let per_combo_fields: Vec<(String, String, String, Option<f64>, bool)> =
-                                fields
-                                    .iter()
-                                    .map(|(idx, rel_path, name, values, disabled)| {
-                                        (
-                                            idx.clone(),
-                                            rel_path.clone(),
-                                            name.clone(),
-                                            values[combo],
-                                            *disabled,
-                                        )
-                                    })
-                                    .collect();
+                            let per_combo_fields: Vec<(
+                                String,
+                                String,
+                                String,
+                                Option<f64>,
+                                ImageFlags,
+                            )> = fields
+                                .iter()
+                                .map(|(idx, rel_path, name, values, flags)| {
+                                    (
+                                        idx.clone(),
+                                        rel_path.clone(),
+                                        name.clone(),
+                                        values[combo],
+                                        *flags,
+                                    )
+                                })
+                                .collect();
                             let result = well_fields_to_result(
                                 per_combo_fields,
                                 column,
@@ -1606,14 +1805,16 @@ impl ResultsGenerator {
         let square_size = filter.square_size.unwrap_or(256).max(1);
         let image_rel_path = filter.image_rel_path.replace('\'', "''");
 
-        let (width, height): (u32, u32) = self
+        let (width, height, measured): (u32, u32, bool) = self
             .database
             .query_row(
                 &format!(
-                    "SELECT width, height FROM images WHERE image_rel_path = '{image_rel_path}'"
+                    "SELECT width, height, {}\n\
+                     FROM images WHERE image_rel_path = '{image_rel_path}'",
+                    self.measured_on_plane_sql("images", &filter.plane)?
                 ),
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(err)?;
         let cols = (width as usize).div_ceil(square_size).max(1);
@@ -1625,10 +1826,7 @@ impl ResultsGenerator {
             format!("image_rel_path = '{image_rel_path}'"),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            conditions.push(format!(
-                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
-                sql_int_array_literal(&[id])
-            ));
+            conditions.push(object_class_filter_sql("object_class_id", &[id]));
         }
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
 
@@ -1662,6 +1860,26 @@ impl ResultsGenerator {
                 continue;
             };
             values.insert((row.min(rows - 1), col.min(cols - 1)), *value);
+        }
+        // A square without objects of an analysed image: a Count/Sum of 0
+        // is the real answer there (see `fill_zero_sql`). `raw_cells` has a
+        // row for every square with objects, value or not, so only squares
+        // without any object are filled.
+        if measured && zero_when_no_objects(&filter.column, &filter.aggregation) {
+            let with_objects: std::collections::HashSet<(usize, usize)> = raw_cells
+                .iter()
+                .filter_map(|(col, row, _)| {
+                    let (col, row) = (usize::try_from(*col).ok()?, usize::try_from(*row).ok()?);
+                    Some((row.min(rows - 1), col.min(cols - 1)))
+                })
+                .collect();
+            for row in 0..rows {
+                for col in 0..cols {
+                    if !with_objects.contains(&(row, col)) {
+                        values.insert((row, col), 0.0);
+                    }
+                }
+            }
         }
 
         match view {
@@ -1702,6 +1920,8 @@ impl ResultsGenerator {
                                 search_key: search_key.clone(),
                                 disabled: false,
                                 any_disabled: false,
+                                failed: false,
+                                any_failed: false,
                             },
                             Cell {
                                 value: CellValue::Float(*value as f32),
@@ -1710,6 +1930,8 @@ impl ResultsGenerator {
                                 search_key,
                                 disabled: false,
                                 any_disabled: false,
+                                failed: false,
+                                any_failed: false,
                             },
                         ]
                     })
@@ -1761,11 +1983,15 @@ impl ResultsGenerator {
                                         search_key: Some((key.clone(), key)),
                                         disabled: false,
                                         any_disabled: false,
+                                        failed: false,
+                                        any_failed: false,
                                     }
                                 }
-                                // No object fell into this tile at all —
-                                // leave it empty rather than showing a
-                                // misleading 0 or a neighboring tile's value.
+                                // No value for this tile (no objects in a
+                                // statistic that needs some, or the image
+                                // wasn't analysed on this plane) - leave it
+                                // empty rather than showing a misleading 0
+                                // or a neighboring tile's value.
                                 None => Cell {
                                     value: CellValue::Empty,
                                     bg_color: 0,
@@ -1773,6 +1999,8 @@ impl ResultsGenerator {
                                     search_key: None,
                                     disabled: false,
                                     any_disabled: false,
+                                    failed: false,
+                                    any_failed: false,
                                 },
                             })
                             .collect()
@@ -2252,6 +2480,58 @@ fn class_blocks(selected: Option<&[u32]>, classes: &[Class]) -> Vec<u32> {
     ids
 }
 
+/// SQL condition that the object's `column` (its `object_class_id`, a JSON
+/// list stored as text, e.g. `"[1, 3]"`) contains any of `ids`.
+///
+/// Parsing that text into a list for every object is what made a class
+/// filter expensive (~47 ms vs ~10 ms on a 3.8M-object file); a results
+/// file only has a handful of distinct class combinations, so they're
+/// parsed once each and the objects matched by their unparsed text.
+pub(super) fn object_class_filter_sql(column: &str, ids: &[u32]) -> String {
+    format!(
+        "{column} IN (\
+         SELECT class_list FROM (SELECT DISTINCT object_class_id AS class_list FROM objects) \
+         WHERE list_has_any(CAST(class_list AS INTEGER[]), {}))",
+        sql_int_array_literal(ids)
+    )
+}
+
+/// The objects grouped per (image, class), one `value_{i}` per statistic
+/// in `stats` plus `n_objects` - the first stage of both per-image views.
+///
+/// `object_class_id` is a per-object list (multi-class objects exist),
+/// unpacked into one `class_id` per (object, class) pair before grouping;
+/// an object without any class contributes no row. `pre` filters the
+/// objects *before* that unpacking - DuckDB otherwise parses every object's
+/// class list first (~48 ms vs ~30 ms on a 3.8M-object file) - and `post`
+/// the unpacked rows (conditions on `class_id`).
+fn per_image_class_sql(
+    stats: &[(&Column, &Aggregation)],
+    pre: &[String],
+    post: &[String],
+) -> Result<String, InternalErrors> {
+    let mut values = Vec::with_capacity(stats.len());
+    for (i, (column, aggregation)) in stats.iter().enumerate() {
+        let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
+        values.push(format!("{agg_fn}({value_expr}) AS value_{i}"));
+    }
+    let post = if post.is_empty() {
+        "true".to_string()
+    } else {
+        post.join(" AND ")
+    };
+    Ok(format!(
+        "SELECT image_rel_path, MIN(image_name) AS image_name, class_id,\n\
+             COUNT(*) AS n_objects, {values}\n\
+         FROM (SELECT * FROM objects WHERE {pre}) AS o,\n\
+             UNNEST(CAST(o.object_class_id AS INTEGER[])) AS u(class_id)\n\
+         WHERE {post}\n\
+         GROUP BY image_rel_path, class_id",
+        values = values.join(", "),
+        pre = pre.join(" AND "),
+    ))
+}
+
 /// Comma-joined integers for a SQL `IN (...)` list.
 fn sql_u32_list(values: &[u32]) -> String {
     values
@@ -2271,6 +2551,8 @@ fn plain_cell() -> Cell {
         search_key: None,
         disabled: false,
         any_disabled: false,
+        failed: false,
+        any_failed: false,
     }
 }
 
@@ -2350,6 +2632,8 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
         search_key: None,
         disabled: object.disabled,
         any_disabled: false,
+        failed: false,
+        any_failed: false,
     };
     match column {
         Column::ObjectId => Cell {
@@ -2379,6 +2663,8 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
                 search_key: None,
                 disabled: object.disabled,
                 any_disabled: false,
+                failed: false,
+                any_failed: false,
             }
         }
         Column::Count => Cell {
@@ -2574,6 +2860,34 @@ fn aggregate_sql(
     ))
 }
 
+/// Whether `column`/`aggregation` has a real value for a group without any
+/// objects: a count of 0, and an (empty) sum of 0. Every other statistic
+/// (average, min, max, median, spread) doesn't exist without values and
+/// stays empty - a 0 there would be a made-up measurement.
+fn zero_when_no_objects(column: &Column, aggregation: &Aggregation) -> bool {
+    matches!(column, Column::Count) || matches!(aggregation, Aggregation::Sum)
+}
+
+/// `value` (an aggregate over a group's objects), but 0 instead of NULL
+/// when the group has no objects (`no_objects`) on images that were
+/// analysed (`measured`, see `ResultsGenerator::measured_on_plane_sql`) -
+/// for the statistics [`zero_when_no_objects`] allows. Keyed on "no
+/// objects" rather than on NULL alone, so a sum over objects whose own
+/// value is missing (e.g. nm areas without pixel sizes) stays empty.
+fn fill_zero_sql(
+    value: &str,
+    column: &Column,
+    aggregation: &Aggregation,
+    no_objects: &str,
+    measured: &str,
+) -> String {
+    if zero_when_no_objects(column, aggregation) {
+        format!("CASE WHEN {no_objects} AND {measured} THEN 0 ELSE {value} END")
+    } else {
+        value.to_string()
+    }
+}
+
 /// Every standard plate size, smallest first — `best_matching_dimensions`
 /// relies on this order to find the smallest one that fits.
 const ALL_PLATE_DIMENSIONS: [PlateDimensions; 7] = [
@@ -2637,20 +2951,29 @@ fn col_number_to_index(digits: &str) -> Option<usize> {
     digits.parse::<usize>().ok()?.checked_sub(1)
 }
 
-/// Turns raw `(group_prefix, row, col, value, any_disabled)` plate-group
+/// Why an image behind a plate/well cell is marked: disabled by the user,
+/// or failed (its analysis stopped with an error, so its objects are
+/// incomplete). For a plate well, whether *any* of its images is; neither
+/// kind contributes to a well's value.
+#[derive(Debug, Clone, Copy, Default)]
+struct ImageFlags {
+    disabled: bool,
+    failed: bool,
+}
+
+/// Turns raw `(group_prefix, row, col, value, flags)` plate-group
 /// rows into a `DatabaseResult` — shared by `get_group_by_plate` (one
 /// aggregation per call) and `get_group_by_plate_multi_agg` (every requested
 /// aggregation in one batched query, calling this once per aggregation over
 /// its own slice of that batch) so the two agree on exactly the same
-/// List/Heatmap shape. `any_disabled` is true when at least one image in
-/// that well/group is disabled — `value` itself never includes a disabled
+/// List/Heatmap shape. `flags` says whether at least one image in that
+/// well/group is disabled or failed — `value` itself never includes such an
 /// image's objects (see `get_group_by_plate`). A well is never itself
-/// rendered as "disabled" though (only individual images are - a well with
-/// a mix of enabled/disabled images still shows its normal heatmap color),
-/// so `any_disabled` is carried through the tuple but intentionally not
-/// written into any `Cell::disabled` here.
+/// rendered as "disabled"/"failed" though (only individual images are - a
+/// well with a mix of images still shows its normal heatmap color), so the
+/// flags only go into `Cell::any_disabled`/`Cell::any_failed` here.
 fn plate_groups_to_result(
-    groups: Vec<(String, String, String, Option<f64>, bool)>,
+    groups: Vec<(String, String, String, Option<f64>, ImageFlags)>,
     column: &Column,
     classes: &[Class],
     matrix_dimension: Option<PlateDimensions>,
@@ -2677,7 +3000,7 @@ fn plate_groups_to_result(
             let row_names = groups.iter().map(|(key, ..)| key.clone()).collect();
             let rows: Vec<Vec<Cell>> = groups
                 .into_iter()
-                .map(|(key, _row, _col, value, any_disabled)| {
+                .map(|(key, _row, _col, value, flags)| {
                     // `key` is the group/well id (e.g. "A1") itself, so
                     // it's its own search key — used by the GUI to
                     // navigate into that group/well. A well itself is
@@ -2696,7 +3019,9 @@ fn plate_groups_to_result(
                             alternating_color: false,
                             search_key: search_key.clone(),
                             disabled: false,
-                            any_disabled,
+                            any_disabled: flags.disabled,
+                            failed: false,
+                            any_failed: flags.failed,
                         },
                         Cell {
                             value: value.map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
@@ -2704,7 +3029,9 @@ fn plate_groups_to_result(
                             alternating_color: false,
                             search_key,
                             disabled: false,
-                            any_disabled,
+                            any_disabled: flags.disabled,
+                            failed: false,
+                            any_failed: flags.failed,
                         },
                     ]
                 })
@@ -2731,17 +3058,18 @@ fn plate_groups_to_result(
             // with valid coordinates is inserted regardless of whether it
             // has a value, so a well made up only of disabled images still
             // reports `any_disabled` even though its cell renders empty.
-            let mut values: HashMap<(usize, usize), (Option<f64>, String, bool)> = HashMap::new();
+            let mut values: HashMap<(usize, usize), (Option<f64>, String, ImageFlags)> =
+                HashMap::new();
             let mut max_row = None;
             let mut max_col = None;
-            for (group_prefix, row, col, value, any_disabled) in &groups {
+            for (group_prefix, row, col, value, flags) in &groups {
                 let (Some(row), Some(col)) = (row_letter_to_index(row), col_number_to_index(col))
                 else {
                     continue;
                 };
                 max_row = Some(max_row.map_or(row, |m: usize| m.max(row)));
                 max_col = Some(max_col.map_or(col, |m: usize| m.max(col)));
-                values.insert((row, col), (*value, group_prefix.clone(), *any_disabled));
+                values.insert((row, col), (*value, group_prefix.clone(), *flags));
             }
 
             // Given: use it exactly, so the caller can request e.g. a
@@ -2784,7 +3112,7 @@ fn plate_groups_to_result(
                             // a disabled image's objects from `value`. It's
                             // still carried into `Cell::any_disabled` so the
                             // GUI can badge the well without recoloring it.
-                            Some((value, group_prefix, any_disabled)) => Cell {
+                            Some((value, group_prefix, flags)) => Cell {
                                 value: value
                                     .map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
                                 bg_color: value.map_or(0, |v| {
@@ -2793,7 +3121,9 @@ fn plate_groups_to_result(
                                 alternating_color: false,
                                 search_key: Some((group_prefix.clone(), group_prefix.clone())),
                                 disabled: false,
-                                any_disabled: *any_disabled,
+                                any_disabled: flags.disabled,
+                                failed: false,
+                                any_failed: flags.failed,
                             },
                             // No well at all matched this grid position —
                             // leave it empty rather than showing a
@@ -2805,6 +3135,8 @@ fn plate_groups_to_result(
                                 search_key: None,
                                 disabled: false,
                                 any_disabled: false,
+                                failed: false,
+                                any_failed: false,
                             },
                         })
                         .collect()
@@ -2835,7 +3167,7 @@ fn plate_groups_to_result(
 /// calling this once per well over its slice of that batch) so the two
 /// agree on exactly the same List/Heatmap shape.
 fn well_fields_to_result(
-    fields: Vec<(String, String, String, Option<f64>, bool)>,
+    fields: Vec<(String, String, String, Option<f64>, ImageFlags)>,
     column: &Column,
     classes: &[Class],
     well_size: Option<WellSize>,
@@ -2863,7 +3195,7 @@ fn well_fields_to_result(
             let row_names = fields.iter().map(|(idx, ..)| idx.clone()).collect();
             let rows: Vec<Vec<Cell>> = fields
                 .into_iter()
-                .map(|(idx, image_rel_path, image_name, value, disabled)| {
+                .map(|(idx, image_rel_path, image_name, value, flags)| {
                     let search_key = Some((image_name, image_rel_path));
                     vec![
                         Cell {
@@ -2871,16 +3203,20 @@ fn well_fields_to_result(
                             bg_color: 0,
                             alternating_color: false,
                             search_key: search_key.clone(),
-                            disabled,
+                            disabled: flags.disabled,
                             any_disabled: false,
+                            failed: flags.failed,
+                            any_failed: false,
                         },
                         Cell {
                             value: value.map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
                             bg_color: 0,
                             alternating_color: false,
                             search_key,
-                            disabled,
+                            disabled: flags.disabled,
                             any_disabled: false,
+                            failed: flags.failed,
+                            any_failed: false,
                         },
                     ]
                 })
@@ -2913,7 +3249,8 @@ fn well_fields_to_result(
             // arm - a field genuinely has no objects is a different thing
             // from "no field at all sits here", and only the latter should
             // render as if the tile doesn't exist.
-            let mut values: HashMap<usize, (Option<f64>, String, String, bool)> = HashMap::new();
+            let mut values: HashMap<usize, (Option<f64>, String, String, ImageFlags)> =
+                HashMap::new();
             for (idx_str, image_rel_path, image_name, value, disabled) in &fields {
                 let Ok(idx) = idx_str.parse::<u32>() else {
                     continue;
@@ -2941,8 +3278,8 @@ fn well_fields_to_result(
                 ColorScale::Auto => {
                     let mut min = f64::INFINITY;
                     let mut max = f64::NEG_INFINITY;
-                    for (value, _, _, disabled) in values.values() {
-                        if let (Some(value), false) = (value, disabled) {
+                    for (value, _, _, flags) in values.values() {
+                        if let (Some(value), false) = (value, flags.disabled) {
                             min = min.min(*value);
                             max = max.max(*value);
                         }
@@ -2959,7 +3296,7 @@ fn well_fields_to_result(
                 .map(|row| {
                     (0..cols)
                         .map(|col| match values.get(&(row * cols + col)) {
-                            Some((value, image_name, image_rel_path, disabled)) => Cell {
+                            Some((value, image_name, image_rel_path, flags)) => Cell {
                                 value: value
                                     .map_or(CellValue::Empty, |v| CellValue::Float(v as f32)),
                                 bg_color: value.map_or(0, |v| {
@@ -2967,8 +3304,10 @@ fn well_fields_to_result(
                                 }),
                                 alternating_color: false,
                                 search_key: Some((image_name.clone(), image_rel_path.clone())),
-                                disabled: *disabled,
+                                disabled: flags.disabled,
                                 any_disabled: false,
+                                failed: flags.failed,
+                                any_failed: false,
                             },
                             // No field occupies this grid position at all -
                             // leave it empty rather than showing a
@@ -2980,6 +3319,8 @@ fn well_fields_to_result(
                                 search_key: None,
                                 disabled: false,
                                 any_disabled: false,
+                                failed: false,
+                                any_failed: false,
                             },
                         })
                         .collect()
@@ -3681,7 +4022,11 @@ mod tests {
 
         let only_a = grouped_transposed(&generator, Some(vec![ObjectClass::Valid(1)]), no_page());
         assert_eq!(only_a.column_names.len(), 1 + 2, "image + one class block");
-        assert_eq!(only_a.row_names, ["img1.tif", "img3.tif"]);
+        // img2 has no ClassA objects, but was analysed: it keeps its row,
+        // with a ClassA count of 0 and no average area.
+        assert_eq!(only_a.row_names, ["img1.tif", "img2.tif", "img3.tif"]);
+        assert_eq!(cell_value(&only_a.rows[1][1]), Some(0.0));
+        assert!(matches!(only_a.rows[1][2].value, CellValue::Empty));
     }
 
     fn list_transposed(
@@ -5093,5 +5438,703 @@ mod tests {
             _ => panic!("expected a float cell"),
         };
         assert_eq!(cell_f64(&result.rows[0][1]), 42.0);
+    }
+
+    // -- groups without objects: 0 vs. empty ---------------------------------
+    //
+    // A Count or Sum of a group without objects is 0 when its images were
+    // analysed on the selected plane; every other statistic stays empty, and
+    // so does everything of a failed, disabled-only or not-analysed group.
+
+    /// How an image row without objects of its own is seeded.
+    struct ImageRow {
+        name: &'static str,
+        successful: bool,
+        disabled: bool,
+        z_stacks: u32,
+    }
+
+    impl ImageRow {
+        fn analysed(name: &'static str) -> Self {
+            Self {
+                name,
+                successful: true,
+                disabled: false,
+                z_stacks: 1,
+            }
+        }
+    }
+
+    fn add_image(generator: &ResultsGenerator, image: ImageRow) {
+        generator
+            .database
+            .execute(
+                "INSERT INTO images (image_name, image_rel_path, successful, disabled, width, \
+                 height, c_stacks, z_stacks, t_stacks) VALUES (?, ?, ?, ?, 512, 512, 1, ?, 1)",
+                duckdb::params![
+                    image.name,
+                    image.name,
+                    image.successful,
+                    image.disabled,
+                    image.z_stacks
+                ],
+            )
+            .unwrap();
+    }
+
+    fn plate_value(generator: &ResultsGenerator, filter: &PlateFilter, well: &str) -> Option<f64> {
+        let result = generator.get_group_by_plate(filter, &View::List).unwrap();
+        let idx = result
+            .row_names
+            .iter()
+            .position(|n| n == well)
+            .unwrap_or_else(|| panic!("well {well} missing: {:?}", result.row_names));
+        as_float(&result.rows[idx][1].value)
+    }
+
+    fn as_float(value: &CellValue) -> Option<f64> {
+        match value {
+            CellValue::Float(v) => Some(*v as f64),
+            CellValue::Empty => None,
+            _ => panic!("expected a float or empty cell"),
+        }
+    }
+
+    #[test]
+    fn plate_count_and_sum_are_zero_for_a_well_whose_images_found_nothing() {
+        let generator = open(&[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)]);
+        add_image(&generator, ImageRow::analysed("B2_01.tif"));
+
+        let count = plate_value(&generator, &plate_filter(Column::Count), "B2");
+        let sum = plate_value(
+            &generator,
+            &PlateFilter {
+                aggregation: Aggregation::Sum,
+                ..plate_filter(Column::AreaSizePx)
+            },
+            "B2",
+        );
+        let avg = plate_value(&generator, &plate_filter(Column::AreaSizePx), "B2");
+
+        assert_eq!(count, Some(0.0));
+        assert_eq!(sum, Some(0.0));
+        assert_eq!(avg, None, "no average without objects");
+        assert_eq!(
+            plate_value(&generator, &plate_filter(Column::Count), "A1"),
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn plate_count_stays_empty_for_a_well_of_only_failed_or_only_disabled_images() {
+        let generator = open(&[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)]);
+        add_image(
+            &generator,
+            ImageRow {
+                successful: false,
+                ..ImageRow::analysed("B2_01.tif")
+            },
+        );
+        add_image(
+            &generator,
+            ImageRow {
+                disabled: true,
+                ..ImageRow::analysed("C3_01.tif")
+            },
+        );
+
+        let filter = plate_filter(Column::Count);
+        assert_eq!(plate_value(&generator, &filter, "B2"), None);
+        assert_eq!(plate_value(&generator, &filter, "C3"), None);
+    }
+
+    #[test]
+    fn plate_count_is_zero_when_at_least_one_enabled_image_of_the_well_was_analysed() {
+        let generator = open(&[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)]);
+        add_image(
+            &generator,
+            ImageRow {
+                successful: false,
+                ..ImageRow::analysed("B2_01.tif")
+            },
+        );
+        add_image(&generator, ImageRow::analysed("B2_02.tif"));
+
+        let value = plate_value(&generator, &plate_filter(Column::Count), "B2");
+
+        assert_eq!(value, Some(0.0));
+    }
+
+    fn count_on_plane(z_stack: u32) -> PlateFilter {
+        PlateFilter {
+            plane: PlaneFilter {
+                z_stack,
+                t_stack: 0,
+            },
+            ..plate_filter(Column::Count)
+        }
+    }
+
+    #[test]
+    fn plate_count_stays_empty_on_a_plane_the_run_did_not_analyse() {
+        // A Z-projection run: 3 planes in the file, objects only on plane 0.
+        let generator = open(&[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)]);
+        add_image(
+            &generator,
+            ImageRow {
+                z_stacks: 3,
+                ..ImageRow::analysed("B2_01.tif")
+            },
+        );
+
+        assert_eq!(plate_value(&generator, &count_on_plane(0), "B2"), Some(0.0));
+        assert_eq!(plate_value(&generator, &count_on_plane(1), "B2"), None);
+    }
+
+    #[test]
+    fn planes_between_the_lowest_and_highest_object_plane_count_as_analysed() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10).at_plane(0, 0),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10).at_plane(2, 0),
+        ]);
+        add_image(
+            &generator,
+            ImageRow {
+                z_stacks: 3,
+                ..ImageRow::analysed("B2_01.tif")
+            },
+        );
+        // Has only one plane itself - plane 1 doesn't exist for it.
+        add_image(&generator, ImageRow::analysed("C3_01.tif"));
+
+        // Plane 1: nothing found anywhere, but inside the analysed range.
+        assert_eq!(plate_value(&generator, &count_on_plane(1), "A1"), Some(0.0));
+        assert_eq!(plate_value(&generator, &count_on_plane(1), "B2"), Some(0.0));
+        assert_eq!(plate_value(&generator, &count_on_plane(1), "C3"), None);
+    }
+
+    #[test]
+    fn a_run_without_any_object_has_no_values_at_all() {
+        let generator = open(&[]);
+        add_image(&generator, ImageRow::analysed("B2_01.tif"));
+
+        assert_eq!(plate_value(&generator, &count_on_plane(0), "B2"), None);
+    }
+
+    #[test]
+    fn plate_sum_of_objects_without_a_value_stays_empty_rather_than_zero() {
+        // Objects exist, but none has an nm area (no pixel size): the sum
+        // is unknown, not 0.
+        let generator = open(&[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)]);
+        generator
+            .database
+            .execute("UPDATE objects SET area_nm2 = NULL", [])
+            .unwrap();
+        let filter = PlateFilter {
+            aggregation: Aggregation::Sum,
+            ..plate_filter(Column::AreaSizeNm)
+        };
+
+        assert_eq!(plate_value(&generator, &filter, "A1"), None);
+    }
+
+    #[test]
+    fn plate_multi_fills_zero_only_for_count_and_sum() {
+        let generator = open(&[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)]);
+        add_image(&generator, ImageRow::analysed("B2_01.tif"));
+        let results = generator
+            .get_group_by_plate_multi(
+                &PlateFilterMulti {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: vec![Aggregation::Avg, Aggregation::Sum],
+                    object_class: vec![ObjectClass::Unset],
+                    column: vec![Column::Count, Column::AreaSizePx],
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::List,
+            )
+            .unwrap();
+        let b2 = |result: &DatabaseResult| {
+            let idx = result.row_names.iter().position(|n| n == "B2").unwrap();
+            as_float(&result.rows[idx][1].value)
+        };
+
+        // (Count, Avg), (Count, Sum), (area, Avg), (area, Sum)
+        let values: Vec<Option<f64>> = results.iter().map(b2).collect();
+        assert_eq!(values, [Some(0.0), Some(0.0), None, Some(0.0)]);
+    }
+
+    #[test]
+    fn well_fields_without_objects_count_zero_unless_their_analysis_failed() {
+        let generator = open(&[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)]);
+        add_image(&generator, ImageRow::analysed("A1_02.tif"));
+        add_image(
+            &generator,
+            ImageRow {
+                successful: false,
+                ..ImageRow::analysed("A1_03.tif")
+            },
+        );
+        // A disabled field's own value is still its own real result.
+        add_image(
+            &generator,
+            ImageRow {
+                disabled: true,
+                ..ImageRow::analysed("A1_04.tif")
+            },
+        );
+        let filter = well_filter("A1", Column::Count);
+
+        let single = generator.get_group_by_well(&filter, &View::List).unwrap();
+        let values: Vec<Option<f64>> = single
+            .rows
+            .iter()
+            .map(|row| as_float(&row[1].value))
+            .collect();
+        assert_eq!(values, [Some(1.0), Some(0.0), None, Some(0.0)]);
+
+        let batched = generator
+            .get_wells_for_plate(&wells_batch_filter(Column::Count), &View::List)
+            .unwrap();
+        let batched_values: Vec<Option<f64>> = batched["A1"]
+            .rows
+            .iter()
+            .map(|row| as_float(&row[1].value))
+            .collect();
+        assert_eq!(batched_values, values);
+
+        let multi = generator
+            .get_wells_for_plate_multi(
+                &WellsBatchFilterMulti {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: vec![Aggregation::Avg],
+                    object_class: vec![ObjectClass::Unset],
+                    column: vec![Column::Count, Column::AreaSizePx],
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    well_size: None,
+                    well_order: None,
+                },
+                &View::List,
+            )
+            .unwrap();
+        let multi_values = |combo: usize| -> Vec<Option<f64>> {
+            multi[combo]["A1"]
+                .rows
+                .iter()
+                .map(|row| as_float(&row[1].value))
+                .collect()
+        };
+        assert_eq!(multi_values(0), values);
+        assert_eq!(multi_values(1), [Some(10.0), None, None, None]);
+    }
+
+    fn grouped(generator: &ResultsGenerator, aggregation: Aggregation) -> DatabaseResult {
+        generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::Count, Column::AreaSizePx],
+                aggregation: vec![aggregation],
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap()
+    }
+
+    /// `(image, class label, values...)` per row.
+    fn grouped_rows(result: &DatabaseResult) -> Vec<(String, String, Vec<Option<f64>>)> {
+        result
+            .rows
+            .iter()
+            .map(|row| {
+                let text = |cell: &Cell| match &cell.value {
+                    CellValue::String(s) => s.clone(),
+                    CellValue::Class((label, _)) => label.clone(),
+                    _ => panic!("expected text"),
+                };
+                (
+                    text(&row[0]),
+                    text(&row[1]),
+                    row[2..].iter().map(|c| as_float(&c.value)).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn grouped_by_image_lists_every_analysed_image_and_class_with_count_zero() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 20),
+        ]);
+        add_image(&generator, ImageRow::analysed("img3.tif"));
+        add_image(
+            &generator,
+            ImageRow {
+                successful: false,
+                ..ImageRow::analysed("img4.tif")
+            },
+        );
+
+        let rows = grouped_rows(&grouped(&generator, Aggregation::Avg));
+
+        let row = |image: &str, class: &str, count, area| {
+            (image.to_string(), class.to_string(), vec![count, area])
+        };
+        assert_eq!(
+            rows,
+            [
+                row("img1.tif", "ClassA", Some(1.0), Some(10.0)),
+                row("img1.tif", "ClassB", Some(0.0), None),
+                row("img2.tif", "ClassA", Some(0.0), None),
+                row("img2.tif", "ClassB", Some(1.0), Some(20.0)),
+                row("img3.tif", "ClassA", Some(0.0), None),
+                row("img3.tif", "ClassB", Some(0.0), None),
+                // img4.tif failed and found nothing: no row at all.
+            ]
+        );
+    }
+
+    #[test]
+    fn grouped_by_image_shows_a_missing_spread_as_empty_not_zero() {
+        // A sample standard deviation needs two values; one object has none.
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+
+        let rows = grouped_rows(&grouped(&generator, Aggregation::Stddev));
+
+        assert_eq!(rows[0].2, [Some(1.0), None]);
+    }
+
+    #[test]
+    fn grouped_by_image_pages_through_images_without_objects_without_gaps() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        add_image(&generator, ImageRow::analysed("img2.tif"));
+        add_image(&generator, ImageRow::analysed("img3.tif"));
+        let page = |after: Option<String>| {
+            generator
+                .get_grouped_by_image(&GroupedByImageFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    columns: vec![Column::Count],
+                    aggregation: vec![Aggregation::Avg],
+                    page: Pagination { limit: 2, after },
+                    transpond_table: false,
+                })
+                .unwrap()
+        };
+
+        let mut seen = Vec::new();
+        let mut after = None;
+        loop {
+            let result = page(after);
+            seen.extend(grouped_rows(&result).into_iter().map(|(image, ..)| image));
+            match result.row_names.last() {
+                Some(last) if result.rows.len() == 2 => after = Some(last.clone()),
+                _ => break,
+            }
+        }
+
+        assert_eq!(seen, ["img1.tif", "img2.tif", "img3.tif"]);
+    }
+
+    #[test]
+    fn grouped_by_image_has_no_rows_on_a_plane_the_run_did_not_analyse() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        add_image(
+            &generator,
+            ImageRow {
+                z_stacks: 3,
+                ..ImageRow::analysed("img2.tif")
+            },
+        );
+
+        let result = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: PlaneFilter {
+                    z_stack: 1,
+                    t_stack: 0,
+                },
+                images: None,
+                object_classes: None,
+                columns: vec![Column::Count],
+                aggregation: vec![Aggregation::Avg],
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+
+        assert!(result.rows.is_empty(), "{:?}", result.row_names);
+    }
+
+    #[test]
+    fn grouped_by_image_leaves_out_background_unless_it_is_selected() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        generator
+            .database
+            .execute(
+                "INSERT INTO classes (class_id, name, color) VALUES (0, 'Background', 0)",
+                [],
+            )
+            .unwrap();
+        generator.classes_cache.replace(None);
+
+        let all = grouped_rows(&grouped(&generator, Aggregation::Avg));
+        let selected = grouped_rows(
+            &generator
+                .get_grouped_by_image(&GroupedByImageFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: Some(vec![ObjectClass::BACKGROUND]),
+                    columns: vec![Column::Count],
+                    aggregation: vec![Aggregation::Avg],
+                    page: no_page(),
+                    transpond_table: false,
+                })
+                .unwrap(),
+        );
+
+        let classes: Vec<&str> = all.iter().map(|(_, class, _)| class.as_str()).collect();
+        assert_eq!(classes, ["ClassA"]);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].1, "Background");
+        assert_eq!(selected[0].2, [Some(0.0)]);
+    }
+
+    #[test]
+    fn transposed_grouped_shows_an_analysed_image_without_objects_with_count_zero() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        add_image(&generator, ImageRow::analysed("img2.tif"));
+        add_image(
+            &generator,
+            ImageRow {
+                successful: false,
+                ..ImageRow::analysed("img3.tif")
+            },
+        );
+
+        let result = grouped_transposed(&generator, None, no_page());
+
+        assert_eq!(result.row_names, ["img1.tif", "img2.tif"]);
+        assert_eq!(cell_value(&result.rows[1][1]), Some(0.0), "Count");
+        assert!(
+            matches!(result.rows[1][2].value, CellValue::Empty),
+            "Avg area"
+        );
+    }
+
+    fn heatmap(
+        generator: &ResultsGenerator,
+        image: &str,
+        column: Column,
+        aggregation: Aggregation,
+    ) -> DatabaseResult {
+        generator
+            .get_image_heatmap(
+                &ImageHeatmapFilter {
+                    plane: plane(),
+                    image_rel_path: image.to_string(),
+                    aggregation,
+                    object_class: ObjectClass::Unset,
+                    column,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    square_size: Some(256),
+                },
+                &View::Heatmap,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn image_heatmap_counts_zero_in_squares_without_objects() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+            .with_image_size(512, 256)
+            .at_centroid(10.0, 10.0)]);
+
+        let count = heatmap(&generator, "img1.tif", Column::Count, Aggregation::Avg);
+        let avg = heatmap(&generator, "img1.tif", Column::AreaSizePx, Aggregation::Avg);
+
+        let values = |result: &DatabaseResult| -> Vec<Option<f64>> {
+            result.rows[0].iter().map(|c| as_float(&c.value)).collect()
+        };
+        assert_eq!(values(&count), [Some(1.0), Some(0.0)]);
+        assert_eq!(values(&avg), [Some(10.0), None]);
+    }
+
+    #[test]
+    fn image_heatmap_of_a_failed_image_stays_empty() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        add_image(
+            &generator,
+            ImageRow {
+                successful: false,
+                ..ImageRow::analysed("img2.tif")
+            },
+        );
+
+        let count = heatmap(&generator, "img2.tif", Column::Count, Aggregation::Avg);
+
+        assert!(
+            count
+                .rows
+                .iter()
+                .flatten()
+                .all(|c| matches!(c.value, CellValue::Empty))
+        );
+    }
+
+    // -- failed images ------------------------------------------------------
+    //
+    // An image whose analysis stopped with an error only has the objects
+    // found before the error: excluded from a well's value like a disabled
+    // image, and marked wherever it's shown on its own.
+
+    fn mark_failed(generator: &ResultsGenerator, image: &str) {
+        generator
+            .database
+            .execute(
+                "UPDATE images SET successful = false WHERE image_rel_path = ?",
+                [image],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn plate_leaves_out_a_failed_images_objects_and_marks_the_well() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 100),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 20),
+        ]);
+        mark_failed(&generator, "A1_02.tif");
+
+        let result = generator
+            .get_group_by_plate(&plate_filter(Column::AreaSizePx), &View::List)
+            .unwrap();
+        let a1 = result.row_names.iter().position(|n| n == "A1").unwrap();
+        let b2 = result.row_names.iter().position(|n| n == "B2").unwrap();
+
+        assert_eq!(as_float(&result.rows[a1][1].value), Some(10.0));
+        assert!(result.rows[a1][1].any_failed);
+        assert!(!result.rows[a1][1].failed, "a well itself never failed");
+        assert!(!result.rows[b2][1].any_failed);
+        assert_eq!(
+            plate_value(&generator, &plate_filter(Column::Count), "A1"),
+            Some(1.0)
+        );
+
+        let multi = generator
+            .get_group_by_plate_multi(
+                &PlateFilterMulti {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: vec![Aggregation::Avg],
+                    object_class: vec![ObjectClass::Unset],
+                    column: vec![Column::AreaSizePx],
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::Heatmap,
+            )
+            .unwrap();
+        // A1 -> (row 0, col 0)
+        assert_eq!(as_float(&multi[0].rows[0][0].value), Some(10.0));
+        assert!(multi[0].rows[0][0].any_failed);
+    }
+
+    #[test]
+    fn well_shows_a_failed_fields_own_value_but_marks_it() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 100),
+        ]);
+        mark_failed(&generator, "A1_02.tif");
+
+        let single = generator
+            .get_group_by_well(&well_filter("A1", Column::AreaSizePx), &View::List)
+            .unwrap();
+        let batched = generator
+            .get_wells_for_plate(&wells_batch_filter(Column::AreaSizePx), &View::Heatmap)
+            .unwrap();
+
+        assert_eq!(as_float(&single.rows[1][1].value), Some(100.0));
+        assert!(single.rows[1][1].failed);
+        assert!(!single.rows[0][1].failed);
+        // Field 02 -> heatmap position 1 (row 0, col 1).
+        assert!(batched["A1"].rows[0][1].failed);
+        assert!(!batched["A1"].rows[0][0].failed);
+    }
+
+    #[test]
+    fn grouped_by_image_marks_every_cell_of_a_failed_images_rows() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 20),
+        ]);
+        mark_failed(&generator, "img2.tif");
+
+        let normal = grouped(&generator, Aggregation::Avg);
+        let transposed = grouped_transposed(&generator, None, no_page());
+
+        for result in [&normal, &transposed] {
+            assert!(result.rows[0].iter().all(|cell| !cell.failed));
+            assert!(result.rows[1].iter().all(|cell| cell.failed));
+        }
+        // Its objects (found before the error) are still shown.
+        assert_eq!(cell_value(&transposed.rows[1][2]), Some(20.0));
+    }
+
+    #[test]
+    fn transposed_grouped_places_each_classs_values_in_its_own_block() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 30),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 5),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 7),
+        ]);
+
+        let result = grouped_transposed(&generator, None, no_page());
+
+        let values = |row: usize| -> Vec<Option<f64>> {
+            result.rows[row][1..]
+                .iter()
+                .map(|c| as_float(&c.value))
+                .collect()
+        };
+        // (Count, Avg area) for ClassA, then for ClassB.
+        assert_eq!(values(0), [Some(2.0), Some(20.0), Some(1.0), Some(5.0)]);
+        assert_eq!(values(1), [Some(0.0), None, Some(1.0), Some(7.0)]);
+    }
+
+    #[test]
+    fn class_filter_matches_objects_with_several_classes() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_01.tif", "ClassB", 2, 20),
+        ]);
+        // The first object is in both classes.
+        generator
+            .database
+            .execute(
+                "UPDATE objects SET object_class_id = '[1, 2]' WHERE area_px = 10",
+                [],
+            )
+            .unwrap();
+        let count_of = |id| PlateFilter {
+            object_class: ObjectClass::Valid(id),
+            ..plate_filter(Column::Count)
+        };
+
+        assert_eq!(plate_value(&generator, &count_of(1), "A1"), Some(1.0));
+        assert_eq!(plate_value(&generator, &count_of(2), "A1"), Some(2.0));
+        assert_eq!(plate_value(&generator, &count_of(3), "A1"), Some(0.0));
     }
 }

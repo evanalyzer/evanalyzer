@@ -1415,6 +1415,10 @@ fn cell_to_f64(cell: &Cell) -> Option<f64> {
 /// The number format keeps a long float from forcing the column far wider
 /// than `GRID_CELL_PX` to avoid Excel's `#####` "too narrow to display"
 /// placeholder.
+/// Font color of a cell from a failed image - the GUI's light-theme
+/// `Theme.warn`.
+const FAILED_FONT_COLOR: u32 = 0xC07800;
+
 fn cell_format(cell: &Cell, num_format: Option<&str>) -> Format {
     let mut format = Format::new().set_font_size(EXPORT_FONT_SIZE);
     if cell.disabled {
@@ -1432,6 +1436,14 @@ fn cell_format(cell: &Cell, num_format: Option<&str>) -> Format {
         format = format.set_background_color(Color::RGB(EMPTY_CELL_BG));
     } else if cell.alternating_color {
         format = format.set_background_color(Color::RGB(ALTERNATING_ROW_BG));
+    }
+    if cell.failed || cell.any_failed {
+        // The image's analysis stopped with an error (or, for a well, one
+        // of its images' did): its values are incomplete / it's left out -
+        // same warning color the GUI uses.
+        format = format
+            .set_font_color(Color::RGB(FAILED_FONT_COLOR))
+            .set_italic();
     }
     if let Some(num_format) = num_format {
         format = format
@@ -1646,6 +1658,8 @@ mod tests {
             search_key: None,
             disabled: false,
             any_disabled: false,
+            failed: false,
+            any_failed: false,
         }
     }
 
@@ -1818,6 +1832,8 @@ mod tests {
                 search_key: None,
                 disabled: false,
                 any_disabled: false,
+                failed: false,
+                any_failed: false,
             }),
             ""
         );
@@ -1829,6 +1845,8 @@ mod tests {
                 search_key: None,
                 disabled: false,
                 any_disabled: false,
+                failed: false,
+                any_failed: false,
             }),
             "1.5"
         );
@@ -1840,6 +1858,8 @@ mod tests {
                 search_key: None,
                 disabled: false,
                 any_disabled: false,
+                failed: false,
+                any_failed: false,
             }),
             "7"
         );
@@ -1851,6 +1871,8 @@ mod tests {
                 search_key: None,
                 disabled: false,
                 any_disabled: false,
+                failed: false,
+                any_failed: false,
             }),
             "ClassA"
         );
@@ -2090,11 +2112,14 @@ mod tests {
             .expect("csv grouped export");
         let grouped_csv = std::fs::read_to_string(out_dir.join("grouped_by_image.csv"))
             .expect("read grouped_by_image.csv");
+        // One row per (image, class) - including the class an image has no
+        // objects of: a count of 0, and no averages.
         assert_eq!(
             grouped_csv.lines().count(),
-            3,
-            "expected a header plus one row per image: {grouped_csv}"
+            5,
+            "expected a header plus one row per image and class: {grouped_csv}"
         );
+        assert!(grouped_csv.contains("img1.tif,ClassB,0,,"), "{grouped_csv}");
     }
 
     #[test]
@@ -2948,19 +2973,19 @@ mod tests {
     }
 
     #[test]
-    fn start_export_grouped_by_image_with_a_non_matching_class_filter_is_an_empty_but_valid_document()
-     {
+    fn start_export_grouped_by_image_with_a_class_without_objects_gives_each_image_an_empty_row() {
         let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
         let export = ResultExport {
             output_dir: out_dir.clone(),
             format: ExportFormat::CSV,
             columns: vec![Column::AreaSizePx],
             aggregations: vec![Aggregation::Avg],
-            // No class 99 was ever seeded - a non-empty selection matching
-            // zero rows, exercising `fetch_all_grouped_by_image_rows`'s
-            // "no rows at all" min/max fallback (as opposed to an
+            // No class 99 object was ever seeded - a selection matching
+            // zero objects, exercising `fetch_all_grouped_by_image_rows`'s
+            // "no values at all" min/max fallback (as opposed to an
             // explicitly-empty `Some(vec![])` selection, which short-
-            // circuits earlier).
+            // circuits earlier). The analysed image still gets its row:
+            // "none found" is a result, and there's no average to show.
             object_classes: vec![ObjectClass::Valid(99)],
             with_grouped_by_image_list: true,
             ..Default::default()
@@ -2970,7 +2995,13 @@ mod tests {
             .expect("export with a non-matching filter should still succeed");
         let content =
             std::fs::read_to_string(out_dir.join("grouped_by_image.csv")).expect("read csv");
-        assert_eq!(content.lines().count(), 1, "header only, no data rows");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "header plus the image's row: {content}");
+        assert!(lines[1].starts_with("img1.tif,"), "{content}");
+        assert!(
+            lines[1].ends_with(','),
+            "no average without objects: {content}"
+        );
     }
 
     #[test]
@@ -2993,6 +3024,8 @@ mod tests {
             search_key: None,
             disabled: false,
             any_disabled: false,
+            failed: false,
+            any_failed: false,
         };
         let int_cell = Cell {
             value: CellValue::Integer(7),
@@ -3001,6 +3034,8 @@ mod tests {
             search_key: None,
             disabled: false,
             any_disabled: false,
+            failed: false,
+            any_failed: false,
         };
         let string_cell = Cell {
             value: CellValue::String("x".to_string()),
@@ -3009,6 +3044,8 @@ mod tests {
             search_key: None,
             disabled: false,
             any_disabled: false,
+            failed: false,
+            any_failed: false,
         };
         assert_eq!(cell_to_f64(&float_cell), Some(1.5));
         assert_eq!(cell_to_f64(&int_cell), Some(7.0));
@@ -3084,5 +3121,24 @@ mod tests {
             !out_dir.join("list_img2.csv").exists(),
             "must not start the second image"
         );
+    }
+
+    #[test]
+    fn cell_format_marks_a_failed_images_cell() {
+        let cell = |failed, any_failed| Cell {
+            value: CellValue::Float(1.0),
+            bg_color: 0,
+            alternating_color: false,
+            search_key: None,
+            disabled: false,
+            any_disabled: false,
+            failed,
+            any_failed,
+        };
+        let plain = cell_format(&cell(false, false), None);
+
+        assert_ne!(cell_format(&cell(true, false), None), plain);
+        assert_ne!(cell_format(&cell(false, true), None), plain);
+        assert_eq!(cell_format(&cell(false, false), None), plain);
     }
 }

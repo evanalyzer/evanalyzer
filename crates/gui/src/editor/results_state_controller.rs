@@ -1888,26 +1888,29 @@ impl ResultsStateController {
         // the table properties need are `Rc`-based and can't cross the
         // `invoke_from_event_loop` closure boundary, so they're built below
         // once we're back on the UI thread.
-        // Every `Cell` in a row carries the same `alternating_color` and
-        // `disabled` flag (see `build_coloc_detail_rows`/`cell_for_column`),
-        // so the first cell's flags speak for the whole row; an empty row
-        // (no columns selected) just isn't alternated/disabled.
-        let row_cells: Vec<(Vec<slint::SharedString>, bool, bool)> = result
+        // Every `Cell` in a row carries the same `alternating_color`,
+        // `disabled` and `failed` flag (see `build_coloc_detail_rows`/
+        // `cell_for_column`/`get_grouped_by_image`), so the first cell's
+        // flags speak for the whole row; an empty row (no columns selected)
+        // just isn't alternated/disabled/failed.
+        let row_cells: Vec<(Vec<slint::SharedString>, bool, bool, bool)> = result
             .rows
             .iter()
             .map(|row| {
                 let alternating = row.first().is_some_and(|cell| cell.alternating_color);
                 let disabled = row.first().is_some_and(|cell| cell.disabled);
+                let failed = row.first().is_some_and(|cell| cell.failed);
                 (
                     row.iter().map(cell_to_string).collect(),
                     alternating,
                     disabled,
+                    failed,
                 )
             })
             .collect();
         let column_widths = list_column_widths(
             &headers,
-            row_cells.iter().map(|(cells, _, _)| cells.as_slice()),
+            row_cells.iter().map(|(cells, ..)| cells.as_slice()),
         );
         *self.list_row_locations.lock().expect("Poisned") = result.row_locations.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -1915,10 +1918,11 @@ impl ResultsStateController {
                 let state = ui_ready.global::<ResultsState>();
                 let rows: Vec<ResultRow> = row_cells
                     .into_iter()
-                    .map(|(cells, alternating, disabled)| ResultRow {
+                    .map(|(cells, alternating, disabled, failed)| ResultRow {
                         cells: ModelRc::new(VecModel::from(cells)),
                         alternating,
                         disabled,
+                        failed,
                     })
                     .collect();
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
@@ -3663,6 +3667,8 @@ fn flatten_grid_cells(result: &DatabaseResult) -> Vec<MatrixCell> {
                         color: bg_color_to_slint(cell.bg_color),
                         disabled: cell.disabled,
                         any_disabled: cell.any_disabled,
+                        failed: cell.failed,
+                        any_failed: cell.any_failed,
                     }
                 })
         })

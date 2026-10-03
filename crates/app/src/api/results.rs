@@ -261,6 +261,15 @@ pub struct Cell {
     pub disabled: bool,
     /// True if at least one image that contributed to is disabled
     pub any_disabled: bool,
+    /// True if this cell's value came from an image whose analysis failed
+    /// (stopped with an error): it only holds the objects found before
+    /// the error, so its values are incomplete.
+    #[serde(default)]
+    pub failed: bool,
+    /// True if at least one image behind this cell failed - excluded from
+    /// this cell's value, like a disabled image.
+    #[serde(default)]
+    pub any_failed: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

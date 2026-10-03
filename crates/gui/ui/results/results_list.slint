@@ -245,7 +245,7 @@ export component ResultsListView inherits Rectangle {
                                     width: ResultsState.list-column-widths[c-index] * 1px;
                                     font-size: 12px;
                                     font-family: Theme.font-mono;
-                                    color: Theme.text;
+                                    color: row.failed ? Theme.warn : Theme.text;
                                     overflow: elide;
                                     vertical-alignment: center;
                                     horizontal-alignment: start;

@@ -1,7 +1,7 @@
 use crate::api::*;
 
 use super::results_generator::{
-    ResultsGenerator, class_display_label, column_aggregate_expr, sql_int_array_literal,
+    ResultsGenerator, class_display_label, column_aggregate_expr, object_class_filter_sql,
     sql_string_in_list,
 };
 use duckdb::types::Value;
@@ -356,10 +356,7 @@ fn chart_where_clause(
         if ids.is_empty() {
             return None;
         }
-        conditions.push(format!(
-            "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
-            sql_int_array_literal(&ids)
-        ));
+        conditions.push(object_class_filter_sql("object_class_id", &ids));
     }
     Some(format!("WHERE {}", conditions.join(" AND ")))
 }

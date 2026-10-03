@@ -49,6 +49,14 @@ export struct MatrixCell {
     // the cell's own value/color is still a real, uncompromised aggregate
     // of its *other* images.
     any-disabled: bool,
+    // True when this cell's own single image failed (well-view field tiles
+    // only): its analysis stopped with an error, so its value only covers
+    // the objects found before that. Shown as a warning badge.
+    failed: bool,
+    // True when at least one image behind this cell failed - e.g. a
+    // plate-view well with one failed field. Like a disabled image, it's
+    // left out of the cell's value; shown as the same warning badge.
+    any-failed: bool,
 }
 
 export struct ObjectMarker {
@@ -67,6 +75,9 @@ export struct ResultRow {
     cells: [string],
     alternating: bool,
     disabled: bool,
+    // The row's image failed (its analysis stopped with an error), so its
+    // values are incomplete - drawn in the warning color.
+    failed: bool,
 }
 
 export struct ChartScatterPoint {
