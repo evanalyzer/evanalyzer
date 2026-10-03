@@ -195,22 +195,17 @@ impl ImageAlgorithm for Cellpose {
         "Cellpose"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
-            cite_key: "stringer2021cellpose",
-            title: "Cellpose: a generalist algorithm for cellular segmentation",
-            authors: &[
-                "Carsen Stringer",
-                "Tim Wang",
-                "Michalis Michaelos",
-                "Marius Pachitariu",
-            ],
-            year: 2021,
-            container: Some("Nature Methods"),
-            doi: Some("10.1038/s41592-020-01018-x"),
-            url: Some("https://doi.org/10.1038/s41592-020-01018-x"),
-            pages: Some("100-106"),
-        })
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
+            cite_key: "pachitariu2025cellposesam",
+            title: "Cellpose-SAM: superhuman generalization for cellular segmentation",
+            authors: &["Marius Pachitariu", "Michael Rariden", "Carsen Stringer"],
+            year: 2025,
+            container: Some("bioRxiv"),
+            doi: Some("10.1101/2025.04.28.651001"),
+            url: Some("https://doi.org/10.1101/2025.04.28.651001"),
+            pages: None,
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

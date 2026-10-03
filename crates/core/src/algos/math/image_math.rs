@@ -175,8 +175,8 @@ impl ImageAlgorithm for ImageMath {
         "Image Math"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -477,7 +477,7 @@ mod tests {
             swap_operands: false,
         };
         assert_eq!(algo.name(), "Image Math");
-        assert!(algo.cite().is_none());
+        assert_eq!(algo.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 

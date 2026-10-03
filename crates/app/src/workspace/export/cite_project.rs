@@ -46,12 +46,18 @@ pub fn cite_project(
         for (i, step) in steps.iter().enumerate() {
             let algo = into_algorithm(step.command.clone())?;
             let label = format!("[Step {}] {}", i + 1, algo.name());
-            let citation_marker = match algo.cite() {
-                Some(cite) => {
+            let cites = algo.cite();
+            let citation_marker = if cites.is_empty() {
+                "(Uncited)".to_string()
+            } else {
+                for cite in &cites {
                     citations.entry(cite.cite_key).or_insert(cite);
-                    format!("[@{}]", cite.cite_key)
                 }
-                None => "(Uncited)".to_string(),
+                cites
+                    .iter()
+                    .map(|cite| format!("[@{}]", cite.cite_key))
+                    .collect::<Vec<_>>()
+                    .join(" ")
             };
             rows.push((label, citation_marker));
         }
@@ -134,8 +140,46 @@ mod tests {
     use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
     use evanalyzer_cfg::settings::pipeline_command_settings::{
         BlurSettings, GaussianBlurSettings, RollingBallSettings,
+        SegmentationThresholdThresholdMethodSettings, ThresholdEntrySettings, ThresholdSettings,
     };
     use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+
+    #[test]
+    fn a_step_with_several_citations_lists_all_of_them() {
+        let entry = |method| ThresholdEntrySettings {
+            method,
+            ..Default::default()
+        };
+        let mut config = ProjectSettings::default();
+        config.pipelines.push(PipelineSettings {
+            id: PipelineId(1),
+            name: "Two thresholds".to_string(),
+            image_source: ImageAddress::Scratchpad,
+            enabled: true,
+            steps: vec![PipelineStepSettings {
+                enabled: true,
+                command: PipelineCommand::Threshold(ThresholdSettings {
+                    thresholds: vec![
+                        entry(SegmentationThresholdThresholdMethodSettings::Li),
+                        entry(SegmentationThresholdThresholdMethodSettings::Triangle),
+                    ],
+                }),
+            }],
+            description: None,
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let output_file = dir.path().join("cite.md");
+        cite_project(&LocalFileSystem::default(), &config, &output_file).unwrap();
+        let content = std::fs::read_to_string(&output_file).unwrap();
+
+        assert!(
+            content.contains("[@li1993minimum] [@zack1977automatic]"),
+            "{content}"
+        );
+        assert!(content.contains("Minimum cross entropy thresholding"));
+        assert!(content.contains("Automatic measurement of sister chromatid exchange frequency"));
+    }
 
     #[test]
     fn writes_ascii_flow_and_citations() {
@@ -173,7 +217,10 @@ mod tests {
         assert!(content.contains("Demo Project"));
         assert!(content.contains("├── [Step 1] Rolling Ball"));
         assert!(content.contains("└── [Step 2] Gaussian Blur"));
-        assert!(content.contains("(Uncited)"));
+        // Gaussian Blur has no published method of its own: it cites EVAnalyzer.
+        assert!(!content.contains("(Uncited)"));
+        assert!(content.contains("[@danmayr2026]"));
+        assert!(content.contains("EVAnalyzer: Enhanced Visual Analyzer"));
         assert!(!content.contains("[Step 3]"));
         assert!(content.contains("[@sternberg1983biomedical]"));
         assert!(content.contains("Sternberg"));

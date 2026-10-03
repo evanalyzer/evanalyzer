@@ -214,8 +214,8 @@ impl ImageAlgorithm for ColorFilterCommand {
         "HsvColorFilter"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -545,7 +545,7 @@ mod tests {
         };
         let name = extractor.name();
         assert_eq!(name, "HsvColorFilter");
-        assert!(extractor.cite().is_none());
+        assert_eq!(extractor.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(extractor.execution_scope(), ExecutionScope::Tile));
     }
 }

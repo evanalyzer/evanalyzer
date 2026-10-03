@@ -171,8 +171,8 @@ impl ImageAlgorithm for EdgeDetectionCanny {
         "Edge Detection Canny"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "canny1986computational",
             title: "A Computational Approach to Edge Detection",
             authors: &["John Canny"],
@@ -181,7 +181,7 @@ impl ImageAlgorithm for EdgeDetectionCanny {
             doi: Some("10.1109/TPAMI.1986.4767851"),
             url: Some("https://doi.org/10.1109/TPAMI.1986.4767851"),
             pages: Some("679-698"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

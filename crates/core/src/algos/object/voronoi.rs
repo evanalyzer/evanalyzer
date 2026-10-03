@@ -502,8 +502,8 @@ impl ImageAlgorithm for Voronoi {
         "Voronoi"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "voronoi1908nouvelles",
             title: "Nouvelles applications des paramètres continus à la théorie des formes quadratiques. Deuxième mémoire",
             authors: &["Georgy Voronoi"],
@@ -512,7 +512,7 @@ impl ImageAlgorithm for Voronoi {
             doi: None,
             url: None,
             pages: Some("198-287"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

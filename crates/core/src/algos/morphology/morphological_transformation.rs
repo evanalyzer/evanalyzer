@@ -138,8 +138,8 @@ impl ImageAlgorithm for MorphologicalCommand {
         "Morphological Transform"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "serra1982image",
             title: "Image Analysis and Mathematical Morphology",
             authors: &["Jean Serra"],
@@ -148,7 +148,7 @@ impl ImageAlgorithm for MorphologicalCommand {
             doi: None,
             url: None,
             pages: None,
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

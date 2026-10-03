@@ -224,8 +224,8 @@ impl ImageAlgorithm for StructureTensor {
         "Structure Tensor"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "bigun1987orientation",
             title: "Optimal Orientation Detection of Linear Symmetry",
             authors: &["Josef Bigün", "Gösta H. Granlund"],
@@ -236,7 +236,7 @@ impl ImageAlgorithm for StructureTensor {
             doi: None,
             url: None,
             pages: None,
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

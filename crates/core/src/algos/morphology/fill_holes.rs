@@ -65,8 +65,8 @@ impl ImageAlgorithm for FillHoles {
         "Fill Holes"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::IMAGEJ]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

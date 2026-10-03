@@ -197,8 +197,8 @@ impl ImageAlgorithm for SaveImage {
         "Save Image"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -555,7 +555,7 @@ mod tests {
             source: ImageSource::Image,
         };
         assert_eq!(saver.name(), "Save Image");
-        assert!(saver.cite().is_none());
+        assert_eq!(saver.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(saver.execution_scope(), ExecutionScope::Tile));
     }
 }

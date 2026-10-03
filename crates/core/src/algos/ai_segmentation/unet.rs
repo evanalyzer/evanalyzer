@@ -175,8 +175,8 @@ impl ImageAlgorithm for UNet {
         "UNet"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "ronneberger2015unet",
             title: "U-Net: Convolutional Networks for Biomedical Image Segmentation",
             authors: &["Olaf Ronneberger", "Philipp Fischer", "Thomas Brox"],
@@ -185,7 +185,7 @@ impl ImageAlgorithm for UNet {
             doi: Some("10.1007/978-3-319-24574-4_28"),
             url: Some("https://doi.org/10.1007/978-3-319-24574-4_28"),
             pages: Some("234-241"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

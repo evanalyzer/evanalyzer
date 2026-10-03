@@ -103,8 +103,8 @@ impl ImageAlgorithm for Hessian {
         "Hessian"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "steger1998unbiased",
             title: "An Unbiased Detector of Curvilinear Structures",
             authors: &["Carsten Steger"],
@@ -113,7 +113,7 @@ impl ImageAlgorithm for Hessian {
             doi: Some("10.1109/34.659930"),
             url: Some("https://doi.org/10.1109/34.659930"),
             pages: Some("113-125"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

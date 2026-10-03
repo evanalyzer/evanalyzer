@@ -118,8 +118,8 @@ impl ImageAlgorithm for RankFilter {
         "Rank Filter"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::IMAGEJ]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

@@ -2271,8 +2271,8 @@ mod execution_order_tests {
         fn name(&self) -> &'static str {
             "Noop"
         }
-        fn cite(&self) -> Option<&'static CitationMetadata> {
-            None
+        fn cite(&self) -> Vec<&'static CitationMetadata> {
+            Vec::new()
         }
         fn execution_scope(&self) -> ExecutionScope {
             ExecutionScope::WholeImage

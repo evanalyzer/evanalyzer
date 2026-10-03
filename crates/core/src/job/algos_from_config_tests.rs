@@ -1176,3 +1176,33 @@ fn into_algorithm_unet_errors_when_ai_feature_is_disabled() {
     let result = into_algorithm(PipelineCommand::UNet(UNetSettings::default()));
     assert!(result.is_err());
 }
+
+// ---- Citations ---------------------------------------------------
+
+#[test]
+fn every_command_cites_something() {
+    // A command without its own method still cites EVAnalyzer
+    // (`CitationMetadata::DANMAYR`), so the project citation export never
+    // silently leaves a step out.
+    use evanalyzer_cfg::settings::pipeline_command::{all_command_meta, default_command};
+    let mut checked = 0;
+    for meta in all_command_meta() {
+        let command = default_command(meta.id).expect("every listed command has a default");
+        let Ok(algo) = into_algorithm(command) else {
+            // Commands that need a trained model file can't be built from
+            // their defaults.
+            continue;
+        };
+        // The AI classifiers' method depends on the model file - see their `cite`.
+        if ["AI Pixel Classifier", "AI Object Classifier"].contains(&meta.name) {
+            assert!(algo.cite().is_empty(), "{} should cite nothing", meta.name);
+        } else {
+            assert!(!algo.cite().is_empty(), "{} has no citation", meta.name);
+        }
+        checked += 1;
+    }
+    assert!(
+        checked + 3 >= all_command_meta().len(),
+        "only {checked} commands could be built from their defaults"
+    );
+}

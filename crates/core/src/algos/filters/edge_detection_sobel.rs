@@ -75,8 +75,17 @@ impl ImageAlgorithm for EdgeDetectionSobel {
         "Edge Detection Sobel"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
+            cite_key: "sobel1968isotropic",
+            title: "A 3x3 Isotropic Gradient Operator for Image Processing",
+            authors: &["Irwin Sobel", "Gary Feldman"],
+            year: 1968,
+            container: Some("Talk at the Stanford Artificial Intelligence Project"),
+            doi: None,
+            url: None,
+            pages: None,
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -174,7 +183,7 @@ mod tests {
         let extractor = EdgeDetectionSobel { kernel_size: 3 };
         let name = extractor.name();
         assert_eq!(name, "Edge Detection Sobel");
-        assert!(extractor.cite().is_none());
+        assert_eq!(extractor.cite()[0].cite_key, "sobel1968isotropic");
         assert!(matches!(extractor.execution_scope(), ExecutionScope::Tile));
     }
 }

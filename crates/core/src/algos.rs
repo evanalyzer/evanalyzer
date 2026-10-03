@@ -106,7 +106,7 @@ pub trait ImageAlgorithm: Send + Sync {
         cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors>;
     fn name(&self) -> &'static str;
-    fn cite(&self) -> Option<&'static CitationMetadata>;
+    fn cite(&self) -> Vec<&'static CitationMetadata>;
     fn execution_scope(&self) -> ExecutionScope;
 
     /// Override to `false` only for the rare command that reads `scratch_pad`

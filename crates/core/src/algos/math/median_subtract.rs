@@ -78,8 +78,8 @@ impl ImageAlgorithm for MedianSubtract {
         "Median Subtract"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -182,7 +182,7 @@ mod tests {
     fn test_median_subtract_name() {
         let algo = MedianSubtract { radius: 10.0 };
         assert_eq!(algo.name(), "Median Subtract");
-        assert!(algo.cite().is_none());
+        assert_eq!(algo.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 }

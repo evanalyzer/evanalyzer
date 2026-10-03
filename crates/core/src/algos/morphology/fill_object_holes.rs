@@ -62,8 +62,8 @@ impl ImageAlgorithm for FillObjectHoles {
         "Fill Object Holes"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -396,7 +396,7 @@ mod tests {
     fn command_metadata() {
         let cmd = FillObjectHoles {};
         assert_eq!(cmd.name(), "Fill Object Holes");
-        assert!(cmd.cite().is_none());
+        assert_eq!(cmd.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(cmd.execution_scope(), ExecutionScope::Tile));
     }
 }

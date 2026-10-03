@@ -138,8 +138,8 @@ impl ImageAlgorithm for DistanceTransform {
         "Distance Transform"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "rosenfeld1966sequential",
             title: "Sequential Operations in Digital Picture Processing",
             authors: &["Azriel Rosenfeld", "John L. Pfaltz"],
@@ -148,7 +148,7 @@ impl ImageAlgorithm for DistanceTransform {
             doi: Some("10.1145/321356.321357"),
             url: Some("https://doi.org/10.1145/321356.321357"),
             pages: Some("471-494"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

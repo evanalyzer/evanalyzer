@@ -93,8 +93,8 @@ impl ImageAlgorithm for LoadAnnotatedObjects {
         "Load Annotated Objects"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -323,7 +323,7 @@ mod tests {
     fn command_metadata() {
         let cmd = load_all();
         assert_eq!(cmd.name(), "Load Annotated Objects");
-        assert!(cmd.cite().is_none());
+        assert_eq!(cmd.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(cmd.execution_scope(), ExecutionScope::WholeImage));
         assert!(cmd.uses_annotated_objects());
     }

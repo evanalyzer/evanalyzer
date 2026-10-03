@@ -284,8 +284,8 @@ mod tests {
             "FakeSegmenter"
         }
 
-        fn cite(&self) -> Option<&'static CitationMetadata> {
-            None
+        fn cite(&self) -> Vec<&'static CitationMetadata> {
+            Vec::new()
         }
 
         fn execution_scope(&self) -> ExecutionScope {
@@ -512,8 +512,8 @@ mod tests {
             "SetFirstPixel"
         }
 
-        fn cite(&self) -> Option<&'static CitationMetadata> {
-            None
+        fn cite(&self) -> Vec<&'static CitationMetadata> {
+            Vec::new()
         }
 
         fn execution_scope(&self) -> ExecutionScope {

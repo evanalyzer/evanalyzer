@@ -235,8 +235,8 @@ impl ImageAlgorithm for Watershed {
         "Watershed"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "vincent1991watersheds",
             title: "Watersheds in Digital Spaces: An Efficient Algorithm Based on Immersion Simulations",
             authors: &["Luc Vincent", "Pierre Soille"],
@@ -245,7 +245,7 @@ impl ImageAlgorithm for Watershed {
             doi: Some("10.1109/34.87344"),
             url: Some("https://doi.org/10.1109/34.87344"),
             pages: Some("583-598"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

@@ -169,8 +169,10 @@ impl ImageAlgorithm for AiObjectClassifier {
         "Ai Object Classifier"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    /// Nothing: the learning backend (random forest, KNN, MLP) is only known
+    /// from the model file, and citing the wrong method would mislead.
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        Vec::new()
     }
 
     fn execution_scope(&self) -> ExecutionScope {

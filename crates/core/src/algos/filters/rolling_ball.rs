@@ -345,8 +345,8 @@ impl ImageAlgorithm for RollingBall {
         "Rolling Ball"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "sternberg1983biomedical",
             title: "Biomedical Image Processing",
             authors: &["Stanley R. Sternberg"],
@@ -355,7 +355,7 @@ impl ImageAlgorithm for RollingBall {
             doi: Some("10.1109/MC.1983.1654163"),
             url: Some("https://doi.org/10.1109/MC.1983.1654163"),
             pages: Some("22-34"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {

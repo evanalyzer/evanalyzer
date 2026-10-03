@@ -321,8 +321,23 @@ impl ImageAlgorithm for Threshold {
         "Threshold"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    /// The papers of every automatic method used (each once, in order);
+    /// EVAnalyzer itself when only manual thresholds are used.
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        let mut citations: Vec<&'static CitationMetadata> = Vec::new();
+        for citation in self
+            .thresholds
+            .iter()
+            .filter_map(|entry| method_citation(&entry.method))
+        {
+            if !citations.iter().any(|c| c.cite_key == citation.cite_key) {
+                citations.push(citation);
+            }
+        }
+        if citations.is_empty() {
+            citations.push(&CitationMetadata::DANMAYR);
+        }
+        citations
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -1349,9 +1364,229 @@ fn median_of_sorted(sorted: &[f32]) -> f32 {
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
+// --- Citations of the automatic threshold methods ---
+
+const OTSU: CitationMetadata = CitationMetadata {
+    cite_key: "otsu1979threshold",
+    title: "A Threshold Selection Method from Gray-Level Histograms",
+    authors: &["Nobuyuki Otsu"],
+    year: 1979,
+    container: Some("IEEE Transactions on Systems, Man, and Cybernetics"),
+    doi: Some("10.1109/TSMC.1979.4310076"),
+    url: Some("https://doi.org/10.1109/TSMC.1979.4310076"),
+    pages: Some("62-66"),
+};
+
+const LI: CitationMetadata = CitationMetadata {
+    cite_key: "li1993minimum",
+    title: "Minimum cross entropy thresholding",
+    authors: &["C. H. Li", "C. K. Lee"],
+    year: 1993,
+    container: Some("Pattern Recognition"),
+    doi: Some("10.1016/0031-3203(93)90115-D"),
+    url: Some("https://doi.org/10.1016/0031-3203(93)90115-D"),
+    pages: Some("617-625"),
+};
+
+const MIN_ERROR: CitationMetadata = CitationMetadata {
+    cite_key: "kittler1986minimum",
+    title: "Minimum error thresholding",
+    authors: &["J. Kittler", "J. Illingworth"],
+    year: 1986,
+    container: Some("Pattern Recognition"),
+    doi: Some("10.1016/0031-3203(86)90030-0"),
+    url: Some("https://doi.org/10.1016/0031-3203(86)90030-0"),
+    pages: Some("41-47"),
+};
+
+const TRIANGLE: CitationMetadata = CitationMetadata {
+    cite_key: "zack1977automatic",
+    title: "Automatic measurement of sister chromatid exchange frequency",
+    authors: &["G. W. Zack", "W. E. Rogers", "S. A. Latt"],
+    year: 1977,
+    container: Some("Journal of Histochemistry & Cytochemistry"),
+    doi: Some("10.1177/25.7.70454"),
+    url: Some("https://doi.org/10.1177/25.7.70454"),
+    pages: Some("741-753"),
+};
+
+const MOMENTS: CitationMetadata = CitationMetadata {
+    cite_key: "tsai1985moment",
+    title: "Moment-preserving thresholding: A new approach",
+    authors: &["Wen-Hsiang Tsai"],
+    year: 1985,
+    container: Some("Computer Vision, Graphics, and Image Processing"),
+    doi: Some("10.1016/0734-189X(85)90133-1"),
+    url: Some("https://doi.org/10.1016/0734-189X(85)90133-1"),
+    pages: Some("377-393"),
+};
+
+const HUANG: CitationMetadata = CitationMetadata {
+    cite_key: "huang1995image",
+    title: "Image thresholding by minimizing the measures of fuzziness",
+    authors: &["Liang-Kai Huang", "Mao-Jiun J. Wang"],
+    year: 1995,
+    container: Some("Pattern Recognition"),
+    doi: Some("10.1016/0031-3203(94)E0043-K"),
+    url: Some("https://doi.org/10.1016/0031-3203(94)E0043-K"),
+    pages: Some("41-51"),
+};
+
+const PREWITT: CitationMetadata = CitationMetadata {
+    cite_key: "prewitt1966analysis",
+    title: "The Analysis of Cell Images",
+    authors: &["Judith M. S. Prewitt", "Mortimer L. Mendelsohn"],
+    year: 1966,
+    container: Some("Annals of the New York Academy of Sciences"),
+    doi: Some("10.1111/j.1749-6632.1965.tb11715.x"),
+    url: Some("https://doi.org/10.1111/j.1749-6632.1965.tb11715.x"),
+    pages: Some("1035-1053"),
+};
+
+const ISODATA: CitationMetadata = CitationMetadata {
+    cite_key: "ridler1978picture",
+    title: "Picture Thresholding Using an Iterative Selection Method",
+    authors: &["T. W. Ridler", "S. Calvard"],
+    year: 1978,
+    container: Some("IEEE Transactions on Systems, Man, and Cybernetics"),
+    doi: Some("10.1109/TSMC.1978.4310039"),
+    url: Some("https://doi.org/10.1109/TSMC.1978.4310039"),
+    pages: Some("630-632"),
+};
+
+const KAPUR: CitationMetadata = CitationMetadata {
+    cite_key: "kapur1985new",
+    title: "A new method for gray-level picture thresholding using the entropy of the histogram",
+    authors: &["J. N. Kapur", "P. K. Sahoo", "A. K. C. Wong"],
+    year: 1985,
+    container: Some("Computer Vision, Graphics, and Image Processing"),
+    doi: Some("10.1016/0734-189X(85)90125-2"),
+    url: Some("https://doi.org/10.1016/0734-189X(85)90125-2"),
+    pages: Some("273-285"),
+};
+
+const GLASBEY: CitationMetadata = CitationMetadata {
+    cite_key: "glasbey1993analysis",
+    title: "An Analysis of Histogram-Based Thresholding Algorithms",
+    authors: &["C. A. Glasbey"],
+    year: 1993,
+    container: Some("CVGIP: Graphical Models and Image Processing"),
+    doi: Some("10.1006/cgip.1993.1040"),
+    url: Some("https://doi.org/10.1006/cgip.1993.1040"),
+    pages: Some("532-537"),
+};
+
+const DOYLE: CitationMetadata = CitationMetadata {
+    cite_key: "doyle1962operations",
+    title: "Operations Useful for Similarity-Invariant Pattern Recognition",
+    authors: &["W. Doyle"],
+    year: 1962,
+    container: Some("Journal of the ACM"),
+    doi: Some("10.1145/321119.321123"),
+    url: Some("https://doi.org/10.1145/321119.321123"),
+    pages: Some("259-267"),
+};
+
+const SHANBHAG: CitationMetadata = CitationMetadata {
+    cite_key: "shanbhag1994utilization",
+    title: "Utilization of Information Measure as a Means of Image Thresholding",
+    authors: &["Abhijit G. Shanbhag"],
+    year: 1994,
+    container: Some("CVGIP: Graphical Models and Image Processing"),
+    doi: Some("10.1006/cgip.1994.1037"),
+    url: Some("https://doi.org/10.1006/cgip.1994.1037"),
+    pages: Some("414-419"),
+};
+
+const YEN: CitationMetadata = CitationMetadata {
+    cite_key: "yen1995new",
+    title: "A new criterion for automatic multilevel thresholding",
+    authors: &["Jui-Cheng Yen", "Fu-Juay Chang", "Shyang Chang"],
+    year: 1995,
+    container: Some("IEEE Transactions on Image Processing"),
+    doi: Some("10.1109/83.366472"),
+    url: Some("https://doi.org/10.1109/83.366472"),
+    pages: Some("370-378"),
+};
+
+/// The paper describing an automatic threshold method (as cited by ImageJ's
+/// AutoThresholder, which these are ported from); `None` for manual ones.
+fn method_citation(method: &ThresholdMethod) -> Option<&'static CitationMetadata> {
+    Some(match method {
+        ThresholdMethod::None | ThresholdMethod::Manual => return None,
+        ThresholdMethod::Li => &LI,
+        ThresholdMethod::MinError => &MIN_ERROR,
+        ThresholdMethod::Triangle => &TRIANGLE,
+        ThresholdMethod::Moments => &MOMENTS,
+        ThresholdMethod::Huang => &HUANG,
+        ThresholdMethod::Intermodes | ThresholdMethod::Minimum => &PREWITT,
+        ThresholdMethod::IsoData => &ISODATA,
+        ThresholdMethod::MaxEntropy | ThresholdMethod::RenyiEntropy => &KAPUR,
+        ThresholdMethod::Mean => &GLASBEY,
+        ThresholdMethod::Otsu { .. } => &OTSU,
+        ThresholdMethod::Percentile => &DOYLE,
+        ThresholdMethod::Shanbhag => &SHANBHAG,
+        ThresholdMethod::Yen => &YEN,
+        ThresholdMethod::RobustBackground { .. } => &CitationMetadata::CELLPROFILER,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn threshold_with(methods: &[ThresholdMethod]) -> Threshold {
+        Threshold {
+            thresholds: methods
+                .iter()
+                .map(|&method| ThresholdEntry {
+                    method,
+                    min_threshold: 0.0,
+                    max_threshold: 255.0,
+                    unit: PixelUnits::Bit,
+                    object_class_id: SegmentationClass(1),
+                    value_source: ThresholdValueSource::ActualImage,
+                })
+                .collect(),
+        }
+    }
+
+    fn cite_keys(methods: &[ThresholdMethod]) -> Vec<&'static str> {
+        threshold_with(methods)
+            .cite()
+            .iter()
+            .map(|c| c.cite_key)
+            .collect()
+    }
+
+    #[test]
+    fn cite_names_the_paper_of_every_automatic_method_once() {
+        assert_eq!(cite_keys(&[ThresholdMethod::Li]), ["li1993minimum"]);
+        assert_eq!(
+            cite_keys(&[
+                ThresholdMethod::Manual,
+                ThresholdMethod::Triangle,
+                ThresholdMethod::Li,
+                ThresholdMethod::Triangle,
+            ]),
+            ["zack1977automatic", "li1993minimum"]
+        );
+        // Intermodes and Minimum share one paper: cited once.
+        assert_eq!(
+            cite_keys(&[ThresholdMethod::Intermodes, ThresholdMethod::Minimum]),
+            ["prewitt1966analysis"]
+        );
+    }
+
+    #[test]
+    fn cite_falls_back_to_evanalyzer_for_manual_thresholds() {
+        assert_eq!(
+            cite_keys(&[ThresholdMethod::Manual, ThresholdMethod::None]),
+            ["danmayr2026"]
+        );
+        assert_eq!(cite_keys(&[]), ["danmayr2026"]);
+    }
+
     use crate::{
         image::{ImageContainer, ImageDebugExt},
         pipeline::pipeline_cache::CacheAddress,

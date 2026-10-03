@@ -149,8 +149,8 @@ impl ImageAlgorithm for Stardist {
         "Stardist"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "schmidt2018stardist",
             title: "Cell Detection with Star-Convex Polygons",
             authors: &[
@@ -164,7 +164,7 @@ impl ImageAlgorithm for Stardist {
             doi: Some("10.1007/978-3-030-00934-2_30"),
             url: Some("https://doi.org/10.1007/978-3-030-00934-2_30"),
             pages: Some("265-273"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
