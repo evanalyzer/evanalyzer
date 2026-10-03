@@ -1,6 +1,11 @@
 use crate::object::Intensity;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
+use duckdb::arrow::array::{
+    ArrayBuilder, ArrayRef, BooleanBuilder, Float64Builder, Int32Builder, ListBuilder, MapBuilder,
+    StringBuilder, UInt8Builder, UInt32Builder, UInt64Builder,
+};
+use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::{Connection, params};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId};
 use indexmap::IndexMap;
@@ -171,6 +176,319 @@ impl DuckDbExporter {
 }
 
 // ---------------------------------------------------------------------------
+// Arrow columns for the objects table
+// ---------------------------------------------------------------------------
+
+/// Rows per Arrow batch handed to the Appender - bounds how many rows of a
+/// huge image are buffered at once.
+const ARROW_BATCH_ROWS: usize = 50_000;
+
+/// The `objects` table's DOUBLE columns, in table order (see
+/// `ObjectColumns::finish`).
+#[derive(Clone, Copy)]
+enum F64 {
+    CentroidXPx,
+    CentroidYPx,
+    CentroidXNm,
+    CentroidYNm,
+    BboxXminNm,
+    BboxYminNm,
+    BboxXmaxNm,
+    BboxYmaxNm,
+    AreaNm2,
+    PerimeterPx,
+    PerimeterNm,
+    Circularity,
+    Solidity,
+    AspectRatio,
+    Roundness,
+    Compactness,
+    MajorAxisPx,
+    MinorAxisPx,
+    MajorAxisNm,
+    MinorAxisNm,
+    MajorAxisAngle,
+    Eccentricity,
+    FeretDiameterPx,
+    MinFeretPx,
+    FeretDiameterNm,
+    MinFeretNm,
+    PixelSizeXNm,
+    PixelSizeYNm,
+    PixelSizeZNm,
+}
+
+const F64_COLUMNS: usize = F64::PixelSizeZNm as usize + 1;
+
+/// One batch of `objects` rows, column by column, for the Appender's Arrow
+/// path - the only way to append the `object_class_id` list: the row-wise
+/// `append_row` rejects list values ("appending List values is not yet
+/// supported", duckdb-rs issue #422). Arrow types map onto the table's:
+/// text into the UUID and JSON columns is converted by DuckDB.
+struct ObjectColumns {
+    image_name: StringBuilder,
+    image_rel_path: StringBuilder,
+    c_stack: Int32Builder,
+    z_stack: Int32Builder,
+    t_stack: Int32Builder,
+    object_id: StringBuilder,
+    seg_class_name: StringBuilder,
+    seg_class_id: Int32Builder,
+    object_class_name: StringBuilder,
+    object_class_id: ListBuilder<Int32Builder>,
+    parent_id: StringBuilder,
+    children: StringBuilder,
+    track_id: UInt64Builder,
+    bbox_px: [UInt32Builder; 4],
+    area_px: UInt64Builder,
+    touches_edge: BooleanBuilder,
+    image_bit_depth: UInt8Builder,
+    /// `intensity_{sum,mean,min,max}_{raw,scaled}`, in table order.
+    intensities: [ListBuilder<Float64Builder>; INTENSITY_COLUMNS.len()],
+    coloc_partner_ids: MapBuilder<Int32Builder, ListBuilder<StringBuilder>>,
+    f64: Vec<Float64Builder>,
+}
+
+/// The per-channel intensity list columns, in table order.
+const INTENSITY_COLUMNS: [&str; 8] = [
+    "intensity_sum_normalized",
+    "intensity_sum_gray",
+    "intensity_mean_normalized",
+    "intensity_mean_gray",
+    "intensity_min_normalized",
+    "intensity_min_gray",
+    "intensity_max_normalized",
+    "intensity_max_gray",
+];
+
+/// `coloc_partner_ids` key for partners without an object class.
+const COLOC_UNSET_CLASS_KEY: i32 = -1;
+
+impl ObjectColumns {
+    fn with_capacity(rows: usize) -> Self {
+        let strings = || StringBuilder::with_capacity(rows, rows * 16);
+        Self {
+            image_name: strings(),
+            image_rel_path: strings(),
+            c_stack: Int32Builder::with_capacity(rows),
+            z_stack: Int32Builder::with_capacity(rows),
+            t_stack: Int32Builder::with_capacity(rows),
+            object_id: StringBuilder::with_capacity(rows, rows * 36),
+            seg_class_name: strings(),
+            seg_class_id: Int32Builder::with_capacity(rows),
+            object_class_name: strings(),
+            object_class_id: ListBuilder::with_capacity(Int32Builder::with_capacity(rows), rows),
+            parent_id: strings(),
+            children: strings(),
+            track_id: UInt64Builder::with_capacity(rows),
+            bbox_px: std::array::from_fn(|_| UInt32Builder::with_capacity(rows)),
+            area_px: UInt64Builder::with_capacity(rows),
+            touches_edge: BooleanBuilder::with_capacity(rows),
+            image_bit_depth: UInt8Builder::with_capacity(rows),
+            intensities: std::array::from_fn(|_| {
+                ListBuilder::with_capacity(Float64Builder::with_capacity(rows * 4), rows)
+            }),
+            coloc_partner_ids: MapBuilder::new(
+                None,
+                Int32Builder::new(),
+                ListBuilder::new(StringBuilder::new()),
+            ),
+            f64: (0..F64_COLUMNS)
+                .map(|_| Float64Builder::with_capacity(rows))
+                .collect(),
+        }
+    }
+
+    fn f64(&mut self, column: F64, value: f64) {
+        self.f64[column as usize].append_value(value);
+    }
+
+    /// One row of every `intensity_*` list: position c + 1 holds channel c,
+    /// NULL for a channel without a measurement. `bit_max` turns the
+    /// `_normalized` values into gray values (`_gray`).
+    fn append_intensities(&mut self, intensities: &IndexMap<i32, Intensity>, bit_max: f64) {
+        let channels = intensities
+            .keys()
+            .filter(|channel| **channel >= 0)
+            .max()
+            .map_or(0, |max| *max as usize + 1);
+        for channel in 0..channels {
+            let stats = intensities.get(&(channel as i32)).map(|v| {
+                [
+                    v.sum_intensity,
+                    v.avg_intensity as f64,
+                    v.min_intensity as f64,
+                    v.max_intensity as f64,
+                ]
+            });
+            for (stat, pair) in self.intensities.chunks_mut(2).enumerate() {
+                let normalized = stats.map(|values| values[stat]);
+                pair[0].values().append_option(normalized);
+                pair[1]
+                    .values()
+                    .append_option(normalized.map(|normalized| normalized * bit_max));
+            }
+        }
+        for list in &mut self.intensities {
+            list.append(true);
+        }
+    }
+
+    /// One row of `coloc_partner_ids`: partner class -> partner object ids.
+    fn append_coloc(
+        &mut self,
+        colocalized_with: &IndexMap<ObjectClass, Vec<ObjectId>>,
+    ) -> Result<(), InternalErrors> {
+        for (class, ids) in colocalized_with {
+            self.coloc_partner_ids.keys().append_value(match class {
+                ObjectClass::Valid(n) => *n as i32,
+                ObjectClass::Unset => COLOC_UNSET_CLASS_KEY,
+            });
+            let partners = self.coloc_partner_ids.values();
+            for id in ids {
+                partners.values().append_value(id.to_string());
+            }
+            partners.append(true);
+        }
+        self.coloc_partner_ids
+            .append(true)
+            .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+
+    fn len(&self) -> usize {
+        self.object_id.len()
+    }
+
+    /// The collected rows as one batch, in the `objects` table's column
+    /// order (the Appender matches columns by position); leaves the
+    /// builders empty for the next batch.
+    fn finish(&mut self) -> Result<RecordBatch, InternalErrors> {
+        fn arr(builder: &mut dyn ArrayBuilder) -> ArrayRef {
+            builder.finish()
+        }
+        let mut f = |column: F64| arr(&mut self.f64[column as usize]);
+        let doubles_1 = [
+            f(F64::CentroidXPx),
+            f(F64::CentroidYPx),
+            f(F64::CentroidXNm),
+            f(F64::CentroidYNm),
+        ];
+        let doubles_2 = [
+            f(F64::BboxXminNm),
+            f(F64::BboxYminNm),
+            f(F64::BboxXmaxNm),
+            f(F64::BboxYmaxNm),
+        ];
+        let doubles_3 = [
+            f(F64::AreaNm2),
+            f(F64::PerimeterPx),
+            f(F64::PerimeterNm),
+            f(F64::Circularity),
+            f(F64::Solidity),
+            f(F64::AspectRatio),
+            f(F64::Roundness),
+            f(F64::Compactness),
+            f(F64::MajorAxisPx),
+            f(F64::MinorAxisPx),
+            f(F64::MajorAxisNm),
+            f(F64::MinorAxisNm),
+            f(F64::MajorAxisAngle),
+            f(F64::Eccentricity),
+            f(F64::FeretDiameterPx),
+            f(F64::MinFeretPx),
+            f(F64::FeretDiameterNm),
+            f(F64::MinFeretNm),
+        ];
+        let doubles_4 = [
+            f(F64::PixelSizeXNm),
+            f(F64::PixelSizeYNm),
+            f(F64::PixelSizeZNm),
+        ];
+        let [b0, b1, b2, b3] = &mut self.bbox_px;
+        let [n0, n1, n2, n3] = doubles_2;
+        let [
+            a0,
+            a1,
+            a2,
+            a3,
+            a4,
+            a5,
+            a6,
+            a7,
+            a8,
+            a9,
+            a10,
+            a11,
+            a12,
+            a13,
+            a14,
+            a15,
+            a16,
+            a17,
+        ] = doubles_3;
+        let [c0, c1, c2, c3] = doubles_1;
+        let [p0, p1, p2] = doubles_4;
+        let columns: Vec<(&str, ArrayRef)> = vec![
+            ("image_name", arr(&mut self.image_name)),
+            ("image_rel_path", arr(&mut self.image_rel_path)),
+            ("c_stack", arr(&mut self.c_stack)),
+            ("z_stack", arr(&mut self.z_stack)),
+            ("t_stack", arr(&mut self.t_stack)),
+            ("object_id", arr(&mut self.object_id)),
+            ("seg_class_name", arr(&mut self.seg_class_name)),
+            ("seg_class_id", arr(&mut self.seg_class_id)),
+            ("object_class_name", arr(&mut self.object_class_name)),
+            ("object_class_id", arr(&mut self.object_class_id)),
+            ("parent_id", arr(&mut self.parent_id)),
+            ("children", arr(&mut self.children)),
+            ("track_id", arr(&mut self.track_id)),
+            ("centroid_x_px", c0),
+            ("centroid_y_px", c1),
+            ("centroid_x_nm", c2),
+            ("centroid_y_nm", c3),
+            ("bbox_xmin_px", arr(b0)),
+            ("bbox_ymin_px", arr(b1)),
+            ("bbox_xmax_px", arr(b2)),
+            ("bbox_ymax_px", arr(b3)),
+            ("bbox_xmin_nm", n0),
+            ("bbox_ymin_nm", n1),
+            ("bbox_xmax_nm", n2),
+            ("bbox_ymax_nm", n3),
+            ("area_px", arr(&mut self.area_px)),
+            ("area_nm2", a0),
+            ("perimeter_px", a1),
+            ("perimeter_nm", a2),
+            ("circularity", a3),
+            ("solidity", a4),
+            ("aspect_ratio", a5),
+            ("roundness", a6),
+            ("compactness", a7),
+            ("major_axis_px", a8),
+            ("minor_axis_px", a9),
+            ("major_axis_nm", a10),
+            ("minor_axis_nm", a11),
+            ("major_axis_angle", a12),
+            ("eccentricity", a13),
+            ("feret_diameter_px", a14),
+            ("min_feret_px", a15),
+            ("feret_diameter_nm", a16),
+            ("min_feret_nm", a17),
+            ("touches_edge", arr(&mut self.touches_edge)),
+            ("pixel_size_x_nm", p0),
+            ("pixel_size_y_nm", p1),
+            ("pixel_size_z_nm", p2),
+            ("image_bit_depth", arr(&mut self.image_bit_depth)),
+        ];
+        let mut columns = columns;
+        for (name, builder) in INTENSITY_COLUMNS.iter().zip(&mut self.intensities) {
+            columns.push((name, arr(builder)));
+        }
+        columns.push(("coloc_partner_ids", arr(&mut self.coloc_partner_ids)));
+        RecordBatch::try_from_iter(columns).map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DDL
 // ---------------------------------------------------------------------------
 
@@ -185,7 +503,7 @@ CREATE TABLE IF NOT EXISTS objects (
     seg_class_name       VARCHAR,
     seg_class_id         INTEGER,
     object_class_name    VARCHAR,
-    object_class_id      VARCHAR,
+    object_class_id      INTEGER[],
     parent_id            VARCHAR,
     children             VARCHAR,
     track_id             UBIGINT,
@@ -225,8 +543,22 @@ CREATE TABLE IF NOT EXISTS objects (
     pixel_size_y_nm      DOUBLE,
     pixel_size_z_nm      DOUBLE,
     image_bit_depth      UTINYINT,
-    intensities_json     JSON,
-    coloc_json           JSON
+    -- Per-channel intensity statistics, one list each, indexed by channel:
+    -- channel c is at position c + 1 (DuckDB lists are 1-based), NULL for a
+    -- channel that wasn't measured. `_normalized` is the value divided by
+    -- the image's maximum gray value (0..1); `_gray` is the same value in
+    -- gray values, as in ImageJ/Fiji (normalized * (2^image_bit_depth - 1)).
+    intensity_sum_normalized     DOUBLE[],
+    intensity_sum_gray           DOUBLE[],
+    intensity_mean_normalized    DOUBLE[],
+    intensity_mean_gray          DOUBLE[],
+    intensity_min_normalized     DOUBLE[],
+    intensity_min_gray           DOUBLE[],
+    intensity_max_normalized     DOUBLE[],
+    intensity_max_gray           DOUBLE[],
+    -- Colocalization partners: partner object class id -> the ids of the
+    -- partner objects of that class (key -1: partners without a class).
+    coloc_partner_ids            MAP(INTEGER, UUID[])
 );
 
 CREATE TABLE IF NOT EXISTS images (
@@ -259,63 +591,6 @@ fn json_string_array(values: &[String]) -> String {
         .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
         .collect();
     format!("[{}]", items.join(","))
-}
-
-fn json_int_array(values: &[i32]) -> String {
-    let items: Vec<String> = values.iter().map(|n| n.to_string()).collect();
-    format!("[{}]", items.join(","))
-}
-
-// ---------------------------------------------------------------------------
-// JSON serialisation helpers
-// ---------------------------------------------------------------------------
-
-// Keys by the class's raw numeric id (not its display name) - a class
-// rename never invalidates an already-written `coloc_json`, and the id is
-// exactly what `Column::ColocCount`/`coloc_count` (results_generator.rs)
-// need anyway, since it only sums values regardless of key.
-fn coloc_to_json(colocalized_with: &IndexMap<ObjectClass, Vec<ObjectId>>) -> String {
-    let mut entries = Vec::with_capacity(colocalized_with.len());
-    for (class, ids) in colocalized_with {
-        let key = match class {
-            ObjectClass::Unset => "unset".to_string(),
-            ObjectClass::Valid(n) => n.to_string(),
-        };
-        let ids_str = ids
-            .iter()
-            .map(|id| format!("\"{}\"", id))
-            .collect::<Vec<_>>()
-            .join(",");
-        entries.push(format!("\"{}\":[{}]", key, ids_str));
-    }
-    format!("{{{}}}", entries.join(","))
-}
-
-fn intensities_to_json(intensities: &IndexMap<i32, Intensity>, bit_max: f64) -> String {
-    let mut entries = Vec::with_capacity(intensities.len());
-    for (ch, v) in intensities {
-        // Mean is the precomputed per-channel average (sum / area), so the DB matches
-        // what the rest of the app reports rather than re-deriving it here.
-        let mean = v.avg_intensity as f64;
-        let min = v.min_intensity as f64;
-        let max = v.max_intensity as f64;
-        entries.push(format!(
-            "\"{}\":{{\"sum_raw\":{:.6},\"sum_scaled\":{:.2},\
-                               \"mean_raw\":{:.6},\"mean_scaled\":{:.2},\
-                               \"min_raw\":{:.6},\"min_scaled\":{:.2},\
-                               \"max_raw\":{:.6},\"max_scaled\":{:.2}}}",
-            ch,
-            v.sum_intensity,
-            v.sum_intensity * bit_max,
-            mean,
-            mean * bit_max,
-            min,
-            min * bit_max,
-            max,
-            max * bit_max,
-        ));
-    }
-    format!("{{{}}}", entries.join(","))
 }
 
 // ---------------------------------------------------------------------------
@@ -365,16 +640,18 @@ impl PipelineResultExporter for DuckDbExporter {
 
         let label = |c: &ObjectClass| self.class_label(c);
 
-        // --- object rows via Appender ---
-        // List columns (object_class_name, object_class_id, children, parent_id)
-        // are stored as VARCHAR JSON strings; the read query casts them back to
-        // typed arrays so the reader code needs no changes.
-        // The Appender flushes its buffer to disk when it is dropped, giving
-        // constant memory usage regardless of how many images are processed.
+        // --- object rows via the Arrow appender ---
+        // Rows are collected into Arrow columns and appended a batch at a
+        // time: row by row, a 3.8M-object run took ~47 s instead of ~36 s
+        // (and `append_row` can't append the `object_class_id` list at all -
+        // see `ObjectColumns`). Batches are capped at `ARROW_BATCH_ROWS`, so
+        // a huge image never holds all its rows twice at once. The Appender
+        // flushes to the database when dropped.
         {
             let mut app = tx
                 .appender("objects")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            let mut columns = ObjectColumns::with_capacity(object_count.min(ARROW_BATCH_ROWS));
 
             for object in cache.object_cache.values() {
                 // get_perimeter()/get_ellipse() are precomputed at object creation on the
@@ -394,106 +671,95 @@ impl PipelineResultExporter for DuckDbExporter {
                     1.0
                 };
 
-                let parent_id: Option<String> = object.parent_id.as_ref().map(|id| id.to_string());
-                let track_id: u64 = object.track.id.0;
-
                 let object_class_names: Vec<String> = object
                     .object_class
                     .iter()
                     .filter(|c| **c != ObjectClass::Unset)
                     .map(|c| label(c))
                     .collect();
-                let object_class_ids: Vec<i32> = object
-                    .object_class
-                    .iter()
-                    .filter_map(|c| match c {
-                        ObjectClass::Valid(n) => Some(*n as i32),
-                        ObjectClass::Unset => None,
-                    })
-                    .collect();
                 let children_ids: Vec<String> =
                     object.children.iter().map(|id| id.to_string()).collect();
 
-                let object_class_names_json = json_string_array(&object_class_names);
-                let object_class_ids_json = json_int_array(&object_class_ids);
-                let children_json = json_string_array(&children_ids);
-                let coloc_json = coloc_to_json(&object.colocalized_with);
-                let intensities_json = intensities_to_json(&object.intensities, bit_max);
-
-                let seg_class_name = object.segmentation_class.to_string();
-                let seg_class_id = object.segmentation_class.0 as i32;
-                let object_id = object.id.to_string();
                 let centroid_x_px = centroid.0 as f64;
                 let centroid_y_px = centroid.1 as f64;
-                let perimeter_nm = perimeter * px_len;
-                let area_px = object.area as u64;
-                let area_nm2 = object.area as f64 * pxx * pxy;
                 // circularity and roundness use the identical 4π·area/perimeter² formula,
                 // so compute it once from the perimeter local. (get_roundness also guards
                 // perimeter == 0, which object.circularity() does not.)
                 let roundness = object.get_roundness(perimeter_f32) as f64;
-                let circularity = roundness;
-                let compactness = object.get_compactness(perimeter_f32) as f64;
-                let feret_nm = feret * px_len;
-                let min_feret_nm = min_feret * px_len;
-                let px_size_z = px.px_size_z as f64;
 
-                app.append_row(params![
-                    &image_name,                   // image_name
-                    &image_rel,                    // image_rel_path
-                    object.plane.c,                // c_stack
-                    object.plane.z,                // z_stack
-                    object.plane.t,                // t_stack
-                    &object_id,                    // object_id (VARCHAR → UUID column)
-                    &seg_class_name,               // seg_class_name
-                    seg_class_id,                  // seg_class_id
-                    &object_class_names_json,      // object_class_name (VARCHAR JSON)
-                    &object_class_ids_json,        // object_class_id   (VARCHAR JSON)
-                    &parent_id,                    // parent_id         (VARCHAR)
-                    &children_json,                // children          (VARCHAR JSON)
-                    track_id,                      // track_id
-                    centroid_x_px,                 // centroid_x_px
-                    centroid_y_px,                 // centroid_y_px
-                    centroid_x_px * pxx,           // centroid_x_nm
-                    centroid_y_px * pxy,           // centroid_y_nm
-                    object.bbox[0],                // bbox_xmin_px
-                    object.bbox[1],                // bbox_ymin_px
-                    object.bbox[2],                // bbox_xmax_px
-                    object.bbox[3],                // bbox_ymax_px
-                    object.bbox[0] as f64 * pxx,   // bbox_xmin_nm
-                    object.bbox[1] as f64 * pxy,   // bbox_ymin_nm
-                    object.bbox[2] as f64 * pxx,   // bbox_xmax_nm
-                    object.bbox[3] as f64 * pxy,   // bbox_ymax_nm
-                    area_px,                       // area_px
-                    area_nm2,                      // area_nm2
-                    perimeter,                     // perimeter_px
-                    perimeter_nm,                  // perimeter_nm
-                    circularity,                   // circularity
-                    object.get_solidity() as f64,  // solidity
-                    aspect_ratio,                  // aspect_ratio
-                    roundness,                     // roundness
-                    compactness,                   // compactness
-                    ellipse.major as f64,          // major_axis_px
-                    ellipse.minor as f64,          // minor_axis_px
-                    ellipse.major as f64 * px_len, // major_axis_nm
-                    ellipse.minor as f64 * px_len, // minor_axis_nm
-                    ellipse.angle as f64,          // major_axis_angle
-                    ellipse.eccentricity as f64,   // eccentricity
-                    feret,                         // feret_diameter_px
-                    min_feret,                     // min_feret_px
-                    feret_nm,                      // feret_diameter_nm
-                    min_feret_nm,                  // min_feret_nm
-                    object.touches_edge,           // touches_edge
-                    pxx,                           // pixel_size_x_nm
-                    pxy,                           // pixel_size_y_nm
-                    px_size_z,                     // pixel_size_z_nm
-                    nr_of_bits,                    // image_bit_depth
-                    &intensities_json,             // intensities_json
-                    &coloc_json,                   // coloc_json
-                ])
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+                let c = &mut columns;
+                c.image_name.append_value(&image_name);
+                c.image_rel_path.append_value(&image_rel);
+                c.c_stack.append_value(object.plane.c);
+                c.z_stack.append_value(object.plane.z);
+                c.t_stack.append_value(object.plane.t);
+                c.object_id.append_value(object.id.to_string());
+                c.seg_class_name
+                    .append_value(object.segmentation_class.to_string());
+                c.seg_class_id
+                    .append_value(object.segmentation_class.0 as i32);
+                c.object_class_name
+                    .append_value(json_string_array(&object_class_names));
+                for class in &object.object_class {
+                    if let ObjectClass::Valid(n) = class {
+                        c.object_class_id.values().append_value(*n as i32);
+                    }
+                }
+                c.object_class_id.append(true);
+                c.parent_id
+                    .append_option(object.parent_id.as_ref().map(|id| id.to_string()));
+                c.children.append_value(json_string_array(&children_ids));
+                c.track_id.append_value(object.track.id.0);
+                c.f64(F64::CentroidXPx, centroid_x_px);
+                c.f64(F64::CentroidYPx, centroid_y_px);
+                c.f64(F64::CentroidXNm, centroid_x_px * pxx);
+                c.f64(F64::CentroidYNm, centroid_y_px * pxy);
+                for (column, value) in c.bbox_px.iter_mut().zip(object.bbox) {
+                    column.append_value(value);
+                }
+                c.f64(F64::BboxXminNm, object.bbox[0] as f64 * pxx);
+                c.f64(F64::BboxYminNm, object.bbox[1] as f64 * pxy);
+                c.f64(F64::BboxXmaxNm, object.bbox[2] as f64 * pxx);
+                c.f64(F64::BboxYmaxNm, object.bbox[3] as f64 * pxy);
+                c.area_px.append_value(object.area as u64);
+                c.f64(F64::AreaNm2, object.area as f64 * pxx * pxy);
+                c.f64(F64::PerimeterPx, perimeter);
+                c.f64(F64::PerimeterNm, perimeter * px_len);
+                c.f64(F64::Circularity, roundness);
+                c.f64(F64::Solidity, object.get_solidity() as f64);
+                c.f64(F64::AspectRatio, aspect_ratio);
+                c.f64(F64::Roundness, roundness);
+                c.f64(
+                    F64::Compactness,
+                    object.get_compactness(perimeter_f32) as f64,
+                );
+                c.f64(F64::MajorAxisPx, ellipse.major as f64);
+                c.f64(F64::MinorAxisPx, ellipse.minor as f64);
+                c.f64(F64::MajorAxisNm, ellipse.major as f64 * px_len);
+                c.f64(F64::MinorAxisNm, ellipse.minor as f64 * px_len);
+                c.f64(F64::MajorAxisAngle, ellipse.angle as f64);
+                c.f64(F64::Eccentricity, ellipse.eccentricity as f64);
+                c.f64(F64::FeretDiameterPx, feret);
+                c.f64(F64::MinFeretPx, min_feret);
+                c.f64(F64::FeretDiameterNm, feret * px_len);
+                c.f64(F64::MinFeretNm, min_feret * px_len);
+                c.touches_edge.append_value(object.touches_edge);
+                c.f64(F64::PixelSizeXNm, pxx);
+                c.f64(F64::PixelSizeYNm, pxy);
+                c.f64(F64::PixelSizeZNm, px.px_size_z as f64);
+                c.image_bit_depth.append_value(nr_of_bits as u8);
+                c.append_intensities(&object.intensities, bit_max);
+                c.append_coloc(&object.colocalized_with)?;
+
+                if columns.len() >= ARROW_BATCH_ROWS {
+                    app.append_record_batch(columns.finish()?)
+                        .map_err(|e| InternalErrors::Io(e.to_string()))?;
+                }
             }
-            // Appender flushes to disk on drop
+            if columns.len() > 0 {
+                app.append_record_batch(columns.finish()?)
+                    .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            }
         }
 
         tx.commit().map_err(|e| InternalErrors::Io(e.to_string()))?;
@@ -537,5 +803,133 @@ impl PipelineResultExporter for DuckDbExporter {
         )
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::object::{Object, ObjectInit};
+    use bitvec::prelude::*;
+    use std::collections::HashSet;
+
+    fn object_in_classes(id: u128, classes: &[u32]) -> Object {
+        Object::new(ObjectInit {
+            id: ObjectId(id),
+            object_class: classes
+                .iter()
+                .map(|c| ObjectClass::Valid(*c))
+                .collect::<HashSet<_>>(),
+            bbox: [0, 0, 1, 1],
+            mask_data: BitVec::<u64, Lsb0>::repeat(true, 4),
+            area: 4,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn export_writes_object_classes_as_an_integer_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        cache.image_meta.nr_of_bits = 8;
+        cache
+            .object_cache
+            .insert(ObjectId(1), object_in_classes(1, &[4]));
+        cache
+            .object_cache
+            .insert(ObjectId(2), object_in_classes(2, &[1, 3]));
+        cache
+            .object_cache
+            .insert(ObjectId(3), object_in_classes(3, &[]));
+
+        exporter.export(&cache).unwrap();
+
+        let conn = shared_connection(&path).unwrap();
+        let column_type: String = conn
+            .query_row(
+                "SELECT data_type FROM information_schema.columns \
+                 WHERE table_name = 'objects' AND column_name = 'object_class_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(column_type, "INTEGER[]");
+        let classes: Vec<String> = conn
+            .prepare(
+                "SELECT CAST(list_sort(object_class_id) AS VARCHAR) FROM objects \
+                 ORDER BY len(object_class_id), list_sort(object_class_id)",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(classes, ["[]", "[4]", "[1, 3]"]);
+    }
+
+    #[test]
+    fn export_writes_intensities_per_channel_and_coloc_partners_as_a_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        cache.image_meta.nr_of_bits = 8; // gray value = normalized * 255
+        let mut object = object_in_classes(1, &[4]);
+        // Channels 0 and 2 measured, channel 1 not.
+        for (channel, value) in [(0, 0.5), (2, 0.25)] {
+            object.intensities.insert(
+                channel,
+                Intensity {
+                    sum_intensity: value * 4.0,
+                    min_intensity: value as f32 / 2.0,
+                    max_intensity: value as f32 * 2.0,
+                    avg_intensity: value as f32,
+                    pixel_values: Vec::new(),
+                },
+            );
+        }
+        object
+            .colocalized_with
+            .insert(ObjectClass::Valid(7), vec![ObjectId(2), ObjectId(3)]);
+        cache.object_cache.insert(ObjectId(1), object);
+        cache
+            .object_cache
+            .insert(ObjectId(2), object_in_classes(2, &[7]));
+
+        exporter.export(&cache).unwrap();
+
+        let conn = shared_connection(&path).unwrap();
+        let row = |sql: &str| -> String {
+            conn.query_row(
+                &format!("SELECT CAST(({sql}) AS VARCHAR) FROM objects ORDER BY object_id LIMIT 1"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(row("intensity_mean_normalized"), "[0.5, NULL, 0.25]");
+        assert_eq!(row("intensity_mean_gray"), "[127.5, NULL, 63.75]");
+        assert_eq!(row("intensity_sum_normalized"), "[2.0, NULL, 1.0]");
+        assert_eq!(row("intensity_min_normalized"), "[0.25, NULL, 0.125]");
+        assert_eq!(row("intensity_max_gray"), "[255.0, NULL, 127.5]");
+        assert_eq!(row("len(coloc_partner_ids[7])"), "2");
+        assert_eq!(
+            row("coloc_partner_ids[7][1]"),
+            ObjectId(2).to_string(),
+            "partner ids are stored as UUIDs"
+        );
+        let without: (String, String) = conn
+            .query_row(
+                "SELECT CAST(intensity_mean_normalized AS VARCHAR), CAST(coloc_partner_ids AS VARCHAR) \
+                 FROM objects ORDER BY object_id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(without, ("[]".to_string(), "{}".to_string()));
     }
 }

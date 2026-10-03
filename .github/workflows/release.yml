@@ -263,6 +263,13 @@ jobs:
       - name: Build
         run: cargo build-linux
 
+      - name: Check that libtorch_cuda is linked
+        # Without it the binary silently runs CPU-only - see relink_torch_cuda
+        # in crates/bin/build.rs.
+        run: |
+          readelf -d target/x86_64-unknown-linux-gnu/release/evanalyzer | grep -q "libtorch_cuda.so" \
+            || { echo "::error::evanalyzer does not link libtorch_cuda.so - the CUDA build would run CPU-only"; exit 1; }
+
       - name: Download templates
         uses: actions/download-artifact@v4
         with:
@@ -380,6 +387,19 @@ jobs:
 
       - name: Build
         run: cargo build-win
+
+      - name: Check that torch_cuda.dll is linked
+        # Without it the exe silently runs CPU-only - see relink_torch_cuda in
+        # crates/bin/build.rs. POSIX sh only (the container has no bash).
+        run: |
+          exe=target/x86_64-pc-windows-msvc/release/evanalyzer.exe
+          dump=$(command -v llvm-objdump || ls /usr/bin/llvm-objdump-* 2>/dev/null | head -n 1)
+          if [ -z "$dump" ]; then
+            echo "::warning::llvm-objdump not found - cannot check that torch_cuda.dll is linked"
+            exit 0
+          fi
+          "$dump" -p "$exe" | grep -qi "DLL Name: torch_cuda.dll" \
+            || { echo "::error::evanalyzer.exe does not import torch_cuda.dll - the CUDA build would run CPU-only"; exit 1; }
 
       - name: Download templates
         uses: actions/download-artifact@v4

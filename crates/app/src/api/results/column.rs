@@ -56,10 +56,10 @@ impl Column {
                 format!("n_colocalized_class_{name}")
             }
             Column::ColocCount(ObjectClass::Unset) => "n_colocalized_unset".to_string(),
-            Column::IntensityAvg(channel) => format!("mean_scaled_ch{channel}"),
-            Column::IntensitySum(channel) => format!("sum_scaled_ch{channel}"),
-            Column::IntensityMin(channel) => format!("min_scaled_ch{channel}"),
-            Column::IntensityMax(channel) => format!("max_scaled_ch{channel}"),
+            Column::IntensityAvg(channel) => format!("intensity_mean_gray_ch{channel}"),
+            Column::IntensitySum(channel) => format!("intensity_sum_gray_ch{channel}"),
+            Column::IntensityMin(channel) => format!("intensity_min_gray_ch{channel}"),
+            Column::IntensityMax(channel) => format!("intensity_max_gray_ch{channel}"),
         }
     }
 
@@ -112,16 +112,16 @@ impl Column {
         if key == "n_colocalized_unset" {
             return Some(Column::ColocCount(ObjectClass::Unset));
         }
-        if let Some(channel) = key.strip_prefix("mean_scaled_ch") {
+        if let Some(channel) = key.strip_prefix("intensity_mean_gray_ch") {
             return channel.parse().ok().map(Column::IntensityAvg);
         }
-        if let Some(channel) = key.strip_prefix("sum_scaled_ch") {
+        if let Some(channel) = key.strip_prefix("intensity_sum_gray_ch") {
             return channel.parse().ok().map(Column::IntensitySum);
         }
-        if let Some(channel) = key.strip_prefix("min_scaled_ch") {
+        if let Some(channel) = key.strip_prefix("intensity_min_gray_ch") {
             return channel.parse().ok().map(Column::IntensityMin);
         }
-        if let Some(channel) = key.strip_prefix("max_scaled_ch") {
+        if let Some(channel) = key.strip_prefix("intensity_max_gray_ch") {
             return channel.parse().ok().map(Column::IntensityMax);
         }
         Some(match key {

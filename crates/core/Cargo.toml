@@ -31,7 +31,7 @@ serde = { workspace = true, features = ["derive", "rc"] }
 indexmap = { workspace = true, features = ["serde", "rayon"] }
 bitvec = { workspace = true, features = ["serde", "alloc", "atomic", "std"] }
 csv = { workspace = true }
-duckdb = { workspace = true }
+duckdb = { workspace = true, features = ["appender-arrow"] }
 tch = {   workspace = true,  optional = true }
 smartcore = {  workspace = true, features = ["serde"], optional = true }
 burn = { workspace = true , optional = true }

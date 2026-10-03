@@ -223,7 +223,7 @@ impl ResultsGenerator {
             );
         }
         if let Some(ids) = &class_ids {
-            conditions.push(object_class_filter_sql("object_class_id", ids));
+            conditions.push(class_filter_sql("object_class_id", ids));
         }
         // Keyset pagination (see the doc comment on `Pagination::after`):
         // narrowing to `object_id > cursor` here, in the same WHERE clause
@@ -243,7 +243,7 @@ impl ResultsGenerator {
         // — then re-fetch full rows filtered to exactly those ids. Doing it
         // in one wide `SELECT ... WHERE ... ORDER BY object_id LIMIT n`
         // forces DuckDB to decode every selected column (including whatever
-        // of `coloc_json`/`intensities_json` was requested) for every row
+        // of the colocalization map/intensity lists was requested) for every row
         // that matches the WHERE clause before it can even start sorting —
         // on this app's tables that's routinely the *entire* table, since
         // z/t-plane and image/class filters often don't narrow anything.
@@ -270,7 +270,7 @@ impl ResultsGenerator {
         // Only pull the source columns `ordered_columns` actually needs.
         // DuckDB is columnar: a column replaced by a constant here is never
         // read off disk or carried through the sort, so an unselected
-        // `coloc_json`/`intensities_json` (each row's biggest fields, since
+        // `coloc_partner_ids`/`intensity_*` (each row's biggest fields, since
         // every other field is a fixed-width number or a short string) costs
         // nothing instead of being materialized for every row that matches
         // the WHERE clause before LIMIT/OFFSET trims it down to one page —
@@ -412,7 +412,7 @@ impl ResultsGenerator {
             if ids.is_empty() {
                 return Ok(empty_result());
             }
-            pre.push(object_class_filter_sql("object_class_id", ids));
+            pre.push(class_filter_sql("object_class_id", ids));
             post.push(format!("class_id IN ({})", sql_u32_list(ids)));
         }
         // The classes every analysed image gets a row (or, transposed, a
@@ -829,9 +829,8 @@ impl ResultsGenerator {
             }
             conditions.join(" AND ")
         };
-        let mut conditions = base_conditions.to_vec();
-        conditions.push(format!("class_id IN ({})", sql_u32_list(blocks)));
-        let conditions = conditions.join(" AND ");
+        let conditions = base_conditions.join(" AND ");
+        let block_ids = sql_u32_list(blocks);
 
         // Numbering objects into rows needs a sort per (image, class), so
         // only the next few images get numbered: start with 4 and widen 4x
@@ -858,8 +857,8 @@ impl ResultsGenerator {
                 "WITH ranked AS (\n\
                     SELECT image_rel_path, image_name, class_id, object_id,\n\
                            row_number() OVER (PARTITION BY image_rel_path, class_id ORDER BY object_id) AS rn\n\
-                    FROM objects, UNNEST(CAST(object_class_id AS INTEGER[])) AS u(class_id)\n\
-                    WHERE {conditions} AND image_rel_path IN ({})\n\
+                    FROM ({}) AS u\n\
+                    WHERE class_id IN ({block_ids})\n\
                  ), page AS (\n\
                     SELECT DISTINCT image_rel_path, rn FROM ranked {page_condition}\n\
                     ORDER BY image_rel_path, rn LIMIT {limit}\n\
@@ -867,7 +866,10 @@ impl ResultsGenerator {
                  SELECT r.image_rel_path, r.image_name, r.rn, r.class_id, r.object_id::VARCHAR\n\
                  FROM ranked r JOIN page p ON r.image_rel_path = p.image_rel_path AND r.rn = p.rn\n\
                  ORDER BY r.image_rel_path, r.rn, r.class_id",
-                sql_string_in_list(&images)
+                objects_per_class_sql(&format!(
+                    "{conditions} AND image_rel_path IN ({})",
+                    sql_string_in_list(&images)
+                )),
             );
             let mut stmt = self.database.prepare(&sql).map_err(err)?;
             let slots: Vec<(String, String, i64, u32, String)> = stmt
@@ -999,20 +1001,9 @@ impl ResultsGenerator {
         let mut partners_by_object: HashMap<String, HashMap<ObjectClass, Vec<String>>> =
             HashMap::new();
         for object in objects {
-            let parsed: Option<serde_json::Value> = serde_json::from_str(&object.coloc_json).ok();
             let mut per_class: HashMap<ObjectClass, Vec<String>> = HashMap::new();
             for class in coloc_class_columns {
-                let key = coloc_class_key(*class);
-                let ids: Vec<String> = parsed
-                    .as_ref()
-                    .and_then(|value| value.get(&key))
-                    .and_then(|value| value.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|value| value.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let ids = coloc_partners(object, *class).cloned().unwrap_or_default();
                 partner_ids.extend(ids.iter().cloned());
                 per_class.insert(*class, ids);
             }
@@ -1131,17 +1122,14 @@ impl ResultsGenerator {
             format!("o.t_stack = {}", filter.plane.t_stack),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            object_conditions.push(object_class_filter_sql("o.object_class_id", &[id]));
+            object_conditions.push(class_filter_sql("o.object_class_id", &[id]));
         }
         let object_where = object_conditions.join(" AND ");
-        // `column_aggregate_expr`'s bare column names (e.g. "area_px") need
-        // qualifying against `objects o` now that this SELECT also has
-        // `images i` in scope; `Column::Count`'s "*" needs no such prefix.
-        let value_expr_sql = if value_expr == "*" {
-            value_expr
-        } else {
-            format!("o.{value_expr}")
-        };
+        // `column_aggregate_expr`'s column names are unambiguous next to
+        // `images i` (see its doc comment) - prefixing the whole expression
+        // with `o.` broke every expression that isn't a bare column (e.g.
+        // `o.COALESCE(...)` for a colocalization count).
+        let value_expr_sql = value_expr;
 
         // Two nested queries rather than one flat `images LEFT JOIN
         // objects`: a flat join would put the z/t-stack + class filter in
@@ -1270,12 +1258,8 @@ impl ResultsGenerator {
                     "img.any_measured",
                 ));
                 let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
-                // Qualified against `objects o` - see `get_group_by_plate`.
-                let value_expr_sql = if value_expr == "*" {
-                    value_expr
-                } else {
-                    format!("o.{value_expr}")
-                };
+                // Unqualified - see `get_group_by_plate`.
+                let value_expr_sql = value_expr;
                 value_exprs.push(format!(
                     "{agg_fn}({value_expr_sql}) AS value_{}",
                     value_exprs.len()
@@ -1300,7 +1284,7 @@ impl ResultsGenerator {
                 format!("o.t_stack = {}", filter.plane.t_stack),
             ];
             if let ObjectClass::Valid(id) = object_class {
-                object_conditions.push(object_class_filter_sql("o.object_class_id", &[*id]));
+                object_conditions.push(class_filter_sql("o.object_class_id", &[*id]));
             }
             let object_where = object_conditions.join(" AND ");
             let agg_value_cols = agg_value_cols.join(", ");
@@ -1419,7 +1403,7 @@ impl ResultsGenerator {
             format!("t_stack = {}", filter.plane.t_stack),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            object_conditions.push(object_class_filter_sql("object_class_id", &[id]));
+            object_conditions.push(class_filter_sql("object_class_id", &[id]));
         }
         let object_where = object_conditions.join(" AND ");
 
@@ -1532,7 +1516,7 @@ impl ResultsGenerator {
             format!("t_stack = {}", filter.plane.t_stack),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            object_conditions.push(object_class_filter_sql("object_class_id", &[id]));
+            object_conditions.push(class_filter_sql("object_class_id", &[id]));
         }
         let object_where = object_conditions.join(" AND ");
 
@@ -1674,7 +1658,7 @@ impl ResultsGenerator {
                 format!("t_stack = {}", filter.plane.t_stack),
             ];
             if let ObjectClass::Valid(id) = object_class {
-                object_conditions.push(object_class_filter_sql("object_class_id", &[*id]));
+                object_conditions.push(class_filter_sql("object_class_id", &[*id]));
             }
             let object_where = object_conditions.join(" AND ");
 
@@ -1826,7 +1810,7 @@ impl ResultsGenerator {
             format!("image_rel_path = '{image_rel_path}'"),
         ];
         if let ObjectClass::Valid(id) = filter.object_class {
-            conditions.push(object_class_filter_sql("object_class_id", &[id]));
+            conditions.push(class_filter_sql("object_class_id", &[id]));
         }
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
 
@@ -2095,19 +2079,18 @@ impl ResultsGenerator {
     }
 
     /// Every class id that appears as a colocalization partner in at least
-    /// one object's `coloc_json` — i.e. the candidates for a
+    /// one object's `coloc_partner_ids` — i.e. the candidates for a
     /// `Column::ColocCount(class)` column, mirroring how
     /// `get_available_columns` enumerates one Avg/Sum/Min/Max intensity
-    /// column per `get_nr_of_c_stacks()` channel. `coloc_json` is keyed by
-    /// class id directly (see `coloc_to_json` in evanalyzer_core's
-    /// duckdb.rs), so this just needs the distinct keys across every
-    /// non-empty `coloc_json` — no join against `classes` required to
-    /// recover the id itself, only to resolve display names later in
-    /// `get_available_columns`.
+    /// column per `get_nr_of_c_stacks()` channel. The map is keyed by class
+    /// id directly (see evanalyzer_core's duckdb.rs), so this just needs the
+    /// distinct keys across every non-empty map — no join against `classes`
+    /// required to recover the id itself, only to resolve display names
+    /// later in `get_available_columns`.
     ///
     /// Cached after the first call for this opened database (see
     /// `coloc_classes_cache`), same reasoning as `get_object_classes`: this
-    /// scans every non-empty `coloc_json` in the table, and the set of
+    /// scans every non-empty `coloc_partner_ids` in the table, and the set of
     /// classes ever recorded as a coloc partner can't change without
     /// re-exporting (i.e. opening a different database).
     pub fn get_object_classes_with_at_least_coloc(
@@ -2121,20 +2104,20 @@ impl ResultsGenerator {
         let mut stmt = self
             .database
             .prepare(
-                "SELECT DISTINCT UNNEST(json_keys(coloc_json)) AS class_key \
+                "SELECT DISTINCT UNNEST(map_keys(coloc_partner_ids)) AS class_key \
                  FROM objects \
-                 WHERE coloc_json IS NOT NULL AND CAST(coloc_json AS VARCHAR) != '{}'",
+                 WHERE cardinality(coloc_partner_ids) > 0",
             )
             .map_err(err)?;
-        let keys: Vec<String> = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+        let keys: Vec<i32> = stmt
+            .query_map([], |row| row.get::<_, i32>(0))
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
 
         let mut classes: Vec<ObjectClass> = keys
             .into_iter()
-            .filter_map(|key| key.parse::<u32>().ok())
+            .filter_map(|key| u32::try_from(key).ok())
             .map(ObjectClass::Valid)
             .collect();
         classes.sort();
@@ -2226,8 +2209,12 @@ struct ObjectRow {
     circularity: f64,
     solidity: f64,
     eccentricity: f64,
-    coloc_json: String,
-    intensities_json: String,
+    /// Colocalization partners: (partner class key, partner object ids) -
+    /// see `coloc_partner_ids` in evanalyzer_core's duckdb.rs.
+    coloc: Vec<(i32, Vec<String>)>,
+    /// Per-channel intensities in gray values, `[sum, mean, min, max]`,
+    /// each indexed by channel (`None` where not measured).
+    intensities: [Vec<Option<f64>>; 4],
     // Always fetched (unlike every field above, gated by `ObjectColumnNeeds`
     // on whether its `Column` is actually selected/displayed) - needed by
     // the GUI to navigate to and highlight this object in its source image
@@ -2347,21 +2334,22 @@ fn object_select_clause(need: ObjectColumnNeeds) -> String {
     } else {
         "0.0::DOUBLE"
     };
-    let select_coloc_json = if need.coloc {
-        "o.coloc_json"
+    let select_coloc = if need.coloc {
+        "map_keys(o.coloc_partner_ids), CAST(map_values(o.coloc_partner_ids) AS VARCHAR[][])"
     } else {
-        "NULL::VARCHAR"
+        "NULL::INTEGER[], NULL::VARCHAR[][]"
     };
-    let select_intensities_json = if need.intensities {
-        "o.intensities_json"
+    let select_intensities = if need.intensities {
+        "o.intensity_sum_gray, o.intensity_mean_gray, o.intensity_min_gray, \
+         o.intensity_max_gray"
     } else {
-        "NULL::VARCHAR"
+        "NULL::DOUBLE[], NULL::DOUBLE[], NULL::DOUBLE[], NULL::DOUBLE[]"
     };
     format!(
         "o.object_id, {select_image_name}, {select_object_class_name}, {select_seg_class_name},\n\
                 {select_area_px}, {select_area_nm2}, {select_perimeter_px}, {select_perimeter_nm},\n\
                 {select_circularity}, {select_solidity}, {select_eccentricity},\n\
-                {select_coloc_json}, {select_intensities_json},\n\
+                {select_coloc}, {select_intensities},\n\
                 o.image_rel_path, o.bbox_xmin_px, o.bbox_ymin_px, o.bbox_xmax_px, o.bbox_ymax_px,\n\
                 COALESCE(i.disabled, false)"
     )
@@ -2382,25 +2370,28 @@ fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
         circularity: row.get(8)?,
         solidity: row.get(9)?,
         eccentricity: row.get(10)?,
-        coloc_json: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
-        intensities_json: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
-        image_rel_path: row.get(13)?,
-        bbox_xmin_px: row.get(14)?,
-        bbox_ymin_px: row.get(15)?,
-        bbox_xmax_px: row.get(16)?,
-        bbox_ymax_px: row.get(17)?,
-        disabled: row.get(18)?,
+        coloc: extract_int_list(row.get::<_, Value>(11)?)
+            .into_iter()
+            .zip(match row.get::<_, Value>(12)? {
+                Value::List(lists) | Value::Array(lists) => {
+                    lists.into_iter().map(extract_string_list).collect()
+                }
+                _ => Vec::new(),
+            })
+            .collect(),
+        intensities: [
+            extract_f64_list(row.get::<_, Value>(13)?),
+            extract_f64_list(row.get::<_, Value>(14)?),
+            extract_f64_list(row.get::<_, Value>(15)?),
+            extract_f64_list(row.get::<_, Value>(16)?),
+        ],
+        image_rel_path: row.get(17)?,
+        bbox_xmin_px: row.get(18)?,
+        bbox_ymin_px: row.get(19)?,
+        bbox_xmax_px: row.get(20)?,
+        bbox_ymax_px: row.get(21)?,
+        disabled: row.get(22)?,
     })
-}
-
-/// `coloc_json`'s key for `class` (see `coloc_to_json` in evanalyzer_core's
-/// duckdb.rs) — shared by `coloc_count_for_class` and `get_list`'s
-/// coloc-detail partner resolution so both agree on the same lookup.
-fn coloc_class_key(class: ObjectClass) -> String {
-    match class {
-        ObjectClass::Valid(n) => n.to_string(),
-        ObjectClass::Unset => "unset".to_string(),
-    }
 }
 
 /// `DatabaseResult::row_locations`' entry for `object` — its source image
@@ -2448,7 +2439,7 @@ fn is_resolvable_metric(column: &Column) -> bool {
     )
 }
 
-/// Display label for a `coloc_json`/`object_class_name`-adjacent class,
+/// Display label for a `coloc_partner_ids`/`object_class_name`-adjacent class,
 /// e.g. for a coloc-detail column header — the class's registered name, or
 /// `"class {n}"` if `n` isn't (or no longer is) a recognized id.
 pub(crate) fn class_display_label(class: ObjectClass, classes: &[Class]) -> String {
@@ -2480,34 +2471,41 @@ fn class_blocks(selected: Option<&[u32]>, classes: &[Class]) -> Vec<u32> {
     ids
 }
 
-/// SQL condition that the object's `column` (its `object_class_id`, a JSON
-/// list stored as text, e.g. `"[1, 3]"`) contains any of `ids`.
+/// The objects matching `conditions`, one row per (object, class) - every
+/// column of `objects` plus the unpacked `class_id` (none for an object
+/// without a class).
 ///
-/// Parsing that text into a list for every object is what made a class
-/// filter expensive (~47 ms vs ~10 ms on a 3.8M-object file); a results
-/// file only has a handful of distinct class combinations, so they're
-/// parsed once each and the objects matched by their unparsed text.
-pub(super) fn object_class_filter_sql(column: &str, ids: &[u32]) -> String {
+/// Unpacked in the `SELECT` list, not as `FROM objects, UNNEST(...)`: with
+/// the latter, any later condition on `class_id` (even in `HAVING`) made
+/// DuckDB pick a plan taking ~1 s and ~2.8 GB instead of ~24 ms and ~90 MB
+/// on a 3.8M-object file.
+pub(super) fn objects_per_class_sql(conditions: &str) -> String {
     format!(
-        "{column} IN (\
-         SELECT class_list FROM (SELECT DISTINCT object_class_id AS class_list FROM objects) \
-         WHERE list_has_any(CAST(class_list AS INTEGER[]), {}))",
-        sql_int_array_literal(ids)
+        "SELECT *, UNNEST(object_class_id) AS class_id \
+         FROM objects WHERE {conditions}"
     )
+}
+
+/// SQL condition that the object's class list `column` (its
+/// `object_class_id`) contains any of `ids` - one `list_contains` per id
+/// (~3 ms vs ~20 ms for a single `list_has_any` on a 3.8M-object file).
+pub(super) fn class_filter_sql(column: &str, ids: &[u32]) -> String {
+    let any = ids
+        .iter()
+        .map(|id| format!("list_contains({column}, {id})"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    format!("({any})")
 }
 
 /// The objects grouped per (image, class), one `value_{i}` per statistic
 /// in `stats` plus `n_objects` - the first stage of both per-image views.
 ///
-/// `object_class_id` is a per-object list stored as text (`"[4]"`,
-/// `"[1,3]"`; multi-class objects exist), unpacked into one `class_id` per
-/// (object, class) pair before grouping; an object without any class
-/// contributes no row. Unpacking every object's list was the most
-/// expensive part (~50 ms and ~300 MB peak on a 3.8M-object file), so the
-/// common single-class text is read as a number directly and only the rare
-/// multi-class lists are unpacked (~32 ms, ~80 MB; same groups and values).
-/// `pre` filters the objects before that, `post` the (object, class) rows
-/// (conditions on `class_id`).
+/// `object_class_id` is a per-object list (multi-class objects exist),
+/// unpacked into one `class_id` per (object, class) pair before grouping;
+/// an object without any class contributes no row. `pre` filters the
+/// objects before that, `post` the (object, class) rows (conditions on
+/// `class_id`).
 fn per_image_class_sql(
     stats: &[(&Column, &Aggregation)],
     pre: &[String],
@@ -2526,20 +2524,11 @@ fn per_image_class_sql(
     Ok(format!(
         "SELECT image_rel_path, MIN(image_name) AS image_name, class_id,\n\
              COUNT(*) AS n_objects, {values}\n\
-         FROM (\n\
-             SELECT *, CAST(trim(object_class_id, '[] ') AS INTEGER) AS class_id\n\
-             FROM objects\n\
-             WHERE {pre} AND object_class_id NOT LIKE '%,%'\n\
-                 AND trim(object_class_id, '[] ') <> ''\n\
-             UNION ALL\n\
-             SELECT o.*, u.class_id\n\
-             FROM (SELECT * FROM objects WHERE {pre} AND object_class_id LIKE '%,%') AS o,\n\
-                 UNNEST(CAST(o.object_class_id AS INTEGER[])) AS u(class_id)\n\
-         )\n\
+         FROM ({per_class}) AS u\n\
          WHERE {post}\n\
          GROUP BY image_rel_path, class_id",
         values = values.join(", "),
-        pre = pre.join(" AND "),
+        per_class = objects_per_class_sql(&pre.join(" AND ")),
     ))
 }
 
@@ -2620,6 +2609,34 @@ pub(super) fn sql_int_array_literal(values: &[u32]) -> String {
 
 /// Converts a DuckDB list/array value (as returned for a `VARCHAR[]`
 /// column) into a `Vec<String>`, dropping any non-text elements.
+fn extract_int_list(value: Value) -> Vec<i32> {
+    match value {
+        Value::List(items) | Value::Array(items) => items
+            .into_iter()
+            .filter_map(|item| match item {
+                Value::Int(v) => Some(v),
+                _ => None,
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
+/// A `DOUBLE[]` value, keeping each NULL element as `None` so positions
+/// (= channels) stay aligned.
+fn extract_f64_list(value: Value) -> Vec<Option<f64>> {
+    match value {
+        Value::List(items) | Value::Array(items) => items
+            .into_iter()
+            .map(|item| match item {
+                Value::Double(v) => Some(v),
+                _ => None,
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
 fn extract_string_list(value: Value) -> Vec<String> {
     match value {
         Value::List(items) | Value::Array(items) => items
@@ -2711,74 +2728,65 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             ..no_bg
         },
         Column::ColocCount(class) => Cell {
-            value: CellValue::Integer(coloc_count_for_class(&object.coloc_json, *class)),
-            ..no_bg
-        },
-        Column::IntensityAvg(channel) => Cell {
-            value: CellValue::Float(intensity_stat(
-                &object.intensities_json,
-                *channel,
-                "mean_scaled",
-            )),
+            value: CellValue::Integer(
+                coloc_partners(object, *class).map_or(0, |ids| ids.len() as i32),
+            ),
             ..no_bg
         },
         Column::IntensitySum(channel) => Cell {
-            value: CellValue::Float(intensity_stat(
-                &object.intensities_json,
-                *channel,
-                "sum_scaled",
-            )),
+            value: CellValue::Float(intensity_stat(object, IntensityStat::Sum, *channel)),
+            ..no_bg
+        },
+        Column::IntensityAvg(channel) => Cell {
+            value: CellValue::Float(intensity_stat(object, IntensityStat::Mean, *channel)),
             ..no_bg
         },
         Column::IntensityMin(channel) => Cell {
-            value: CellValue::Float(intensity_stat(
-                &object.intensities_json,
-                *channel,
-                "min_scaled",
-            )),
+            value: CellValue::Float(intensity_stat(object, IntensityStat::Min, *channel)),
             ..no_bg
         },
         Column::IntensityMax(channel) => Cell {
-            value: CellValue::Float(intensity_stat(
-                &object.intensities_json,
-                *channel,
-                "max_scaled",
-            )),
+            value: CellValue::Float(intensity_stat(object, IntensityStat::Max, *channel)),
             ..no_bg
         },
     }
 }
 
-/// Number of `class`-colocalizing partners a object has, from the raw
-/// `{"<class_id>": [<object ids>], ...}` shape `coloc_json` stores (see
-/// `coloc_to_json` in evanalyzer_core's duckdb.rs) — keyed by the target
-/// class's numeric id, not its name. `0` if `class` never shows up as a key
-/// at all (no colocalization with that class recorded for this object).
-fn coloc_count_for_class(coloc_json: &str, class: ObjectClass) -> i32 {
-    let Ok(serde_json::Value::Object(partners)) = serde_json::from_str(coloc_json) else {
-        return 0;
-    };
-    let key = match class {
-        ObjectClass::Valid(n) => n.to_string(),
-        ObjectClass::Unset => "unset".to_string(),
-    };
-    partners
-        .get(&key)
-        .and_then(|v| v.as_array())
-        .map_or(0, |ids| ids.len() as i32)
+/// The `coloc_partner_ids` map key of `class` - its id, or -1 for
+/// partners without a class (see evanalyzer_core's duckdb.rs).
+fn coloc_class_key(class: ObjectClass) -> i32 {
+    match class {
+        ObjectClass::Valid(n) => n as i32,
+        ObjectClass::Unset => -1,
+    }
 }
 
-/// One channel's stat out of the raw `{"<channel>": {"mean_raw": ..., ...},
-/// ...}` shape `intensities_json` stores (see `intensities_to_json` in
-/// evanalyzer_core, whose stat key names this mirrors exactly).
-fn intensity_stat(intensities_json: &str, channel: u32, stat: &str) -> f32 {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(intensities_json) else {
-        return 0.0;
-    };
-    value
-        .get(channel.to_string())
-        .and_then(|channel| channel.get(stat))
-        .and_then(|v| v.as_f64())
+/// `object`'s colocalization partners of `class`, if it has any.
+fn coloc_partners(object: &ObjectRow, class: ObjectClass) -> Option<&Vec<String>> {
+    let key = coloc_class_key(class);
+    object
+        .coloc
+        .iter()
+        .find(|(partner_class, _)| *partner_class == key)
+        .map(|(_, ids)| ids)
+}
+
+/// Position of a statistic in `ObjectRow::intensities`.
+#[derive(Clone, Copy)]
+enum IntensityStat {
+    Sum,
+    Mean,
+    Min,
+    Max,
+}
+
+/// One channel's statistic in gray values; 0 for a channel that wasn't
+/// measured (as before, when it came from JSON).
+fn intensity_stat(object: &ObjectRow, stat: IntensityStat, channel: u32) -> f32 {
+    object.intensities[stat as usize]
+        .get(channel as usize)
+        .copied()
+        .flatten()
         .unwrap_or(0.0) as f32
 }
 
@@ -2788,12 +2796,11 @@ fn intensity_stat(intensities_json: &str, channel: u32, stat: &str) -> f32 {
 /// `pub(super)`), which aggregate nothing themselves but still need a bare
 /// per-object value expression to bucket/plot/box.
 /// Plain numeric `objects` columns are a direct column reference;
-/// `ColocCount` is a `json_array_length` extraction (see
-/// `coloc_count_for_class`, which does the same lookup per-row in Rust for
-/// `get_list`). The per-channel intensity columns still need their own
-/// JSON-extraction SQL (see `intensity_stat`, which — like `coloc_count_for_class`
-/// before this — only handles this per-row in Rust today, not as a groupable
-/// SQL expression), left for a follow-up.
+/// `ColocCount` looks the class up in `coloc_partner_ids` and intensities
+/// pick their channel out of the per-channel lists (the same values
+/// `coloc_partners`/`intensity_stat` read per row for the list view).
+/// Unqualified column names: none of them exists in `images` as well, so
+/// they stay unambiguous in queries joining it.
 pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalErrors> {
     Ok(match column {
         Column::AreaSizePx => "area_px".to_string(),
@@ -2803,30 +2810,23 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
         Column::Circularity => "circularity".to_string(),
         Column::Solidity => "solidity".to_string(),
         Column::Eccentricity => "eccentricity".to_string(),
-        // Same shape as `coloc_partner_count_expr` in evanalyzer_core's
-        // duckdb.rs: `coloc_json` is a native `JSON` column, keyed by class
-        // id (see `coloc_to_json`), so `->` always receives well-formed
-        // JSON — no string-literal-cast guard needed here.
-        Column::ColocCount(ObjectClass::Valid(class_id)) => {
-            format!("COALESCE(json_array_length(coloc_json -> '{class_id}'), 0)")
-        }
-        Column::ColocCount(ObjectClass::Unset) => {
-            "COALESCE(json_array_length(coloc_json -> 'unset'), 0)".to_string()
-        }
+        Column::ColocCount(class) => format!(
+            "COALESCE(len(coloc_partner_ids[{}]), 0)",
+            coloc_class_key(*class)
+        ),
+        // Gray values, like the list view; NULL (left out of every
+        // aggregate) for a channel the object wasn't measured in.
+        Column::IntensitySum(channel) => format!("intensity_sum_gray[{}]", channel + 1),
+        Column::IntensityAvg(channel) => format!("intensity_mean_gray[{}]", channel + 1),
+        Column::IntensityMin(channel) => format!("intensity_min_gray[{}]", channel + 1),
+        Column::IntensityMax(channel) => format!("intensity_max_gray[{}]", channel + 1),
         // Handled by `aggregate_sql` before this function is ever called
         // with `Column::Count` — `COUNT(*)` doesn't fit the "aggregate
         // function wraps a per-row scalar expression" shape every other
         // arm here does, since it counts rows rather than reading a column
         // off them. Kept here (rather than left unreachable) only so this
         // match stays exhaustive.
-        Column::Count
-        | Column::ObjectId
-        | Column::ImageName
-        | Column::ObjectClass
-        | Column::IntensityAvg(_)
-        | Column::IntensitySum(_)
-        | Column::IntensityMin(_)
-        | Column::IntensityMax(_) => {
+        Column::Count | Column::ObjectId | Column::ImageName | Column::ObjectClass => {
             // No classes list handy here (this is a plain error-message
             // helper, not a `ResultsGenerator` method) — `as_key` already
             // falls back to the raw numeric id for `ColocCount` when it
@@ -3560,8 +3560,8 @@ mod tests {
                 "CREATE TABLE classes (class_id INTEGER, name VARCHAR, color UINTEGER);
                  CREATE TABLE objects (
                      c_stack INTEGER,
-                     coloc_json JSON,
-                     intensities_json JSON
+                     coloc_partner_ids MAP(INTEGER, UUID[]),
+                     intensity_mean_gray DOUBLE[]
                  );
                  CREATE TABLE images (
                      image_rel_path VARCHAR,
@@ -6151,9 +6151,7 @@ mod tests {
 
     #[test]
     fn grouped_by_image_counts_a_multi_class_object_in_each_of_its_classes() {
-        // Single-class lists are read directly, multi-class ones unpacked
-        // (see `per_image_class_sql`) - both must land in the same groups,
-        // whatever the spacing of the stored list.
+        // A multi-class object lands in the group of each of its classes.
         let generator = open(&[
             ObjectSpec::new("img1.tif", "ClassA", 1, 10),
             ObjectSpec::new("img1.tif", "ClassB", 2, 20),
@@ -6176,6 +6174,97 @@ mod tests {
             [
                 row("ClassA", Some(1.0), Some(10.0)),
                 row("ClassB", Some(3.0), Some(70.0)),
+            ]
+        );
+    }
+
+    // -- intensity lists and colocalization map ---------------------------------
+
+    const PARTNER: &str = "00000000-0000-0000-0000-000000000001";
+
+    #[test]
+    fn plate_aggregates_a_colocalization_count() {
+        // Used to fail with an SQL error: the whole expression was prefixed
+        // with `o.` (`o.COALESCE(...)`).
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)
+                .with_coloc(&format!(r#"{{"2":["{PARTNER}","{PARTNER}"]}}"#)),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 20),
+        ]);
+
+        let value = plate_value(
+            &generator,
+            &PlateFilter {
+                aggregation: Aggregation::Sum,
+                ..plate_filter(Column::ColocCount(ObjectClass::Valid(2)))
+            },
+            "A1",
+        );
+
+        assert_eq!(value, Some(2.0));
+    }
+
+    #[test]
+    fn plate_aggregates_an_intensity_and_leaves_out_unmeasured_channels() {
+        let channel_0 =
+            |mean: f64| format!(r#"{{"0":{{"mean_normalized":0.1,"mean_gray":{mean}}}}}"#);
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10).with_intensities(&channel_0(100.0)),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10).with_intensities(&channel_0(300.0)),
+            // Measured in channel 1 only - no channel-0 value to average.
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)
+                .with_intensities(r#"{"1":{"mean_normalized":0.9,"mean_gray":900.0}}"#),
+        ]);
+
+        let mean_of = |channel| {
+            plate_value(
+                &generator,
+                &plate_filter(Column::IntensityAvg(channel)),
+                "A1",
+            )
+        };
+
+        assert_eq!(mean_of(0), Some(200.0));
+        assert_eq!(mean_of(1), Some(900.0));
+    }
+
+    #[test]
+    fn object_list_shows_intensities_in_gray_values_and_zero_for_an_unmeasured_channel() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10).with_intensities(
+                r#"{"1":{"sum_normalized":0.5,"sum_gray":500.0,"mean_normalized":0.2,"mean_gray":200.0,
+                     "min_normalized":0.1,"min_gray":100.0,"max_normalized":0.3,"max_gray":300.0}}"#,
+            ),
+        ]);
+
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![
+                    Column::IntensityAvg(1),
+                    Column::IntensitySum(1),
+                    Column::IntensityMin(1),
+                    Column::IntensityMax(1),
+                    Column::IntensityAvg(0),
+                ],
+                with_coloc_details: false,
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+
+        // The list orders its columns: channel 0 first.
+        let values: Vec<Option<f64>> = result.rows[0].iter().map(cell_value).collect();
+        assert_eq!(
+            values,
+            [
+                Some(0.0),
+                Some(200.0),
+                Some(500.0),
+                Some(100.0),
+                Some(300.0)
             ]
         );
     }

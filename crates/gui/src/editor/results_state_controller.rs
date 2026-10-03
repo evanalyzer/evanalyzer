@@ -4006,7 +4006,7 @@ mod tests {
                 c_stack INTEGER, z_stack INTEGER, t_stack INTEGER,
                 object_id UUID NOT NULL,
                 seg_class_name VARCHAR, seg_class_id INTEGER,
-                object_class_name VARCHAR, object_class_id VARCHAR,
+                object_class_name VARCHAR, object_class_id INTEGER[],
                 parent_id VARCHAR, children VARCHAR, track_id UBIGINT,
                 centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
                 bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
@@ -4019,7 +4019,11 @@ mod tests {
                 touches_edge BOOLEAN,
                 pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
                 image_bit_depth UTINYINT,
-                intensities_json JSON, coloc_json JSON
+                intensity_sum_normalized DOUBLE[], intensity_sum_gray DOUBLE[],
+                intensity_mean_normalized DOUBLE[], intensity_mean_gray DOUBLE[],
+                intensity_min_normalized DOUBLE[], intensity_min_gray DOUBLE[],
+                intensity_max_normalized DOUBLE[], intensity_max_gray DOUBLE[],
+                coloc_partner_ids MAP(INTEGER, UUID[])
             );
             CREATE TABLE images (
                 image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
@@ -4034,17 +4038,20 @@ mod tests {
         )
         .expect("create test schema");
 
-        let ch0_intensities = r#"{"0":{"sum_raw":1.0,"sum_scaled":255.0,"mean_raw":0.5,"mean_scaled":127.0,"median_raw":0.5,"median_scaled":127.0,"std_raw":0.1,"std_scaled":25.5,"min_raw":0.0,"min_scaled":0.0,"max_raw":1.0,"max_scaled":255.0}}"#;
+        // Channel 0 only: sum 1.0 (255 gray values), mean 0.5 (127), min 0,
+        // max 1.0 (255).
+        let ch0_intensities = "[1.0], [255.0], [0.5], [127.0], [0.0], [0.0], [1.0], [255.0]";
         let insert = |idx: usize,
                       image: &str,
                       class_name: &str,
                       class_id: i32,
                       area_px: u64,
                       centroid: (f64, f64),
-                      coloc_json: &str| {
+                      // SQL map literal, partner class -> partner ids.
+                      coloc_partner_ids: &str| {
             let object_id = format!("00000000-0000-0000-0000-{idx:012}");
             conn.execute(
-                "INSERT INTO objects (
+                &format!("INSERT INTO objects (
                     image_name, image_rel_path, t_stack, z_stack, object_id, seg_class_name, seg_class_id,
                     object_class_name, object_class_id, track_id,
                     centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
@@ -4054,7 +4061,9 @@ mod tests {
                     circularity, solidity, aspect_ratio, roundness, compactness,
                     major_axis_px, minor_axis_px, eccentricity, touches_edge,
                     pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-                    intensities_json, coloc_json
+                    intensity_sum_normalized, intensity_sum_gray, intensity_mean_normalized,
+                    intensity_mean_gray, intensity_min_normalized, intensity_min_gray,
+                    intensity_max_normalized, intensity_max_gray, coloc_partner_ids
                 ) VALUES (
                     ?, ?, 0, 0, ?, ?, ?,
                     ?, ?, 0,
@@ -4065,8 +4074,8 @@ mod tests {
                     1.0, 1.0, 1.0, 1.0, 1.0,
                     10, 10, 1.0, false,
                     1.0, 1.0, 1.0,
-                    ?, ?
-                )",
+                    {ch0_intensities}, {coloc_partner_ids}
+                )"),
                 duckdb::params![
                     image,
                     image,
@@ -4079,8 +4088,6 @@ mod tests {
                     centroid.1,
                     area_px,
                     area_px as f64,
-                    ch0_intensities,
-                    coloc_json,
                 ],
             )
             .unwrap_or_else(|e| panic!("insert object {idx}: {e}"));
@@ -4093,10 +4100,10 @@ mod tests {
             1,
             10,
             (10.0, 10.0),
-            r#"{"2":["00000000-0000-0000-0000-000000000002"]}"#,
+            "MAP {2: ['00000000-0000-0000-0000-000000000002']}",
         );
-        insert(1, "A1_02.tif", "ClassA", 1, 20, (60.0, 10.0), "{}");
-        insert(2, "A2_01.tif", "ClassB", 2, 30, (10.0, 10.0), "{}");
+        insert(1, "A1_02.tif", "ClassA", 1, 20, (60.0, 10.0), "MAP {}");
+        insert(2, "A2_01.tif", "ClassB", 2, 30, (10.0, 10.0), "MAP {}");
 
         for image in ["A1_01.tif", "A1_02.tif", "A2_01.tif"] {
             conn.execute(

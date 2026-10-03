@@ -12,9 +12,43 @@
 use duckdb::Connection;
 use std::path::Path;
 
-/// A row's worth of single-channel (channel 0) intensity data, in the same
-/// JSON shape `evanalyzer_core::storage::duckdb::intensities_to_json` writes.
-pub(super) const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_raw":1.0,"sum_scaled":255.0,"mean_raw":0.5,"mean_scaled":127.0,"median_raw":0.5,"median_scaled":127.0,"std_raw":0.1,"std_scaled":25.5,"min_raw":0.0,"min_scaled":0.0,"max_raw":1.0,"max_scaled":255.0}}"#;
+/// A row's worth of single-channel (channel 0) intensity data, as the JSON
+/// [`ObjectSpec::with_intensities`] takes (see [`json_columns_sql`]).
+pub(super) const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_normalized":1.0,"sum_gray":255.0,"mean_normalized":0.5,"mean_gray":127.0,"min_normalized":0.0,"min_gray":0.0,"max_normalized":1.0,"max_gray":255.0}}"#;
+
+/// The `objects` columns written from an [`ObjectSpec`]'s intensity and
+/// colocalization JSON, in [`json_columns_sql`]'s order.
+const JSON_DERIVED_COLUMNS: &str = "intensity_sum_normalized, intensity_sum_gray, \
+     intensity_mean_normalized, intensity_mean_gray, intensity_min_normalized, intensity_min_gray, \
+     intensity_max_normalized, intensity_max_gray, coloc_partner_ids";
+
+/// SQL for [`JSON_DERIVED_COLUMNS`] from the intensity JSON
+/// (`{"<channel>": {"mean_normalized": ..., "mean_gray": ..., ...}}`) and the
+/// colocalization JSON (`{"<class id>": ["<partner uuid>", ...]}`) that
+/// `ObjectSpec`s are written with - keeps the fixtures short to write while
+/// the table has the real per-channel lists and partner map: the JSON's
+/// `<stat>_<kind>` fills `intensity_<stat>_<kind>`. `intensities` and
+/// `coloc` are SQL expressions of type JSON.
+fn json_columns_sql(intensities: &str, coloc: &str) -> String {
+    let mut columns = Vec::new();
+    for stat in ["sum", "mean", "min", "max"] {
+        for kind in ["normalized", "gray"] {
+            columns.push(format!(
+                "list_transform(\
+                     range(0, COALESCE(list_max(list_transform(json_keys({intensities}), \
+                         k -> CAST(k AS INTEGER))) + 1, 0)), \
+                     c -> CAST({intensities} -> CAST(c AS VARCHAR) ->> '{stat}_{kind}' AS DOUBLE))"
+            ));
+        }
+    }
+    columns.push(format!(
+        "CAST(map_from_entries(list_transform(json_keys({coloc}), \
+             k -> {{'key': CAST(k AS INTEGER), \
+                   'value': CAST(CAST({coloc} -> k AS VARCHAR[]) AS UUID[])}})) \
+         AS MAP(INTEGER, UUID[]))"
+    ));
+    columns.join(", ")
+}
 
 fn create_schema(conn: &Connection) {
     conn.execute_batch(
@@ -23,7 +57,7 @@ fn create_schema(conn: &Connection) {
             c_stack               INTEGER, z_stack INTEGER, t_stack INTEGER,
             object_id             UUID NOT NULL,
             seg_class_name        VARCHAR, seg_class_id INTEGER,
-            object_class_name     VARCHAR, object_class_id VARCHAR,
+            object_class_name     VARCHAR, object_class_id INTEGER[],
             parent_id              VARCHAR, children VARCHAR, track_id UBIGINT,
             centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
             bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
@@ -36,7 +70,11 @@ fn create_schema(conn: &Connection) {
             touches_edge BOOLEAN,
             pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
             image_bit_depth UTINYINT,
-            intensities_json JSON, coloc_json JSON
+            intensity_sum_normalized DOUBLE[], intensity_sum_gray DOUBLE[],
+            intensity_mean_normalized DOUBLE[], intensity_mean_gray DOUBLE[],
+            intensity_min_normalized DOUBLE[], intensity_min_gray DOUBLE[],
+            intensity_max_normalized DOUBLE[], intensity_max_gray DOUBLE[],
+            coloc_partner_ids MAP(INTEGER, UUID[])
         );
         CREATE TABLE images (
             image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
@@ -162,8 +200,7 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
                 area_px, area_nm2, perimeter_px, perimeter_nm,
                 circularity, solidity, aspect_ratio, roundness, compactness,
                 major_axis_px, minor_axis_px, eccentricity, touches_edge,
-                pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-                intensities_json, coloc_json
+                pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, 0,
@@ -173,8 +210,7 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
                 ?, ?, 40, 40,
                 1.0, 1.0, 1.0, 1.0, 1.0,
                 10, 10, 1.0, false,
-                1.0, 1.0, 1.0,
-                ?, ?
+                1.0, 1.0, 1.0
             )",
             duckdb::params![
                 spec.image,
@@ -190,11 +226,19 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
                 spec.centroid_y_px,
                 spec.area_px,
                 spec.area_px as f64,
-                spec.intensities_json,
-                spec.coloc_json,
             ],
         )
         .unwrap_or_else(|e| panic!("insert object {idx}: {e}"));
+        conn.execute(
+            &format!(
+                "UPDATE objects SET ({JSON_DERIVED_COLUMNS}) = ({}) \
+                 FROM (SELECT CAST(? AS JSON) AS ij, CAST(? AS JSON) AS cj) AS j \
+                 WHERE object_id = CAST(? AS UUID)",
+                json_columns_sql("j.ij", "j.cj")
+            ),
+            duckdb::params![spec.intensities_json, spec.coloc_json, object_id],
+        )
+        .unwrap_or_else(|e| panic!("intensities/coloc of object {idx}: {e}"));
 
         if !images_seen.contains(&spec.image) {
             images_seen.push(spec.image);
@@ -250,6 +294,10 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
 pub(super) fn seed_synthetic_db(path: &Path, images: u32, classes: u32, per_class: u32) {
     let conn = Connection::open(path).expect("open bench db");
     create_schema(&conn);
+    let json_derived = json_columns_sql(
+        &format!("CAST('{CH0_INTENSITIES_JSON}' AS JSON)"),
+        "CAST('{}' AS JSON)",
+    );
     conn.execute_batch(&format!(
         "INSERT INTO objects (
             image_name, image_rel_path, c_stack, z_stack, t_stack, object_id,
@@ -261,7 +309,7 @@ pub(super) fn seed_synthetic_db(path: &Path, images: u32, classes: u32, per_clas
             circularity, solidity, aspect_ratio, roundness, compactness,
             major_axis_px, minor_axis_px, eccentricity, touches_edge,
             pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-            intensities_json, coloc_json)
+            {JSON_DERIVED_COLUMNS})
          SELECT
             'img_' || lpad(i::VARCHAR, 5, '0') || '.tif', 'img_' || lpad(i::VARCHAR, 5, '0') || '.tif',
             0, 0, 0, uuid(),
@@ -272,7 +320,7 @@ pub(super) fn seed_synthetic_db(path: &Path, images: u32, classes: u32, per_clas
             random(), random(), 1, 1, 1,
             10, 10, random(), false,
             1, 1, 1,
-            '{CH0_INTENSITIES_JSON}', '{{}}'
+            {json_derived}
          FROM range({images}) t1(i), range(1, {classes} + 1) t2(c), range({per_class}) t3(k);
          INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks)
          SELECT 'img_' || lpad(i::VARCHAR, 5, '0') || '.tif', 'img_' || lpad(i::VARCHAR, 5, '0') || '.tif',
@@ -285,8 +333,8 @@ pub(super) fn seed_synthetic_db(path: &Path, images: u32, classes: u32, per_clas
 }
 
 /// Extracts a flat JSON object's top-level keys without pulling in a JSON
-/// crate — good enough for the simple `{"0":{...},"1":{...}}` shape
-/// `intensities_to_json` produces (used only to compute a fixture's real
+/// crate — good enough for the simple `{"0":{...},"1":{...}}` shape of
+/// [`ObjectSpec::with_intensities`]'s JSON (used only to compute a fixture's real
 /// `c_stacks` above, not to parse arbitrary JSON): tracks brace depth and
 /// only treats a quoted string at depth 1 (directly inside the outer
 /// object, not one of its nested values) immediately followed by `:` as a

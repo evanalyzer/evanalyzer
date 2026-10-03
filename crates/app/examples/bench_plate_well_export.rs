@@ -65,7 +65,7 @@ const CREATE_TABLES: &str = "
         c_stack               INTEGER, z_stack INTEGER, t_stack INTEGER,
         object_id             UUID NOT NULL,
         seg_class_name        VARCHAR, seg_class_id INTEGER,
-        object_class_name     VARCHAR, object_class_id VARCHAR,
+        object_class_name     VARCHAR, object_class_id INTEGER[],
         parent_id              VARCHAR, children VARCHAR, track_id UBIGINT,
         centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
         bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
@@ -78,7 +78,11 @@ const CREATE_TABLES: &str = "
         touches_edge BOOLEAN,
         pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
         image_bit_depth UTINYINT,
-        intensities_json JSON, coloc_json JSON
+        intensity_sum_normalized DOUBLE[], intensity_sum_gray DOUBLE[],
+        intensity_mean_normalized DOUBLE[], intensity_mean_gray DOUBLE[],
+        intensity_min_normalized DOUBLE[], intensity_min_gray DOUBLE[],
+        intensity_max_normalized DOUBLE[], intensity_max_gray DOUBLE[],
+        coloc_partner_ids MAP(INTEGER, UUID[])
     );
     CREATE TABLE images (
         image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
@@ -194,8 +198,15 @@ fn seed_db(path: &PathBuf, n_classes: usize, objects_per_image_class: usize) -> 
                                 1.0,                   // pixel_size_y_nm
                                 1.0,                   // pixel_size_z_nm
                                 8u8,                   // image_bit_depth
-                                "{}",                  // intensities_json
-                                "{}",                  // coloc_json
+                                "[]",                  // intensity_* (no channels measured)
+                                "[]",
+                                "[]",
+                                "[]",
+                                "[]",
+                                "[]",
+                                "[]",
+                                "[]",
+                                "{}", // coloc_partner_ids
                             ])
                             .expect("append object row");
                             idx += 1;

@@ -1,8 +1,8 @@
 use crate::api::*;
 
 use super::results_generator::{
-    ResultsGenerator, class_display_label, column_aggregate_expr, object_class_filter_sql,
-    sql_string_in_list,
+    ResultsGenerator, class_display_label, class_filter_sql, column_aggregate_expr,
+    objects_per_class_sql, sql_string_in_list,
 };
 use duckdb::types::Value;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
@@ -39,7 +39,7 @@ impl ResultCharts {
                 sql_string_in_list(images)
             ));
         }
-        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+        let per_class = objects_per_class_sql(&conditions.join(" AND "));
 
         let class_filter = match &filter.object_classes {
             Some(wanted) => {
@@ -67,8 +67,7 @@ impl ResultCharts {
         let sql = format!(
             "WITH exploded AS (\n\
                  SELECT class_id, {value_expr} AS v\n\
-                 FROM objects, UNNEST(CAST(object_class_id AS INTEGER[])) AS u(class_id)\n\
-                 {where_clause}\n\
+                 FROM ({per_class}) AS u\n\
              ),\n\
              filtered AS (\n\
                  SELECT * FROM exploded {class_filter}\n\
@@ -356,7 +355,7 @@ fn chart_where_clause(
         if ids.is_empty() {
             return None;
         }
-        conditions.push(object_class_filter_sql("object_class_id", &ids));
+        conditions.push(class_filter_sql("object_class_id", &ids));
     }
     Some(format!("WHERE {}", conditions.join(" AND ")))
 }
