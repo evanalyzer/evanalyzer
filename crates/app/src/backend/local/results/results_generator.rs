@@ -2499,12 +2499,15 @@ pub(super) fn object_class_filter_sql(column: &str, ids: &[u32]) -> String {
 /// The objects grouped per (image, class), one `value_{i}` per statistic
 /// in `stats` plus `n_objects` - the first stage of both per-image views.
 ///
-/// `object_class_id` is a per-object list (multi-class objects exist),
-/// unpacked into one `class_id` per (object, class) pair before grouping;
-/// an object without any class contributes no row. `pre` filters the
-/// objects *before* that unpacking - DuckDB otherwise parses every object's
-/// class list first (~48 ms vs ~30 ms on a 3.8M-object file) - and `post`
-/// the unpacked rows (conditions on `class_id`).
+/// `object_class_id` is a per-object list stored as text (`"[4]"`,
+/// `"[1,3]"`; multi-class objects exist), unpacked into one `class_id` per
+/// (object, class) pair before grouping; an object without any class
+/// contributes no row. Unpacking every object's list was the most
+/// expensive part (~50 ms and ~300 MB peak on a 3.8M-object file), so the
+/// common single-class text is read as a number directly and only the rare
+/// multi-class lists are unpacked (~32 ms, ~80 MB; same groups and values).
+/// `pre` filters the objects before that, `post` the (object, class) rows
+/// (conditions on `class_id`).
 fn per_image_class_sql(
     stats: &[(&Column, &Aggregation)],
     pre: &[String],
@@ -2523,8 +2526,16 @@ fn per_image_class_sql(
     Ok(format!(
         "SELECT image_rel_path, MIN(image_name) AS image_name, class_id,\n\
              COUNT(*) AS n_objects, {values}\n\
-         FROM (SELECT * FROM objects WHERE {pre}) AS o,\n\
-             UNNEST(CAST(o.object_class_id AS INTEGER[])) AS u(class_id)\n\
+         FROM (\n\
+             SELECT *, CAST(trim(object_class_id, '[] ') AS INTEGER) AS class_id\n\
+             FROM objects\n\
+             WHERE {pre} AND object_class_id NOT LIKE '%,%'\n\
+                 AND trim(object_class_id, '[] ') <> ''\n\
+             UNION ALL\n\
+             SELECT o.*, u.class_id\n\
+             FROM (SELECT * FROM objects WHERE {pre} AND object_class_id LIKE '%,%') AS o,\n\
+                 UNNEST(CAST(o.object_class_id AS INTEGER[])) AS u(class_id)\n\
+         )\n\
          WHERE {post}\n\
          GROUP BY image_rel_path, class_id",
         values = values.join(", "),
@@ -6136,5 +6147,36 @@ mod tests {
         assert_eq!(plate_value(&generator, &count_of(1), "A1"), Some(1.0));
         assert_eq!(plate_value(&generator, &count_of(2), "A1"), Some(2.0));
         assert_eq!(plate_value(&generator, &count_of(3), "A1"), Some(0.0));
+    }
+
+    #[test]
+    fn grouped_by_image_counts_a_multi_class_object_in_each_of_its_classes() {
+        // Single-class lists are read directly, multi-class ones unpacked
+        // (see `per_image_class_sql`) - both must land in the same groups,
+        // whatever the spacing of the stored list.
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 20),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 40),
+        ]);
+        generator
+            .database
+            .execute_batch(
+                "UPDATE objects SET object_class_id = '[1, 2]' WHERE area_px = 10;
+                 UPDATE objects SET object_class_id = '[ 2 ]' WHERE area_px = 40;",
+            )
+            .unwrap();
+
+        let rows = grouped_rows(&grouped(&generator, Aggregation::Sum));
+
+        let row =
+            |class: &str, count, sum| ("img1.tif".to_string(), class.to_string(), vec![count, sum]);
+        assert_eq!(
+            rows,
+            [
+                row("ClassA", Some(1.0), Some(10.0)),
+                row("ClassB", Some(3.0), Some(70.0)),
+            ]
+        );
     }
 }
