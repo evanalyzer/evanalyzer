@@ -100,6 +100,11 @@
       "description": "Instance segmentation using a Cellpose-SAM model exported as TorchScript\n\n[AI Cellpose Segmentation] -> [Extract Objects]\n\nObject segmentation using Cellpose-SAM model which can be downloaded from\nhttps://evanalyzer.org/downloads/#ai-models\n\nCellpose-SAM is a biological segmentation model that integrates the pretrained transformer\narchitecture of Meta's Segment Anything Model (SAM) with the Cellpose framework to accurately\npredict vector flow fields for dense cellular structures.\nBy combining these methods, it achieves \"superhuman generalization,\" outperforming the average\naccuracy of human annotators and reaching near-optimal cell masking performance. [1]\n\n[1] Pachitariu, M., Rariden, M., & Stringer, C. (2025). Cellpose-SAM: superhuman generalization for cellular segmentation. bioRxiv. doi.org",
       "type": "object",
       "properties": {
+        "cellposePostprocessing": {
+          "description": "Build the objects from the flows exactly like Cellpose does: pixels\nfollow the interpolated flows, an object only starts where more than\n10 pixels end up together, and pixels that reach no such spot become\nbackground. Off, every spot any pixel ends up at starts an object,\nwhich can join touching cells. Cellpose also fills the holes inside\neach object - add a Fill Object Holes step after this one for that.",
+          "type": "boolean",
+          "default": true
+        },
         "flowIterations": {
           "description": "Number of Euler integration steps used to follow the flow field. Higher\nvalues let pixels of large cells reach their sink at the cost of runtime;\nCellpose's default is `200`.",
           "type": "integer",
@@ -108,6 +113,14 @@
           "maximum": 1000,
           "minimum": 1
         },
+        "flowThreshold": {
+          "description": "Flow error threshold: an object whose shape doesn't match the flows\nthe model predicted (mean squared error above this value) is removed.\nIncrease to keep more objects, decrease to keep only clean ones. `0`\ndisables the check (Cellpose's default is `0.4`).",
+          "type": "number",
+          "format": "float",
+          "default": 0.4000000059604645,
+          "maximum": 10,
+          "minimum": 0
+        },
         "inputChannels": {
           "description": "Number of input channels the model expects. The grayscale image goes in\nchannel 0; any further channels are zero-filled. Cellpose-SAM's\npatch-embedding convolution only has weights for up to 3 input\nchannels: `2` (cytoplasm + optional nucleus) is standard, `1` is for\nsingle-channel exports.",
           "type": "integer",
@@ -115,6 +128,14 @@
           "default": 2,
           "maximum": 3,
           "minimum": 1
+        },
+        "maxResize": {
+          "description": "Longest image side, in pixels, the image is scaled down to before\nsegmentation; the masks are scaled back up to the original size\nafterwards. Smaller values make large cells look like the cell sizes\nthe model was trained on and are faster. The scale is taken from the\nfull image, so every tile is scaled the same. `0` keeps the full\nresolution (the Cellpose web demo uses `1000`).",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0
         },
         "minObjectSize": {
           "description": "Minimum object size, in pixels. After the dynamics, any instance smaller\nthan this is removed (its pixels become background). `0` disables the filter.",
@@ -141,6 +162,11 @@
           "default": 0.5,
           "maximum": 1,
           "minimum": 0
+        },
+        "replicateGrayChannel": {
+          "description": "Copy the gray image into every input channel instead of filling the\nextra channels with zeros. With `input_channels = 3` this matches\nCellpose run on an RGB image whose channels are (nearly) equal.",
+          "type": "boolean",
+          "default": true
         }
       }
     },
@@ -491,6 +517,10 @@
     },
     "FillHolesSettings": {
       "description": "Fills enclosed background holes in the segmentation map.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nA direct port of ImageJ's `Process > Binary > Fill Holes` command\n(`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel\nLandini): a background pixel counts as a \"hole\" - and is turned into\nforeground - exactly when it cannot be reached from the image border by a\npath of background pixels using 4-connectivity.\n\nWhich pixels count as a \"hole\" is decided the same way ImageJ does it:\nevery non-background pixel is \"foreground\" regardless of its actual\nlabel/class value, so a background pocket enclosed by *any* mix of labels\nis still a hole. Unlike ImageJ, each hole is then attributed back to the\nclass that actually encloses it - every enclosed background region is\ngrouped into a connected component, and that component is filled with\nwhichever label is most common among its immediately bordering pixels\n(falling back to `FILL_VALUE` only in the degenerate case of a hole with\nno foreground neighbor at all). This keeps multi-class segmentation maps\ncorrect: a hole inside a class-2 object is filled with 2, not merged with\na fixed value that happens to collide with an unrelated class elsewhere\nin the image.",
+      "type": "object"
+    },
+    "FillObjectHolesSettings": {
+      "description": "Fills the holes inside every object, one object at a time.\n\n[AI Cellpose / StarDist Segmentation | Watershed | Connected Components] -> [Fill Object Holes] -> [Extract Objects]\n\nWorks on the objects (instance map), so it has to come after a step that\ncreates objects and before Extract Objects. A pixel becomes part of an\nobject when it is enclosed by that object alone; a gap enclosed by several\ntouching objects together is left as it is. An object lying completely\ninside another object's hole becomes part of the enclosing object. Filled\npixels get the class of the object they now belong to.\n\nUse Fill Holes instead to fill holes in the segmentation map before the\nobjects are created (e.g. right after a Threshold).",
       "type": "object"
     },
     "FiltersHessianHessianModeSettings": {
@@ -1740,6 +1770,19 @@
             }
           },
           "$ref": "#/$defs/FillHolesSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "FILL_OBJECT_HOLES"
+            }
+          },
+          "$ref": "#/$defs/FillObjectHolesSettings",
           "required": [
             "type"
           ]

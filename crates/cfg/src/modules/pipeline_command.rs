@@ -121,6 +121,12 @@ pub enum PipelineCommand {
     #[serde(alias = "fill-holes", alias = "fillHoles", alias = "fill_holes")]
     FillHoles(FillHolesSettings),
     #[serde(
+        alias = "fill-object-holes",
+        alias = "fillObjectHoles",
+        alias = "fill_object_holes"
+    )]
+    FillObjectHoles(FillObjectHolesSettings),
+    #[serde(
         alias = "gaussian-blur",
         alias = "gaussianBlur",
         alias = "gaussian_blur"
@@ -313,160 +319,167 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 13,
+            name: "FillObjectHoles",
+            category: CommandCategory::Measure,
+            summary: "Fills the holes inside every object, one object at a time.",
+            description: "[AI Cellpose / StarDist Segmentation | Watershed | Connected Components] -> [Fill Object Holes] -> [Extract Objects]\n\nWorks on the objects (instance map), so it has to come after a step that\ncreates objects and before Extract Objects. A pixel becomes part of an\nobject when it is enclosed by that object alone; a gap enclosed by several\ntouching objects together is left as it is. An object lying completely\ninside another object's hole becomes part of the enclosing object. Filled\npixels get the class of the object they now belong to.\n\nUse Fill Holes instead to fill holes in the segmentation map before the\nobjects are created (e.g. right after a Threshold).",
+        },
+        CommandMeta {
+            id: 14,
             name: "GaussianBlur",
             category: CommandCategory::Preprocess,
             summary: "Smooths an image and reduces background noise using a Gaussian kernel.",
             description: "This algorithm applies a localized, bell-curve weighted blur that suppresses\nhigh-frequency pixel variations (like camera noise, salt-and-pepper artifacts,\nor dust) while preserving structural features. It is commonly used as a\npreprocessing step to optimize thresholding and edge detection tasks.\n\n# Examples\n\n```\nuse imagec::backend::algos::GaussianBlur;\n\nlet settings = GaussianBlur {\nkernel_size: 5,\nsigma: 2.0\n};\n```",
         },
         CommandMeta {
-            id: 14,
+            id: 15,
             name: "Hessian",
             category: CommandCategory::Preprocess,
             summary: "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.",
             description: "This algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.\n\n# Examples\n\n```\n# use imagec::backend::algos::{Hessian, HessianMode};\nlet detector = Hessian {\nmode: HessianMode::Determinant,\n};\n```",
         },
         CommandMeta {
-            id: 15,
+            id: 16,
             name: "IlluminationCorrection",
             category: CommandCategory::Preprocess,
             summary: "Use this when your images are brighter in the middle and dimmer toward",
             description: "the edges/corners (vignetting), or show any other smooth shading pattern\nthat repeats the same way across every tile or every image from the same\nmicroscope/camera setup - a consequence of the optics or illumination,\nnot the sample. Left uncorrected, that shading makes intensity\ncomparisons between regions of an image (or between images/wells)\nunreliable, even though it rarely stops segmentation from finding\nobjects on its own.\n\nUse [`super::rolling_ball::RollingBall`] instead when the problem is a\n*local* background glow or halo under/around individual objects (e.g.\nout-of-focus light, autofluorescence, uneven staining) that differs from\nimage to image rather than being tied to the acquisition setup -\nRollingBall strips that local floor so thresholding/segmentation works\ncleanly. The two solve different problems: RollingBall won't fix a\nglobal brightness gradient, and this filter won't remove a local halo.\n\n### How it works\n\nFlat-field (\"illumination\") correction: estimates a smooth, slowly-varying\ngain/offset field caused by uneven illumination (vignetting, dust on the\ncondenser, uneven excitation) and removes it in a single calculate+apply\nstep - equivalent to CellProfiler's `CorrectIlluminationCalculate` and\n`CorrectIlluminationApply` modules combined into one.\n\nUnlike `RollingBall`, which estimates a *local* per-object background\nbaseline via a rolling structural element, this estimates one *global*,\nlow-frequency field for the whole image/channel.",
         },
         CommandMeta {
-            id: 16,
+            id: 17,
             name: "ImageCache",
             category: CommandCategory::Preprocess,
             summary: "A filter that acts as a synchronization point between the pipeline and a storage backend.",
             description: "`ImageCache` allows the pipeline to branch or \"undo\" operations by saving\nstates to a named address and reloading them as needed.\n\n# Examples\n\n```\nuse imagec::backend::core::context::{ImageCache, ImageCacheMode, ImageAddress};\nlet checkpoint = ImageCache {\nmode: ImageCacheMode::Store,\naddress: ImageAddress::from(\"pre_processed_state\"),\n};\n```",
         },
         CommandMeta {
-            id: 17,
+            id: 18,
             name: "ImageMath",
             category: CommandCategory::Preprocess,
             summary: "A filter that performs pixel-wise mathematical operations between the current",
             description: "pipeline image and a secondary image stored in the cache.\n\nThis command allows for complex image blending, masking, and comparison.\n\n# Examples\n\n```\nuse imagec::backend::algos::{ImageMath, Operand};\nlet subtract_bg = ImageMath {\noperand: Operand::Subtract,\nsecond_image_address: ImageAddress::from(\"background\"),\nswap_operands: false,\n};\n```",
         },
         CommandMeta {
-            id: 18,
+            id: 19,
             name: "IntensityTransformation",
             category: CommandCategory::Preprocess,
             summary: "Configuration for adjusting image contrast and brightness.",
             description: "This transformation applies a linear mapping to pixel values.\nIn [`Mode::Manual`], the output is typically calculated as:\n`output = input * contrast + brightness`.",
         },
         CommandMeta {
-            id: 19,
+            id: 20,
             name: "Laplacian",
             category: CommandCategory::Preprocess,
             summary: "Configuration for the Laplacian edge detection filter.",
             description: "The Laplacian is a second-order derivative operator used to find regions of\nrapid intensity change. It is particularly effective for detecting edges\nand fine details, though it is highly sensitive to noise.\n\n# Examples\n\n```\n# use imagec::backend::algos::Laplacian;\nlet filter = Laplacian { kernel_size: 3 };\n```",
         },
         CommandMeta {
-            id: 20,
+            id: 21,
             name: "LoadAnnotatedObjects",
             category: CommandCategory::Object,
             summary: "Loads the hand-annotated objects of the image into the pipeline.",
             description: "Every loaded object gets a new object id, is marked as manually annotated\nand has its intensities measured on every channel - from there on it is\nhandled like any segmented object.",
         },
         CommandMeta {
-            id: 21,
+            id: 22,
             name: "MedianSubtract",
             category: CommandCategory::Preprocess,
             summary: "A background subtraction filter that uses a median rank operator.",
             description: "This algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.\n\n# Examples\n\n```\nuse imagec::backend::algos::MedianSubtract;\nlet filter = MedianSubtract { radius: 10.0 };\n```",
         },
         CommandMeta {
-            id: 22,
+            id: 23,
             name: "MorphologicalCommand",
             category: CommandCategory::Preprocess,
             summary: "A filter that applies mathematical morphology to an image.",
             description: "Morphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.\n\n# Examples\n\n```\nuse imagec::backend::algos::{MorphologicalCommand, MorphOps, KernelShapes};\nlet clean_noise = MorphologicalCommand {\nop: MorphOps::Open,\nkernel_size: 3,\nkernel_shape: KernelShapes::Ellipse,\n};\n```",
         },
         CommandMeta {
-            id: 23,
+            id: 24,
             name: "ObjectMath",
             category: CommandCategory::Object,
             summary: "Computes a boolean set operation between two object classes, object pair by",
             description: "object pair.\n\nWhen more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
         },
         CommandMeta {
-            id: 24,
+            id: 25,
             name: "AI Pixel Classifier",
             category: CommandCategory::Segment,
             summary: "A pixel classifier trained via the app's AI training dialog",
             description: "(an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),\napplied here as a pipeline segmentation step: every pixel is classified\nindependently (reusing the same feature recipe used at training time),\nthen remapped through `segmentation_mapping` into this project's own\nclasses and written to the segmentation map - the same output shape\n`Threshold` produces, so downstream steps (extraction, classification)\ndon't need to care which one ran.\n\nPredicted classes with no matching `segmentation_mapping` entry are\nwritten as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`\nleaves pixels outside every configured range as background - mapping\nonly the classes you care about is a deliberate simplification, not an\noversight.",
         },
         CommandMeta {
-            id: 25,
+            id: 26,
             name: "RankFilter",
             category: CommandCategory::Preprocess,
             summary: "A filter that transforms pixels based on the statistical rank of their neighbors.",
             description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
         },
         CommandMeta {
-            id: 26,
+            id: 27,
             name: "Rolling Ball",
             category: CommandCategory::Preprocess,
             summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
         },
         CommandMeta {
-            id: 27,
+            id: 28,
             name: "SaveImage",
             category: CommandCategory::Preprocess,
             summary: "A command that exports the current image to a persistent file on disk.",
             description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.\n\n# Examples\n\n```\nuse imagec::backend::algos::SaveImage;\nlet saver = SaveImage {path:\"output/processed_cell.png\"};\n```",
         },
         CommandMeta {
-            id: 28,
+            id: 29,
             name: "AI Stardist Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
         },
         CommandMeta {
-            id: 29,
+            id: 30,
             name: "StructureTensor",
             category: CommandCategory::Preprocess,
             summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.",
             description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```",
         },
         CommandMeta {
-            id: 30,
+            id: 31,
             name: "Threshold",
             category: CommandCategory::Segment,
             summary: "A filter that segments an image into discrete classes based on intensity.",
             description: "This supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.",
         },
         CommandMeta {
-            id: 31,
+            id: 32,
             name: "TransformObjects",
             category: CommandCategory::Object,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.",
         },
         CommandMeta {
-            id: 32,
+            id: 33,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.",
         },
         CommandMeta {
-            id: 33,
+            id: 34,
             name: "Voronoi",
             category: CommandCategory::Object,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 34,
+            id: 35,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 35,
+            id: 36,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
@@ -511,47 +524,50 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
             ExtractObjectsSettings::default(),
         )),
         12 => Some(PipelineCommand::FillHoles(FillHolesSettings::default())),
-        13 => Some(PipelineCommand::GaussianBlur(
+        13 => Some(PipelineCommand::FillObjectHoles(
+            FillObjectHolesSettings::default(),
+        )),
+        14 => Some(PipelineCommand::GaussianBlur(
             GaussianBlurSettings::default(),
         )),
-        14 => Some(PipelineCommand::Hessian(HessianSettings::default())),
-        15 => Some(PipelineCommand::IlluminationCorrection(
+        15 => Some(PipelineCommand::Hessian(HessianSettings::default())),
+        16 => Some(PipelineCommand::IlluminationCorrection(
             IlluminationCorrectionSettings::default(),
         )),
-        16 => Some(PipelineCommand::ImageCache(ImageCacheSettings::default())),
-        17 => Some(PipelineCommand::ImageMath(ImageMathSettings::default())),
-        18 => Some(PipelineCommand::IntensityTransformation(
+        17 => Some(PipelineCommand::ImageCache(ImageCacheSettings::default())),
+        18 => Some(PipelineCommand::ImageMath(ImageMathSettings::default())),
+        19 => Some(PipelineCommand::IntensityTransformation(
             IntensityTransformationSettings::default(),
         )),
-        19 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
-        20 => Some(PipelineCommand::LoadAnnotatedObjects(
+        20 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
+        21 => Some(PipelineCommand::LoadAnnotatedObjects(
             LoadAnnotatedObjectsSettings::default(),
         )),
-        21 => Some(PipelineCommand::MedianSubtract(
+        22 => Some(PipelineCommand::MedianSubtract(
             MedianSubtractSettings::default(),
         )),
-        22 => Some(PipelineCommand::MorphologicalCommand(
+        23 => Some(PipelineCommand::MorphologicalCommand(
             MorphologicalCommandSettings::default(),
         )),
-        23 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
-        24 => Some(PipelineCommand::PixelClassifier(
+        24 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
+        25 => Some(PipelineCommand::PixelClassifier(
             PixelClassifierSettings::default(),
         )),
-        25 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        26 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        27 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        28 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        29 => Some(PipelineCommand::StructureTensor(
+        26 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
+        27 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        28 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        29 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        30 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        30 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        31 => Some(PipelineCommand::TransformObjects(
+        31 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        32 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        32 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        33 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        34 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        35 => Some(PipelineCommand::WeightedDeviation(
+        33 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        34 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        35 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        36 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
         _ => None,
@@ -575,6 +591,7 @@ impl PipelineCommand {
             Self::EnhanceContrast(_) => "EnhanceContrast",
             Self::ExtractObjects(_) => "ExtractObjects",
             Self::FillHoles(_) => "FillHoles",
+            Self::FillObjectHoles(_) => "FillObjectHoles",
             Self::GaussianBlur(_) => "GaussianBlur",
             Self::Hessian(_) => "Hessian",
             Self::IlluminationCorrection(_) => "IlluminationCorrection",
@@ -616,6 +633,7 @@ impl PipelineCommand {
             Self::EnhanceContrast(_) => &CommandCategory::Preprocess,
             Self::ExtractObjects(_) => &CommandCategory::Measure,
             Self::FillHoles(_) => &CommandCategory::InstanceSegmentation,
+            Self::FillObjectHoles(_) => &CommandCategory::Measure,
             Self::GaussianBlur(_) => &CommandCategory::Preprocess,
             Self::Hessian(_) => &CommandCategory::Preprocess,
             Self::IlluminationCorrection(_) => &CommandCategory::Preprocess,
@@ -661,6 +679,7 @@ impl PipelineCommand {
             Self::EnhanceContrast(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::ExtractObjects(_) => &[CommandCategory::Object],
             Self::FillHoles(_) => &[CommandCategory::InstanceSegmentation],
+            Self::FillObjectHoles(_) => &[CommandCategory::Measure],
             Self::GaussianBlur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Hessian(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::IlluminationCorrection(_) => {
@@ -697,7 +716,7 @@ impl PipelineCommand {
         match self {
             Self::AiObjectClassifier(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a trained object classifier model, saved from the AI training dialog.".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["evamodel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "segmentation_mapping".to_string(), display_name: "Segmentation Mapping".to_string(), description: "Maps the model's predicted classes to this project's object classes.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.segmentation_mapping.iter().map(|__item| [vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "Object class predicted by the classifier model.".to_string(), value: match __item.object_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "The project's own object class objects predicted as `object_class`\nare assigned.".to_string(), value: match __item.output_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat()).collect() }], vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated by the model. Leave empty to apply the model to\nevery object regardless of its current class.".to_string(), value: _s.input_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "match_handling".to_string(), display_name: "Match Handling".to_string(), description: "What to do with object class labels after prediction\n\n- **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.\n- **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.".to_string(), value: match _s.match_handling { ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add class on match".to_string(), ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string() }, param_type: ParamType::Dropdown, options: vec!["Add class on match".to_string(), "Reclassify on match".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::Blur(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel size".to_string(), description: "The size of the blur matrix.\n\nMust be an odd number (e.g., 3, 5, 7)".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Spinner, options: vec![], min: 3.0f32, max: 27.0f32, step: 2.0000f32, groups: vec![] }],
-            Self::Cellpose(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "input_channels".to_string(), display_name: "Input Channels".to_string(), description: "Number of input channels the model expects. The grayscale image goes in\nchannel 0; any further channels are zero-filled. Cellpose-SAM's\npatch-embedding convolution only has weights for up to 3 input\nchannels: `2` (cytoplasm + optional nucleus) is standard, `1` is for\nsingle-channel exports.".to_string(), value: format!("{}", _s.input_channels), param_type: ParamType::Dropdown, options: vec!["1".to_string(), "2".to_string(), "3".to_string()], min: 1.0f32, max: 3.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Cell probability above which a pixel takes part in the flow dynamics and\ncan be assigned to an object. The raw cell-probability logits are passed\nthrough a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's\ndefault logit threshold of `0` corresponds to `0.5`).".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![] }], vec![ParameterDef { name: "flow_iterations".to_string(), display_name: "Flow Iterations".to_string(), description: "Number of Euler integration steps used to follow the flow field. Higher\nvalues let pixels of large cells reach their sink at the cost of runtime;\nCellpose's default is `200`.".to_string(), value: format!("{}", _s.flow_iterations), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_object_size".to_string(), display_name: "Min Object Size".to_string(), description: "Minimum object size, in pixels. After the dynamics, any instance smaller\nthan this is removed (its pixels become background). `0` disables the filter.".to_string(), value: format!("{}", _s.min_object_size), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
+            Self::Cellpose(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "input_channels".to_string(), display_name: "Input Channels".to_string(), description: "Number of input channels the model expects. The grayscale image goes in\nchannel 0; any further channels are zero-filled. Cellpose-SAM's\npatch-embedding convolution only has weights for up to 3 input\nchannels: `2` (cytoplasm + optional nucleus) is standard, `1` is for\nsingle-channel exports.".to_string(), value: format!("{}", _s.input_channels), param_type: ParamType::Dropdown, options: vec!["1".to_string(), "2".to_string(), "3".to_string()], min: 1.0f32, max: 3.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Cell probability above which a pixel takes part in the flow dynamics and\ncan be assigned to an object. The raw cell-probability logits are passed\nthrough a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's\ndefault logit threshold of `0` corresponds to `0.5`).".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![] }], vec![ParameterDef { name: "flow_iterations".to_string(), display_name: "Flow Iterations".to_string(), description: "Number of Euler integration steps used to follow the flow field. Higher\nvalues let pixels of large cells reach their sink at the cost of runtime;\nCellpose's default is `200`.".to_string(), value: format!("{}", _s.flow_iterations), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_object_size".to_string(), display_name: "Min Object Size".to_string(), description: "Minimum object size, in pixels. After the dynamics, any instance smaller\nthan this is removed (its pixels become background). `0` disables the filter.".to_string(), value: format!("{}", _s.min_object_size), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "max_resize".to_string(), display_name: "Max Resize".to_string(), description: "Longest image side, in pixels, the image is scaled down to before\nsegmentation; the masks are scaled back up to the original size\nafterwards. Smaller values make large cells look like the cell sizes\nthe model was trained on and are faster. The scale is taken from the\nfull image, so every tile is scaled the same. `0` keeps the full\nresolution (the Cellpose web demo uses `1000`).".to_string(), value: format!("{}", _s.max_resize), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "flow_threshold".to_string(), display_name: "Flow Threshold".to_string(), description: "Flow error threshold: an object whose shape doesn't match the flows\nthe model predicted (mean squared error above this value) is removed.\nIncrease to keep more objects, decrease to keep only clean ones. `0`\ndisables the check (Cellpose's default is `0.4`).".to_string(), value: format!("{}", _s.flow_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 10.0f32, step: 0.0100f32, groups: vec![] }], vec![ParameterDef { name: "cellpose_postprocessing".to_string(), display_name: "Cellpose Postprocessing".to_string(), description: "Build the objects from the flows exactly like Cellpose does: pixels\nfollow the interpolated flows, an object only starts where more than\n10 pixels end up together, and pixels that reach no such spot become\nbackground. Off, every spot any pixel ends up at starts an object,\nwhich can join touching cells. Cellpose also fills the holes inside\neach object - add a Fill Object Holes step after this one for that.".to_string(), value: format!("{}", _s.cellpose_postprocessing), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "replicate_gray_channel".to_string(), display_name: "Replicate Gray Channel".to_string(), description: "Copy the gray image into every input channel instead of filling the\nextra channels with zeros. With `input_channels = 3` this matches\nCellpose run on an RGB image whose channels are (nearly) equal.".to_string(), value: format!("{}", _s.replicate_gray_channel), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::ClassifyObjects(_s) => [vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated against the morphological and intensity criteria below.\nLeave empty to apply the criteria to every object regardless of its current class.".to_string(), value: _s.input_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "match_handling".to_string(), display_name: "Match Handling".to_string(), description: "What to do with object class labels after criteria evaluation\n\nControls whether the output class is added or existing classes are removed,\nand whether the action is triggered on a criteria **match** or a **non-match**:\n\n- **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n- **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n- **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n- **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n- **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.".to_string(), value: match _s.match_handling { ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => "Add class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfMatch => "Remove class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => "Remove class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => "Remove output class on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => "Remove output class on mismatch".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => "Remove objects matching criteria".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => "Keep objects matching criteria".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string(), ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch => "Reclassify on mismatch".to_string() }, param_type: ParamType::Dropdown, options: vec!["Add class on match".to_string(), "Add class on mismatch".to_string(), "Remove class on match".to_string(), "Remove class on mismatch".to_string(), "Remove output class on match".to_string(), "Remove output class on mismatch".to_string(), "Remove objects matching criteria".to_string(), "Keep objects matching criteria".to_string(), "Reclassify on match".to_string(), "Reclassify on mismatch".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Tag".to_string(), description: "Class label assigned to (or removed from) objects by the chosen operation\n\nUsed as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.\nHas no effect when the selected operation only manipulates input classes or clears all classes.".to_string(), value: match _s.output_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "overlapping_with".to_string(), display_name: "Intersecting With".to_string(), description: "Additional criterion: the object must intersect an object carrying this class\n\nIf unset (the default) this filter is not applied. When set, an object only\nsatisfies the overall criteria if it also overlaps at least one object carrying this\nclass by at least `min_intersection_area`. Combine with e.g.\n`RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,\nor `AddOutputClassIfMatch` to tag objects that do.".to_string(), value: match _s.overlapping_with.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_intersection_area".to_string(), display_name: "Min Intersection Area".to_string(), description: "Minimum intersection area with an `overlapping_with` object, in `size_unit`\n\nHas no effect while `overlapping_with` is Unset.".to_string(), value: format!("{}", _s.min_intersection_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Unit to use for object extraction".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_area".to_string(), display_name: "Min Area".to_string(), description: "Minimum area size\n\nMinimum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.min_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "max_area".to_string(), display_name: "Max Area".to_string(), description: "Maximum area size\n\nMaximum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.max_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_circularity".to_string(), display_name: "Min Circularity".to_string(), description: "Circularity range: 0 = elongated, 1 = perfect circle\n\nCircularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.\nA circle is the mathematically perfect shape for maximizing area while minimizing perimeter.\nIt is calculated with `4*Pi*AreaSize / Perimeter^2`".to_string(), value: format!("{}", _s.min_circularity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "max_circularity".to_string(), display_name: "Max Circularity".to_string(), description: "Circularity range: 0 = elongated, 1 = perfect circle\n\nCircularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.\nA circle is the mathematically perfect shape for maximizing area while minimizing perimeter.\nIt is calculated with `4*Pi*AreaSize / Perimeter^2`".to_string(), value: format!("{}", _s.max_circularity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "min_solidity".to_string(), display_name: "Min Solidity".to_string(), description: "Minimum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.".to_string(), value: format!("{}", _s.min_solidity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "max_solidity".to_string(), display_name: "Max Solidity".to_string(), description: "Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.".to_string(), value: format!("{}", _s.max_solidity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "min_aspect_ratio".to_string(), display_name: "Min Aspect Ratio".to_string(), description: "Minimum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.min_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "max_aspect_ratio".to_string(), display_name: "Max Aspect Ratio".to_string(), description: "Maximum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.max_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_eccentricity".to_string(), display_name: "Min Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.min_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "max_eccentricity".to_string(), display_name: "Max Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.max_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "min_feret".to_string(), display_name: "Min Feret".to_string(), description: "Feret diameter threshold\n\nThe absolute shortest parallel distance across the object.\nThis represents the minimum sieve size a particle could pass through.\n\nIn image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\nIt mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\nWhen analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.".to_string(), value: format!("{}", _s.min_feret), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "max_feret".to_string(), display_name: "Max Feret".to_string(), description: "Maximum feret diameter threshold in selected unit (px or nm)\n\nThe absolute longest distance across the object at any angle.\nUsed to measure elongation or the maximum length of a particle.\n\nIn image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\nIt mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\nWhen analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.".to_string(), value: format!("{}", _s.max_feret), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "allow_edge_touching".to_string(), display_name: "Allow Edge Touching".to_string(), description: "Whether object can touch image edge".to_string(), value: format!("{}", _s.allow_edge_touching), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::Colocalization(_s) => [vec![ParameterDef { name: "classes_to_coloc".to_string(), display_name: "Classes To Coloc".to_string(), description: "Theses are the classes the coloclization should be calculated for".to_string(), value: _s.classes_to_coloc.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.classes_to_coloc.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "class_for_overlapping_areas".to_string(), display_name: "Class For Overlapping Areas".to_string(), description: "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class".to_string(), value: match _s.class_for_overlapping_areas.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "multiplicity".to_string(), display_name: "Multiplicity".to_string(), description: "How many partners an object may coloc with at once.".to_string(), value: match _s.multiplicity { ObjectColocObjectsColocMultiplicitySettings::OneToOne => "No multi coloc (1:1)".to_string(), ObjectColocObjectsColocMultiplicitySettings::ManyToMany => "Allow multi coloc".to_string(), ObjectColocObjectsColocMultiplicitySettings::MultiFor(_) => "Multi coloc only for selected".to_string() }, param_type: ParamType::Dropdown, options: vec!["No multi coloc (1:1)".to_string(), "Allow multi coloc".to_string(), "Multi coloc only for selected".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], match &_s.multiplicity { ObjectColocObjectsColocMultiplicitySettings::OneToOne => vec![], ObjectColocObjectsColocMultiplicitySettings::ManyToMany => vec![], ObjectColocObjectsColocMultiplicitySettings::MultiFor(__inner) => vec![ParameterDef { name: "multiplicity.0".to_string(), display_name: "Multi coloc only for selected".to_string(), description: "Only objects of these classes may coloc with more than one partner;\nevery other class in `classes_to_coloc` is capped to its single\nbest-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and\n`MultiFor([Cell])`, a cell can coloc with any number of spots, but\neach spot colocs with exactly one cell (the one it overlaps most).".to_string(), value: __inner.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if __inner.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }] }, vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Size unit for the minimum coloc area size".to_string(), value: match _s.size_unit { SizeUnitsRel::NanoMeter => "nm".to_string(), SizeUnitsRel::Pixels => "px".to_string(), SizeUnitsRel::Percent => "%".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string(), "%".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_coloc_area".to_string(), display_name: "Min Coloc Area".to_string(), description: "Minimum overlapping area size to count objects as coloc".to_string(), value: format!("{}", _s.min_coloc_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "exclude_classes".to_string(), display_name: "Exclude Classes".to_string(), description: "Classes an object must NOT overlap to be considered colocalized.\n\nExclude_classes is a blocklist — \"even if an object matches everything else, throw it out if it also touches one of these classes.\"\nConcretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).\nWithout exclude_classes, any object satisfying that gets recorded as colocalized.\nWith exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.\nSo it's a \"match A and B, but not C\" filter\n\nExample: \"cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker.\"".to_string(), value: _s.exclude_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.exclude_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::ColorFilterCommand(_s) => [vec![ParameterDef { name: "range.min_h".to_string(), display_name: "Min. Hue".to_string(), description: "Minimum Hue angle in degrees [0.0, 360.0].".to_string(), value: format!("{}", _s.range.min_h), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 360.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "range.max_h".to_string(), display_name: "Max. Hue".to_string(), description: "Maximum Hue angle in degrees [0.0, 360.0].".to_string(), value: format!("{}", _s.range.max_h), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 360.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "range.min_s".to_string(), display_name: "Min. Sat.".to_string(), description: "Minimum Saturation normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.min_s), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "range.max_s".to_string(), display_name: "Max. Sat.".to_string(), description: "Maximum Saturation normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.max_s), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "range.min_v".to_string(), display_name: "Min. Brightness".to_string(), description: "Minimum Value (Brightness) normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.min_v), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "range.max_v".to_string(), display_name: "Max. Brightness".to_string(), description: "Maximum Value (Brightness) normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.max_v), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }]].concat(),
@@ -708,6 +727,7 @@ impl PipelineCommand {
             Self::EnhanceContrast(_s) => [vec![ParameterDef { name: "saturated_pixels".to_string(), display_name: "Saturated Pixels".to_string(), description: "Percentage of pixels to \"clip\" from the top and bottom of the histogram.\n\nRange: [0.0, 1.0]. A value of 0.01 (1%) helps ignore hot/dead pixels\nthat would otherwise prevent effective contrast stretching.".to_string(), value: format!("{}", _s.saturated_pixels), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "normalize".to_string(), display_name: "Normalize".to_string(), description: "Whether to linearly stretch the remaining pixel intensities to fill\nthe full [0.0, 1.0] range.".to_string(), value: format!("{}", _s.normalize), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "equalize_histogram".to_string(), display_name: "Equalize Histogram".to_string(), description: "Whether to apply Histogram Equalization.\n\nThis redistributes pixel intensities to achieve a uniform distribution,\nwhich is highly effective for images with low contrast but high noise.".to_string(), value: format!("{}", _s.equalize_histogram), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::ExtractObjects(_s) => vec![ParameterDef { name: "max_objects_before_fail".to_string(), display_name: "Max Objects Before Fail".to_string(), description: "Maximum allowed ROIs to extract.\n\nIf this limit is exceeded the pipeline fails.\nThis is a protection against memory overload.".to_string(), value: format!("{}", _s.max_objects_before_fail), param_type: ParamType::Label, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }],
             Self::FillHoles(_s) => vec![],
+            Self::FillObjectHoles(_s) => vec![],
             Self::GaussianBlur(_s) => [vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the blur matrix.\n\nMust be an odd number (e.g., 3, 5, 7).".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Spinner, options: vec![], min: 3.0f32, max: 27.0f32, step: 2.0000f32, groups: vec![] }], vec![ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The standard deviation of the Gaussian kernel.\n\nHigher values create a more significant blur effect.\n$$N \\approx 6\\sigma + 1$$".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 5.0f32, step: 0.1000f32, groups: vec![] }]].concat(),
             Self::Hessian(_s) => vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines which component of the Hessian matrix structure to extract.\n\nDepending on the mode, this can highlight interest points (blobs)\nor directional features (ridges).".to_string(), value: match _s.mode { FiltersHessianHessianModeSettings::Determinant => "Determinant".to_string(), FiltersHessianHessianModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersHessianHessianModeSettings::EigenvaluesY => "Eigenvalues Y".to_string() }, param_type: ParamType::Dropdown, options: vec!["Determinant".to_string(), "Eigenvalues X".to_string(), "Eigenvalues Y".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }],
             Self::IlluminationCorrection(_s) => [vec![ParameterDef { name: "method".to_string(), display_name: "Method".to_string(), description: "How the illumination field is estimated from the image.".to_string(), value: match _s.method { FiltersIlluminationCorrectionCorrectionMethodSettings::Regular => "Regular".to_string(), FiltersIlluminationCorrectionCorrectionMethodSettings::Background => "Background".to_string() }, param_type: ParamType::Dropdown, options: vec!["Regular".to_string(), "Background".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "block_size".to_string(), display_name: "Block Size".to_string(), description: "Block size, in pixels, used to reduce the image to a coarse\nillumination estimate before smoothing. Should be larger than the\nlargest foreground object, so objects are averaged/eroded away and\nonly the slow-varying illumination trend survives.".to_string(), value: format!("{}", _s.block_size), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 2000.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "smoothing".to_string(), display_name: "Smoothing".to_string(), description: "Smoothing applied to the block-reduced field to remove blockiness.".to_string(), value: match _s.smoothing { FiltersIlluminationCorrectionSmoothingMethodSettings::None => "None".to_string(), FiltersIlluminationCorrectionSmoothingMethodSettings::Gaussian { .. } => "Gaussian".to_string(), FiltersIlluminationCorrectionSmoothingMethodSettings::Median { .. } => "Median".to_string(), FiltersIlluminationCorrectionSmoothingMethodSettings::FitPolynomial => "Fit Polynomial".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Gaussian".to_string(), "Median".to_string(), "Fit Polynomial".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], match &_s.smoothing { FiltersIlluminationCorrectionSmoothingMethodSettings::None => vec![], FiltersIlluminationCorrectionSmoothingMethodSettings::Gaussian { sigma } => vec![ParameterDef { name: "smoothing.sigma".to_string(), display_name: "Sigma".to_string(), description: "Standard deviation, in block-grid units.".to_string(), value: format!("{}", sigma), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 20.0f32, step: 0.1000f32, groups: vec![] }], FiltersIlluminationCorrectionSmoothingMethodSettings::Median { radius } => vec![ParameterDef { name: "smoothing.radius".to_string(), display_name: "Radius".to_string(), description: "Neighborhood radius, in block-grid units.".to_string(), value: format!("{}", radius), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 20.0f32, step: 1.0000f32, groups: vec![] }], FiltersIlluminationCorrectionSmoothingMethodSettings::FitPolynomial => vec![] }, vec![ParameterDef { name: "apply_method".to_string(), display_name: "Apply Method".to_string(), description: "How the field is combined with the original image.".to_string(), value: match _s.apply_method { FiltersIlluminationCorrectionApplyMethodSettings::Divide => "Divide".to_string(), FiltersIlluminationCorrectionApplyMethodSettings::Subtract => "Subtract".to_string() }, param_type: ParamType::Dropdown, options: vec!["Divide".to_string(), "Subtract".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "rescale".to_string(), display_name: "Rescale".to_string(), description: "Stretch the corrected image's intensities to fill the full\n`[0.0, 1.0]` range afterward - guards against `Divide` pushing\npreviously-dim regions above `1.0`.".to_string(), value: format!("{}", _s.rescale), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
@@ -755,6 +775,7 @@ impl PipelineCommand {
             Self::EnhanceContrast(_) => String::new(),
             Self::ExtractObjects(_) => String::new(),
             Self::FillHoles(_) => String::new(),
+            Self::FillObjectHoles(_) => String::new(),
             Self::GaussianBlur(s) => format!(
                 "Kernel Size: {} · Sigma: {}",
                 format!("{:.3}", s.kernel_size),
@@ -903,6 +924,22 @@ impl PipelineCommand {
                     if let Ok(v) = value.parse::<i32>() {
                         s.min_object_size = v;
                     }
+                }
+                if param_name == "max_resize" {
+                    if let Ok(v) = value.parse::<i32>() {
+                        s.max_resize = v;
+                    }
+                }
+                if param_name == "flow_threshold" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.flow_threshold = v;
+                    }
+                }
+                if param_name == "cellpose_postprocessing" {
+                    s.cellpose_postprocessing = value == "true";
+                }
+                if param_name == "replicate_gray_channel" {
+                    s.replicate_gray_channel = value == "true";
                 }
             }
             Self::ClassifyObjects(s) => {
@@ -1222,6 +1259,7 @@ impl PipelineCommand {
                 }
             }
             Self::FillHoles(_) => {}
+            Self::FillObjectHoles(_) => {}
             Self::GaussianBlur(s) => {
                 if param_name == "kernel_size" {
                     if let Ok(v) = value.parse::<usize>() {
@@ -2034,6 +2072,7 @@ impl PipelineCommand {
             Self::EnhanceContrast(_) => {}
             Self::ExtractObjects(_) => {}
             Self::FillHoles(_) => {}
+            Self::FillObjectHoles(_) => {}
             Self::GaussianBlur(_) => {}
             Self::Hessian(_) => {}
             Self::IlluminationCorrection(_) => {}
@@ -2096,6 +2135,7 @@ impl PipelineCommand {
             Self::EnhanceContrast(_) => {}
             Self::ExtractObjects(_) => {}
             Self::FillHoles(_) => {}
+            Self::FillObjectHoles(_) => {}
             Self::GaussianBlur(_) => {}
             Self::Hessian(_) => {}
             Self::IlluminationCorrection(_) => {}

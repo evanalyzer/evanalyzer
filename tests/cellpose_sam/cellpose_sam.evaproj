@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 2,
+  "meta": {
+    "name": "",
+    "shortDescription": "",
+    "description": "",
+    "authors": [],
+    "authorOrganization": "",
+    "creationTime": "1970-01-01T00:00:00Z",
+    "category": "",
+    "tags": [],
+    "appVersion": "0.1.0"
+  },
+  "classification": {
+    "classes": [
+      {
+        "id": {
+          "VALID": 0
+        },
+        "color": "#97978f",
+        "name": "Background",
+        "notes": ""
+      },
+      {
+        "id": {
+          "VALID": 1
+        },
+        "color": "#ffffff00",
+        "name": "cell",
+        "notes": ""
+      }
+    ]
+  },
+  "plate": {
+    "groupingMode": "NO_GROUPING",
+    "groupingRegex": "",
+    "plateCols": 1,
+    "plateRows": 1,
+    "wellCols": 4,
+    "wellRows": 4,
+    "wellImageOrder": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ]
+  },
+  "tileMerge": {
+    "enabled": true,
+    "classesToNotMerge": [],
+    "connectivity": "EIGHT_CONNECTED",
+    "maxFragmentsPerGroup": 10000
+  },
+  "images": {
+    "root": "/home/joachim-danmayr/Downloads/cellpose_sam",
+    "list": {
+      "B5_0009.jpg": {
+        "relPath": "B5_0009.jpg",
+        "fileSize": 33554432,
+        "selectedSeries": 0,
+        "series": {
+          "0": {
+            "selectedChannel": null,
+            "channels": {
+              "0": {
+                "name": "Red",
+                "emissionWaveLength": 635.0,
+                "visible": null,
+                "histogram": {
+                  "min": 0.0,
+                  "max": 1.0,
+                  "minLimit": 0.0,
+                  "maxLimit": 1.0
+                }
+              },
+              "1": {
+                "name": "Green",
+                "emissionWaveLength": 532.0,
+                "visible": null,
+                "histogram": {
+                  "min": 0.0,
+                  "max": 1.0,
+                  "minLimit": 0.0,
+                  "maxLimit": 1.0
+                }
+              },
+              "2": {
+                "name": "Blue",
+                "emissionWaveLength": 450.0,
+                "visible": null,
+                "histogram": {
+                  "min": 0.0,
+                  "max": 1.0,
+                  "minLimit": 0.0,
+                  "maxLimit": 1.0
+                }
+              }
+            },
+            "imageWidth": 2048,
+            "imageHeight": 2048,
+            "pixelSizes": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "zStack": null,
+            "tStack": null,
+            "objects": []
+          }
+        }
+      }
+    },
+    "settings": {
+      "selectedChannel": null,
+      "channels": {},
+      "pixelSizes": null,
+      "zStack": null,
+      "tStack": null
+    }
+  },
+  "pipelines": [
+    {
+      "id": 1,
+      "name": "cell",
+      "description": null,
+      "imageSource": {
+        "channel": 0
+      },
+      "enabled": true,
+      "steps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "COLOR_FILTER_COMMAND",
+            "range": {
+              "minH": 0.0,
+              "maxH": 360.0,
+              "minS": 0.0,
+              "maxS": 1.0,
+              "minV": 0.0,
+              "maxV": 1.0
+            }
+          }
+        },
+        {
+          "enabled": false,
+          "command": {
+            "type": "ENHANCE_CONTRAST",
+            "saturatedPixels": 1.0,
+            "normalize": true,
+            "equalizeHistogram": false
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "CELLPOSE",
+            "modelPath": "../../Documents/github/evanalyzer-project/evanalyzer-models/models/cpsam_v2.pt",
+            "objectClassId": 1,
+            "inputChannels": 1,
+            "probabilityThreshold": 0.4,
+            "flowIterations": 250,
+            "minObjectSize": 15
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "EXTRACT_OBJECTS",
+            "maxObjectsBeforeFail": 100000
+          }
+        }
+      ]
+    }
+  ]
+}

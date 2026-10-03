@@ -355,7 +355,7 @@ fn command_category_suggested_next_advances_and_terminates_at_object() {
 #[test]
 fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
-    let expected: [(&str, &[CommandCategory]); 36] = [
+    let expected: [(&str, &[CommandCategory]); 37] = [
         ("AI Object Classifier", &[Object]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Measure]),
@@ -374,6 +374,9 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         // ExtractObjects expect instance IDs from ConnectedComponents/
         // Watershed, which haven't run yet right after FillHoles.
         ("FillHoles", &[InstanceSegmentation]),
+        // After filling, only Extract Objects (Measure) makes sense - object
+        // commands need extracted objects.
+        ("FillObjectHoles", &[Measure]),
         ("GaussianBlur", &[Segment, Preprocess]),
         ("Hessian", &[Segment, Preprocess]),
         ("IlluminationCorrection", &[Segment, Preprocess]),

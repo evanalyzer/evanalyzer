@@ -1399,6 +1399,18 @@ pub struct WeightedDeviationSettings {
 
 // ============ SEGMENTATION ============
 
+fn _serde_default_cellpose_max_resize() -> i32 {
+    0i32
+}
+fn _serde_default_cellpose_flow_threshold() -> f32 {
+    0.4f32
+}
+fn _serde_default_cellpose_cellpose_postprocessing() -> bool {
+    true
+}
+fn _serde_default_cellpose_replicate_gray_channel() -> bool {
+    true
+}
 /// Instance segmentation using a Cellpose-SAM model exported as TorchScript
 ///
 /// [AI Cellpose Segmentation] -> [Extract Objects]
@@ -1445,6 +1457,35 @@ pub struct CellposeSettings {
     /// than this is removed (its pixels become background). `0` disables the filter.
     #[schemars(range(min = 0, max = 100000))]
     pub min_object_size: i32,
+    /// Longest image side, in pixels, the image is scaled down to before
+    /// segmentation; the masks are scaled back up to the original size
+    /// afterwards. Smaller values make large cells look like the cell sizes
+    /// the model was trained on and are faster. The scale is taken from the
+    /// full image, so every tile is scaled the same. `0` keeps the full
+    /// resolution (the Cellpose web demo uses `1000`).
+    #[schemars(range(min = 0, max = 100000))]
+    #[serde(default = "_serde_default_cellpose_max_resize")]
+    pub max_resize: i32,
+    /// Flow error threshold: an object whose shape doesn't match the flows
+    /// the model predicted (mean squared error above this value) is removed.
+    /// Increase to keep more objects, decrease to keep only clean ones. `0`
+    /// disables the check (Cellpose's default is `0.4`).
+    #[schemars(range(min = 0, max = 10))]
+    #[serde(default = "_serde_default_cellpose_flow_threshold")]
+    pub flow_threshold: f32,
+    /// Build the objects from the flows exactly like Cellpose does: pixels
+    /// follow the interpolated flows, an object only starts where more than
+    /// 10 pixels end up together, and pixels that reach no such spot become
+    /// background. Off, every spot any pixel ends up at starts an object,
+    /// which can join touching cells. Cellpose also fills the holes inside
+    /// each object - add a Fill Object Holes step after this one for that.
+    #[serde(default = "_serde_default_cellpose_cellpose_postprocessing")]
+    pub cellpose_postprocessing: bool,
+    /// Copy the gray image into every input channel instead of filling the
+    /// extra channels with zeros. With `input_channels = 3` this matches
+    /// Cellpose run on an RGB image whose channels are (nearly) equal.
+    #[serde(default = "_serde_default_cellpose_replicate_gray_channel")]
+    pub replicate_gray_channel: bool,
 }
 
 impl Default for CellposeSettings {
@@ -1456,6 +1497,10 @@ impl Default for CellposeSettings {
             probability_threshold: 0.5f32,
             flow_iterations: 200i32,
             min_object_size: 15i32,
+            max_resize: 0i32,
+            flow_threshold: 0.4f32,
+            cellpose_postprocessing: true,
+            replicate_gray_channel: true,
         }
     }
 }
@@ -1848,6 +1893,23 @@ impl Default for ExtractObjectsSettings {
         }
     }
 }
+
+/// Fills the holes inside every object, one object at a time.
+///
+/// [AI Cellpose / StarDist Segmentation | Watershed | Connected Components] -> [Fill Object Holes] -> [Extract Objects]
+///
+/// Works on the objects (instance map), so it has to come after a step that
+/// creates objects and before Extract Objects. A pixel becomes part of an
+/// object when it is enclosed by that object alone; a gap enclosed by several
+/// touching objects together is left as it is. An object lying completely
+/// inside another object's hole becomes part of the enclosing object. Filled
+/// pixels get the class of the object they now belong to.
+///
+/// Use Fill Holes instead to fill holes in the segmentation map before the
+/// objects are created (e.g. right after a Threshold).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FillObjectHolesSettings {}
 
 // ============ OBJECT ============
 

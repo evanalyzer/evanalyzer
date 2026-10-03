@@ -436,6 +436,10 @@ impl From<CellposeSettings> for Cellpose {
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             flow_iterations: _s.flow_iterations,
             min_object_size: _s.min_object_size,
+            max_resize: _s.max_resize,
+            flow_threshold: _s.flow_threshold.clamp(0.0, 10.0),
+            cellpose_postprocessing: _s.cellpose_postprocessing,
+            replicate_gray_channel: _s.replicate_gray_channel,
         }
     }
 }
@@ -559,6 +563,12 @@ impl From<ExtractObjectsSettings> for ExtractObjects {
 impl From<FillHolesSettings> for FillHoles {
     fn from(_s: FillHolesSettings) -> Self {
         FillHoles {}
+    }
+}
+
+impl From<FillObjectHolesSettings> for FillObjectHoles {
+    fn from(_s: FillObjectHolesSettings) -> Self {
+        FillObjectHoles {}
     }
 }
 
@@ -903,6 +913,9 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         }
         PipelineCommand::FillHoles(settings) => {
             Ok(Box::new(crate::algos::FillHoles::from(settings)))
+        }
+        PipelineCommand::FillObjectHoles(settings) => {
+            Ok(Box::new(crate::algos::FillObjectHoles::from(settings)))
         }
         PipelineCommand::GaussianBlur(settings) => {
             Ok(Box::new(crate::algos::GaussianBlur::from(settings)))
