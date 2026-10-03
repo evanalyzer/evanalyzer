@@ -57,7 +57,7 @@ pub(crate) fn project_with_one_image() -> ProjectWithRuntime {
             0,
             ChannelSettings {
                 name: "Ch0".into(),
-                emission_wave_length: 488.0,
+                emission_wave_length: Some(488.0),
                 visible: None,
                 histogram: None,
             },
@@ -66,7 +66,7 @@ pub(crate) fn project_with_one_image() -> ProjectWithRuntime {
             1,
             ChannelSettings {
                 name: "Ch1".into(),
-                emission_wave_length: 561.0,
+                emission_wave_length: Some(561.0),
                 visible: None,
                 histogram: None,
             },

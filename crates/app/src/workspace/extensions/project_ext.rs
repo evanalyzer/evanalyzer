@@ -112,6 +112,9 @@ pub trait ProjectExt {
     fn set_active_series(&mut self, selected_series: &i32);
     fn set_image_preferences(&mut self, channel_visibility: &BTreeMap<i32, bool>);
     fn set_global_preferences(&mut self, channel_visibility: &BTreeMap<i32, bool>);
+    fn set_global_emission_wavel_length(&mut self, channel_id: i32, emission_wave_length: f32);
+    fn reset_global_emission_wavel_length(&mut self, channel_id: i32);
+    fn get_emission_wave_length(&self, channel_id: i32) -> f32;
     fn set_image_z_stack(&mut self, z_stack: &ZStackSettings);
     fn set_global_z_stack(&mut self, z_stack: &ZStackSettings);
     fn get_z_stack(&self) -> Option<&ZStackSettings>;
@@ -510,7 +513,7 @@ impl ProjectExt for ProjectWithRuntime {
                     .entry(*id)
                     .or_insert_with(|| ChannelSettings {
                         name: "".into(),
-                        emission_wave_length: 0.0,
+                        emission_wave_length: None,
                         visible: None,
                         histogram: None,
                     });
@@ -518,6 +521,56 @@ impl ProjectExt for ProjectWithRuntime {
             // This allows mutation by cloning if shared, or just borrowing if unique
             channel_arc.visible = Some(*visible);
         }
+    }
+
+    fn set_global_emission_wavel_length(&mut self, channel_id: i32, emission_wave_length: f32) {
+        let channel_arc = self
+            .images
+            .settings
+            .channels
+            .entry(channel_id)
+            .or_insert_with(|| ChannelSettings {
+                name: "".into(),
+                emission_wave_length: None,
+                visible: None,
+                histogram: None,
+            });
+
+        channel_arc.emission_wave_length = Some(emission_wave_length);
+    }
+
+    fn reset_global_emission_wavel_length(&mut self, channel_id: i32) {
+        let channel_arc = self
+            .images
+            .settings
+            .channels
+            .entry(channel_id)
+            .or_insert_with(|| ChannelSettings {
+                name: "".into(),
+                emission_wave_length: None,
+                visible: None,
+                histogram: None,
+            });
+
+        channel_arc.emission_wave_length = None;
+    }
+
+    fn get_emission_wave_length(&self, channel_id: i32) -> f32 {
+        // 1. A global value set for this channel wins. A global entry that
+        //    only carries other settings (visibility, histogram) has none.
+        self.images
+            .settings
+            .channels
+            .get(&channel_id)
+            .and_then(|channel| channel.emission_wave_length)
+            // 2. Otherwise the current image's own value for the channel
+            .or_else(|| {
+                self.get_current_image_channel_settings()
+                    .and_then(|(_, series)| series.channels.get(&channel_id))
+                    .and_then(|channel| channel.emission_wave_length)
+            })
+            // 3. Unknown
+            .unwrap_or(0.0)
     }
 
     /// Sets the Z-stack settings for the current image series.
@@ -713,7 +766,9 @@ impl ProjectExt for ProjectWithRuntime {
                         .values()
                         .map(|ch| Class {
                             id: ObjectClass::Unset,
-                            color: wavelength_to_rgb_u32(ch.emission_wave_length),
+                            color: wavelength_to_rgb_u32(
+                                ch.emission_wave_length.unwrap_or_else(|| 0.0),
+                            ),
                             name: ch.name.clone(),
                             notes: "".into(),
                         })
@@ -968,7 +1023,7 @@ impl ProjectExt for ProjectWithRuntime {
                             *ch_idx,
                             ChannelSettings {
                                 name: data.name.clone(),
-                                emission_wave_length: data.emission_wave_length.clone(),
+                                emission_wave_length: Some(data.emission_wave_length.clone()),
                                 visible: None,
                                 histogram: None,
                             },
@@ -1459,6 +1514,66 @@ mod tests {
     /// carrying two channels ("Ch0"/"Ch1"), selected as the current image -
     /// i.e. everything `get_selected_image_series`/`get_current_image_*`
     /// need to return `Some`.
+    // -- get_emission_wave_length -------------------------------------------
+
+    #[test]
+    fn emission_wave_length_comes_from_the_image_when_no_global_is_set() {
+        let project = project_with_one_image();
+        assert_eq!(project.get_emission_wave_length(0), 488.0);
+        assert_eq!(project.get_emission_wave_length(1), 561.0);
+    }
+
+    #[test]
+    fn a_global_emission_wave_length_overrides_the_images_own() {
+        let mut project = project_with_one_image();
+        project.set_global_emission_wavel_length(0, 405.0);
+        assert_eq!(project.get_emission_wave_length(0), 405.0);
+        assert_eq!(
+            project.get_emission_wave_length(1),
+            561.0,
+            "other channels unaffected"
+        );
+
+        project.reset_global_emission_wavel_length(0);
+        assert_eq!(
+            project.get_emission_wave_length(0),
+            488.0,
+            "back to the image's value"
+        );
+    }
+
+    #[test]
+    fn a_global_channel_entry_without_a_wave_length_falls_back_to_the_image() {
+        let mut project = project_with_one_image();
+        // Only visibility is set globally for channel 0.
+        project.set_global_preferences(&BTreeMap::from([(0, false)]));
+        assert_eq!(project.get_emission_wave_length(0), 488.0);
+    }
+
+    #[test]
+    fn emission_wave_length_is_zero_when_neither_global_nor_image_knows_it() {
+        let mut project = project_with_one_image();
+        assert_eq!(
+            project.get_emission_wave_length(7),
+            0.0,
+            "channel the image lacks"
+        );
+        project.with_current_series_mut(|series| {
+            series.channels.get_mut(&1).unwrap().emission_wave_length = None;
+        });
+        assert_eq!(
+            project.get_emission_wave_length(1),
+            0.0,
+            "image has no value"
+        );
+
+        let no_image = ProjectWithRuntime::default();
+        assert_eq!(no_image.get_emission_wave_length(0), 0.0);
+        let mut global_only = ProjectWithRuntime::default();
+        global_only.set_global_emission_wavel_length(2, 640.0);
+        assert_eq!(global_only.get_emission_wave_length(2), 640.0);
+    }
+
     fn project_with_one_image() -> ProjectWithRuntime {
         let mut project = ProjectWithRuntime::default();
         let rel_path = PathBuf::from("img.tif");
@@ -1468,7 +1583,7 @@ mod tests {
                 0,
                 ChannelSettings {
                     name: "Ch0".into(),
-                    emission_wave_length: 488.0,
+                    emission_wave_length: Some(488.0),
                     visible: None,
                     histogram: None,
                 },
@@ -1477,7 +1592,7 @@ mod tests {
                 1,
                 ChannelSettings {
                     name: "Ch1".into(),
-                    emission_wave_length: 561.0,
+                    emission_wave_length: Some(561.0),
                     visible: None,
                     histogram: None,
                 },
@@ -2232,7 +2347,7 @@ mod tests {
         assert_eq!(series.image_width, 4);
         assert_eq!(series.image_height, 4);
         assert_eq!(series.channels[&0].name, "DAPI");
-        assert_eq!(series.channels[&0].emission_wave_length, 461.0);
+        assert_eq!(series.channels[&0].emission_wave_length, Some(461.0));
         assert_eq!(
             entry.file_size,
             4 * 4 * 8,

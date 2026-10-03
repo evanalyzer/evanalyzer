@@ -98,7 +98,7 @@ pub struct HistogramSettings {
 #[serde(rename_all = "camelCase")]
 pub struct ChannelSettings {
     pub name: String,
-    pub emission_wave_length: f32,
+    pub emission_wave_length: Option<f32>,
     pub visible: Option<bool>,
     pub histogram: Option<HistogramSettings>,
 }
