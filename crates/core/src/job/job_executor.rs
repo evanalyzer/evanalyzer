@@ -676,8 +676,36 @@ impl<'a> JobExecutor {
         // on every single tile.
         let image_entry_arc = Arc::new(image_entry.clone());
 
+        // The user's hand-annotated objects of this image, for
+        // `LoadAnnotatedObjects` - only gathered when a pipeline uses them.
+        let loads_annotations = self
+            .pipelines_post_process
+            .values()
+            .any(|p| p.commands.iter().any(|(_, c)| c.uses_annotated_objects()));
+        let series_annotations: &[ObjectMetricSettings] = match loads_annotations {
+            true => image_entry
+                .series
+                .get(&image_entry.selected_series)
+                .map(|series| series.objects.as_slice())
+                .unwrap_or(&[]),
+            false => &[],
+        };
+        // With a z-projection the stacks loop sees one projected image, not
+        // individual z-planes, so annotations then match on t alone.
+        let per_z_plane = matches!(
+            z_handling,
+            ZStackHandling::AllStacks | ZStackHandling::SingleStack
+        );
+
         'stacks: for &t in &t_stacks {
             for &z in &z_stacks {
+                let plane_annotations: Arc<Vec<ObjectMetricSettings>> = Arc::new(
+                    series_annotations
+                        .iter()
+                        .filter(|a| a.t_stack == t && (!per_z_plane || a.z_stack == z))
+                        .cloned()
+                        .collect(),
+                );
                 let global_cache = match self.prepare_global_image_cache(
                     full_size,
                     is_rgb,
@@ -872,7 +900,10 @@ impl<'a> JobExecutor {
                     });
 
                 let stack_merge_result = stack_result.and_then(|mut merged_cache| {
-                    if merged_cache.object_cache.is_empty() {
+                    merged_cache.annotated_objects = plane_annotations;
+                    if merged_cache.object_cache.is_empty()
+                        && merged_cache.annotated_objects.is_empty()
+                    {
                         // Object buffer is empty - no whole-image-scoped
                         // commands or export to run, but this stack's
                         // reserved progress unit (see `total_tiles` above)
@@ -1154,6 +1185,7 @@ impl<'a> JobExecutor {
             },
             object_cache: ObjectCache::default(),
             image_rel_path: image_rel_path.into(),
+            annotated_objects: Default::default(),
         })
     }
 
@@ -2311,7 +2343,7 @@ mod full_run_integration_tests {
     };
     use crate::pipeline::pipeline::CorePipelineSettings;
     use crate::storage::memory::MemoryExporter;
-    use evanalyzer_cfg::core_types::{PixelUnits, SegmentationClass};
+    use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, PixelUnits, SegmentationClass};
     use evanalyzer_cfg::settings::images_settings::SeriesSettings;
     use std::collections::BTreeMap;
     use std::sync::atomic::AtomicBool;
@@ -2674,6 +2706,113 @@ mod full_run_integration_tests {
         let count = job.count_preview_visible_tiles().unwrap();
         assert_eq!(count, 1);
     }
+
+    /// A filled 3×3 annotation of the plane (`z`, `t`), carrying `class`.
+    fn annotation_on_plane(z: i32, t: i32, class: ObjectClass) -> ObjectMetricSettings {
+        let mut object = crate::object::Object::new(crate::object::ObjectInit {
+            id: ObjectId(800_000 + (z * 10 + t) as u128),
+            bbox: [1, 1, 3, 3],
+            mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; 9],
+            area: 9,
+            ..Default::default()
+        });
+        object.add_object_class(class);
+        let mut settings = object.to_object_settings();
+        settings.z_stack = z;
+        settings.t_stack = t;
+        settings
+    }
+
+    #[test]
+    fn load_annotated_objects_runs_without_segmentation_and_only_loads_the_analyzed_plane() {
+        use crate::algos::LoadAnnotatedObjects;
+        const ANALYZED: ObjectClass = ObjectClass::Valid(1);
+        const OTHER_Z: ObjectClass = ObjectClass::Valid(2);
+        const OTHER_T: ObjectClass = ObjectClass::Valid(3);
+        const LOADED: ObjectClass = ObjectClass::Valid(4);
+
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let rel_path = PathBuf::from("multi-channel-4D-series.ome.tif");
+        let mut series = BTreeMap::new();
+        series.insert(
+            0,
+            SeriesSettings {
+                // Default stack settings analyze z = 0, t = 0 only.
+                objects: vec![
+                    annotation_on_plane(0, 0, ANALYZED),
+                    annotation_on_plane(1, 0, OTHER_Z),
+                    annotation_on_plane(0, 1, OTHER_T),
+                ],
+                ..Default::default()
+            },
+        );
+        let mut images = IndexMap::new();
+        images.insert(
+            rel_path.clone(),
+            ImageEntry {
+                rel_path,
+                file_size: 0,
+                selected_series: 0,
+                series,
+            },
+        );
+        let mut job = JobExecutor::new(
+            PathBuf::new(),
+            std::env::temp_dir(),
+            images,
+            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
+            GlobalImageSettings::default(),
+            Arc::new(Mutex::new(MemoryExporter {
+                out_objects: out_objects.clone(),
+            })),
+            None,
+        );
+        // Built like `job_generator` does for a pipeline holding only this
+        // command: an empty tile pipeline (nothing is segmented) plus the
+        // whole-image one. The annotations alone must be enough for the
+        // whole-image phase to run.
+        job.add_pre_process_pipeline(Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        ));
+        let mut pipeline = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        pipeline.add_command(Box::new(LoadAnnotatedObjects {
+            input_classes: vec![],
+            output_class: LOADED,
+            keep_annotated_classes: true,
+        }));
+        job.add_post_process_pipeline(pipeline);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false)))
+            .expect("loading annotations should succeed");
+
+        let exported = out_objects.lock().unwrap();
+        assert_eq!(
+            exported.len(),
+            1,
+            "only the z = 0, t = 0 annotation is loaded"
+        );
+        let object = &exported[0];
+        assert!(object.object_class.contains(&ANALYZED));
+        assert!(object.object_class.contains(&LOADED));
+        assert_eq!(
+            object.segmentation_class,
+            SegmentationClass::MANUAL_ANNOTATED
+        );
+        assert_eq!(object.area, 9);
+        assert!(
+            !object.intensities.is_empty(),
+            "the loaded annotation is measured on the image"
+        );
+    }
 }
 
 /// The plan's strongest correctness check for `docs/tile_merge_plan.md`:
@@ -2779,6 +2918,7 @@ mod tile_merge_end_to_end_tests {
 
             object_cache: Default::default(),
             image_rel_path: PathBuf::new(),
+            annotated_objects: Default::default(),
             image_meta: GlobalImageMeta {
                 full_image_width: ImageSize {
                     width: full_width,

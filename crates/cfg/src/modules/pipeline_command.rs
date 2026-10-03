@@ -147,6 +147,12 @@ pub enum PipelineCommand {
     #[serde(alias = "laplacian")]
     Laplacian(LaplacianSettings),
     #[serde(
+        alias = "load-annotated-objects",
+        alias = "loadAnnotatedObjects",
+        alias = "load_annotated_objects"
+    )]
+    LoadAnnotatedObjects(LoadAnnotatedObjectsSettings),
+    #[serde(
         alias = "median-subtract",
         alias = "medianSubtract",
         alias = "median_subtract"
@@ -356,104 +362,111 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 20,
+            name: "LoadAnnotatedObjects",
+            category: CommandCategory::Object,
+            summary: "Loads the hand-annotated objects of the image into the pipeline.",
+            description: "Every loaded object gets a new object id, is marked as manually annotated\nand has its intensities measured on every channel - from there on it is\nhandled like any segmented object.",
+        },
+        CommandMeta {
+            id: 21,
             name: "MedianSubtract",
             category: CommandCategory::Preprocess,
             summary: "A background subtraction filter that uses a median rank operator.",
             description: "This algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.\n\n# Examples\n\n```\nuse imagec::backend::algos::MedianSubtract;\nlet filter = MedianSubtract { radius: 10.0 };\n```",
         },
         CommandMeta {
-            id: 21,
+            id: 22,
             name: "MorphologicalCommand",
             category: CommandCategory::Preprocess,
             summary: "A filter that applies mathematical morphology to an image.",
             description: "Morphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.\n\n# Examples\n\n```\nuse imagec::backend::algos::{MorphologicalCommand, MorphOps, KernelShapes};\nlet clean_noise = MorphologicalCommand {\nop: MorphOps::Open,\nkernel_size: 3,\nkernel_shape: KernelShapes::Ellipse,\n};\n```",
         },
         CommandMeta {
-            id: 22,
+            id: 23,
             name: "ObjectMath",
             category: CommandCategory::Object,
             summary: "Computes a boolean set operation between two object classes, object pair by",
             description: "object pair.\n\nWhen more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
         },
         CommandMeta {
-            id: 23,
+            id: 24,
             name: "AI Pixel Classifier",
             category: CommandCategory::Segment,
             summary: "A pixel classifier trained via the app's AI training dialog",
             description: "(an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),\napplied here as a pipeline segmentation step: every pixel is classified\nindependently (reusing the same feature recipe used at training time),\nthen remapped through `segmentation_mapping` into this project's own\nclasses and written to the segmentation map - the same output shape\n`Threshold` produces, so downstream steps (extraction, classification)\ndon't need to care which one ran.\n\nPredicted classes with no matching `segmentation_mapping` entry are\nwritten as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`\nleaves pixels outside every configured range as background - mapping\nonly the classes you care about is a deliberate simplification, not an\noversight.",
         },
         CommandMeta {
-            id: 24,
+            id: 25,
             name: "RankFilter",
             category: CommandCategory::Preprocess,
             summary: "A filter that transforms pixels based on the statistical rank of their neighbors.",
             description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
         },
         CommandMeta {
-            id: 25,
+            id: 26,
             name: "Rolling Ball",
             category: CommandCategory::Preprocess,
             summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
         },
         CommandMeta {
-            id: 26,
+            id: 27,
             name: "SaveImage",
             category: CommandCategory::Preprocess,
             summary: "A command that exports the current image to a persistent file on disk.",
             description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.\n\n# Examples\n\n```\nuse imagec::backend::algos::SaveImage;\nlet saver = SaveImage {path:\"output/processed_cell.png\"};\n```",
         },
         CommandMeta {
-            id: 27,
+            id: 28,
             name: "AI Stardist Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
         },
         CommandMeta {
-            id: 28,
+            id: 29,
             name: "StructureTensor",
             category: CommandCategory::Preprocess,
             summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.",
             description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```",
         },
         CommandMeta {
-            id: 29,
+            id: 30,
             name: "Threshold",
             category: CommandCategory::Segment,
             summary: "A filter that segments an image into discrete classes based on intensity.",
             description: "This supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.",
         },
         CommandMeta {
-            id: 30,
+            id: 31,
             name: "TransformObjects",
             category: CommandCategory::Object,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.",
         },
         CommandMeta {
-            id: 31,
+            id: 32,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.",
         },
         CommandMeta {
-            id: 32,
+            id: 33,
             name: "Voronoi",
             category: CommandCategory::Object,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 33,
+            id: 34,
             name: "Watershed",
             category: CommandCategory::InstanceSegmentation,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nThis is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 34,
+            id: 35,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
@@ -511,31 +524,34 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
             IntensityTransformationSettings::default(),
         )),
         19 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
-        20 => Some(PipelineCommand::MedianSubtract(
+        20 => Some(PipelineCommand::LoadAnnotatedObjects(
+            LoadAnnotatedObjectsSettings::default(),
+        )),
+        21 => Some(PipelineCommand::MedianSubtract(
             MedianSubtractSettings::default(),
         )),
-        21 => Some(PipelineCommand::MorphologicalCommand(
+        22 => Some(PipelineCommand::MorphologicalCommand(
             MorphologicalCommandSettings::default(),
         )),
-        22 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
-        23 => Some(PipelineCommand::PixelClassifier(
+        23 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
+        24 => Some(PipelineCommand::PixelClassifier(
             PixelClassifierSettings::default(),
         )),
-        24 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        25 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        26 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        27 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        28 => Some(PipelineCommand::StructureTensor(
+        25 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
+        26 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        27 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        28 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        29 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        29 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        30 => Some(PipelineCommand::TransformObjects(
+        30 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        31 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        31 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        32 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        33 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        34 => Some(PipelineCommand::WeightedDeviation(
+        32 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        33 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        34 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        35 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
         _ => None,
@@ -566,6 +582,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => "ImageMath",
             Self::IntensityTransformation(_) => "IntensityTransformation",
             Self::Laplacian(_) => "Laplacian",
+            Self::LoadAnnotatedObjects(_) => "LoadAnnotatedObjects",
             Self::MedianSubtract(_) => "MedianSubtract",
             Self::MorphologicalCommand(_) => "MorphologicalCommand",
             Self::ObjectMath(_) => "ObjectMath",
@@ -606,6 +623,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => &CommandCategory::Preprocess,
             Self::IntensityTransformation(_) => &CommandCategory::Preprocess,
             Self::Laplacian(_) => &CommandCategory::Preprocess,
+            Self::LoadAnnotatedObjects(_) => &CommandCategory::Object,
             Self::MedianSubtract(_) => &CommandCategory::Preprocess,
             Self::MorphologicalCommand(_) => &CommandCategory::Preprocess,
             Self::ObjectMath(_) => &CommandCategory::Object,
@@ -654,6 +672,7 @@ impl PipelineCommand {
                 &[CommandCategory::Segment, CommandCategory::Preprocess]
             }
             Self::Laplacian(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::LoadAnnotatedObjects(_) => &[CommandCategory::Object],
             Self::MedianSubtract(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::MorphologicalCommand(_) => {
                 &[CommandCategory::Segment, CommandCategory::Preprocess]
@@ -696,6 +715,7 @@ impl PipelineCommand {
             Self::ImageMath(_s) => [vec![ParameterDef { name: "operand".to_string(), display_name: "Operand".to_string(), description: "The specific mathematical or logical operator to apply.".to_string(), value: match _s.operand { MathImageMathOperandSettings::None => "None".to_string(), MathImageMathOperandSettings::Invert => "Invert".to_string(), MathImageMathOperandSettings::Add => "Add".to_string(), MathImageMathOperandSettings::Subtract => "Subtract".to_string(), MathImageMathOperandSettings::Multiply => "Multiply".to_string(), MathImageMathOperandSettings::Divide => "Divide".to_string(), MathImageMathOperandSettings::And => "And".to_string(), MathImageMathOperandSettings::Or => "Or".to_string(), MathImageMathOperandSettings::Xor => "Xor".to_string(), MathImageMathOperandSettings::Min => "Min".to_string(), MathImageMathOperandSettings::Max => "Max".to_string(), MathImageMathOperandSettings::Average => "Average".to_string(), MathImageMathOperandSettings::DifferenceType => "Difference Type".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Invert".to_string(), "Add".to_string(), "Subtract".to_string(), "Multiply".to_string(), "Divide".to_string(), "And".to_string(), "Or".to_string(), "Xor".to_string(), "Min".to_string(), "Max".to_string(), "Average".to_string(), "Difference Type".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "swap_operands".to_string(), display_name: "Swap Operands".to_string(), description: "If false, the calculation is `(Current Image OP Cached Image)`.\nIf true, the calculation is `(Cached Image OP Current Image)`.\n\nThis is critical for non-commutative operations like Subtraction or Division.".to_string(), value: format!("{}", _s.swap_operands), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::IntensityTransformation(_s) => [vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines whether to use automated enhancement or user-defined values.".to_string(), value: match _s.mode { FiltersIntensityTransformIntensityTransformModeSettings::Automatic => "Automatic".to_string(), FiltersIntensityTransformIntensityTransformModeSettings::Manual => "Manual".to_string() }, param_type: ParamType::Dropdown, options: vec!["Automatic".to_string(), "Manual".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "contrast".to_string(), display_name: "Contrast".to_string(), description: "Contrast multiplier (gain).\n\nOnly active in [`Mode::Manual`].\nValues > 1.0 increase contrast, while values < 1.0 decrease it.".to_string(), value: format!("{}", _s.contrast), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "brightness".to_string(), display_name: "Brightness".to_string(), description: "Brightness offset (bias).\n\nOnly active in [`Mode::Manual`].\nPositive values brighten the image, negative values darken it.".to_string(), value: format!("{}", _s.brightness), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::Laplacian(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the discrete Laplacian aperture.\n\nTypically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)\nmore closely but are more computationally expensive. Must be an odd number.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }],
+            Self::LoadAnnotatedObjects(_s) => [vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Only load annotations carrying at least one of these classes.\n\nLeave empty to load every annotated object of the image.".to_string(), value: _s.input_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "Class added to every loaded object, so later steps can select them.\nSet to `Unset` to add none.".to_string(), value: match _s.output_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "keep_annotated_classes".to_string(), display_name: "Keep Annotated Classes".to_string(), description: "Keep the classes the objects were given while annotating.\n\nTurn off to start from `output_class` alone.".to_string(), value: format!("{}", _s.keep_annotated_classes), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::MedianSubtract(_s) => vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the neighborhood used to estimate the background.\n\nFeatures smaller than this radius will be preserved, while\nlarger structures will be treated as background and removed.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }],
             Self::MorphologicalCommand(_s) => [vec![ParameterDef { name: "op".to_string(), display_name: "Op".to_string(), description: "The transformation type (e.g., Dilate, Erode).".to_string(), value: match _s.op { MorphologyMorphologicalTransformationMorphOpsSettings::Dilate => "Dilate".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Erode => "Erode".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Open => "Open".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Close => "Close".to_string() }, param_type: ParamType::Dropdown, options: vec!["Dilate".to_string(), "Erode".to_string(), "Open".to_string(), "Close".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The diameter of the structuring element in pixels.\nMust be an odd number (e.g., 3, 5, 7).".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "kernel_shape".to_string(), display_name: "Kernel Shape".to_string(), description: "The geometric profile of the structuring element.".to_string(), value: match _s.kernel_shape { MorphologyMorphologicalTransformationKernelShapesSettings::Box => "Box".to_string(), MorphologyMorphologicalTransformationKernelShapesSettings::Ellipse => "Ellipse".to_string(), MorphologyMorphologicalTransformationKernelShapesSettings::Cross => "Cross".to_string() }, param_type: ParamType::Dropdown, options: vec!["Box".to_string(), "Ellipse".to_string(), "Cross".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "use_grayscale".to_string(), display_name: "Use Grayscale".to_string(), description: "If set the grayscale image instead of the labeld image is taken to perform a morphological transform".to_string(), value: format!("{}", _s.use_grayscale), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::ObjectMath(_s) => [vec![ParameterDef { name: "operation".to_string(), display_name: "Operation".to_string(), description: "Boolean set operation to apply".to_string(), value: match _s.operation { ObjectObjectMathObjectSetOperationSettings::And => "And".to_string(), ObjectObjectMathObjectSetOperationSettings::Or => "Or".to_string(), ObjectObjectMathObjectSetOperationSettings::Xor => "Xor".to_string(), ObjectObjectMathObjectSetOperationSettings::Subtract => "Subtract".to_string() }, param_type: ParamType::Dropdown, options: vec!["And".to_string(), "Or".to_string(), "Xor".to_string(), "Subtract".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "input_class".to_string(), display_name: "Input Class".to_string(), description: "ROIs carrying this class are the left-hand operand (\"A\").".to_string(), value: match _s.input_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "other_class".to_string(), display_name: "Other Class".to_string(), description: "ROIs carrying this class are the right-hand operand (\"B\").".to_string(), value: match _s.other_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "other_filter_classes".to_string(), display_name: "Other Filter Classes".to_string(), description: "Optional additional label filters applied to `other_class` objects.\n\nOnly `other_class` objects that carry all listed classes are used.".to_string(), value: _s.other_filter_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.other_filter_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Size unit for `min_overlap_area`".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_overlap_area".to_string(), display_name: "Min Overlap Area".to_string(), description: "Minimum overlap area before an `other_class` object is treated as a partner\nof an input object; objects overlapping less than this are ignored.".to_string(), value: format!("{}", _s.min_overlap_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "If unset, the result replaces the input object in place.\n\nIf set, a new object carrying this class is created for each input object instead,\nleaving the input object untouched.".to_string(), value: match _s.output_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "keep_unmatched".to_string(), display_name: "Keep Unmatched".to_string(), description: "When an input object has no qualifying overlapping partner: keep it unchanged in\nthe output (true), or drop it entirely - no output for it at all - (false).\n\nNote this is a policy override, not the literal mathematical result: e.g. for\n`And`, the true result of \"A and nothing\" is empty, but `keep_unmatched = true`\nstill leaves A untouched rather than emitting a zero-area object.".to_string(), value: format!("{}", _s.keep_unmatched), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
@@ -746,6 +766,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => String::new(),
             Self::IntensityTransformation(_) => String::new(),
             Self::Laplacian(_) => String::new(),
+            Self::LoadAnnotatedObjects(_) => String::new(),
             Self::MedianSubtract(_) => String::new(),
             Self::MorphologicalCommand(_) => String::new(),
             Self::ObjectMath(s) => format!(
@@ -1344,6 +1365,41 @@ impl PipelineCommand {
                     if let Ok(v) = value.parse::<usize>() {
                         s.kernel_size = v;
                     }
+                }
+            }
+            Self::LoadAnnotatedObjects(s) => {
+                if param_name == "input_classes" {
+                    if let Some(id) = value
+                        .strip_prefix("toggle:")
+                        .and_then(|x| x.trim().parse::<u32>().ok())
+                    {
+                        if s.input_classes
+                            .iter()
+                            .any(|c| c.to_u32().map_or(false, |v| v == id))
+                        {
+                            s.input_classes
+                                .retain(|c| c.to_u32().map_or(true, |v| v != id));
+                        } else {
+                            s.input_classes.push(ObjectClass::Valid(id));
+                        }
+                    } else {
+                        s.input_classes = value
+                            .split(',')
+                            .filter(|x| !x.is_empty())
+                            .filter_map(|x| x.trim().parse::<u32>().ok())
+                            .map(|v| ObjectClass::Valid(v))
+                            .collect();
+                    }
+                }
+                if param_name == "output_class" {
+                    if value == "-1" {
+                        s.output_class = ObjectClass::Unset;
+                    } else if let Ok(v) = value.parse::<u32>() {
+                        s.output_class = ObjectClass::Valid(v);
+                    }
+                }
+                if param_name == "keep_annotated_classes" {
+                    s.keep_annotated_classes = value == "true";
                 }
             }
             Self::MedianSubtract(s) => {
@@ -1985,6 +2041,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
+            Self::LoadAnnotatedObjects(_) => {}
             Self::MedianSubtract(_) => {}
             Self::MorphologicalCommand(_) => {}
             Self::ObjectMath(_) => {}
@@ -2046,6 +2103,7 @@ impl PipelineCommand {
             Self::ImageMath(_) => {}
             Self::IntensityTransformation(_) => {}
             Self::Laplacian(_) => {}
+            Self::LoadAnnotatedObjects(_) => {}
             Self::MedianSubtract(_) => {}
             Self::MorphologicalCommand(_) => {}
             Self::ObjectMath(_) => {}

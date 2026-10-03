@@ -641,6 +641,16 @@ impl From<LaplacianSettings> for Laplacian {
     }
 }
 
+impl From<LoadAnnotatedObjectsSettings> for LoadAnnotatedObjects {
+    fn from(_s: LoadAnnotatedObjectsSettings) -> Self {
+        LoadAnnotatedObjects {
+            input_classes: _s.input_classes.into_iter().map(|v| v.into()).collect(),
+            output_class: _s.output_class,
+            keep_annotated_classes: _s.keep_annotated_classes,
+        }
+    }
+}
+
 impl From<MedianSubtractSettings> for MedianSubtract {
     fn from(_s: MedianSubtractSettings) -> Self {
         MedianSubtract { radius: _s.radius }
@@ -912,6 +922,9 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         )),
         PipelineCommand::Laplacian(settings) => {
             Ok(Box::new(crate::algos::Laplacian::from(settings)))
+        }
+        PipelineCommand::LoadAnnotatedObjects(settings) => {
+            Ok(Box::new(crate::algos::LoadAnnotatedObjects::from(settings)))
         }
         PipelineCommand::MedianSubtract(settings) => {
             Ok(Box::new(crate::algos::MedianSubtract::from(settings)))

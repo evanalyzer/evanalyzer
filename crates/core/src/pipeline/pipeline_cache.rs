@@ -47,6 +47,9 @@ pub struct GlobalPipelineCache {
     pub image_meta: GlobalImageMeta,
     pub object_cache: ObjectCache,
     pub image_rel_path: PathBuf,
+    /// The objects the user annotated by hand on this image, for the plane being processed
+    pub annotated_objects:
+        std::sync::Arc<Vec<evanalyzer_cfg::settings::object_settings::ObjectMetricSettings>>,
 }
 
 mod tests {

@@ -1219,6 +1219,30 @@
         "kernelSize"
       ]
     },
+    "LoadAnnotatedObjectsSettings": {
+      "description": "Loads the hand-annotated objects of the image into the pipeline.\n\nEvery loaded object gets a new object id, is marked as manually annotated\nand has its intensities measured on every channel - from there on it is\nhandled like any segmented object.",
+      "type": "object",
+      "properties": {
+        "inputClasses": {
+          "description": "Only load annotations carrying at least one of these classes.\n\nLeave empty to load every annotated object of the image.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "keepAnnotatedClasses": {
+          "description": "Keep the classes the objects were given while annotating.\n\nTurn off to start from `output_class` alone.",
+          "type": "boolean",
+          "default": false
+        },
+        "outputClass": {
+          "description": "Class added to every loaded object, so later steps can select them.\nSet to `Unset` to add none.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        }
+      }
+    },
     "MathImageCacheImageCacheModeSettings": {
       "description": "Defines the interaction type with the persistent image storage.",
       "oneOf": [
@@ -2231,6 +2255,19 @@
             }
           },
           "$ref": "#/$defs/LaplacianSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "LOAD_ANNOTATED_OBJECTS"
+            }
+          },
+          "$ref": "#/$defs/LoadAnnotatedObjectsSettings",
           "required": [
             "type"
           ]

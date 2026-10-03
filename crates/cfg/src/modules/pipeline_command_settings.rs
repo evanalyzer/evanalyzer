@@ -2150,6 +2150,38 @@ impl Default for ColocalizationSettings {
     }
 }
 
+/// Loads the hand-annotated objects of the image into the pipeline.
+///
+/// Every loaded object gets a new object id, is marked as manually annotated
+/// and has its intensities measured on every channel - from there on it is
+/// handled like any segmented object.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadAnnotatedObjectsSettings {
+    /// Only load annotations carrying at least one of these classes.
+    ///
+    /// Leave empty to load every annotated object of the image.
+    pub input_classes: Vec<ObjectClass>,
+    /// Class added to every loaded object, so later steps can select them.
+    /// Set to `Unset` to add none.
+    pub output_class: ObjectClass,
+    /// Keep the classes the objects were given while annotating.
+    ///
+    /// Turn off to start from `output_class` alone.
+    pub keep_annotated_classes: bool,
+}
+
+impl Default for LoadAnnotatedObjectsSettings {
+    fn default() -> Self {
+        Self {
+            input_classes: vec![],
+            output_class: ObjectClass::default(),
+            keep_annotated_classes: false,
+        }
+    }
+}
+
 /// Computes a boolean set operation between two object classes, object pair by
 /// object pair.
 ///

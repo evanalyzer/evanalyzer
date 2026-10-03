@@ -67,6 +67,7 @@ pub use self::object::classify_objects::ClassifyObjects;
 pub use self::object::coloc_objects::ColocMultiplicity;
 pub use self::object::coloc_objects::Colocalization;
 pub use self::object::extract_objects::ExtractObjects;
+pub use self::object::load_annotaed_objects::LoadAnnotatedObjects;
 pub use self::object::object_math::ObjectMath;
 pub use self::object::object_math::ObjectSetOperation;
 pub(crate) use self::object::tile_merge::{Connectivity, TileMerge, touches_tile_edge};
@@ -113,6 +114,14 @@ pub trait ImageAlgorithm: Send + Sync {
     /// time would destroy the data it's about to read.
     fn scratch_is_workspace(&self) -> bool {
         true
+    }
+
+    /// `true` for commands that read `GlobalPipelineCache::annotated_objects`
+    /// (the user's hand-annotated objects). The executor only fills that, and
+    /// only runs the whole-image phase without any segmented objects, when a
+    /// job contains such a command.
+    fn uses_annotated_objects(&self) -> bool {
+        false
     }
 
     /// Entry point pipeline dispatchers should call instead of [`Self::execute`]

@@ -753,24 +753,33 @@ impl ProjectExt for ProjectWithRuntime {
     fn auto_add_classes_based_on_image_meta(&mut self) {
         // Collect channel data first to avoid holding Deref borrows while mutating.
         let classes: Vec<Class> = {
-            let idx = self.get_selected_series_idx();
-            self.settings
-                .images
-                .list
-                .values()
-                .next()
-                .and_then(|image| image.series.get(&idx))
+            // The selected image, or the first one of the project if none is selected.
+            let image = self
+                .get_current_image_settings()
+                .or_else(|| self.settings.images.list.values().next());
+            image
+                .and_then(|image| image.series.get(&image.selected_series))
                 .map(|series_data| {
                     series_data
                         .channels
-                        .values()
-                        .map(|ch| Class {
-                            id: ObjectClass::Unset,
-                            color: wavelength_to_rgb_u32(
-                                ch.emission_wave_length.unwrap_or_else(|| 0.0),
-                            ),
-                            name: ch.name.clone(),
-                            notes: "".into(),
+                        .iter()
+                        .map(|(channel_id, ch)| {
+                            // A global wavelength set by the user wins over the image's own,
+                            // so the class gets the colour the viewer shows for the channel.
+                            let wave_length = self
+                                .images
+                                .settings
+                                .channels
+                                .get(channel_id)
+                                .and_then(|channel| channel.emission_wave_length)
+                                .or(ch.emission_wave_length)
+                                .unwrap_or(0.0);
+                            Class {
+                                id: ObjectClass::Unset,
+                                color: wavelength_to_rgb_u32(wave_length),
+                                name: ch.name.clone(),
+                                notes: "".into(),
+                            }
                         })
                         .collect()
                 })
@@ -2493,6 +2502,138 @@ mod tests {
     }
 
     // -- auto_add_classes_based_on_image_meta -------------------------------
+
+    /// Colour of the auto-added class called `name`.
+    fn auto_class_color(project: &ProjectWithRuntime, name: &str) -> u32 {
+        project
+            .classification
+            .classes()
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no class {name}"))
+            .color
+    }
+
+    /// Adds a second image whose single channel is called `channel_name`.
+    fn add_second_image(project: &mut ProjectWithRuntime, channel_name: &str) -> PathBuf {
+        let rel_path = PathBuf::from("second.tif");
+        let mut entry = project.images.list.values().next().unwrap().clone();
+        entry.rel_path = rel_path.clone();
+        let series = entry.series.get_mut(&0).unwrap();
+        series.channels = BTreeMap::from([(
+            0,
+            ChannelSettings {
+                name: channel_name.into(),
+                emission_wave_length: Some(640.0),
+                visible: None,
+                histogram: None,
+            },
+        )]);
+        project.images.list.insert(rel_path.clone(), entry);
+        rel_path
+    }
+
+    #[test]
+    fn auto_add_classes_colours_classes_by_the_images_wavelength() {
+        let mut project = project_with_one_image();
+        project.auto_add_classes_based_on_image_meta();
+        assert_eq!(
+            auto_class_color(&project, "Ch0"),
+            wavelength_to_rgb_u32(488.0)
+        );
+        assert_eq!(
+            auto_class_color(&project, "Ch1"),
+            wavelength_to_rgb_u32(561.0)
+        );
+    }
+
+    #[test]
+    fn auto_add_classes_prefers_a_global_wavelength_over_the_images_own() {
+        let mut project = project_with_one_image();
+        project.set_global_emission_wavel_length(0, 640.0);
+        project.auto_add_classes_based_on_image_meta();
+        assert_eq!(
+            auto_class_color(&project, "Ch0"),
+            wavelength_to_rgb_u32(640.0)
+        );
+        // Channels without a global value keep the image's own.
+        assert_eq!(
+            auto_class_color(&project, "Ch1"),
+            wavelength_to_rgb_u32(561.0)
+        );
+    }
+
+    #[test]
+    fn auto_add_classes_uses_the_selected_image_not_the_first() {
+        let mut project = project_with_one_image();
+        let second = add_second_image(&mut project, "Far red");
+        project.set_current_image_path(&second);
+        project.auto_add_classes_based_on_image_meta();
+
+        let names: Vec<&str> = project
+            .classification
+            .classes()
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(
+            names.len(),
+            2,
+            "Background plus the second image's one channel"
+        );
+        assert!(names.contains(&"Far red"));
+        assert_eq!(
+            auto_class_color(&project, "Far red"),
+            wavelength_to_rgb_u32(640.0)
+        );
+    }
+
+    #[test]
+    fn auto_add_classes_falls_back_to_the_first_image_without_a_selection() {
+        let mut project = project_with_one_image();
+        add_second_image(&mut project, "Far red");
+        project.rest_current_image_path();
+        project.set_global_emission_wavel_length(1, 405.0);
+        project.auto_add_classes_based_on_image_meta();
+
+        assert!(
+            project
+                .classification
+                .classes()
+                .iter()
+                .all(|c| c.name != "Far red")
+        );
+        assert_eq!(
+            auto_class_color(&project, "Ch0"),
+            wavelength_to_rgb_u32(488.0)
+        );
+        // The global value applies without a selected image, too.
+        assert_eq!(
+            auto_class_color(&project, "Ch1"),
+            wavelength_to_rgb_u32(405.0)
+        );
+    }
+
+    #[test]
+    fn auto_add_classes_uses_the_images_selected_series() {
+        let mut project = project_with_one_image();
+        project.with_current_image_mut(|img| {
+            let mut series = img.series[&0].clone();
+            series.channels.retain(|id, _| *id == 0);
+            series.channels.get_mut(&0).unwrap().name = "Series1".into();
+            img.series.insert(1, series);
+        });
+        project.set_active_series(&1);
+        project.auto_add_classes_based_on_image_meta();
+        assert!(
+            project
+                .classification
+                .classes()
+                .iter()
+                .any(|c| c.name == "Series1")
+        );
+        assert_eq!(project.classification.classes().len(), 2);
+    }
 
     #[test]
     fn auto_add_classes_creates_one_class_per_channel_of_the_first_image() {
