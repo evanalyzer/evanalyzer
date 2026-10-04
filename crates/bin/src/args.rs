@@ -10,9 +10,10 @@ pub struct Args {
 
     /// What to log, in env_logger filter syntax: a level (`error`, `warn`,
     /// `info`, `debug`, `trace`, `off`) or per module, e.g.
-    /// `info,evanalyzer_core=debug`.
-    #[arg(long, global = true, value_name = "FILTER", default_value = "debug")]
-    pub log_level: String,
+    /// `info,evanalyzer_core=debug`. Default `debug`, or for `server` the
+    /// config file's `log_level`.
+    #[arg(long, global = true, value_name = "FILTER")]
+    pub log_level: Option<String>,
 
     /// EVAnalyzer server to work on instead of this machine, e.g.
     /// `ws://workstation:7400`. Projects, images and results are then read
@@ -65,9 +66,18 @@ pub enum TopCommand {
         command: evanalyzer_cli::CliCommand,
     },
     /// Start an EVAnalyzer server which manages more evanalyzer worker sessions
+    ///
+    /// Settings come from the built-in defaults, then the `--config` file,
+    /// then these arguments. `docs/server.toml` documents every setting.
     Server {
-        #[arg(long, default_value = "127.0.0.1:7400")]
-        listen: String,
+        /// Configuration file (TOML): users, allowed folders, and the
+        /// settings below. See `docs/server.md`.
+        #[arg(long, value_name = "FILE")]
+        config: Option<std::path::PathBuf>,
+
+        /// Address and port to accept clients on. Default `127.0.0.1:7400`.
+        #[arg(long, value_name = "ADDRESS")]
+        listen: Option<String>,
 
         /// File the running workers are recorded in, so a restarted server
         /// finds them again. Default: `/run/evanalyzer/sessions.json` for a
@@ -75,6 +85,11 @@ pub enum TopCommand {
         #[arg(long, value_name = "FILE")]
         session_store: Option<std::path::PathBuf>,
     },
+    /// Print an Argon2id hash of a password, for `password = "..."` in the
+    /// server's config or users file. Asks for the password twice (hidden),
+    /// or reads one line from stdin when it is not a terminal:
+    /// `echo 'secret' | evanalyzer hash-password`.
+    HashPassword,
     /// Run one compute instance. Started by `evanalyzer server` for each
     /// logged-in user, or by hand for a direct `--remote-token` connection.
     Worker {
@@ -117,10 +132,31 @@ mod tests {
             "--remote-token",
             "\n  server ",
             "\n  worker ",
+            "\n  hash-password ",
         ] {
             assert!(help.contains(shown), "{shown} missing in:\n{help}");
         }
         assert!(!help.contains("[env:"), "no environment variables:\n{help}");
+    }
+
+    #[test]
+    fn server_settings_not_given_are_left_to_the_config_file() {
+        let args =
+            Args::try_parse_from(["evanalyzer", "server", "--config", "/etc/eva.toml"]).unwrap();
+        assert!(
+            args.log_level.is_none(),
+            "not defaulted - the file may set it"
+        );
+        let Some(TopCommand::Server {
+            config,
+            listen,
+            session_store,
+        }) = args.command
+        else {
+            panic!("expected the server command");
+        };
+        assert_eq!(config, Some("/etc/eva.toml".into()));
+        assert!(listen.is_none() && session_store.is_none());
     }
 
     #[test]

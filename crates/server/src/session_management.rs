@@ -56,9 +56,9 @@ pub struct SessionEntry {
     pub pid: u32,
     /// Token of this session. The worker expects it in the remote protocol's
     pub session_token: String,
-    /// User id of the user which started the session
+    /// ID of the user which started the session ([`User::user_id`]) - never
+    /// the username, which may change.
     pub user_id: String,
-    pub username: String,
     /// The worker listens on `127.0.0.1:<port>`
     pub port: u16,
     /// Date time when the session has been started
@@ -124,7 +124,7 @@ impl SessionManagement {
         if let Some(index) = state
             .sessions
             .iter()
-            .position(|s| s.username == user.username)
+            .position(|s| s.user_id == user.user_id)
         {
             if state.is_alive(index) {
                 info!("Restoring session of {}", user.username);
@@ -147,7 +147,7 @@ impl SessionManagement {
             .position(|s| s.session_token == session_token)
         {
             let entry = state.remove(index);
-            info!("Closed session of {}", entry.username);
+            info!("Closed session of user {}", entry.user_id);
             self.persist(&state.sessions)?;
         }
         Ok(())
@@ -188,7 +188,6 @@ impl SessionManagement {
             pid: child.id(),
             session_token,
             user_id: user.user_id.clone(),
-            username: user.username.clone(),
             port,
             start_date: SystemTime::now(),
         };
@@ -378,7 +377,7 @@ pub(crate) mod tests {
 
     fn user(name: &str) -> User {
         User {
-            user_id: name.into(),
+            user_id: format!("id-{name}"),
             username: name.into(),
             home: std::env::temp_dir(),
             allowed_dirs: vec![std::env::temp_dir()],
@@ -470,6 +469,31 @@ pub(crate) mod tests {
 
         sessions.close_session(&first.session_token).unwrap();
         sessions.close_session(&bob.session_token).unwrap();
+    }
+
+    #[test]
+    fn a_renamed_user_gets_their_running_session_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = manager(dir.path());
+        let first = sessions.open_or_create_session(&user("bob")).unwrap();
+
+        let renamed = User {
+            username: "robert".into(),
+            ..user("bob")
+        };
+        let again = sessions.open_or_create_session(&renamed).unwrap();
+        assert_eq!(again.pid, first.pid);
+
+        // A new user taking over the old name is someone else.
+        let new_bob = User {
+            user_id: "id-new-bob".into(),
+            ..user("bob")
+        };
+        let other = sessions.open_or_create_session(&new_bob).unwrap();
+        assert_ne!(other.pid, first.pid);
+
+        sessions.close_session(&first.session_token).unwrap();
+        sessions.close_session(&other.session_token).unwrap();
     }
 
     #[test]

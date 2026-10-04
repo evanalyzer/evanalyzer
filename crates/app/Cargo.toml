@@ -12,7 +12,6 @@ evanalyzer_cfg = { workspace = true }
 
 log = { workspace = true }
 chrono = { workspace = true }
-indexmap = { workspace = true }
 bitvec = { workspace = true }
 kornia-image = { workspace = true }
 pathdiff = { workspace = true }
@@ -21,8 +20,6 @@ human-sort ={ workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-regex = { workspace = true }
-csv = { workspace = true }
 rust_xlsxwriter = { workspace = true , features = ["constant_memory"] }
 dirs = { workspace = true }
 image = { workspace = true }

@@ -1,7 +1,8 @@
 use crate::{
     api::{Request, Response},
-    session_management::SessionManagement,
-    user_management::{AuthenticationStatus, UserManagement, single_user::SingleUser},
+    config::ServerConfig,
+    session_management::{SessionManagement, default_store_path},
+    user_management::{AuthenticationStatus, UserManagement},
 };
 use log::{error, info, warn};
 use std::{
@@ -28,8 +29,9 @@ pub type SessionId = u64;
 pub struct SessionInfo {
     pub _peer: SocketAddr,
     pub _connected_at: SystemTime,
-    /// Set once the client logged in.
-    pub username: Option<String>,
+    /// ID of the logged-in user ([`crate::user_management::User::user_id`]),
+    /// set once the client logged in.
+    pub user_id: Option<String>,
 }
 
 /// All open connections, shared between the connection threads.
@@ -49,36 +51,32 @@ struct Connection {
     user_management: Arc<dyn UserManagement>,
     session_management: Arc<SessionManagement>,
     state: State,
-    username: Option<String>,
+    /// ID of the logged-in user.
+    user_id: Option<String>,
     /// Session this connection logged into.
     session_token: Option<String>,
     /// Port of the session's worker on 127.0.0.1.
     worker_port: Option<u16>,
 }
 
-/// `evanalyzer server`: listens on `listen`, keeps its session file at
-/// `session_store` and starts workers logging with `worker_log_level`.
-pub fn serve(
-    listen: String,
-    session_store: std::path::PathBuf,
-    worker_log_level: String,
-) -> std::io::Result<()> {
-    Server::new(session_store, worker_log_level)?.serve(&listen)
+/// `evanalyzer server`: listens on `config.listen`, logs users in through
+/// the configured user source, keeps its session file at
+/// `config.session_store` and starts workers logging at `config.log_level`.
+pub fn serve(config: ServerConfig) -> std::io::Result<()> {
+    let session_store = config
+        .session_store
+        .clone()
+        .unwrap_or_else(default_store_path);
+    Server {
+        user_management: config.user_management()?,
+        session_management: Arc::new(SessionManagement::new(session_store, config.log_level)?),
+        sessions: Arc::default(),
+        next_session_id: AtomicU64::new(1),
+    }
+    .serve(&config.listen)
 }
 
 impl Server {
-    pub fn new(
-        session_store: std::path::PathBuf,
-        worker_log_level: String,
-    ) -> std::io::Result<Self> {
-        Ok(Self {
-            user_management: Arc::new(SingleUser::default()),
-            session_management: Arc::new(SessionManagement::new(session_store, worker_log_level)?),
-            sessions: Arc::default(),
-            next_session_id: AtomicU64::new(1),
-        })
-    }
-
     pub fn serve(&self, listen: &str) -> std::io::Result<()> {
         let listener = TcpListener::bind(listen)?;
         info!("Starting server on ws://{}", listener.local_addr()?);
@@ -92,7 +90,7 @@ impl Server {
                 SessionInfo {
                     _peer: peer,
                     _connected_at: SystemTime::now(),
-                    username: None,
+                    user_id: None,
                 },
             );
             info!("Session {session_id}: {peer} connected");
@@ -103,7 +101,7 @@ impl Server {
                 user_management: Arc::clone(&self.user_management),
                 session_management: Arc::clone(&self.session_management),
                 state: State::WaitingForLogin,
-                username: None,
+                user_id: None,
                 session_token: None,
                 worker_port: None,
             };
@@ -187,12 +185,12 @@ impl Connection {
                 match self.user_management.login(username.clone(), password) {
                     AuthenticationStatus::Authenticated(user) => {
                         info!(
-                            "Session {}: logged in as {}",
-                            self.session_id, user.username
+                            "Session {}: logged in as {} (id {})",
+                            self.session_id, user.username, user.user_id
                         );
                         if let Some(info) = self.sessions.lock().unwrap().get_mut(&self.session_id)
                         {
-                            info.username = Some(user.username.clone());
+                            info.user_id = Some(user.user_id.clone());
                         }
                         let session = match self.session_management.open_or_create_session(&user) {
                             Ok(session) => session,
@@ -201,7 +199,7 @@ impl Connection {
                                 return Response::error("Could not start EVAnalyzer for this user");
                             }
                         };
-                        self.username = Some(user.username);
+                        self.user_id = Some(user.user_id);
                         self.worker_port = Some(session.port);
                         self.session_token = Some(session.session_token.clone());
                         self.state = State::WaitingForCommands;
@@ -238,14 +236,14 @@ impl Connection {
             return Response::error("Could not close the session");
         }
         info!(
-            "Session {}: {} exited",
+            "Session {}: user {} exited",
             self.session_id,
-            self.username.as_deref().unwrap_or_default()
+            self.user_id.as_deref().unwrap_or_default()
         );
         if let Some(info) = self.sessions.lock().unwrap().get_mut(&self.session_id) {
-            info.username = None;
+            info.user_id = None;
         }
-        self.username = None;
+        self.user_id = None;
         self.worker_port = None;
         self.state = State::WaitingForLogin;
         Response::accepted("Session closed")
@@ -372,6 +370,7 @@ mod tests {
     mod conversation {
         use super::super::*;
         use crate::session_management::tests::fake_worker;
+        use crate::user_management::single_user::SingleUser;
         use std::net::TcpStream;
         use tungstenite::stream::MaybeTlsStream;
 

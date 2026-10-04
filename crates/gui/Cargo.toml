@@ -12,7 +12,6 @@ evanalyzer_cfg = { workspace = true }
 evanalyzer_gui_slint = { path = "ui" }
 
 slint = { workspace = true }
-copypasta = { workspace = true }
 log = { workspace = true }
 rayon = { workspace = true }
 kornia-image = { workspace = true }

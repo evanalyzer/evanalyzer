@@ -8,13 +8,39 @@ use evanalyzer_app::global::Frontend;
 use evanalyzer_app::project::ProjectOwner;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cli::CliCommand;
-use evanalyzer_server::serve;
+use evanalyzer_server::{ServerConfig, serve};
 use log::{LevelFilter, info, warn};
 use std::{path::PathBuf, sync::Arc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
-    init_logger(&args.log_level);
+    // The server's log level may come from its config file, so the logger
+    // waits for that.
+    let server_config = match &args.command {
+        Some(TopCommand::Server {
+            config,
+            listen,
+            session_store,
+        }) => Some(
+            server_config(
+                config.as_deref(),
+                listen.clone(),
+                session_store.clone(),
+                args.log_level.clone(),
+            )
+            .unwrap_or_else(|e| {
+                // `main`'s error return would print it Debug-formatted, which
+                // garbles the multi-line TOML error.
+                eprintln!("Error: {e}");
+                std::process::exit(2)
+            }),
+        ),
+        _ => None,
+    };
+    init_logger(match &server_config {
+        Some(config) => &config.log_level,
+        None => args.log_level.as_deref().unwrap_or("debug"),
+    });
 
     // The one place that decides where compute runs - front ends only ever
     // see the `Backend` trait.
@@ -30,10 +56,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 roots,
                 home,
             } => start_worker(listen, token, roots, home),
-            TopCommand::Server {
-                listen,
-                session_store,
-            } => start_server(listen, session_store, args.log_level.clone()),
+            TopCommand::HashPassword => print_password_hash(),
+            TopCommand::Server { .. } => {
+                start_server(server_config.expect("loaded above for the server command"))
+            }
         },
         None => start_gui(backend, args.project),
     };
@@ -155,14 +181,46 @@ fn start_worker(
     return Ok(());
 }
 
-/// Start evanalyzer server; its workers log with the same `log_level`.
-fn start_server(
-    listen: String,
+/// The server's settings: defaults, then the `--config` file, then the
+/// command-line arguments.
+fn server_config(
+    file: Option<&std::path::Path>,
+    listen: Option<String>,
     session_store: Option<PathBuf>,
-    log_level: String,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let session_store = session_store.unwrap_or_else(evanalyzer_server::default_store_path);
-    serve(listen, session_store, log_level)?;
+    log_level: Option<String>,
+) -> std::io::Result<ServerConfig> {
+    let config = match file {
+        Some(file) => ServerConfig::load(file)?,
+        None => ServerConfig::default(),
+    };
+    Ok(config.with_overrides(listen, session_store, log_level))
+}
+
+/// `evanalyzer hash-password`: the hash goes to stdout alone (prompts go to
+/// the terminal), so it works in `$(...)` and pipes.
+fn print_password_hash() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{BufRead, IsTerminal};
+    let password = if std::io::stdin().is_terminal() {
+        let password = rpassword::prompt_password("Password: ")?;
+        if rpassword::prompt_password("Repeat password: ")? != password {
+            return Err("The passwords differ".into());
+        }
+        password
+    } else {
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        line.trim_end_matches(['\r', '\n']).to_string()
+    };
+    if password.is_empty() {
+        return Err("The password is empty".into());
+    }
+    println!("{}", evanalyzer_server::hash_password(&password)?);
+    Ok(())
+}
+
+/// Start evanalyzer server; its workers log with the same `log_level`.
+fn start_server(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
+    serve(config)?;
     Ok(())
 }
 

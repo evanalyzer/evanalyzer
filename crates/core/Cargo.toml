@@ -9,7 +9,6 @@ publish = { workspace = true }
 [dependencies]
 macros = { path = "./macros" }
 evanalyzer_cfg = { workspace = true }
-kornia-tensor ={ workspace = true }
 kornia-image = { workspace = true }
 kornia-imgproc = { workspace = true }
 # Pinned transitive dep (image -> zune-jpeg -> zune-core), not used directly.

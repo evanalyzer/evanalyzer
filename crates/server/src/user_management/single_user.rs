@@ -1,36 +1,60 @@
 use std::path::PathBuf;
 
 use crate::user_management::UserManagement;
+use crate::user_management::password::verify_password;
 
+/// The ID of the single account. Fixed, so changing its username changes
+/// nothing but the login.
+pub const SINGLE_USER_ID: &str = "single";
+
+/// One account, configured in `[users.single]` (see
+/// `config::SingleUserConfig`).
 pub struct SingleUser {
     pub username: String,
-    pub password: String,
-    pub userid: String,
+    /// The stored password, see [`crate::user_management::password`].
+    pub stored_password: String,
     pub user_home: PathBuf,
-    /// Folders the user's worker may access; just `user_home` by default.
+    /// Folders the user's worker may access.
     pub allowed_dirs: Vec<PathBuf>,
 }
 
 impl SingleUser {
-    /// The built-in account, at home in the server account's own home folder
-    /// (until a configuration file sets it).
-    pub fn default() -> Self {
-        let home = server_account_home();
+    /// `username` with `stored_password`, at home in `home` (default: the
+    /// server account's), allowed to access `allowed_dirs` (`{home}` = the
+    /// home folder).
+    pub fn new(
+        username: String,
+        stored_password: String,
+        home: Option<PathBuf>,
+        allowed_dirs: Vec<String>,
+    ) -> Self {
+        let home = home.unwrap_or_else(server_account_home);
         Self {
-            username: "admin".into(),
-            password: "1234".into(),
-            userid: "user-id".into(),
-            allowed_dirs: vec![home.clone()],
+            username,
+            stored_password,
+            allowed_dirs: super::expand_dirs(&allowed_dirs, &home),
             user_home: home,
         }
+    }
+
+    /// The built-in account (`admin`, password `1234`) - what a server
+    /// without `--config` uses.
+    pub fn default() -> Self {
+        let config = crate::config::SingleUserConfig::default();
+        Self::new(
+            config.username,
+            config.password,
+            config.home,
+            vec!["{home}".into()],
+        )
     }
 }
 
 impl UserManagement for SingleUser {
     fn login(&self, username: String, password: String) -> super::AuthenticationStatus {
-        if username == self.username && password == self.password {
+        if username == self.username && verify_password(&password, &self.stored_password) {
             return super::AuthenticationStatus::Authenticated(super::User {
-                user_id: self.userid.clone(),
+                user_id: SINGLE_USER_ID.into(),
                 username,
                 home: self.user_home.clone(),
                 allowed_dirs: self.allowed_dirs.clone(),
@@ -79,7 +103,7 @@ mod tests {
         match users.login("admin".into(), "1234".into()) {
             AuthenticationStatus::Authenticated(user) => {
                 assert_eq!(user.username, "admin");
-                assert_eq!(user.user_id, "user-id");
+                assert_eq!(user.user_id, SINGLE_USER_ID);
                 assert!(user.unix_account.is_none());
             }
             _ => panic!("expected a login"),
@@ -90,6 +114,17 @@ mod tests {
                 AuthenticationStatus::PasswordWrong
             ));
         }
+    }
+
+    #[test]
+    fn renaming_the_user_keeps_their_id() {
+        let users = SingleUser::new("joachim".into(), "plain:pw".into(), None, vec![]);
+        let AuthenticationStatus::Authenticated(user) = users.login("joachim".into(), "pw".into())
+        else {
+            panic!("expected a login");
+        };
+        assert_eq!(user.username, "joachim");
+        assert_eq!(user.user_id, SINGLE_USER_ID);
     }
 
     #[test]

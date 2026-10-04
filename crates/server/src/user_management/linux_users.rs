@@ -6,18 +6,27 @@
 //!
 //! Reading `/etc/shadow` requires root or membership in the `shadow` group.
 
-use crate::user_management::{AuthenticationStatus, UnixAccount, User, UserManagement};
-use sha_crypt::{PasswordVerifier, ShaCrypt};
+use crate::user_management::password::verify_password;
+use crate::user_management::{
+    AuthenticationStatus, UnixAccount, User, UserManagement, expand_dirs,
+};
 use std::{
+    collections::BTreeMap,
     fs::File,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
-use yescrypt::Yescrypt;
 
+/// This machine's system users - configured in `[users.linux]` (see
+/// `config::LinuxUsersConfig`).
 pub struct LinuxUsers {
     pub shadow_file: PathBuf,
     pub passwd_file: PathBuf,
+    /// Allowed folders of every user without an override (`{home}` = their
+    /// home folder).
+    pub default_allowed_dirs: Vec<String>,
+    /// Allowed folders per username, replacing the default.
+    pub overrides: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for LinuxUsers {
@@ -25,6 +34,8 @@ impl Default for LinuxUsers {
         Self {
             shadow_file: "/etc/shadow".into(),
             passwd_file: "/etc/passwd".into(),
+            default_allowed_dirs: vec!["{home}".into()],
+            overrides: BTreeMap::new(),
         }
     }
 }
@@ -67,10 +78,14 @@ impl UserManagement for LinuxUsers {
                 return AuthenticationStatus::PasswordWrong;
             }
         };
+        let allowed_dirs = self
+            .overrides
+            .get(&username)
+            .unwrap_or(&self.default_allowed_dirs);
         AuthenticationStatus::Authenticated(User {
             user_id: entry.uid.to_string(),
+            allowed_dirs: expand_dirs(allowed_dirs, &entry.home),
             username,
-            allowed_dirs: vec![entry.home.clone()],
             home: entry.home,
             unix_account: Some(UnixAccount {
                 uid: entry.uid,
@@ -140,25 +155,6 @@ fn passwd_entry(
     Ok(None)
 }
 
-/// Checks `password` against a crypt(3) hash from the shadow file.
-///
-/// Locked (`!...`), disabled (`*`) and empty hashes never match, so an
-/// account without a password cannot log in remotely. Hash formats other
-/// than yescrypt and sha256/sha512-crypt are rejected.
-fn verify_password(password: &str, hash: &str) -> bool {
-    let password = password.as_bytes();
-    if hash.starts_with("$y$") {
-        Yescrypt::default().verify_password(password, hash).is_ok()
-    } else if hash.starts_with("$5$") || hash.starts_with("$6$") {
-        ShaCrypt::default().verify_password(password, hash).is_ok()
-    } else {
-        if !hash.is_empty() && !hash.starts_with(['!', '*']) {
-            log::warn!("Unsupported password hash format, login rejected");
-        }
-        false
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +192,7 @@ mod tests {
             users: LinuxUsers {
                 shadow_file,
                 passwd_file,
+                ..LinuxUsers::default()
             },
         }
     }
@@ -246,6 +243,26 @@ mod tests {
         assert_eq!(user.allowed_dirs, [PathBuf::from("/srv/bob")]);
         let account = user.unix_account.expect("a unix account");
         assert_eq!((account.uid, account.gid), (1001, 1002));
+    }
+
+    #[test]
+    fn an_override_replaces_the_default_allowed_folders_for_one_user() {
+        let mut f = standard();
+        f.users.default_allowed_dirs = vec!["{home}".into(), "/data/shared".into()];
+        f.users
+            .overrides
+            .insert("bob".into(), vec!["{home}/work".into()]);
+
+        let allowed = |name, password| match login(&f, name, password) {
+            AuthenticationStatus::Authenticated(user) => user.allowed_dirs,
+            _ => panic!("expected authentication"),
+        };
+
+        assert_eq!(
+            allowed("alice", "correct horse"),
+            [PathBuf::from("/home/alice"), PathBuf::from("/data/shared")]
+        );
+        assert_eq!(allowed("bob", "hunter2"), [PathBuf::from("/srv/bob/work")]);
     }
 
     #[test]
@@ -368,6 +385,7 @@ mod tests {
         let users = LinuxUsers {
             shadow_file: "/nonexistent/shadow".into(),
             passwd_file: "/nonexistent/passwd".into(),
+            ..LinuxUsers::default()
         };
         assert!(matches!(
             users.login("alice".into(), "correct horse".into()),
