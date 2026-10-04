@@ -37,6 +37,17 @@ pub enum TlsTrust {
     NoVerification,
 }
 
+/// A server's TLS certificate, as [`inspect`] found it - for a client to
+/// ask the user whether to trust it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerCertificate {
+    /// SHA-256, `AB:CD:...` - what `evanalyzer server` logs at startup.
+    pub fingerprint: String,
+    /// A public certificate authority signed it for the host name: trusted
+    /// without asking ([`TlsTrust::PublicAuthorities`]).
+    pub publicly_trusted: bool,
+}
+
 /// The connection to a server: `ws://` or `wss://`.
 pub(crate) enum NetStream {
     Plain(TcpStream),
@@ -183,6 +194,7 @@ pub(crate) fn connect(
             log::info!("TLS: {url} has the certificate with the given fingerprint");
             true
         }
+        Check::Inspect(_) => unreachable!("inspecting verifiers never finish a handshake"),
         Check::Nothing => {
             log::warn!(
                 "TLS: the certificate of {url} was NOT verified (--no-tls-verification): \
@@ -195,6 +207,62 @@ pub(crate) fn connect(
     Ok(NetStream::Tls {
         stream: Box::new(StreamOwned::new(tls, stream)),
         verified,
+    })
+}
+
+/// Shows the certificate the server at `host` presents on `stream`, trusting
+/// nothing: the handshake only runs far enough to see it.
+pub(crate) fn inspect(
+    stream: TcpStream,
+    host: &str,
+    url: &str,
+) -> Result<ServerCertificate, InternalErrors> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = Arc::new(Verifier {
+        check: Check::Inspect(Mutex::new(None)),
+        public_cas: WebPkiServerVerifier::builder_with_provider(
+            Arc::new(rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            }),
+            Arc::clone(&provider),
+        )
+        .build()
+        .map_err(|e| InternalErrors::Internal(format!("TLS setup failed: {e}")))?,
+        provider: Arc::clone(&provider),
+        seen: Mutex::new(None),
+    });
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| InternalErrors::Internal(format!("TLS setup failed: {e}")))?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::clone(&verifier) as Arc<dyn ServerCertVerifier>)
+        .with_no_client_auth();
+    let name = host.trim_start_matches('[').trim_end_matches(']');
+    let name = ServerName::try_from(name.to_string())
+        .map_err(|e| InternalErrors::InvalidArgument(format!("Invalid host in '{url}': {e}")))?;
+    let mut tls = ClientConnection::new(Arc::new(config), name)
+        .map_err(|e| InternalErrors::Internal(format!("TLS setup failed: {e}")))?;
+    let mut stream = stream;
+    while tls.is_handshaking() {
+        // The verifier refuses on purpose once it has seen the certificate.
+        if let Err(e) = tls.complete_io(&mut stream) {
+            if verifier.seen.lock().unwrap().is_none() {
+                return Err(InternalErrors::Io(format!(
+                    "TLS connection to {url} failed: {e} (if the server runs without TLS, \
+                     connect with ws:// instead)"
+                )));
+            }
+            break;
+        }
+    }
+    let fingerprint = verifier.seen.lock().unwrap().clone().unwrap_or_default();
+    let Check::Inspect(publicly_trusted) = &verifier.check else {
+        unreachable!("an inspecting verifier");
+    };
+    let publicly_trusted = publicly_trusted.lock().unwrap().unwrap_or(false);
+    Ok(ServerCertificate {
+        fingerprint,
+        publicly_trusted,
     })
 }
 
@@ -234,6 +302,9 @@ enum Check {
     PublicAuthorities,
     Pinned(String),
     Nothing,
+    /// Only look: record whether a public authority vouches for the
+    /// certificate, then refuse it (see [`inspect`]).
+    Inspect(Mutex<Option<bool>>),
 }
 
 /// Checks the server's certificate as [`Check`] says; remembers the
@@ -265,6 +336,16 @@ impl ServerCertVerifier for Verifier {
                 rustls::CertificateError::ApplicationVerificationFailure,
             )),
             Check::Nothing => Ok(ServerCertVerified::assertion()),
+            Check::Inspect(publicly_trusted) => {
+                let trusted = self
+                    .public_cas
+                    .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+                    .is_ok();
+                *publicly_trusted.lock().unwrap() = Some(trusted);
+                Err(rustls::Error::InvalidCertificate(
+                    rustls::CertificateError::ApplicationVerificationFailure,
+                ))
+            }
             Check::PublicAuthorities => self.public_cas.verify_server_cert(
                 end_entity,
                 intermediates,
@@ -396,6 +477,23 @@ mod tests {
         let mut echo = [0u8; 5];
         stream.read_exact(&mut echo).unwrap();
         assert_eq!(&echo, b"hello", "still a working, encrypted connection");
+    }
+
+    #[test]
+    fn inspecting_shows_a_self_signed_certificate_without_trusting_it() {
+        let (addr, fingerprint) = tls_server(&["evanalyzer-server"]);
+        let stream = TcpStream::connect(addr).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let seen = inspect(stream, "127.0.0.1", "wss://test").unwrap();
+        assert_eq!(
+            seen,
+            ServerCertificate {
+                fingerprint,
+                publicly_trusted: false
+            }
+        );
     }
 
     #[test]

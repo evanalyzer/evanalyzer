@@ -16,6 +16,7 @@ pub mod global {
     pub use crate::workspace::Frontend;
     pub use crate::workspace::crash_log;
     pub use crate::workspace::settings::AppSettings;
+    pub use crate::workspace::settings::RecentServer;
 }
 
 pub mod results {
@@ -120,9 +121,11 @@ pub mod backends {
     }
     pub mod remote {
         pub use crate::backend::RemoteBackend;
+        pub use crate::backend::ServerCertificate;
         pub use crate::backend::TlsTrust;
         pub use crate::backend::Worker;
         pub use crate::backend::generate_token;
+        pub use crate::backend::server_certificate;
     }
 }
 

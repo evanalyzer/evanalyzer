@@ -18,6 +18,7 @@ use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_list_controller::ResultsListController;
 use crate::editor::template_controller::TemplateController;
+use evanalyzer_app::backends::Backend;
 use evanalyzer_app::exporter::cite_project;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::SaveProjectActions;
@@ -57,6 +58,17 @@ enum PendingAction {
     ImportLegacy(PathBuf),
     OpenProjectTemplate(PathBuf),
     Quit,
+    /// Show the "Connect to server" dialog (connecting closes the project).
+    OpenConnectDialog,
+    /// Back to this computer (closes the project).
+    Disconnect,
+}
+
+/// What the "Analysis running" dialog was asked for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AfterAnalysisQuestion {
+    Quit,
+    Disconnect,
 }
 
 pub struct ProjectController {
@@ -77,6 +89,8 @@ pub struct ProjectController {
     /// The open/import/quit action waiting on the unsaved-changes dialog's
     /// answer, if any (see [`PendingAction`]).
     pending_action: Mutex<Option<PendingAction>>,
+    /// What the "Analysis running" dialog's answer leads to.
+    after_analysis_question: Mutex<AfterAnalysisQuestion>,
 }
 
 impl ProjectController {
@@ -102,6 +116,7 @@ impl ProjectController {
             project_templates: Mutex::new(Vec::new()),
             template_filter: Mutex::new(TemplateFilter::default()),
             pending_action: Mutex::new(None),
+            after_analysis_question: Mutex::new(AfterAnalysisQuestion::Quit),
         }
     }
 
@@ -533,12 +548,7 @@ impl ProjectController {
                     .analysis_running
                     .load(Ordering::SeqCst)
                 {
-                    if let Some(ui) = manager.ui.upgrade() {
-                        ui.global::<AnalysisRunningCloseState>()
-                            .set_remote(manager.app_state.backend().is_remote());
-                        ui.global::<GlobalAppState>()
-                            .set_active_dialog(DialogType::AnalysisRunningClose);
-                    }
+                    manager.ask_about_running_analysis(AfterAnalysisQuestion::Quit);
                     slint::CloseRequestResponse::KeepWindowShown
                 } else if manager.app_state.is_dirty() {
                     manager.guard_discard(PendingAction::Quit);
@@ -550,7 +560,7 @@ impl ProjectController {
 
             let manager = Arc::clone(self);
             ui.global::<AnalysisRunningCloseState>()
-                .on_keep_running(move || manager.quit_unless_unsaved());
+                .on_keep_running(move || manager.after_analysis_question());
             let manager = Arc::clone(self);
             ui.global::<AnalysisRunningCloseState>()
                 .on_cancel_analysis(move || {
@@ -563,9 +573,16 @@ impl ProjectController {
                     {
                         cancel.cancel();
                     }
-                    manager.quit_unless_unsaved();
+                    manager.after_analysis_question();
                 });
             ui.global::<AnalysisRunningCloseState>().on_back(|| {});
+
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>()
+                .on_connect_clicked(move || manager.request_connect());
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>()
+                .on_disconnect_clicked(move || manager.request_disconnect());
         }
     }
 
@@ -824,6 +841,106 @@ impl ProjectController {
         .ok();
     }
 
+    /// Asks what to do with the running analysis before `then` - see
+    /// [`Self::after_analysis_question`] for the answer.
+    fn ask_about_running_analysis(&self, then: AfterAnalysisQuestion) {
+        *self.after_analysis_question.lock().unwrap() = then;
+        let remote = self.app_state.backend().is_remote();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<AnalysisRunningCloseState>();
+                state.set_remote(remote);
+                state.set_disconnecting(then == AfterAnalysisQuestion::Disconnect);
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::AnalysisRunningClose);
+            }
+        })
+        .ok();
+    }
+
+    /// The running analysis has been dealt with (kept running on the
+    /// server, or cancelled): go on with what the question was for.
+    fn after_analysis_question(self: &Arc<Self>) {
+        let then = *self.after_analysis_question.lock().unwrap();
+        match then {
+            AfterAnalysisQuestion::Quit => self.quit_unless_unsaved(),
+            AfterAnalysisQuestion::Disconnect => self.guard_discard(PendingAction::Disconnect),
+        }
+    }
+
+    /// "File > Connect to server": the dialog - after unsaved changes are
+    /// dealt with, since connecting closes the project. Not while an
+    /// analysis runs on this computer (it would end with the switch).
+    pub(crate) fn request_connect(self: &Arc<Self>) {
+        let local = !self.app_state.backend().is_remote();
+        if local
+            && self
+                .pipelines_controller
+                .analysis_running
+                .load(Ordering::SeqCst)
+        {
+            self.show_warning(
+                "An analysis is running",
+                "Connecting to a server ends the analysis running on this computer. \
+                 Wait for it to finish, or cancel it first.",
+            );
+            return;
+        }
+        self.guard_discard(PendingAction::OpenConnectDialog);
+    }
+
+    /// "File > Disconnect": back to this computer. An analysis running on
+    /// the server is asked about first (it can keep running there).
+    pub(crate) fn request_disconnect(self: &Arc<Self>) {
+        if !self.app_state.backend().is_remote() {
+            return;
+        }
+        if self
+            .pipelines_controller
+            .analysis_running
+            .load(Ordering::SeqCst)
+        {
+            self.ask_about_running_analysis(AfterAnalysisQuestion::Disconnect);
+        } else {
+            self.guard_discard(PendingAction::Disconnect);
+        }
+    }
+
+    /// Moves the window to `backend` - a server, or back to this computer:
+    /// closes the open project (its paths mean the old backend's files),
+    /// points the file dialogs there, takes on that user's preferences,
+    /// closes the results window, and follows an analysis running on a
+    /// server. The old backend's connection is closed.
+    pub(crate) fn switch_backend(self: &Arc<Self>, backend: Arc<dyn Backend>) {
+        info!("Working on {} from now on", backend.description());
+        let old = self.app_state.app.switch_backend(Arc::clone(&backend));
+        old.disconnect();
+        self.app_state
+            .file_browser
+            .set_backend(Arc::clone(&backend));
+        self.app_state
+            .results_file_browser
+            .set_backend(Arc::clone(&backend));
+        self.app_state.reload_app_settings();
+        Arc::clone(self).create_new_project();
+        self.app_state.set_window_title(false);
+
+        let manager = Arc::clone(self);
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let (Some(ui), Some(results_ui)) = (
+                manager.ui.upgrade(),
+                manager.app_state.results_ui_handle.upgrade(),
+            ) else {
+                return;
+            };
+            crate::apply_appearance(&ui, &results_ui, &manager.app_state);
+            let _ = results_ui.hide();
+        })
+        .ok();
+        self.pipelines_controller.follow_server_analyses();
+    }
+
     /// Closes the window - through the unsaved-changes dialog if needed.
     fn quit_unless_unsaved(self: &Arc<Self>) {
         if self.app_state.is_dirty() {
@@ -853,6 +970,21 @@ impl ProjectController {
             PendingAction::OpenProjectTemplate(path) => {
                 let manager = self.clone();
                 crate::helper::ui_thread::spawn(move || manager.open_project_template_file(&path));
+            }
+            PendingAction::OpenConnectDialog => {
+                let ui_weak = self.ui.clone();
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.global::<crate::ConnectState>().invoke_opened();
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::ConnectServer);
+                    }
+                })
+                .ok();
+            }
+            PendingAction::Disconnect => {
+                let local = self.app_state.local_backend();
+                self.switch_backend(local);
             }
             PendingAction::Quit => {
                 let ui_weak = self.ui.clone();
@@ -1081,7 +1213,7 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
     use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
@@ -1198,7 +1330,7 @@ mod tests {
 
     /// All controllers wired to `ui` (a dead `Weak` for project-state-only
     /// tests, a real window for UI tests).
-    fn make_controller_on(
+    pub(crate) fn make_controller_on(
         ui: slint::Weak<AppWindow>,
         results_ui: slint::Weak<crate::ResultsWindow>,
         ui_state: Arc<UiState>,
@@ -1279,6 +1411,80 @@ mod tests {
             template_controller,
         ));
         (ui_state, controller)
+    }
+
+    /// A worker on a free port serving this machine, and a client of it.
+    fn remote_backend() -> Arc<dyn Backend> {
+        use evanalyzer_app::backends::remote::{RemoteBackend, Worker};
+        let worker = Worker::bind("127.0.0.1:0", "t".into()).unwrap();
+        let url = format!("ws://{}", worker.local_addr().unwrap());
+        std::thread::spawn(move || {
+            worker.run(Arc::new(
+                evanalyzer_app::backends::local::LocalBackend::default(),
+            ))
+        });
+        Arc::new(RemoteBackend::connect(&url, "t").unwrap())
+    }
+
+    #[test]
+    fn switching_to_a_server_closes_the_project_and_disconnecting_comes_back() {
+        let (ui_state, controller) = make_controller();
+        let local = ui_state.backend();
+        {
+            let mut project = ui_state.get_project_write();
+            project.meta.name = "Local project".to_string();
+        }
+        ui_state.mark_dirty();
+
+        let remote = remote_backend();
+        controller.switch_backend(Arc::clone(&remote));
+        assert!(ui_state.backend().is_remote());
+        assert!(
+            ui_state.get_project().meta.name.is_empty(),
+            "project closed"
+        );
+        assert!(!ui_state.is_dirty());
+
+        controller.run_pending_action(PendingAction::Disconnect);
+        assert!(!ui_state.backend().is_remote());
+        assert!(
+            Arc::ptr_eq(&ui_state.backend(), &local),
+            "this computer's backend"
+        );
+        for _ in 0..200 {
+            if !remote.is_connected() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!remote.is_connected(), "the server connection is closed");
+    }
+
+    #[test]
+    fn connecting_is_refused_while_an_analysis_runs_on_this_computer() {
+        let (ui_state, controller) = make_controller();
+        ui_state.mark_dirty();
+        controller
+            .pipelines_controller
+            .analysis_running
+            .store(true, Ordering::SeqCst);
+
+        controller.request_connect();
+
+        assert!(
+            controller.pending_action.lock().unwrap().is_none(),
+            "not even asked about unsaved changes"
+        );
+        assert!(!ui_state.backend().is_remote());
+    }
+
+    #[test]
+    fn disconnecting_locally_does_nothing() {
+        let (ui_state, controller) = make_controller();
+        ui_state.mark_dirty();
+        controller.request_disconnect();
+        assert!(controller.pending_action.lock().unwrap().is_none());
+        assert!(ui_state.is_dirty());
     }
 
     #[test]

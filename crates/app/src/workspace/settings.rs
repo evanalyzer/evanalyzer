@@ -17,6 +17,48 @@ pub struct AppSettings {
     /// Show every step's advanced settings without expanding them.
     #[serde(default)]
     pub always_show_advanced_settings: bool,
+
+    /// Servers connected to from the GUI, most recent first - see
+    /// [`AppSettings::remember_server`]. Kept on this computer only.
+    #[serde(default)]
+    pub recent_servers: Vec<RecentServer>,
+}
+
+/// A server the user connected to: what the connect dialog offers again.
+/// Never the password.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentServer {
+    pub url: String,
+    pub user: String,
+    /// The certificate fingerprint the user confirmed for this server - a
+    /// different one later means the certificate changed. `None` for
+    /// `ws://` and for certificates signed by a public authority.
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+}
+
+/// How many servers [`AppSettings::recent_servers`] keeps.
+const MAX_RECENT_SERVERS: usize = 10;
+
+impl AppSettings {
+    /// Puts `server` first in [`Self::recent_servers`], replacing an older
+    /// entry for the same address and user.
+    pub fn remember_server(&mut self, server: RecentServer) {
+        self.recent_servers
+            .retain(|known| !(known.url == server.url && known.user == server.user));
+        self.recent_servers.insert(0, server);
+        self.recent_servers.truncate(MAX_RECENT_SERVERS);
+    }
+
+    /// The fingerprint confirmed for `url`, if any (by any user: it's the
+    /// server's certificate, not the user's).
+    pub fn known_fingerprint(&self, url: &str) -> Option<&str> {
+        self.recent_servers
+            .iter()
+            .find(|known| known.url == url && known.fingerprint.is_some())
+            .and_then(|known| known.fingerprint.as_deref())
+    }
 }
 
 /// Returns the application's per-user data directory (`<OS user data dir>/evanalyzer`),
@@ -74,6 +116,48 @@ pub fn save_app_settings_to(path: &Path, settings: &AppSettings) -> std::io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn server(url: &str, user: &str, fingerprint: Option<&str>) -> RecentServer {
+        RecentServer {
+            url: url.into(),
+            user: user.into(),
+            fingerprint: fingerprint.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn the_latest_server_comes_first_once_and_the_list_stays_short() {
+        let mut settings = AppSettings::default();
+        settings.remember_server(server("wss://a", "alice", Some("AA")));
+        settings.remember_server(server("wss://b", "alice", None));
+        settings.remember_server(server("wss://a", "alice", Some("AA")));
+        assert_eq!(
+            settings.recent_servers,
+            [
+                server("wss://a", "alice", Some("AA")),
+                server("wss://b", "alice", None)
+            ]
+        );
+        // Another user on the same server is another entry, but the
+        // server's fingerprint is known for both.
+        settings.remember_server(server("wss://a", "bob", None));
+        assert_eq!(settings.recent_servers.len(), 3);
+        assert_eq!(settings.known_fingerprint("wss://a"), Some("AA"));
+        assert_eq!(settings.known_fingerprint("wss://b"), None);
+
+        for i in 0..20 {
+            settings.remember_server(server(&format!("wss://{i}"), "x", None));
+        }
+        assert_eq!(settings.recent_servers.len(), MAX_RECENT_SERVERS);
+        assert_eq!(settings.recent_servers[0].url, "wss://19");
+    }
+
+    #[test]
+    fn settings_from_before_recent_servers_still_load() {
+        let settings: AppSettings = serde_json::from_str(r#"{"darkMode":true}"#).unwrap();
+        assert!(settings.dark_mode);
+        assert!(settings.recent_servers.is_empty());
+    }
 
     #[test]
     fn the_user_folder_of_an_explicit_home_follows_the_platform_layout() {

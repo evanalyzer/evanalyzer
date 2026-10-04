@@ -561,3 +561,24 @@ fn a_training_whose_client_disconnected_saves_its_model_itself() {
     }
     panic!("the worker did not save the model");
 }
+
+#[test]
+fn disconnecting_ends_the_connection_but_not_the_analysis() {
+    let (worker, gate) = gated_worker();
+    let url = format!("ws://{worker}");
+    let remote = RemoteBackend::connect(&url, TOKEN).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let job = remote.start_analysis(request(dir.path())).unwrap();
+
+    remote.disconnect();
+    job.events().iter().for_each(drop);
+    assert!(job.wait().is_err(), "followed until the disconnect");
+    assert!(!remote.is_connected());
+
+    gate.open();
+    let other = RemoteBackend::connect(&url, TOKEN).unwrap();
+    assert_eq!(
+        wait_for_state(&other, |state| *state == JobState::Succeeded),
+        JobState::Succeeded
+    );
+}

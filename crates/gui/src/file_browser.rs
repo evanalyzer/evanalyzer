@@ -155,7 +155,9 @@ struct Session {
 /// One per window: the dialog is drawn inside that window.
 pub struct FileBrowser<W: ComponentHandle + 'static> {
     window: slint::Weak<W>,
-    backend: Arc<dyn Backend>,
+    /// Whose files are shown - replaced when the window connects to a
+    /// server or disconnects.
+    backend: Mutex<Arc<dyn Backend>>,
     session: Mutex<Session>,
 }
 
@@ -167,9 +169,20 @@ where
     pub fn new(window: slint::Weak<W>, backend: Arc<dyn Backend>) -> Self {
         Self {
             window,
-            backend,
+            backend: Mutex::new(backend),
             session: Mutex::new(Session::default()),
         }
+    }
+
+    fn backend(&self) -> Arc<dyn Backend> {
+        Arc::clone(&self.backend.lock().unwrap())
+    }
+
+    /// Shows `backend`'s files from now on; the folder remembered from the
+    /// old one means nothing there.
+    pub fn set_backend(&self, backend: Arc<dyn Backend>) {
+        *self.backend.lock().unwrap() = backend;
+        *self.session.lock().unwrap() = Session::default();
     }
 
     /// Wires the dialog's callbacks. Call once after the window exists.
@@ -249,12 +262,12 @@ where
             start
         };
 
-        let location = if self.backend.is_remote() {
-            format!("Files on server {}", self.backend.description())
+        let location = if self.backend().is_remote() {
+            format!("Files on server {}", self.backend().description())
         } else {
             "Files on this computer".to_string()
         };
-        let remote = self.backend.is_remote();
+        let remote = self.backend().is_remote();
         let filter_names: Vec<SharedString> = request
             .filters
             .iter()
@@ -287,7 +300,7 @@ where
         // Places and the start folder load in the background.
         let this = Arc::clone(self);
         crate::helper::ui_thread::spawn(move || {
-            let places = this.backend.files().places();
+            let places = this.backend().files().places();
             let start_dir = match start {
                 Some(dir) => this.resolve_start(dir),
                 None => None,
@@ -327,7 +340,8 @@ where
     /// A start folder that exists - the given path, its parent (for a file
     /// path), or nothing.
     fn resolve_start(&self, dir: PathBuf) -> Option<PathBuf> {
-        let files = self.backend.files();
+        let backend = self.backend();
+        let files = backend.files();
         match files.stat(&dir) {
             Ok(Some(entry)) if entry.is_dir => Some(dir),
             _ => {
@@ -365,7 +379,7 @@ where
 
         let this = Arc::clone(self);
         crate::helper::ui_thread::spawn(move || {
-            let result = this.backend.files().list_dir(&dir);
+            let result = this.backend().files().list_dir(&dir);
             let ui_this = Arc::clone(&this);
             let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 {
@@ -426,7 +440,7 @@ where
             s.selected = None;
             // The backend's formats - a worker may read other ones than
             // this build.
-            let formats = self.backend.image_formats();
+            let formats = self.backend().image_formats();
             let rows: Vec<FileBrowserEntry> =
                 s.shown.iter().map(|e| entry_row(e, &formats)).collect();
             (rows, summary(&s.shown))
@@ -558,7 +572,7 @@ where
                 // Ask before replacing an existing file.
                 let this = Arc::clone(self);
                 crate::helper::ui_thread::spawn(move || {
-                    let existing = this.backend.files().stat(&target);
+                    let existing = this.backend().files().stat(&target);
                     let ui_this = Arc::clone(&this);
                     let _ =
                         crate::helper::ui_thread::invoke_from_event_loop(move || match existing {
@@ -594,7 +608,7 @@ where
         let path = PathBuf::from(text);
         let this = Arc::clone(self);
         crate::helper::ui_thread::spawn(move || {
-            let stat = this.backend.files().stat(&path);
+            let stat = this.backend().files().stat(&path);
             let ui_this = Arc::clone(&this);
             let _ = crate::helper::ui_thread::invoke_from_event_loop(move || match stat {
                 Ok(Some(entry)) if entry.is_dir => ui_this.navigate(path),
@@ -628,7 +642,7 @@ where
         let target = self.session.lock().unwrap().current_dir.join(name);
         let this = Arc::clone(self);
         crate::helper::ui_thread::spawn(move || {
-            let result = this.backend.files().create_dir_all(&target);
+            let result = this.backend().files().create_dir_all(&target);
             let ui_this = Arc::clone(&this);
             let _ = crate::helper::ui_thread::invoke_from_event_loop(move || match result {
                 Ok(()) => ui_this.navigate(target),

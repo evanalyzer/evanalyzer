@@ -18,4 +18,12 @@ mod session;
 mod tls;
 
 pub use remote_backend::RemoteBackend;
-pub use tls::TlsTrust;
+pub use tls::{ServerCertificate, TlsTrust};
+
+/// The TLS certificate of the server at `url` (`wss://`), without trusting
+/// it - for asking the user. `None` for `ws://`.
+pub fn server_certificate(
+    url: &str,
+) -> Result<Option<ServerCertificate>, evanalyzer_cfg::core_types::InternalErrors> {
+    session::server_certificate(url)
+}

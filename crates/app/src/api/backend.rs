@@ -106,6 +106,10 @@ pub trait Backend: Send + Sync {
         Ok(())
     }
 
+    /// Closes the connection to a server for good - the window moves on to
+    /// another backend. What runs on the server goes on. Nothing locally.
+    fn disconnect(&self) {}
+
     /// Who is logged in on a remote server (`--user`), if anyone.
     fn user(&self) -> Option<String> {
         None

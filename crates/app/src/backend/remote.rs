@@ -26,5 +26,5 @@ mod job_registry;
 pub(crate) mod wire;
 mod worker;
 
-pub use client::{RemoteBackend, TlsTrust};
+pub use client::{RemoteBackend, ServerCertificate, TlsTrust, server_certificate};
 pub use worker::{Worker, generate_token};

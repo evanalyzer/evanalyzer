@@ -499,7 +499,7 @@ mod tests {
     use crate::editor::images_list_controller::ImagesListController;
     use crate::editor::results_state_controller::ResultsStateController;
     use crate::editor::template_controller::TemplateController;
-    use crate::editor::test_support::{fixture_image_path, test_ui_windows, ui_state_with_windows};
+    use crate::editor::test_support::{fixture_image_path, test_ui_windows};
     use crate::helper::ui_thread::drain_ui_queue;
     use crate::{AppWindow, ResultsWindow};
     use evanalyzer_app::backends::local::LocalBackend;

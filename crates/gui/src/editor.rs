@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 pub mod ai_learning_controller;
 pub mod classification_controller;
+pub mod connection_controller;
 pub mod focus_controller;
 pub mod histogram_controller;
 pub mod image_meta_controller;
@@ -60,6 +61,7 @@ pub struct Editor {
     template_controller: Arc<TemplateController>,
     undo_redo_controller: Arc<UndoRedoController>,
     results_state_controller: Arc<ResultsStateController>,
+    connection_controller: Arc<connection_controller::ConnectionController>,
 }
 
 impl Editor {
@@ -202,7 +204,14 @@ impl Editor {
             viewport_controller.clone(),
         ));
 
+        let connection_controller = Arc::new(connection_controller::ConnectionController::new(
+            ui.clone(),
+            app_state.clone(),
+            project_controller.clone(),
+        ));
+
         Self {
+            connection_controller,
             image_list_controller,
             project_controller,
             histogram_controller,
@@ -241,6 +250,7 @@ impl Editor {
         self.template_controller.attach_callbacks();
         self.undo_redo_controller.attach_callbacks();
         self.results_state_controller.attach_callbacks();
+        self.connection_controller.attach_callbacks();
 
         self.viewport_worker.start_worker();
         self.pipeline_worker.start_worker();

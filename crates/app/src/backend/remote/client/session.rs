@@ -141,6 +141,13 @@ impl Session {
         self.security
     }
 
+    /// Closes the connection: everything waiting for a reply gets "lost
+    /// connection". What runs on the worker goes on (analyses, trainings
+    /// with a destination).
+    pub(super) fn close(&self) {
+        let _ = self.outgoing.send(Vec::new());
+    }
+
     pub(super) fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
     }
@@ -304,6 +311,31 @@ impl Session {
 
 pub(super) fn unexpected_reply() -> InternalErrors {
     InternalErrors::Internal("unexpected reply from server".into())
+}
+
+/// The TLS certificate of the server at `url`, without trusting it - `None`
+/// for `ws://`, which has none.
+pub(crate) fn server_certificate(
+    url: &str,
+) -> Result<Option<tls::ServerCertificate>, InternalErrors> {
+    let uri: tungstenite::http::Uri = url
+        .parse()
+        .map_err(|e| InternalErrors::InvalidArgument(format!("Invalid server URL '{url}': {e}")))?;
+    match uri.scheme_str() {
+        Some("ws") => return Ok(None),
+        Some("wss") => {}
+        _ => {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "Server URL must start with wss:// or ws:// (got '{url}')"
+            )));
+        }
+    }
+    let host = uri
+        .host()
+        .ok_or_else(|| InternalErrors::InvalidArgument(format!("No host in '{url}'")))?;
+    let stream = connect_tcp(host, uri.port_u16().unwrap_or(DEFAULT_PORT))?;
+    stream.set_read_timeout(Some(CONNECT_TIMEOUT))?;
+    tls::inspect(stream, host, url).map(Some)
 }
 
 /// Opens the WebSocket to `url`: `ws://host[:port]`, or encrypted

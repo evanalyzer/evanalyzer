@@ -1592,7 +1592,7 @@ impl PipelinesController {
     /// tells about analyses that ended while no window was following them.
     /// Runs the server queries off the UI thread.
     pub(crate) fn follow_server_analyses(self: &Arc<Self>) {
-        let backend = Arc::clone(self.app_state.backend());
+        let backend = self.app_state.backend();
         if !backend.is_remote() {
             return;
         }
@@ -2141,7 +2141,7 @@ impl PipelinesController {
         };
         let pid = pipeline_id.0 as i32;
         // Model files are read through the backend (the server's, remotely).
-        let backend = Arc::clone(self.app_state.backend());
+        let backend = self.app_state.backend();
 
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {

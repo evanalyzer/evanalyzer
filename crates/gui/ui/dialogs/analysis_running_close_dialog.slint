@@ -14,7 +14,9 @@ export component AnalysisRunningCloseDialog inherits BaseDialog {
         spacing: 12px;
         Text {
             text: AnalysisRunningCloseState.remote
-                ? "An analysis is running on the server. It can keep running without this window - EVAnalyzer shows it again the next time you connect."
+                ? (AnalysisRunningCloseState.disconnecting
+                    ? "An analysis is running on the server. It can keep running after you disconnect - EVAnalyzer shows it again the next time you connect."
+                    : "An analysis is running on the server. It can keep running without this window - EVAnalyzer shows it again the next time you connect.")
                 : "An analysis is running on this computer. Closing EVAnalyzer stops it.";
             wrap: word-wrap;
             color: Theme.text;
@@ -48,7 +50,7 @@ export component AnalysisRunningCloseDialog inherits BaseDialog {
             }
 
             if AnalysisRunningCloseState.remote: AppButton {
-                text: "Keep running on server";
+                text: AnalysisRunningCloseState.disconnecting ? "Keep running and disconnect" : "Keep running on server";
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
                     AnalysisRunningCloseState.keep_running();

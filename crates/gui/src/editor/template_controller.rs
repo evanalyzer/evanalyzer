@@ -98,7 +98,7 @@ impl TemplateController {
         // background, so the dialog can offer them as quick-pick suggestions
         // without blocking on disk IO.
         let ui_weak = self.ui.clone();
-        let backend = Arc::clone(self.app_state.backend());
+        let backend = self.app_state.backend();
         crate::helper::ui_thread::spawn(move || {
             let mut categories: BTreeSet<String> = BTreeSet::new();
             for (_path, template) in load_project_templates(backend.as_ref()) {

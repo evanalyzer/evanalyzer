@@ -85,6 +85,9 @@ pub struct UiState {
     /// worker's user folder in remote mode) and saved back there on every
     /// change - kept here so reading one doesn't cost a round trip.
     app_settings: Mutex<evanalyzer_app::global::AppSettings>,
+    /// This computer - where "Disconnect" returns to, and where the list of
+    /// recent servers is kept whatever the window is connected to.
+    local_backend: Arc<dyn Backend>,
 }
 
 impl UiState {
@@ -93,11 +96,16 @@ impl UiState {
         handle: slint::Weak<AppWindow>,
         results_handle: slint::Weak<ResultsWindow>,
     ) -> Self {
-        let backend = Arc::clone(app.backend());
+        let backend = app.backend();
         let app_settings = backend.load_app_settings().unwrap_or_else(|e| {
             log::warn!("Could not load the app settings, using defaults: {e}");
             Default::default()
         });
+        let local_backend: Arc<dyn Backend> = if backend.is_remote() {
+            Arc::new(evanalyzer_app::backends::local::LocalBackend::default())
+        } else {
+            Arc::clone(&backend)
+        };
         Self {
             file_browser: Arc::new(FileBrowser::new(handle.clone(), Arc::clone(&backend))),
             results_file_browser: Arc::new(FileBrowser::new(results_handle.clone(), backend)),
@@ -110,6 +118,46 @@ impl UiState {
             last_checkpoint_at: Mutex::new(Instant::now()),
             force_next_checkpoint: AtomicBool::new(false),
             app_settings: Mutex::new(app_settings),
+            local_backend,
+        }
+    }
+
+    /// This computer's backend - see `local_backend`.
+    pub fn local_backend(&self) -> Arc<dyn Backend> {
+        Arc::clone(&self.local_backend)
+    }
+
+    /// The preferences of the current backend's user (they live in its
+    /// user folder - the server's when connected), read again after a
+    /// switch.
+    pub fn reload_app_settings(&self) {
+        let settings = self.app.backend().load_app_settings().unwrap_or_else(|e| {
+            log::warn!("Could not load the app settings, using defaults: {e}");
+            Default::default()
+        });
+        *self.app_settings.lock().unwrap() = settings;
+    }
+
+    /// The servers connected to before, most recent first - always this
+    /// computer's list.
+    pub fn recent_servers(&self) -> Vec<evanalyzer_app::global::RecentServer> {
+        self.local_backend
+            .load_app_settings()
+            .map(|settings| settings.recent_servers)
+            .unwrap_or_default()
+    }
+
+    /// Puts `server` first in this computer's list of recent servers.
+    pub fn remember_server(&self, server: evanalyzer_app::global::RecentServer) {
+        let result = self
+            .local_backend
+            .load_app_settings()
+            .and_then(|mut settings| {
+                settings.remember_server(server);
+                self.local_backend.save_app_settings(&settings)
+            });
+        if let Err(e) = result {
+            log::warn!("Could not remember the server: {e}");
         }
     }
 
@@ -276,8 +324,9 @@ impl UiState {
         self.app.get_image_source(new_path)
     }
 
-    /// Where analysis/preview/training runs - local or a server.
-    pub fn backend(&self) -> &Arc<dyn Backend> {
+    /// Where analysis/preview/training runs - local or a server. Can change
+    /// while the program runs ("Connect to server"), so fetch it per use.
+    pub fn backend(&self) -> Arc<dyn Backend> {
         self.app.backend()
     }
 
@@ -426,7 +475,7 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     // sitting in the shared `ProjectWithRuntime` `ui_state` now points at).
     ui_state.set_window_title(false);
     apply_user_settings(&ui, &results_ui, &ui_state);
-    attach_system_info(&ui, Arc::clone(ui_state.backend()));
+    attach_system_info(&ui, Arc::clone(&ui_state));
     ui_state.file_browser.attach(&ui);
     ui_state.results_file_browser.attach(&results_ui);
 
@@ -441,7 +490,8 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     ));
     editor.attach_callbacks();
     // Kept alive until the window closes.
-    let _connection_watch = show_connection(&ui, ui_state.backend(), editor.on_reconnected());
+    let app = ui_state.app.clone();
+    let _connection_watch = show_connection(&ui, move || app.backend(), editor.on_reconnected());
 
     ui.run()
 }
@@ -484,12 +534,13 @@ fn load_about_dialog_information(ui: &AppWindow) {
 /// Fetched on a background thread: the CUDA probe is slow on first use
 /// (loading the driver, commonly hundreds of ms), plus a round trip in
 /// remote mode.
-fn attach_system_info(ui: &AppWindow, backend: Arc<dyn Backend>) {
+fn attach_system_info(ui: &AppWindow, ui_state: Arc<UiState>) {
     let ui_weak = ui.as_weak();
     ui.global::<AppInfoState>().on_refresh_system_info(move || {
         let Some(ui) = ui_weak.upgrade() else {
             return;
         };
+        let backend = ui_state.backend();
         let info = ui.global::<AppInfoState>();
         let source = if backend.is_remote() {
             format!("worker at {}", backend.description())
@@ -555,20 +606,80 @@ pub fn connection_label(backend: &dyn Backend) -> String {
     }
 }
 
-/// Fills `ConnectionState` (status bar badge, lost-connection banner) and,
-/// for a server, polls the connection once a second - cheap, it's an atomic
-/// flag. A dropped connection is reconnected in the background (see
-/// [`Reconnector`]); `on_reconnected` runs once it's back. Returns the
-/// timer, which must stay alive as long as the window.
+/// Shows where the work happens (`ConnectionState`: status bar badge,
+/// lost-connection banner) and keeps it current: once a second it checks
+/// the backend `current` returns - it changes on "Connect to server" and
+/// "Disconnect" - and whether its connection is still up. A dropped
+/// connection is reconnected in the background (see [`Reconnector`]);
+/// `on_reconnected` runs once it's back. Returns the timer, which must stay
+/// alive as long as the window.
 fn show_connection(
     ui: &AppWindow,
-    backend: &Arc<dyn Backend>,
+    current: impl Fn() -> Arc<dyn Backend> + 'static,
     on_reconnected: impl Fn() + Send + Sync + 'static,
-) -> Option<slint::Timer> {
-    let state = ui.global::<ConnectionState>();
+) -> slint::Timer {
+    let on_reconnected: Arc<dyn Fn() + Send + Sync> = Arc::new(on_reconnected);
+    // The reconnector of the backend shown, if it is a server.
+    let reconnector: Arc<Mutex<Option<Arc<Reconnector>>>> = Arc::default();
+    let now = Arc::clone(&reconnector);
+    ui.global::<ConnectionState>().on_reconnect_now(move || {
+        if let Some(reconnector) = now.lock().unwrap().as_ref() {
+            reconnector.try_now();
+        }
+    });
+
+    let mut shown: Option<Arc<dyn Backend>> = None;
+    let mut update = {
+        let ui = ui.as_weak();
+        move || {
+            let Some(ui) = ui.upgrade() else {
+                return;
+            };
+            let backend = current();
+            let state = ui.global::<ConnectionState>();
+            if !shown
+                .as_ref()
+                .is_some_and(|shown| Arc::ptr_eq(shown, &backend))
+            {
+                fill_connection_state(&state, backend.as_ref());
+                let mut slot = reconnector.lock().unwrap();
+                if let Some(old) = slot.take() {
+                    old.stop();
+                }
+                if backend.is_remote() {
+                    let on_reconnected = Arc::clone(&on_reconnected);
+                    *slot = Some(Arc::new(Reconnector {
+                        ui: ui.as_weak(),
+                        backend: Arc::clone(&backend),
+                        on_reconnected: Box::new(move || on_reconnected()),
+                        try_now: Mutex::new(None),
+                        stopped: AtomicBool::new(false),
+                    }));
+                }
+                shown = Some(Arc::clone(&backend));
+            }
+            let connected = backend.is_connected();
+            if state.get_connected() != connected {
+                state.set_connected(connected);
+            }
+            if !connected && let Some(reconnector) = reconnector.lock().unwrap().as_ref() {
+                reconnector.start();
+            }
+        }
+    };
+    update();
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), update);
+    timer
+}
+
+/// `ConnectionState` for `backend`, as long as nothing changes.
+fn fill_connection_state(state: &ConnectionState<'_>, backend: &dyn Backend) {
     state.set_remote(backend.is_remote());
-    state.set_label(connection_label(backend.as_ref()).into());
+    state.set_label(connection_label(backend).into());
     state.set_connected(backend.is_connected());
+    state.set_lost_message("".into());
+    state.set_can_reconnect(true);
     let security = backend.connection_security();
     state.set_encrypted(matches!(
         security,
@@ -577,45 +688,12 @@ fn show_connection(
             | ConnectionSecurity::EncryptedUnverified
     ));
     state.set_verified(security != ConnectionSecurity::EncryptedUnverified);
-    if !backend.is_remote() {
-        return None;
-    }
-    let reconnector = Arc::new(Reconnector {
-        ui: ui.as_weak(),
-        backend: Arc::clone(backend),
-        on_reconnected: Box::new(on_reconnected),
-        try_now: Mutex::new(None),
-    });
-    let now = Arc::clone(&reconnector);
-    state.on_reconnect_now(move || now.try_now());
-
-    let timer = slint::Timer::default();
-    let ui = ui.as_weak();
-    timer.start(
-        slint::TimerMode::Repeated,
-        Duration::from_secs(1),
-        move || {
-            if let Some(ui) = ui.upgrade() {
-                let state = ui.global::<ConnectionState>();
-                let connected = reconnector.backend.is_connected();
-                if state.get_connected() != connected {
-                    state.set_connected(connected);
-                }
-                if !connected {
-                    reconnector.start();
-                }
-            }
-        },
-    );
-    Some(timer)
 }
 
 /// Applies the remembered appearance to both windows and saves a dark-mode
 /// toggle - through `ui_state`, so in remote mode they live on the worker.
 fn apply_user_settings(ui: &AppWindow, results_ui: &ResultsWindow, ui_state: &Arc<UiState>) {
-    let dark_mode = ui_state.load_app_settings().dark_mode;
-    ui.global::<Appearance>().invoke_apply(dark_mode);
-    results_ui.global::<Appearance>().invoke_apply(dark_mode);
+    apply_appearance(ui, results_ui, ui_state);
 
     let results_ui_handle = results_ui.as_weak();
     let ui_state = Arc::clone(ui_state);
@@ -625,6 +703,13 @@ fn apply_user_settings(ui: &AppWindow, results_ui: &ResultsWindow, ui_state: &Ar
             results_ui.global::<Appearance>().invoke_apply(dark);
         }
     });
+}
+
+/// The remembered dark/light mode, on both windows.
+pub(crate) fn apply_appearance(ui: &AppWindow, results_ui: &ResultsWindow, ui_state: &UiState) {
+    let dark_mode = ui_state.load_app_settings().dark_mode;
+    ui.global::<Appearance>().invoke_apply(dark_mode);
+    results_ui.global::<Appearance>().invoke_apply(dark_mode);
 }
 
 #[cfg(test)]
@@ -659,10 +744,8 @@ mod ui_state_tests {
         assert_eq!(connection_label(backend.as_ref()), "This computer");
 
         let ui = AppWindow::new().unwrap();
-        assert!(
-            show_connection(&ui, &backend, || {}).is_none(),
-            "no polling locally"
-        );
+        let shown = Arc::clone(&backend);
+        let _timer = show_connection(&ui, move || Arc::clone(&shown), || {});
         let state = ui.global::<ConnectionState>();
         assert!(!state.get_remote());
         assert!(state.get_connected());
@@ -670,6 +753,41 @@ mod ui_state_tests {
             state.get_encrypted() && state.get_verified(),
             "nothing to warn about"
         );
+        assert_eq!(state.get_label(), "This computer");
+    }
+
+    #[test]
+    fn the_connection_display_follows_a_switch_to_a_server_and_back() {
+        use evanalyzer_app::backends::remote::{RemoteBackend, Worker};
+        crate::editor::test_support::ensure_slint_test_platform();
+        let worker = Worker::bind("127.0.0.1:0", "t".into()).unwrap();
+        let addr = worker.local_addr().unwrap();
+        std::thread::spawn(move || {
+            worker.run(Arc::new(
+                evanalyzer_app::backends::local::LocalBackend::default(),
+            ))
+        });
+        let local: Arc<dyn Backend> =
+            Arc::new(evanalyzer_app::backends::local::LocalBackend::default());
+        let remote: Arc<dyn Backend> =
+            Arc::new(RemoteBackend::connect(&format!("ws://{addr}"), "t").unwrap());
+        let current = Arc::new(Mutex::new(Arc::clone(&local)));
+
+        let ui = AppWindow::new().unwrap();
+        let shown = Arc::clone(&current);
+        let _timer = show_connection(&ui, move || Arc::clone(&shown.lock().unwrap()), || {});
+        let state = ui.global::<ConnectionState>();
+        assert!(!state.get_remote());
+
+        *current.lock().unwrap() = Arc::clone(&remote);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1100));
+        assert!(state.get_remote());
+        assert_eq!(state.get_label(), addr.to_string());
+        assert!(!state.get_encrypted(), "ws://");
+
+        *current.lock().unwrap() = local;
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1100));
+        assert!(!state.get_remote());
         assert_eq!(state.get_label(), "This computer");
     }
 

@@ -68,7 +68,8 @@ impl ResultsListController {
         drop(project);
 
         let mut items: Vec<(i64, ResultItemData)> = Vec::new();
-        let files = self.app_state.backend().files();
+        let backend = self.app_state.backend();
+        let files = backend.files();
         if matches!(files.stat(&results_dir), Ok(Some(entry)) if entry.is_dir) {
             collect_results_files(files, &results_dir, &mut items);
         }

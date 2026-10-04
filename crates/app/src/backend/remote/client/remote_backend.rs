@@ -256,6 +256,10 @@ impl Backend for RemoteBackend {
         self.link.reconnect()
     }
 
+    fn disconnect(&self) {
+        self.link.session().close();
+    }
+
     fn connection_security(&self) -> ConnectionSecurity {
         self.link.session().security()
     }

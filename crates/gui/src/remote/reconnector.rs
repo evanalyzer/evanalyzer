@@ -17,11 +17,17 @@ pub struct Reconnector {
     pub on_reconnected: Box<dyn Fn() + Send + Sync>,
     /// Wakes the waiting reconnect thread; `Some` while it runs.
     pub try_now: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    /// Set when the window moved on to another backend ("Disconnect", or a
+    /// connection to another server): no more attempts.
+    pub stopped: std::sync::atomic::AtomicBool,
 }
 
 impl Reconnector {
     /// Starts reconnecting, unless already at it.
     pub fn start(self: &Arc<Self>) {
+        if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let mut try_now = self.try_now.lock().unwrap();
         if try_now.is_some() {
             return;
@@ -33,6 +39,14 @@ impl Reconnector {
             this.run(woken);
             *this.try_now.lock().unwrap() = None;
         });
+    }
+
+    /// Ends the attempts - the window doesn't use this backend any more.
+    pub fn stop(&self) {
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Dropping the sender wakes the waiting thread, which then ends.
+        *self.try_now.lock().unwrap() = None;
     }
 
     pub fn try_now(&self) {
@@ -51,8 +65,12 @@ impl Reconnector {
             {
                 return;
             }
+            if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
             self.show("reconnecting ...", true);
             match self.backend.reconnect() {
+                Ok(()) if self.stopped.load(std::sync::atomic::Ordering::SeqCst) => return,
                 Ok(()) => {
                     log::info!("Connection to the server is back");
                     let ui = self.ui.clone();

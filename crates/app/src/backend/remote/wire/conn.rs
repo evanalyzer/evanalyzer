@@ -55,6 +55,13 @@ pub(crate) fn run_io<S: Socket>(
     loop {
         loop {
             match outgoing.try_recv() {
+                // Asked to close (see `Session::close`): real frames are
+                // never empty.
+                Ok(frame) if frame.is_empty() => {
+                    let _ = ws.close(None);
+                    let _ = ws.flush();
+                    return;
+                }
                 Ok(frame) => {
                     if let Err(e) = ws.write(Message::Binary(frame.into())) {
                         log::warn!("Connection write failed: {e}");

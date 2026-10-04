@@ -143,6 +143,26 @@ impl DerefMut for ProjectWithRuntime {
     }
 }
 
+/// Where compute runs, shared by the [`ProjectOwner`] and all its
+/// [`AppHandle`]s - and switchable while the program runs (the GUI's
+/// "Connect to server" / "Disconnect").
+#[derive(Clone)]
+struct BackendSlot(Arc<RwLock<Arc<dyn Backend>>>);
+
+impl BackendSlot {
+    fn new(backend: Arc<dyn Backend>) -> Self {
+        Self(Arc::new(RwLock::new(backend)))
+    }
+
+    fn get(&self) -> Arc<dyn Backend> {
+        Arc::clone(&self.0.read().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    fn set(&self, backend: Arc<dyn Backend>) {
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = backend;
+    }
+}
+
 /// ProjectOwner single writer, owns all resources
 /// Not Clone there is only ever one owner
 pub struct ProjectOwner {
@@ -152,8 +172,8 @@ pub struct ProjectOwner {
     /// Current project file path - None if unsaved
     current_path: Mutex<Option<PathBuf>>,
 
-    /// Where compute runs - handed to every [`AppHandle`].
-    backend: Arc<dyn Backend>,
+    /// Where compute runs - shared with every [`AppHandle`].
+    backend: BackendSlot,
 }
 
 impl ProjectOwner {
@@ -168,7 +188,7 @@ impl ProjectOwner {
         Self {
             project: Arc::new(RwLock::new(ProjectWithRuntime::default())),
             current_path: Mutex::new(None),
-            backend,
+            backend: BackendSlot::new(backend),
         }
     }
 
@@ -176,15 +196,17 @@ impl ProjectOwner {
     pub fn handle(&self) -> AppHandle {
         AppHandle {
             project: Arc::clone(&self.project),
-            backend: Arc::clone(&self.backend),
+            backend: self.backend.clone(),
             image_source: Arc::new(Mutex::new(None)),
         }
     }
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let project =
-            crate::workspace::extensions::project_ext::load_project(self.backend.files(), path)?;
+        let project = crate::workspace::extensions::project_ext::load_project(
+            self.backend.get().files(),
+            path,
+        )?;
         *lock_project_write(&self.project) = project;
         *self.current_path.lock().unwrap() = Some(path.clone());
         Ok(())
@@ -204,7 +226,10 @@ impl ProjectOwner {
         project.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
         let content = serde_json::to_string_pretty(&project.settings)
             .map_err(|e| InternalErrors::Internal(e.to_string()))?;
-        self.backend.files().write_file(path, content.as_bytes())?;
+        self.backend
+            .get()
+            .files()
+            .write_file(path, content.as_bytes())?;
         *self.current_path.lock().unwrap() = Some(path.clone());
         Ok(())
     }
@@ -223,7 +248,7 @@ pub struct AppHandle {
     project: Arc<RwLock<ProjectWithRuntime>>,
 
     /// Where compute runs - see [`Self::backend`].
-    backend: Arc<dyn Backend>,
+    backend: BackendSlot,
 
     /// Per-handle cache of the currently opened image - the only image
     /// cache `AppHandle` has, used both by callers that only want metadata
@@ -252,7 +277,7 @@ impl AppHandle {
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
         let project =
-            crate::workspace::extensions::project_ext::load_project(self.backend.files(), path)?;
+            crate::workspace::extensions::project_ext::load_project(self.backend().files(), path)?;
         *lock_project_write(&self.project) = project;
         Ok(())
     }
@@ -274,7 +299,7 @@ impl AppHandle {
     ) -> Result<(Vec<String>, Option<String>), InternalErrors> {
         let (project, warnings, legacy_image_folder) =
             crate::workspace::extensions::project_ext::import_legacy_project(
-                self.backend.files(),
+                self.backend().files(),
                 path,
             )
             .map_err(|e| {
@@ -285,9 +310,22 @@ impl AppHandle {
     }
 
     /// Where analysis/preview/training runs and image reads happen - local
-    /// or a server, decided when the [`ProjectOwner`] was created.
-    pub fn backend(&self) -> &Arc<dyn Backend> {
-        &self.backend
+    /// or a server. Can change while the program runs (see
+    /// [`Self::switch_backend`]), so fetch it per use instead of keeping it.
+    pub fn backend(&self) -> Arc<dyn Backend> {
+        self.backend.get()
+    }
+
+    /// Moves to `backend` - e.g. from this computer to a server - for this
+    /// handle, its siblings and the owner. The open project's paths refer to
+    /// the old backend's files, so it's replaced by a fresh one, and the
+    /// opened image is forgotten. Returns the old backend.
+    pub fn switch_backend(&self, backend: Arc<dyn Backend>) -> Arc<dyn Backend> {
+        let old = self.backend.get();
+        self.backend.set(backend);
+        *self.image_source.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.new_project();
+        old
     }
 
     /// Returns the metadata of the image at `new_path`, from the same cached
@@ -310,7 +348,7 @@ impl AppHandle {
                 return Ok(Arc::clone(source));
             }
         }
-        let source = self.backend.open_image(new_path)?;
+        let source = self.backend().open_image(new_path)?;
         *cached = Some((new_path.clone(), Arc::clone(&source)));
         Ok(source)
     }

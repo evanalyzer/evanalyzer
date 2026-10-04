@@ -20,6 +20,7 @@ export enum DialogType {
     project_template,
     unsaved_changes_confirm,
     analysis_running_close,
+    connect_server,
     run_analysis_confirm,
     ai_learning,
     shortcuts_help }
@@ -128,6 +129,35 @@ export global UnsavedChangesState {
     }
 
 //
+// "File > Connect to server" - see connect_dialog.slint.
+//
+export struct RecentServerRow {
+        url: string,
+        user: string,
+    }
+
+export global ConnectState {
+        in-out property <string> url;
+        in-out property <string> user;
+        in-out property <string> password;
+        in property <[RecentServerRow]> recent;
+        in property <bool> busy: false;
+        in property <string> error;
+        /// 0: address/user/password; 1: confirm a new server's certificate;
+        /// 2: the certificate differs from the one confirmed before.
+        in property <int> step: 0;
+        in property <string> fingerprint;
+        in property <string> known-fingerprint;
+        /// The dialog is about to show: fill in the recent servers.
+        callback opened();
+        callback connect();
+        callback trust();
+        callback back();
+        callback cancel();
+        callback pick-recent(int);
+    }
+
+//
 // Closing the window while an analysis runs. Rust shows it (switch
 // GlobalAppState.active_dialog to DialogType.analysis_running_close) and
 // reacts to the answer. On a server the analysis can keep running without
@@ -135,6 +165,8 @@ export global UnsavedChangesState {
 //
 export global AnalysisRunningCloseState {
         in property <bool> remote: false;
+        /// Asked for "Disconnect" instead of closing the window.
+        in property <bool> disconnecting: false;
         callback keep_running();
         callback cancel_analysis();
         callback back();

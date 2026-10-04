@@ -23,7 +23,7 @@
 // way to enumerate "every branch below" automatically) - it only stays
 // accurate if every new shortcut updates both places.
 
-import { GlobalAppState, DialogType, UnsavedChangesState, AnalysisRunningCloseState } from "state.slint";
+import { GlobalAppState, DialogType, UnsavedChangesState, AnalysisRunningCloseState, ConnectState } from "state.slint";
 import { ToolbarState } from "toolbar.slint";
 import { ToolState, ViewportObjectState } from "editor/viewport_state.slint";
 import { ImagesListState } from "editor/images_list_panel.slint";
@@ -258,6 +258,8 @@ export component DialogShortcuts inherits FocusScope {
             UnsavedChangesState.cancel();
         } else if (GlobalAppState.active_dialog == DialogType.analysis_running_close) {
             AnalysisRunningCloseState.back();
+        } else if (GlobalAppState.active_dialog == DialogType.connect_server) {
+            ConnectState.cancel();
         } else if (GlobalAppState.active_dialog == DialogType.run_analysis_confirm) {
             RunAnalysisState.cancel();
         } else if (GlobalAppState.active_dialog == DialogType.ai_learning) {
