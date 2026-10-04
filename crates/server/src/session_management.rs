@@ -41,6 +41,44 @@ const WORKER_ENV: &[&str] = &[
     "CLICOLOR_FORCE",
 ];
 
+/// On Windows, also the system variables every process expects. Without
+/// `SystemRoot` in particular, Winsock can't load its provider DLLs and the
+/// worker's `bind` fails with WSAEPROVIDERFAILEDINIT (os error 10106) -
+/// `env_clear` would otherwise drop them. (Variable names are
+/// case-insensitive on Windows, so `std::env::var_os` finds them however
+/// they are spelled.)
+#[cfg(windows)]
+const WINDOWS_WORKER_ENV: &[&str] = &[
+    "SystemRoot",
+    "windir",
+    "SystemDrive",
+    "ComSpec",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramData",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "CommonProgramFiles",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "CUDA_PATH",
+];
+
+/// The variables of the server's environment a worker gets - see
+/// [`WORKER_ENV`] and, on Windows, [`WINDOWS_WORKER_ENV`].
+fn worker_env() -> Vec<(&'static str, std::ffi::OsString)> {
+    #[cfg(windows)]
+    let keys = WORKER_ENV.iter().chain(WINDOWS_WORKER_ENV);
+    #[cfg(not(windows))]
+    let keys = WORKER_ENV.iter();
+    keys.filter_map(|k| Some((*k, std::env::var_os(k)?)))
+        .collect()
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SessionEntry {
     /// Process ID of the started evanalyzer instance for this session
@@ -151,11 +189,7 @@ impl SessionManagement {
             .arg(&session_token)
             .stdin(Stdio::null())
             .env_clear()
-            .envs(
-                WORKER_ENV
-                    .iter()
-                    .filter_map(|k| Some((k, std::env::var_os(k)?))),
-            );
+            .envs(worker_env());
         run_as(&mut command, user);
 
         let mut child = command.spawn()?;
@@ -490,5 +524,36 @@ pub(crate) mod tests {
         .unwrap();
         assert!(sessions.open_or_create_session(&user("alice")).is_err());
         assert!(sessions.state.lock().unwrap().sessions.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod worker_env_tests {
+    use super::*;
+
+    #[test]
+    fn workers_get_only_allowlisted_variables() {
+        #[cfg(windows)]
+        let allowed: Vec<&str> = WORKER_ENV
+            .iter()
+            .chain(WINDOWS_WORKER_ENV)
+            .copied()
+            .collect();
+        #[cfg(not(windows))]
+        let allowed: Vec<&str> = WORKER_ENV.to_vec();
+
+        let env = worker_env();
+
+        assert!(env.iter().all(|(key, _)| allowed.contains(key)));
+        if std::env::var_os("PATH").is_some() {
+            assert!(env.iter().any(|(key, _)| *key == "PATH"));
+        }
+    }
+
+    /// Without it the worker can't open a socket (os error 10106).
+    #[cfg(windows)]
+    #[test]
+    fn windows_workers_get_system_root() {
+        assert!(worker_env().iter().any(|(key, _)| *key == "SystemRoot"));
     }
 }
