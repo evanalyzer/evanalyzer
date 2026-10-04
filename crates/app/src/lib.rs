@@ -125,7 +125,7 @@ pub mod backends {
     }
     pub mod remote {
         pub use crate::backend::RemoteBackend;
-        pub use crate::backend::Server;
+        pub use crate::backend::Worker;
         pub use crate::backend::generate_token;
     }
 }

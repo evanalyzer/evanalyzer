@@ -1,4 +1,4 @@
-//! Keeps one EVAnalyzer worker process (`evanalyzer serve`) per logged-in
+//! Keeps one EVAnalyzer worker process (`evanalyzer worker`) per logged-in
 //! user and records them in a session file, so a restarted server finds the
 //! still running workers again.
 //!
@@ -382,7 +382,7 @@ pub(crate) mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    /// Stand-in for `evanalyzer serve --listen 127.0.0.1:<port>`: just
+    /// Stand-in for `evanalyzer worker --listen 127.0.0.1:<port>`: just
     /// listens on the port.
     pub(crate) fn fake_worker(dir: &Path) -> PathBuf {
         let path = dir.join("fake-worker");

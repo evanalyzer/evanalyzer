@@ -13,7 +13,7 @@ use evanalyzer_app::analysis::RunningJob;
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::backends::local::LocalBackend;
 use evanalyzer_app::backends::remote::RemoteBackend;
-use evanalyzer_app::backends::remote::Server;
+use evanalyzer_app::backends::remote::Worker;
 use evanalyzer_app::images::ImageSource;
 use evanalyzer_app::images::TileRequest;
 use evanalyzer_app::preview::PreviewRequest;
@@ -38,7 +38,7 @@ use std::sync::Arc;
 const TOKEN: &str = "test-token";
 
 fn start_server() -> String {
-    let server = Server::bind("127.0.0.1:0", TOKEN.into()).unwrap();
+    let server = Worker::bind("127.0.0.1:0", TOKEN.into()).unwrap();
     let addr = server.local_addr().unwrap();
     std::thread::spawn(move || server.run(Arc::new(LocalBackend::default())));
     format!("ws://{addr}")
@@ -361,7 +361,7 @@ fn dropping_a_client_does_not_affect_the_next_one() {
 // -- File access ----------------------------------------------------------
 
 fn start_restricted_server(root: &std::path::Path) -> String {
-    let server = Server::bind("127.0.0.1:0", TOKEN.into()).unwrap();
+    let server = Worker::bind("127.0.0.1:0", TOKEN.into()).unwrap();
     let addr = server.local_addr().unwrap();
     let backend = LocalBackend::restricted_to(&[root.to_path_buf()]).unwrap();
     std::thread::spawn(move || server.run(Arc::new(backend)));

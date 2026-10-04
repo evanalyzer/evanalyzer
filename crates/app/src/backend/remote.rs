@@ -3,7 +3,11 @@
 //! - [`RemoteBackend`] (client): implements `crate::api::Backend`
 //!   by sending each request to a server - front ends use it exactly like
 //!   the local backend.
-//! - [`Server`]: `evanalyzer serve`, executes requests on a local backend.
+//! - [`Worker`]: `evanalyzer worker`, executes requests on a local backend
+//!   (started per logged-in user by `evanalyzer server`, the separate
+//!   multi-user gateway in `crates/server`, or by hand).
+//! - [`wire`]: the transport both sides share - connection, framing,
+//!   messages, image encoding.
 //!
 //! The transport is synchronous (`tungstenite` over a plain `TcpStream`), so
 //! nothing async leaks into the GUI or CLI: results still arrive on the same
@@ -17,11 +21,8 @@
 //! client's running jobs (no reconnect).
 
 mod client;
-mod conn;
-mod frame;
-pub(crate) mod pixels;
-mod protocol;
-mod server;
+pub(crate) mod wire;
+mod worker;
 
 pub use client::RemoteBackend;
-pub use server::{Server, generate_token};
+pub use worker::{Worker, generate_token};

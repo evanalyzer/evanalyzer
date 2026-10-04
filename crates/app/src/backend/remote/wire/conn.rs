@@ -19,8 +19,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(5);
 /// multi-channel tile stays well below this.
 pub(crate) const MAX_MESSAGE_SIZE: usize = 1 << 30;
 
-/// Limit before the handshake, so an unauthenticated peer can't make us
-/// allocate large buffers.
+/// Limit before the handshake, so an unauthenticated peer can't make us allocate large buffers.
 pub(crate) const HANDSHAKE_MESSAGE_SIZE: usize = 64 * 1024;
 
 pub(crate) fn set_message_limit(ws: &mut WebSocket<TcpStream>, limit: usize) {

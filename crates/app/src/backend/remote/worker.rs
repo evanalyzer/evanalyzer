@@ -1,16 +1,19 @@
-//! `evanalyzer serve`: accepts clients and executes their requests on a
-//! [`Backend`] (normally `LocalBackend`) in this process.
+//! `evanalyzer worker`: accepts clients and executes their requests on a
+//! [`Backend`] (normally `LocalBackend`) in this process - the server side of
+//! a [`RemoteBackend`](super::RemoteBackend) connection. Started per
+//! logged-in user by `evanalyzer server` (the multi-user gateway in
+//! `crates/server`), or by hand for a direct `--remote-token` connection.
 //!
 //! Security model: every client must present the shared token in its first
-//! message, and the server binds to localhost unless told otherwise. The
+//! message, and the worker binds to localhost unless told otherwise. The
 //! connection itself is plain `ws://` - not encrypted - so across machines it
 //! belongs behind an SSH tunnel or VPN. An authenticated client can make the
-//! server read any image and write results anywhere this process may, so the
+//! worker read any image and write results anywhere this process may, so the
 //! token must be treated like a password.
 
-use super::conn::{self, HANDSHAKE_MESSAGE_SIZE, MAX_MESSAGE_SIZE};
-use super::frame::{self, Frame};
-use super::protocol::{
+use super::wire::conn::{self, HANDSHAKE_MESSAGE_SIZE, MAX_MESSAGE_SIZE};
+use super::wire::frame::{self, Frame};
+use super::wire::protocol::{
     APP_VERSION, ClientMsg, PROTOCOL_VERSION, Reply, Request, ResultsAnswer, ResultsQuery,
     ServerMsg, WireError, channels_to_wire, event_to_wire, from_postcard, to_postcard,
 };
@@ -31,12 +34,12 @@ use std::time::Duration;
 /// How long a new connection may take to authenticate.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub struct Server {
+pub struct Worker {
     listener: TcpListener,
     token: String,
 }
 
-impl Server {
+impl Worker {
     /// Binds `listen` (e.g. `127.0.0.1:7400`; port 0 picks a free one).
     pub fn bind(listen: &str, token: String) -> Result<Self, InternalErrors> {
         if token.is_empty() {
@@ -89,7 +92,7 @@ impl Server {
     }
 }
 
-/// Generates a random token for a server started without one.
+/// Generates a random token for a worker started without one.
 pub fn generate_token() -> Result<String, InternalErrors> {
     let mut bytes = [0u8; 24];
     getrandom::fill(&mut bytes)

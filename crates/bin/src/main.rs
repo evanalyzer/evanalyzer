@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 listen,
                 token,
                 roots,
-            } => start_serve(listen, token, roots),
+            } => start_worker(listen, token, roots),
             TopCommand::Server { listen } => start_server(listen),
         },
         None => start_gui(backend, args.project),
@@ -111,8 +111,8 @@ fn start_cli(
     return Ok(());
 }
 
-/// Serve a local instance which can react on websocket commannds
-fn start_serve(
+/// `evanalyzer worker`: serve a local backend to remote clients over WebSocket.
+fn start_worker(
     listen: String,
     token: Option<String>,
     roots: Vec<PathBuf>,
@@ -126,10 +126,10 @@ fn start_serve(
             token
         }
     };
-    let server = evanalyzer_app::backends::remote::Server::bind(&listen, token)?;
+    let worker = evanalyzer_app::backends::remote::Worker::bind(&listen, token)?;
     info!(
-        "EVAnalyzer server listening on ws://{}",
-        server.local_addr()?
+        "EVAnalyzer worker listening on ws://{}",
+        worker.local_addr()?
     );
     let backend = if roots.is_empty() {
         warn!("Warning: no --root given - clients can reach every file this process can.");
@@ -140,7 +140,7 @@ fn start_serve(
         }
         LocalBackend::restricted_to(&roots)?
     };
-    server.run(Arc::new(backend));
+    worker.run(Arc::new(backend));
     return Ok(());
 }
 
