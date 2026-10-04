@@ -110,7 +110,7 @@ fn generate_backend(
             match connected {
                 Ok(remote) => Ok(Arc::new(remote)),
                 Err(e) => {
-                    eprintln!("Error: {e}");
+                    log::error!("Cannot connect to {url}: {e}");
                     std::process::exit(1);
                 }
             }
@@ -244,13 +244,17 @@ fn init_logger(log_level: &str) {
     builder.filter_level(LevelFilter::Debug);
     builder
         .filter_module("slint", LevelFilter::Off)
+        .filter_module("rustls", LevelFilter::Off)
         .filter_module("winit", LevelFilter::Off)
+        .filter_module("sctk", LevelFilter::Off)
         .filter_module("glow", LevelFilter::Off)
         .filter_module("zbus", LevelFilter::Off)
         .filter_module("naga", LevelFilter::Off)
         .filter_module("tungstenite", LevelFilter::Off)
         .filter_module("wgpu_core", LevelFilter::Off)
         .filter_module("wgpu_hal", LevelFilter::Off)
+        .filter_module("arboard", LevelFilter::Off)
+        .filter_module("sctk_adwaita", LevelFilter::Off)
         .filter_module("tracing::span", LevelFilter::Off);
 
     builder.parse_filters(log_level);

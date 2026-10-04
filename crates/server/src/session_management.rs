@@ -27,9 +27,12 @@ use std::{
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The only environment variables a worker gets: what the operating system
-/// needs to run a process at all. Everything EVAnalyzer itself is configured
-/// with (home, allowed folders, log level) travels as arguments instead.
-const WORKER_OS_ENV: &[&str] = &["PATH"];
+/// needs to run a process at all, and what describes the terminal its log
+/// shares with the server's (`TERM`, `NO_COLOR`: without them the worker's
+/// log lines come out uncoloured next to the server's coloured ones).
+/// Everything EVAnalyzer itself is configured with (home, allowed folders,
+/// log level) travels as arguments instead.
+const WORKER_OS_ENV: &[&str] = &["PATH", "TERM", "NO_COLOR"];
 
 /// On Windows also these: without `SystemRoot` in particular, Winsock can't
 /// load its provider DLLs and the worker's `bind` fails with

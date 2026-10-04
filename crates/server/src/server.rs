@@ -130,7 +130,8 @@ pub fn serve(config: ServerConfig) -> std::io::Result<()> {
 impl Server {
     pub fn serve(&self, listen: &str) -> std::io::Result<()> {
         let listener = TcpListener::bind(listen)?;
-        info!("Starting server on ws://{}", listener.local_addr()?);
+        let scheme = if self.tls.is_some() { "wss" } else { "ws" };
+        info!("Starting server on {scheme}://{}", listener.local_addr()?);
         for stream in listener.incoming().flatten() {
             let Ok(peer) = stream.peer_addr() else {
                 continue;
