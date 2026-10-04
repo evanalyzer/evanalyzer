@@ -109,12 +109,14 @@ pub mod ai_learning {
 
 pub mod backends {
     pub use crate::api::Backend;
+    pub use crate::api::ConnectionSecurity;
     pub use crate::api::SystemInfo;
     pub mod local {
         pub use crate::backend::LocalBackend;
     }
     pub mod remote {
         pub use crate::backend::RemoteBackend;
+        pub use crate::backend::TlsTrust;
         pub use crate::backend::Worker;
         pub use crate::backend::generate_token;
     }

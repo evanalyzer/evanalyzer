@@ -2,7 +2,7 @@
 
 pub use evanalyzer_gui_slint::*;
 
-use evanalyzer_app::backends::Backend;
+use evanalyzer_app::backends::{Backend, ConnectionSecurity};
 use evanalyzer_app::global::{AppHandle, Frontend};
 use evanalyzer_app::images::ImageMeta;
 use evanalyzer_app::images::ImageSource;
@@ -572,6 +572,10 @@ mod ui_state_tests {
         let state = ui.global::<ConnectionState>();
         assert!(!state.get_remote());
         assert!(state.get_connected());
+        assert!(
+            state.get_encrypted() && state.get_verified(),
+            "nothing to warn about"
+        );
         assert_eq!(state.get_label(), "This computer");
     }
 
@@ -726,6 +730,14 @@ fn show_connection(ui: &AppWindow, backend: &Arc<dyn Backend>) -> Option<slint::
     state.set_remote(backend.is_remote());
     state.set_label(connection_label(backend.as_ref()).into());
     state.set_connected(backend.is_connected());
+    let security = backend.connection_security();
+    state.set_encrypted(matches!(
+        security,
+        ConnectionSecurity::Local
+            | ConnectionSecurity::Encrypted
+            | ConnectionSecurity::EncryptedUnverified
+    ));
+    state.set_verified(security != ConnectionSecurity::EncryptedUnverified);
     if !backend.is_remote() {
         return None;
     }

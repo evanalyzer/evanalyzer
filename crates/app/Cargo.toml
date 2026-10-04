@@ -25,12 +25,16 @@ dirs = { workspace = true }
 image = { workspace = true }
 duckdb = { workspace = true }
 tungstenite = { workspace = true }
+rustls = { workspace = true }
+ring = { workspace = true }
+webpki-roots = { workspace = true }
 getrandom = { workspace = true }
 postcard = { workspace = true }
 
 
 [dev-dependencies]
 tempfile = { workspace = true }
+rcgen = { workspace = true }
 duckdb = { workspace = true, features = ["bundled"] }
 calamine = "0.36.1"
 kornia-image = { workspace = true }

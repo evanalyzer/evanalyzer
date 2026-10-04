@@ -16,8 +16,9 @@ pub struct Args {
     pub log_level: Option<String>,
 
     /// EVAnalyzer server to work on instead of this machine, e.g.
-    /// `ws://workstation:7400`. Projects, images and results are then read
-    /// and written there; all paths refer to that machine.
+    /// `wss://workstation:7400` (`ws://` if the server runs without TLS).
+    /// Projects, images and results are then read and written there; all
+    /// paths refer to that machine.
     #[arg(long, global = true, value_name = "URL", help_heading = "Remote")]
     pub remote: Option<String>,
 
@@ -41,6 +42,31 @@ pub struct Args {
         help_heading = "Remote"
     )]
     pub password: Option<String>,
+
+    /// SHA-256 fingerprint of the server's TLS certificate, as `evanalyzer
+    /// server` logs it at startup. Needed for the server's own self-signed
+    /// certificate (the default); not for one signed by a public authority.
+    #[arg(
+        long,
+        global = true,
+        value_name = "SHA256",
+        requires = "user",
+        help_heading = "Remote"
+    )]
+    pub remote_fingerprint: Option<String>,
+
+    /// Accept any TLS certificate from the server, without checking it.
+    /// The connection is still encrypted, but anyone in between could pose
+    /// as the server and read your password - only for tests and networks
+    /// you trust. Prefer `--remote-fingerprint`.
+    #[arg(
+        long,
+        global = true,
+        requires = "user",
+        conflicts_with = "remote_fingerprint",
+        help_heading = "Remote"
+    )]
+    pub no_tls_verification: bool,
 
     /// Connect to an `evanalyzer worker` directly, without server login,
     /// using the token it printed (instead of `--user`).
@@ -130,6 +156,8 @@ mod tests {
             "--user",
             "--password",
             "--remote-token",
+            "--remote-fingerprint",
+            "--no-tls-verification",
             "\n  server ",
             "\n  worker ",
             "\n  hash-password ",
@@ -175,6 +203,24 @@ mod tests {
                 "--remote-token",
                 "t"
             ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn tls_verification_is_skipped_only_on_request_and_not_with_a_fingerprint() {
+        let login = ["evanalyzer", "--remote", "wss://h", "--user", "a"];
+        assert!(!Args::try_parse_from(login).unwrap().no_tls_verification);
+        let args = Args::try_parse_from([&login[..], &["--no-tls-verification"]].concat()).unwrap();
+        assert!(args.no_tls_verification);
+        assert!(
+            Args::try_parse_from(
+                [
+                    &login[..],
+                    &["--no-tls-verification", "--remote-fingerprint", "AB"]
+                ]
+                .concat()
+            )
             .is_err()
         );
     }

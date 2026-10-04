@@ -5,7 +5,7 @@
 //! outgoing frames and reading with a short timeout. Every other thread only
 //! talks to it through a channel.
 
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
@@ -22,7 +22,19 @@ pub(crate) const MAX_MESSAGE_SIZE: usize = 1 << 30;
 /// Limit before the handshake, so an unauthenticated peer can't make us allocate large buffers.
 pub(crate) const HANDSHAKE_MESSAGE_SIZE: usize = 64 * 1024;
 
-pub(crate) fn set_message_limit(ws: &mut WebSocket<TcpStream>, limit: usize) {
+/// A stream a WebSocket runs over - plain TCP, or TLS on top of it - whose
+/// TCP socket can be reached for timeouts.
+pub(crate) trait Socket: Read + Write {
+    fn tcp(&self) -> &TcpStream;
+}
+
+impl Socket for TcpStream {
+    fn tcp(&self) -> &TcpStream {
+        self
+    }
+}
+
+pub(crate) fn set_message_limit<S: Socket>(ws: &mut WebSocket<S>, limit: usize) {
     ws.set_config(|c| {
         c.max_message_size = Some(limit);
         c.max_frame_size = Some(limit);
@@ -31,12 +43,12 @@ pub(crate) fn set_message_limit(ws: &mut WebSocket<TcpStream>, limit: usize) {
 
 /// Runs until the peer closes, the connection fails, every sender of
 /// `outgoing` is dropped, or `on_frame` returns `false`.
-pub(crate) fn run_io(
-    mut ws: WebSocket<TcpStream>,
+pub(crate) fn run_io<S: Socket>(
+    mut ws: WebSocket<S>,
     outgoing: Receiver<Vec<u8>>,
     mut on_frame: impl FnMut(Vec<u8>) -> bool,
 ) {
-    if let Err(e) = ws.get_ref().set_read_timeout(Some(POLL_INTERVAL)) {
+    if let Err(e) = ws.get_ref().tcp().set_read_timeout(Some(POLL_INTERVAL)) {
         log::warn!("Could not set socket read timeout: {e}");
         return;
     }
@@ -87,7 +99,7 @@ fn is_timeout(e: &tungstenite::Error) -> bool {
 
 /// Blocking read of one binary message, for the handshake before
 /// [`run_io`] takes over.
-pub(crate) fn read_binary(ws: &mut WebSocket<TcpStream>) -> Result<Vec<u8>, String> {
+pub(crate) fn read_binary<S: Socket>(ws: &mut WebSocket<S>) -> Result<Vec<u8>, String> {
     loop {
         match ws.read() {
             Ok(Message::Binary(bytes)) => return Ok(bytes.to_vec()),

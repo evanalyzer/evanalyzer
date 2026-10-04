@@ -64,3 +64,20 @@ passwd_file = "/etc/passwd"
 # The users file - required for source = "file". Format: see
 # docs/server-users.toml. Keep it readable by the server only (chmod 600).
 # path = "/etc/evanalyzer/users.toml"
+
+[tls]
+# Encrypt client connections: clients connect with wss:// instead of ws://.
+# Turn it off only when something else encrypts (reverse proxy, VPN, SSH
+# tunnel) or for tests on this machine - otherwise passwords and data cross
+# the network readable. Workers are always reached unencrypted on 127.0.0.1.
+enabled = true
+# Certificate chain and private key (PEM), e.g. from Let's Encrypt or your
+# organisation's CA - clients then need no fingerprint. Both or neither.
+# Default: a self-signed certificate the server creates (see below).
+# cert = "/etc/evanalyzer/cert.pem"
+# key = "/etc/evanalyzer/key.pem"
+# Where the self-signed certificate is created on first start and kept, so
+# its fingerprint stays the same. Default: /var/lib/evanalyzer/tls for a
+# system service, otherwise .evanalyzer-server/tls in the server account's
+# home folder.
+# self_signed_dir = "/var/lib/evanalyzer/tls"

@@ -70,6 +70,12 @@ pub trait Backend: Send + Sync {
         true
     }
 
+    /// How well the connection to the backend is protected - shown in the
+    /// status bar.
+    fn connection_security(&self) -> ConnectionSecurity {
+        ConnectionSecurity::Local
+    }
+
     /// Who is logged in on a remote server (`--user`), if anyone.
     fn user(&self) -> Option<String> {
         None
@@ -198,4 +204,19 @@ pub struct TileRequest {
     pub z_range: Option<RangeInclusive<i32>>,
     pub t_stack: i32,
     pub tile: ImageTile,
+}
+
+/// How the connection to a backend is protected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionSecurity {
+    /// No connection: everything runs on this computer.
+    Local,
+    /// `ws://`: passwords and data cross the network readable.
+    Unencrypted,
+    /// `wss://` with the server's certificate checked - against the
+    /// fingerprint the user gave, or signed by a public authority.
+    Encrypted,
+    /// `wss://` without checking the certificate (`--no-tls-verification`):
+    /// encrypted, but anyone in between could pose as the server.
+    EncryptedUnverified,
 }

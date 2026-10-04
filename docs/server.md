@@ -9,7 +9,9 @@ here, and the analysis runs here. Each logged-in user gets their own
 evanalyzer server --config /etc/evanalyzer/server.toml
 ```
 
-Clients connect with `evanalyzer --remote ws://<host>:7400 --user <name>`.
+Clients connect with
+`evanalyzer --remote wss://<host>:7400 --user <name> --remote-fingerprint <SHA256>`
+(see [Encryption](#encryption-tls) for the fingerprint).
 
 ## Where settings come from
 
@@ -95,6 +97,42 @@ chmod 600 /etc/evanalyzer/server.toml /etc/evanalyzer/users.toml
 ```
 
 The server warns at startup if other accounts can read the users file.
+
+## Encryption (TLS)
+
+Connections between clients and the server are encrypted by default
+(`wss://`). Workers listen on `127.0.0.1` only and are reached unencrypted.
+
+**Without any setup** the server creates a self-signed certificate on first
+start (in `tls.self_signed_dir`) and logs its fingerprint at every start:
+
+```
+Clients connect with wss:// - certificate fingerprint 1E:0F:D0:…:23:5D
+```
+
+Give that fingerprint to your users. They pass it once per connection with
+`--remote-fingerprint`; the client then trusts exactly this certificate.
+Without it, the client refuses to connect and prints the fingerprint it was
+shown, so users can compare it with yours. If the fingerprint differs from
+the expected one, the client refuses as well: either the certificate was
+replaced (deleted `self_signed_dir`, new `cert`) or someone is intercepting
+the connection. Keep `self_signed_dir` (include it in backups) and
+the fingerprint stays the same.
+
+For tests or a network you fully trust, clients can skip the check with
+`--no-tls-verification`: still encrypted, but anyone in between could pose
+as the server and read the password. The client logs a warning and its
+status bar shows "server not verified".
+
+**With a certificate from a public authority** (e.g. Let's Encrypt) set
+`tls.cert` and `tls.key`. Clients connecting by that host name need no
+fingerprint. A certificate from your organisation's own CA works too, with
+the fingerprint, like a self-signed one.
+
+**Without encryption**: `tls.enabled = false`, and clients use `ws://`. Only
+for a server behind something that encrypts already (reverse proxy, VPN, SSH
+tunnel) or for tests on one machine - the server warns when it listens on
+the network without TLS, and the client's status bar shows "unencrypted".
 
 ## Workers
 

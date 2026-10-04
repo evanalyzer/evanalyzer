@@ -70,7 +70,7 @@ impl UserManagement for SingleUser {
 /// (configuration comes from arguments, never the environment): on Linux
 /// it is the account's `/etc/passwd` entry, elsewhere the OS's profile
 /// folder.
-fn server_account_home() -> PathBuf {
+pub(crate) fn server_account_home() -> PathBuf {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::MetadataExt;

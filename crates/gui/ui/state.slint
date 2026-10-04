@@ -33,6 +33,11 @@ export global ConnectionState {
     in property <bool> connected: true;
     /// "alice @ workstation:7400", or "This computer".
     in property <string> label: "This computer";
+    /// The connection to the server is encrypted (`wss://`).
+    in property <bool> encrypted: true;
+    /// The server's certificate was checked - `false` with
+    /// `--no-tls-verification`.
+    in property <bool> verified: true;
     }
 
 export global GlobalAppState {

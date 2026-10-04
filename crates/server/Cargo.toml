@@ -10,6 +10,9 @@ publish = { workspace = true }
 [dependencies]
 log = { workspace = true }
 tungstenite = { workspace = true }
+rustls = { workspace = true }
+rcgen = { workspace = true }
+ring = { workspace = true }
 yescrypt = { workspace = true }
 sha-crypt = { workspace = true }
 bcrypt = { workspace = true }

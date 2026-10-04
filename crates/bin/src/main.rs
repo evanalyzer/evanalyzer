@@ -4,6 +4,7 @@ use args::{TopCommand, parse_args};
 use env_logger::Builder;
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::backends::local::LocalBackend;
+use evanalyzer_app::backends::remote::TlsTrust;
 use evanalyzer_app::global::Frontend;
 use evanalyzer_app::project::ProjectOwner;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -44,7 +45,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The one place that decides where compute runs - front ends only ever
     // see the `Backend` trait.
-    let backend = generate_backend(args.remote, args.remote_token, args.user, args.password)?;
+    let backend = generate_backend(
+        args.remote,
+        args.remote_token,
+        args.user,
+        args.password,
+        match (args.remote_fingerprint, args.no_tls_verification) {
+            (Some(fingerprint), _) => TlsTrust::Fingerprint(fingerprint),
+            (None, true) => TlsTrust::NoVerification,
+            (None, false) => TlsTrust::PublicAuthorities,
+        },
+    )?;
     log::info!("Compute backend: {}", backend.description());
 
     let ret = match args.command {
@@ -73,6 +84,7 @@ fn generate_backend(
     token: Option<String>,
     user: Option<String>,
     password: Option<String>,
+    trust: TlsTrust,
 ) -> Result<Arc<dyn Backend>, Box<dyn std::error::Error>> {
     use evanalyzer_app::backends::remote::RemoteBackend;
     match &remote {
@@ -85,7 +97,7 @@ fn generate_backend(
                         Some(password) => password,
                         None => rpassword::prompt_password(format!("Password for {user}: "))?,
                     };
-                    RemoteBackend::connect_with_login(url, &user, &password)
+                    RemoteBackend::connect_with_login(url, &user, &password, &trust)
                 }
                 // `evanalyzer worker` directly.
                 (None, Some(token)) => RemoteBackend::connect(url, &token),

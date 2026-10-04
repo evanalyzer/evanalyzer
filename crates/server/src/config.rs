@@ -45,6 +45,8 @@ pub struct ServerConfig {
     pub log_level: String,
     /// Who may log in, and where their workers may read and write.
     pub users: UsersConfig,
+    /// Encryption of client connections.
+    pub tls: TlsConfig,
 }
 
 impl Default for ServerConfig {
@@ -54,6 +56,42 @@ impl Default for ServerConfig {
             session_store: None,
             log_level: "debug".into(),
             users: UsersConfig::default(),
+            tls: TlsConfig::default(),
+        }
+    }
+}
+
+/// `[tls]`: encryption of client connections. On by default, with a
+/// self-signed certificate the server creates itself - see
+/// [`crate::tls`].
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct TlsConfig {
+    /// Encrypt client connections: clients then connect with `wss://`
+    /// instead of `ws://`. Default `true`. Turn it off only when something
+    /// else encrypts (a reverse proxy, VPN, SSH tunnel) or for tests on this
+    /// machine - otherwise passwords and data cross the network readable.
+    pub enabled: bool,
+    /// Certificate chain (PEM), e.g. from Let's Encrypt or the
+    /// organisation's CA. Needs `key`. Default: a self-signed certificate in
+    /// `self_signed_dir`.
+    pub cert: Option<PathBuf>,
+    /// Private key of `cert` (PEM). Needs `cert`.
+    pub key: Option<PathBuf>,
+    /// Where the self-signed certificate is created and kept when no
+    /// `cert` is configured. Default `/var/lib/evanalyzer/tls` for a system
+    /// service, otherwise `.evanalyzer-server/tls` in the server account's
+    /// home folder.
+    pub self_signed_dir: Option<PathBuf>,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cert: None,
+            key: None,
+            self_signed_dir: None,
         }
     }
 }
@@ -237,6 +275,9 @@ impl ServerConfig {
         if self.users.source == UserSource::File && self.users.file.path.is_none() {
             return invalid("users.source = \"file\" needs users.file.path".into());
         }
+        if self.tls.cert.is_some() != self.tls.key.is_some() {
+            return invalid("tls.cert and tls.key go together - set both or neither".into());
+        }
         Ok(())
     }
 
@@ -370,10 +411,19 @@ mod tests {
             ),
             ("[users]\nsource = \"file\"", "users.file.path"),
             ("[users]\nsource = \"ldap\"", "ldap"),
+            ("[tls]\ncert = \"/etc/evanalyzer/cert.pem\"", "tls.key"),
         ] {
             let error = parse(text).unwrap_err();
             assert!(error.contains(key), "{text}: {error}");
         }
+    }
+
+    #[test]
+    fn tls_is_on_by_default_and_can_be_turned_off() {
+        assert!(parse("").unwrap().tls.enabled);
+        assert!(!parse("[tls]\nenabled = false").unwrap().tls.enabled);
+        let own = parse("[tls]\ncert = \"/c.pem\"\nkey = \"/k.pem\"").unwrap();
+        assert_eq!(own.tls.cert, Some(PathBuf::from("/c.pem")));
     }
 
     #[test]

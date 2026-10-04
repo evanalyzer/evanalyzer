@@ -5,8 +5,10 @@ use super::filesystem::RemoteFiles;
 use super::image_reader::RemoteImageSource;
 use super::results::RemoteResults;
 use super::session::{Session, login, open_websocket, unexpected_reply};
+use super::tls::TlsTrust;
 use crate::api::AnalysisRequest;
 use crate::api::Backend;
+use crate::api::ConnectionSecurity;
 use crate::api::FileSystem;
 use crate::api::ImageMeta;
 use crate::api::ImageSource;
@@ -39,19 +41,22 @@ impl RemoteBackend {
     /// `token`. Fails with a readable message if the server is unreachable,
     /// rejects the token, or runs a different version.
     pub fn connect(url: &str, token: &str) -> Result<Self, InternalErrors> {
-        let ws = open_websocket(url)?;
+        let ws = open_websocket(url, &TlsTrust::default())?;
         Ok(Self::new(Session::open(ws, url, token)?, None))
     }
 
-    /// Connects to an `evanalyzer server` (`ws://host[:port]`), logs in as
-    /// `username` and attaches to the user's worker, which the server starts
-    /// if it isn't running yet.
+    /// Connects to an `evanalyzer server` (`wss://host[:port]`, or
+    /// `ws://` if it runs without TLS), logs in as `username` and attaches
+    /// to the user's worker, which the server starts if it isn't running
+    /// yet. `trust`: which certificate to accept as the server's - for the
+    /// server's self-signed default its fingerprint, from its startup log.
     pub fn connect_with_login(
         url: &str,
         username: &str,
         password: &str,
+        trust: &TlsTrust,
     ) -> Result<Self, InternalErrors> {
-        let mut ws = open_websocket(url)?;
+        let mut ws = open_websocket(url, trust)?;
         let session_token = login(&mut ws, url, username, password)?;
         // From here on the server forwards everything to the worker, which
         // accepts the session token in `Hello`.
@@ -230,6 +235,10 @@ impl Backend for RemoteBackend {
 
     fn is_connected(&self) -> bool {
         self.session.is_connected()
+    }
+
+    fn connection_security(&self) -> ConnectionSecurity {
+        self.session.security()
     }
 
     fn user(&self) -> Option<String> {

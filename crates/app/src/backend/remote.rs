@@ -24,5 +24,5 @@ mod client;
 pub(crate) mod wire;
 mod worker;
 
-pub use client::RemoteBackend;
+pub use client::{RemoteBackend, TlsTrust};
 pub use worker::{Worker, generate_token};

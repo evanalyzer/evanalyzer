@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod server;
 mod session_management;
+mod tls;
 mod user_management;
 
 pub use config::{ServerConfig, UserSource};

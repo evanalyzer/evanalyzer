@@ -11,8 +11,10 @@ use evanalyzer_app::analysis::AnalysisRequest;
 use evanalyzer_app::analysis::ProgressEvent;
 use evanalyzer_app::analysis::RunningJob;
 use evanalyzer_app::backends::Backend;
+use evanalyzer_app::backends::ConnectionSecurity;
 use evanalyzer_app::backends::local::LocalBackend;
 use evanalyzer_app::backends::remote::RemoteBackend;
+use evanalyzer_app::backends::remote::TlsTrust;
 use evanalyzer_app::backends::remote::Worker;
 use evanalyzer_app::images::ImageSource;
 use evanalyzer_app::images::TileRequest;
@@ -165,7 +167,7 @@ fn connecting_to_a_closed_port_fails_instead_of_hanging() {
 
 #[test]
 fn non_ws_urls_are_rejected_up_front() {
-    for url in ["wss://host:7400", "http://host:7400", "not a url"] {
+    for url in ["http://host:7400", "not a url"] {
         assert!(RemoteBackend::connect(url, TOKEN).is_err(), "{url}");
     }
 }
@@ -977,9 +979,15 @@ fn start_login_gateway(reply: GatewayReply) -> String {
 #[test]
 fn logging_in_through_a_server_attaches_to_its_worker() {
     let url = start_login_gateway(GatewayReply::AcceptAndForward);
-    let remote = RemoteBackend::connect_with_login(&url, "alice", "secret").unwrap();
+    let remote =
+        RemoteBackend::connect_with_login(&url, "alice", "secret", &TlsTrust::default()).unwrap();
     assert_eq!(remote.user().as_deref(), Some("alice"));
     assert!(remote.is_connected());
+    assert_eq!(
+        remote.connection_security(),
+        ConnectionSecurity::Unencrypted,
+        "ws://"
+    );
     // Requests now reach the worker behind the server.
     let image = remote.open_image(&fixture()).unwrap();
     assert!(!image.meta().series.is_empty());
@@ -990,7 +998,7 @@ fn a_refused_login_reports_the_servers_reason() {
     let url = start_login_gateway(GatewayReply::Text(
         r#"{"response":"Error","msg":"Invalid username or password"}"#,
     ));
-    let err = RemoteBackend::connect_with_login(&url, "alice", "wrong")
+    let err = RemoteBackend::connect_with_login(&url, "alice", "wrong", &TlsTrust::default())
         .err()
         .expect("refused");
     assert!(
@@ -1004,7 +1012,7 @@ fn a_login_accepted_without_a_session_is_an_error() {
     let url = start_login_gateway(GatewayReply::Text(
         r#"{"response":"Accepted","msg":"Logged in"}"#,
     ));
-    let err = RemoteBackend::connect_with_login(&url, "alice", "x")
+    let err = RemoteBackend::connect_with_login(&url, "alice", "x", &TlsTrust::default())
         .err()
         .unwrap();
     assert!(err.to_string().contains("sent no session"), "{err}");
@@ -1013,7 +1021,7 @@ fn a_login_accepted_without_a_session_is_an_error() {
 #[test]
 fn logging_in_at_a_worker_or_a_closing_server_fails_clearly() {
     let url = start_login_gateway(GatewayReply::Binary);
-    let err = RemoteBackend::connect_with_login(&url, "alice", "x")
+    let err = RemoteBackend::connect_with_login(&url, "alice", "x", &TlsTrust::default())
         .err()
         .unwrap();
     assert!(
@@ -1022,7 +1030,7 @@ fn logging_in_at_a_worker_or_a_closing_server_fails_clearly() {
     );
 
     let url = start_login_gateway(GatewayReply::Close);
-    let err = RemoteBackend::connect_with_login(&url, "alice", "x")
+    let err = RemoteBackend::connect_with_login(&url, "alice", "x", &TlsTrust::default())
         .err()
         .unwrap();
     let text = err.to_string();

@@ -33,14 +33,17 @@ export component StatusBar inherits Rectangle {
         spacing: 10px;
 
         // Where the work happens. Always visible; coloured when on a server
-        // so local and remote windows can't be mixed up. Icon + text, not
-        // just colour.
-        Rectangle {
+        // so local and remote windows can't be mixed up, and in the warning
+        // colour when the connection is lost or not secure (unencrypted, or
+        // the server's certificate unchecked). Icon + text, not just colour.
+        badge := Rectangle {
+            property <bool> secure: ConnectionState.encrypted && ConnectionState.verified;
+            property <bool> fine: ConnectionState.connected && self.secure;
             vertical-stretch: 0;
             height: 22px;
             border-radius: 4px;
             background: !ConnectionState.remote ? transparent
-                : ConnectionState.connected ? Theme.accent : Theme.warn;
+                : self.fine ? Theme.accent : Theme.warn;
             border-width: ConnectionState.remote ? 0px : 1px;
             border-color: Theme.border;
             HorizontalLayout {
@@ -55,17 +58,30 @@ export component StatusBar inherits Rectangle {
                         : ConnectionState.connected ? @image-url("icons/regular-black/cloud.svg")
                         : @image-url("icons/regular-black/cloud-slash.svg");
                     colorize: !ConnectionState.remote ? Theme.text-dim
-                        : ConnectionState.connected ? #FFFFFF : #000000;
+                        : badge.fine ? #FFFFFF : #000000;
+                }
+                // Lock: encrypted and verified. Open lock: unencrypted.
+                // Shield with warning: encrypted, certificate unchecked.
+                if ConnectionState.remote: Image {
+                    width: 14px;
+                    height: 14px;
+                    y: (parent.height - self.height) / 2;
+                    source: !ConnectionState.encrypted ? @image-url("icons/regular-black/lock-open.svg")
+                        : !ConnectionState.verified ? @image-url("icons/regular-black/shield-warning.svg")
+                        : @image-url("icons/regular-black/lock.svg");
+                    colorize: badge.fine ? #FFFFFF : #000000;
                 }
                 Text {
                     text: !ConnectionState.remote ? ConnectionState.label
-                        : ConnectionState.connected ? ConnectionState.label
-                        : ConnectionState.label + " - disconnected";
+                        : !ConnectionState.connected ? ConnectionState.label + " - disconnected"
+                        : !ConnectionState.encrypted ? ConnectionState.label + " - unencrypted"
+                        : !ConnectionState.verified ? ConnectionState.label + " - server not verified"
+                        : ConnectionState.label;
                     font-size: 11px;
                     font-weight: ConnectionState.remote ? 600 : 400;
                     vertical-alignment: center;
                     color: !ConnectionState.remote ? Theme.text-dim
-                        : ConnectionState.connected ? #FFFFFF : #000000;
+                        : badge.fine ? #FFFFFF : #000000;
                 }
             }
         }

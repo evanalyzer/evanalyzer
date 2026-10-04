@@ -3,9 +3,11 @@
 //! request with its replies. Everything else in the client is a thin adapter
 //! that turns API calls into requests on a [`Session`].
 
+use super::tls::{self, NetStream, TlsTrust};
 use crate::api::CancelHandle;
+use crate::api::ConnectionSecurity;
 use crate::api::RunningJob;
-use crate::backend::remote::wire::conn::{self, MAX_MESSAGE_SIZE};
+use crate::backend::remote::wire::conn::{self, MAX_MESSAGE_SIZE, Socket};
 use crate::backend::remote::wire::frame::{self, Frame};
 use crate::backend::remote::wire::protocol::{
     APP_VERSION, ClientMsg, PROTOCOL_VERSION, Reply, Request, ServerMsg, event_from_wire,
@@ -33,6 +35,7 @@ pub(super) struct Session {
     url: String,
     /// The worker's image formats, from its `Welcome`.
     image_formats: Vec<String>,
+    security: ConnectionSecurity,
     outgoing: Sender<Vec<u8>>,
     /// Requests waiting for replies, by id. Emptied when the connection
     /// drops, which turns every pending `recv` into a "connection lost".
@@ -46,7 +49,7 @@ impl Session {
     /// Remote protocol handshake (`Hello`) on an open WebSocket, then starts
     /// the I/O thread.
     pub(super) fn open(
-        mut ws: WebSocket<TcpStream>,
+        mut ws: WebSocket<NetStream>,
         url: &str,
         token: &str,
     ) -> Result<Arc<Self>, InternalErrors> {
@@ -82,10 +85,24 @@ impl Session {
             }
         };
 
+        let security = ws.get_ref().security();
+        match security {
+            ConnectionSecurity::Encrypted => {
+                log::info!("Connection to {url} is encrypted (TLS)")
+            }
+            ConnectionSecurity::EncryptedUnverified => log::warn!(
+                "Connection to {url} is encrypted, but the server's identity was not verified"
+            ),
+            ConnectionSecurity::Unencrypted | ConnectionSecurity::Local => log::warn!(
+                "Connection to {url} is NOT encrypted: passwords and data cross the network readable"
+            ),
+        }
+
         let (outgoing, outgoing_rx) = mpsc::channel();
         let session = Arc::new(Self {
             url: url.into(),
             image_formats,
+            security,
             outgoing,
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -118,6 +135,10 @@ impl Session {
 
     pub(super) fn image_formats(&self) -> &[String] {
         &self.image_formats
+    }
+
+    pub(super) fn security(&self) -> ConnectionSecurity {
+        self.security
     }
 
     pub(super) fn is_connected(&self) -> bool {
@@ -255,23 +276,29 @@ pub(super) fn unexpected_reply() -> InternalErrors {
     InternalErrors::Internal("unexpected reply from server".into())
 }
 
-/// Opens the WebSocket to `url` (`ws://host[:port]`).
-pub(super) fn open_websocket(url: &str) -> Result<WebSocket<TcpStream>, InternalErrors> {
+/// Opens the WebSocket to `url`: `ws://host[:port]`, or encrypted
+/// `wss://host[:port]`, accepting the server's certificate as `trust` says
+/// (see [`tls`]).
+pub(super) fn open_websocket(
+    url: &str,
+    trust: &TlsTrust,
+) -> Result<WebSocket<NetStream>, InternalErrors> {
     let uri: tungstenite::http::Uri = url
         .parse()
         .map_err(|e| InternalErrors::InvalidArgument(format!("Invalid server URL '{url}': {e}")))?;
-    match uri.scheme_str() {
-        Some("ws") => {}
-        Some("wss") => {
-            return Err(InternalErrors::InvalidArgument(
-                "wss:// is not supported - use ws:// through an SSH tunnel or VPN".into(),
-            ));
-        }
+    let encrypted = match uri.scheme_str() {
+        Some("ws") => false,
+        Some("wss") => true,
         _ => {
             return Err(InternalErrors::InvalidArgument(format!(
-                "Server URL must start with ws:// (got '{url}')"
+                "Server URL must start with wss:// or ws:// (got '{url}')"
             )));
         }
+    };
+    if *trust != TlsTrust::PublicAuthorities && !encrypted {
+        return Err(InternalErrors::InvalidArgument(format!(
+            "Certificate options (fingerprint, no verification) need a wss:// URL (got '{url}')"
+        )));
     }
     let host = uri
         .host()
@@ -282,13 +309,23 @@ pub(super) fn open_websocket(url: &str) -> Result<WebSocket<TcpStream>, Internal
     let stream = connect_tcp(host, port)?;
     stream.set_nodelay(true).ok();
     stream.set_read_timeout(Some(CONNECT_TIMEOUT))?;
+    let stream = if encrypted {
+        tls::connect(stream, host, trust, url)?
+    } else {
+        NetStream::Plain(stream)
+    };
     let config = tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(MAX_MESSAGE_SIZE))
         .max_frame_size(Some(MAX_MESSAGE_SIZE));
     let (ws, _) =
         tungstenite::client::client_with_config(request_url.as_str(), stream, Some(config))
             .map_err(|e| {
-                InternalErrors::Io(format!("WebSocket handshake with {url} failed: {e}"))
+                let hint = if encrypted {
+                    ""
+                } else {
+                    " (if the server uses TLS, connect with wss://)"
+                };
+                InternalErrors::Io(format!("WebSocket handshake with {url} failed: {e}{hint}"))
             })?;
     Ok(ws)
 }
@@ -313,7 +350,7 @@ struct LoginReply {
 /// Sends the server's JSON login command and returns the session token.
 /// Text messages that aren't a reply (the server's greeting) are skipped.
 pub(super) fn login(
-    ws: &mut WebSocket<TcpStream>,
+    ws: &mut WebSocket<NetStream>,
     url: &str,
     username: &str,
     password: &str,
@@ -325,7 +362,7 @@ pub(super) fn login(
     });
     ws.send(Message::text(request.to_string()))
         .map_err(|e| InternalErrors::Io(format!("Could not reach {url}: {e}")))?;
-    ws.get_ref().set_read_timeout(Some(LOGIN_TIMEOUT))?;
+    ws.get_ref().tcp().set_read_timeout(Some(LOGIN_TIMEOUT))?;
     let reply = loop {
         let text = match ws.read() {
             Ok(Message::Text(text)) => text,
@@ -344,7 +381,7 @@ pub(super) fn login(
             break reply;
         }
     };
-    ws.get_ref().set_read_timeout(Some(CONNECT_TIMEOUT))?;
+    ws.get_ref().tcp().set_read_timeout(Some(CONNECT_TIMEOUT))?;
     match (reply.response, reply.session_token) {
         (LoginState::Accepted, Some(token)) => Ok(token),
         (LoginState::Accepted, None) => Err(InternalErrors::Internal(format!(

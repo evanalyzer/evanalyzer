@@ -14,5 +14,7 @@ mod image_reader;
 mod remote_backend;
 mod results;
 mod session;
+mod tls;
 
 pub use remote_backend::RemoteBackend;
+pub use tls::TlsTrust;

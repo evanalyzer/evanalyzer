@@ -7,4 +7,4 @@ pub mod local;
 pub mod remote;
 
 pub use local::{LocalBackend, LocalFileSystem};
-pub use remote::{RemoteBackend, Worker, generate_token};
+pub use remote::{RemoteBackend, TlsTrust, Worker, generate_token};
