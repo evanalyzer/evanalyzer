@@ -17,10 +17,12 @@
 //!
 //! Assumptions of this first version: client and server see the same files
 //! under the same paths (shared storage), results are written by the server
-//! into the project's results folder, and a dropped connection cancels the
-//! client's running jobs (no reconnect).
+//! into the project's results folder. A dropped connection cancels the
+//! client's previews, trainings and exports; analyses keep running on the
+//! worker and can be attached to again ([`job_registry`]).
 
 mod client;
+mod job_registry;
 pub(crate) mod wire;
 mod worker;
 

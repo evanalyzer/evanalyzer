@@ -89,6 +89,7 @@ pub mod bioimageio {
 }
 
 pub mod templates {
+    pub use crate::api::TemplateFolders;
     pub use crate::workspace::templates::load_pipeline_templates;
     pub use crate::workspace::templates::load_project_template_from_file;
     pub use crate::workspace::templates::load_project_templates;
@@ -97,6 +98,7 @@ pub mod templates {
 pub mod ai_learning {
     pub use crate::api::CancelHandle;
     pub use crate::api::PixelTrainingParams;
+    pub use crate::api::RunningTraining;
     pub use crate::api::StartTrainingError;
     pub use crate::api::TrainingItems;
     pub use crate::api::TrainingRequest;
@@ -125,6 +127,8 @@ pub mod backends {
 pub mod analysis {
     pub use crate::api::AnalysisRequest;
     pub use crate::api::CancelHandle;
+    pub use crate::api::JobInfo;
+    pub use crate::api::JobState;
     pub use crate::api::ProgressEvent;
     pub use crate::api::RunningJob;
 }

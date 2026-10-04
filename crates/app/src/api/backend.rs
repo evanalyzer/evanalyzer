@@ -5,9 +5,9 @@
 use super::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, FileSystem, GroupedByImageFilter,
     HistogramFilter, HistogramResult, ImageChannel, ImageEntry, ImageHeatmapFilter, ImageMeta,
-    ListFilter, PixelTrainingParams, PlateFilter, PreviewRequest, ResultExport, RunningJob,
-    RunningTraining, ScatterFilter, ScatterResult, StartPreviewError, StartTrainingError, View,
-    WellFilter,
+    JobInfo, ListFilter, PixelTrainingParams, PlateFilter, PreviewRequest, ResultExport,
+    RunningJob, RunningTraining, ScatterFilter, ScatterResult, StartPreviewError,
+    StartTrainingError, View, WellFilter,
 };
 use crate::workspace::settings::AppSettings;
 use evanalyzer_cfg::core_types::{ImageTile, InternalErrors, ZProjection};
@@ -26,6 +26,29 @@ pub trait Backend: Send + Sync {
     /// Starts a full analysis run over every image in the project, writing a
     /// results database under `<project_path>/results`.
     fn start_analysis(&self, req: AnalysisRequest) -> Result<RunningJob, InternalErrors>;
+
+    /// The analyses this backend keeps track of - on a server the running
+    /// one (it continues when the client disconnects) and recently finished
+    /// ones, oldest first. Nothing for a local backend: its analyses end
+    /// with the process.
+    fn list_jobs(&self) -> Result<Vec<JobInfo>, InternalErrors> {
+        Ok(Vec::new())
+    }
+
+    /// Follows the analysis `id` from [`list_jobs`](Self::list_jobs), as if
+    /// this client had started it: its progress so far, then live events and
+    /// its result (at once, if it has finished).
+    fn attach_job(&self, id: &str) -> Result<RunningJob, InternalErrors> {
+        Err(InternalErrors::InvalidArgument(format!(
+            "No analysis '{id}': only a server keeps track of analyses"
+        )))
+    }
+
+    /// Drops the finished analysis `id` from [`list_jobs`](Self::list_jobs)
+    /// (its results stay on disk).
+    fn forget_job(&self, _id: &str) -> Result<(), InternalErrors> {
+        Ok(())
+    }
 
     /// Starts a preview run restricted to the tiles visible in the viewport.
     fn start_preview(&self, req: PreviewRequest) -> Result<RunningJob, StartPreviewError>;

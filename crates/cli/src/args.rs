@@ -17,6 +17,17 @@ pub enum CliCommand {
     Columns(ColumnsArgs),
     /// Train a pixel or object classifier from a project's labeled objects and save it under models/
     TrainClassifier(TrainClassifierArgs),
+    /// List the analyses on the --remote server: the running one, and recently finished ones
+    Jobs,
+    /// Follow an analysis on the --remote server again, e.g. after the connection dropped
+    Attach(AttachArgs),
+}
+
+#[derive(Args)]
+pub struct AttachArgs {
+    /// Id of the analysis, as `jobs` lists it. Default: the running one.
+    #[arg(long)]
+    pub job: Option<String>,
 }
 
 #[derive(Args)]

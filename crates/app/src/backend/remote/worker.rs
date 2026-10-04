@@ -11,6 +11,7 @@
 //! worker read any image and write results anywhere this process may, so the
 //! token must be treated like a password.
 
+use super::job_registry::{JobEntry, JobRegistry};
 use super::wire::conn::{self, HANDSHAKE_MESSAGE_SIZE, MAX_MESSAGE_SIZE};
 use super::wire::frame::{self, Frame};
 use super::wire::protocol::{
@@ -61,6 +62,8 @@ impl Worker {
     /// Serves clients until the process exits, one thread per connection.
     pub fn run(self, backend: Arc<dyn Backend>) {
         let token = Arc::new(self.token);
+        // Shared by all connections: analyses outlive the one that started them.
+        let jobs = Arc::new(JobRegistry::default());
         for stream in self.listener.incoming() {
             let stream = match stream {
                 Ok(stream) => stream,
@@ -71,6 +74,7 @@ impl Worker {
             };
             let backend = Arc::clone(&backend);
             let token = Arc::clone(&token);
+            let jobs = Arc::clone(&jobs);
             std::thread::spawn(move || {
                 let peer = stream
                     .peer_addr()
@@ -85,7 +89,7 @@ impl Worker {
                     log::debug!("{peer} closed without sending anything (port check)");
                     return;
                 }
-                match serve_connection(stream, &token, backend) {
+                match serve_connection(stream, &token, backend, jobs) {
                     Ok(()) => log::info!("Client {peer} disconnected"),
                     Err(reason) => log::warn!("Client {peer} rejected: {reason}"),
                 }
@@ -175,6 +179,9 @@ fn native_paths(request: Request) -> Request {
         other @ (Request::ReadTile { .. }
         | Request::QueryResults { .. }
         | Request::ExportResults { .. }
+        | Request::ListJobs
+        | Request::AttachJob { .. }
+        | Request::ForgetJob { .. }
         | Request::TemplateFolders
         | Request::Places
         | Request::SystemInfo
@@ -195,6 +202,7 @@ fn serve_connection(
     stream: TcpStream,
     token: &str,
     backend: Arc<dyn Backend>,
+    jobs: Arc<JobRegistry>,
 ) -> Result<(), String> {
     stream.set_nodelay(true).ok();
     stream
@@ -256,8 +264,10 @@ fn serve_connection(
     let (outgoing, outgoing_rx) = mpsc::channel();
     let session = Arc::new(Session {
         backend,
+        jobs,
         outgoing,
         running: Mutex::new(HashMap::new()),
+        analyses: Mutex::new(HashMap::new()),
         images: Mutex::new(HashMap::new()),
         results: Mutex::new(HashMap::new()),
         next_handle: AtomicU64::new(1),
@@ -265,8 +275,9 @@ fn serve_connection(
     let handler = Arc::clone(&session);
     conn::run_io(ws, outgoing_rx, move |bytes| handler.on_frame(&bytes));
 
-    // The client is gone: nobody is left to receive results, so stop
-    // whatever it started instead of letting it run to completion unseen.
+    // The client is gone: nobody is left to receive previews, trainings or
+    // exports, so stop them instead of letting them run unseen. Analyses go
+    // on - their results land on disk, and a client can attach again.
     for cancel in session.running.lock().unwrap().values() {
         cancel.cancel();
     }
@@ -282,9 +293,15 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// One authenticated connection's state.
 struct Session {
     backend: Arc<dyn Backend>,
+    /// The worker's analyses, shared with all connections.
+    jobs: Arc<JobRegistry>,
     outgoing: Sender<Vec<u8>>,
-    /// Cancel handles of running jobs/trainings, by request id.
+    /// Cancel handles of running previews, trainings and exports, by
+    /// request id - cancelled when the connection drops.
     running: Mutex<HashMap<u64, CancelHandle>>,
+    /// Analyses this connection follows, by request id - for `Cancel`.
+    /// Not cancelled when the connection drops.
+    analyses: Mutex<HashMap<u64, Arc<JobEntry>>>,
     /// Images the client has opened, by handle.
     images: Mutex<HashMap<u64, Arc<dyn ImageSource>>>,
     /// Results databases the client has opened, by handle.
@@ -310,6 +327,9 @@ impl Session {
             ClientMsg::Cancel { id } => {
                 if let Some(cancel) = self.running.lock().unwrap().get(&id) {
                     cancel.cancel();
+                }
+                if let Some(analysis) = self.analyses.lock().unwrap().get(&id) {
+                    analysis.cancel_handle().cancel();
                 }
             }
             ClientMsg::CloseResults { handle } => {
@@ -342,8 +362,25 @@ impl Session {
         let files = self.backend.files();
         let none = Vec::new;
         match native_paths(request) {
-            Request::StartAnalysis(req) => match self.backend.start_analysis(req) {
-                Ok(job) => self.stream_job(id, job),
+            Request::StartAnalysis(req) => {
+                match self.jobs.start(|| self.backend.start_analysis(req)) {
+                    Ok(analysis) => self.follow(id, analysis),
+                    Err(e) => self.fail(id, &e),
+                }
+            }
+            Request::AttachJob { job_id } => match self.jobs.get(&job_id) {
+                Some(analysis) => self.follow(id, analysis),
+                None => self.fail(
+                    id,
+                    &InternalErrors::InvalidArgument(format!(
+                        "No analysis '{job_id}' on the server (finished long ago, \
+                         or the worker restarted)"
+                    )),
+                ),
+            },
+            Request::ListJobs => self.reply(id, Reply::Jobs(self.jobs.list()), none()),
+            Request::ForgetJob { job_id } => match self.jobs.forget(&job_id) {
+                Ok(()) => self.reply(id, Reply::Done, none()),
                 Err(e) => self.fail(id, &e),
             },
             Request::StartPreview(req) => match self.backend.start_preview(req) {
@@ -535,6 +572,17 @@ impl Session {
             })
     }
 
+    /// Lets this connection follow `analysis` under request `id`.
+    fn follow(&self, id: u64, analysis: Arc<JobEntry>) {
+        // Known before the first reply, so a cancel sent right after
+        // "started" finds it.
+        self.analyses
+            .lock()
+            .unwrap()
+            .insert(id, Arc::clone(&analysis));
+        analysis.subscribe(self.outgoing.clone(), id);
+    }
+
     fn stream_job(&self, id: u64, job: crate::api::RunningJob) {
         // Registered before replying, so a cancel sent right after
         // "started" can't arrive before it is known.
@@ -544,6 +592,7 @@ impl Session {
             Reply::JobStarted {
                 output_path: job.output_path().clone(),
                 parallelism: job.parallelism(),
+                job_id: None,
             },
             Vec::new(),
         );

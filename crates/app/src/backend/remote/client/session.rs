@@ -220,6 +220,36 @@ impl Session {
         })
     }
 
+    /// The first reply to `StartAnalysis` or `AttachJob`: on `JobStarted`
+    /// the analysis as a `RunningJob`, carrying the worker's job id.
+    pub(super) fn job_started(
+        self: &Arc<Self>,
+        id: u64,
+        rx: Receiver<Frame<Reply>>,
+    ) -> Result<RunningJob, InternalErrors> {
+        match self.recv(&rx)?.msg {
+            Reply::JobStarted {
+                output_path,
+                parallelism,
+                job_id,
+            } => {
+                let job = self.running_job(id, rx, output_path, parallelism);
+                Ok(match job_id {
+                    Some(job_id) => job.with_id(job_id),
+                    None => job,
+                })
+            }
+            Reply::Failed(e) => {
+                self.finish(id);
+                Err(e.into_internal())
+            }
+            _ => {
+                self.finish(id);
+                Err(unexpected_reply())
+            }
+        }
+    }
+
     /// Turns the replies of a started job into a `RunningJob`.
     pub(super) fn running_job(
         self: &Arc<Self>,

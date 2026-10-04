@@ -1,12 +1,13 @@
 use crate::args::AnalyzeArgs;
 use evanalyzer_app::analysis::AnalysisRequest;
 use evanalyzer_app::analysis::ProgressEvent;
+use evanalyzer_app::analysis::RunningJob;
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::project::{ProjectExt, load_project};
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::SystemTime;
 
 pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
     let mut project = load_project(backend.files(), &args.project)?;
@@ -34,7 +35,7 @@ pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalError
     println!("Images:    {image_count}");
     println!("Pipelines: {enabled_pipelines} enabled");
 
-    let start = Instant::now();
+    let start = SystemTime::now();
     let job = backend.start_analysis(AnalysisRequest {
         settings: project.settings.clone(),
         project_path: project_dir,
@@ -48,6 +49,17 @@ pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalError
         job.parallelism()
     );
 
+    follow(job, backend, image_count, start)
+}
+
+/// Prints `job`'s progress until it ends (Ctrl+C cancels it), then its
+/// summary - with the time since `started`. Shared with `attach`.
+pub(crate) fn follow(
+    job: RunningJob,
+    backend: &dyn Backend,
+    image_count: usize,
+    started: SystemTime,
+) -> Result<(), InternalErrors> {
     let cancel = job.cancel_handle();
     if let Err(e) = ctrlc::set_handler(move || {
         eprintln!("\nCancelling... (waiting for in-flight images to finish)");
@@ -56,16 +68,31 @@ pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalError
         eprintln!("Warning: could not install Ctrl+C handler: {e}");
     }
 
+    let output_path = job.output_path().clone();
+    let id = job.id().map(str::to_string);
     let mut failed = 0usize;
     let mut total = image_count;
     for event in job.events() {
         apply_progress_event(event, &mut total, &mut failed);
     }
-    job.wait()?;
+    match job.wait() {
+        Ok(_) => {}
+        // A server's analysis goes on without us.
+        Err(e) if !backend.is_connected() => {
+            return Err(match id {
+                Some(id) => InternalErrors::Io(format!(
+                    "Lost the connection to the server - the analysis keeps running there. \
+                     Follow it again with `cli attach --job {id}` (same --remote and --user)."
+                )),
+                None => e,
+            });
+        }
+        Err(e) => return Err(e),
+    }
 
     println!(
         "Done: {total} image(s) analyzed in {:.1?} ({failed} failed)",
-        start.elapsed()
+        started.elapsed().unwrap_or_default()
     );
     println!("Results database written under: {}", output_path.display());
     Ok(())

@@ -120,6 +120,44 @@ pub struct JobOutput {
     pub preview_objects: Option<Vec<ObjectMetricSettings>>,
 }
 
+/// An analysis a backend keeps track of: running, or finished not long ago.
+/// A server's analyses outlive the client connection that started them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobInfo {
+    pub id: String,
+    /// Directory the analysis writes its results into; its last component
+    /// is the job name.
+    pub output_path: PathBuf,
+    pub started_at: std::time::SystemTime,
+    pub state: JobState,
+}
+
+impl JobInfo {
+    /// The job's name: its results folder's.
+    pub fn name(&self) -> String {
+        self.output_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    pub fn is_running(&self) -> bool {
+        matches!(self.state, JobState::Running { .. })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum JobState {
+    /// `done` of `total` images processed (`total` is 0 until known).
+    Running {
+        done: usize,
+        total: usize,
+    },
+    Succeeded,
+    Cancelled,
+    Failed(String),
+}
+
 /// Blocks until a job has finished and yields its result - a local job
 /// joins its thread, a remote one waits for the server's final message.
 pub type JobCompletion = Box<dyn FnOnce() -> Result<JobOutput, InternalErrors> + Send>;
@@ -132,6 +170,7 @@ pub struct RunningJob {
     output_path: PathBuf,
     parallelism: usize,
     completion: JobCompletion,
+    id: Option<String>,
 }
 impl RunningJob {
     /// Assembles a job run by some other backend (e.g. on a server). The
@@ -149,7 +188,22 @@ impl RunningJob {
             output_path,
             parallelism,
             completion,
+            id: None,
         }
+    }
+
+    /// The job as one the backend keeps track of under `id` - see
+    /// [`Backend::list_jobs`](crate::api::Backend::list_jobs).
+    pub fn with_id(mut self, id: String) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    /// Under which id the backend tracks the job, if it does: a server's
+    /// analyses keep running when the connection drops, and can be attached
+    /// to again with this id.
+    pub fn id(&self) -> Option<&str> {
+        self.id.as_deref()
     }
 
     /// Progress events, in order. The channel closes once the job is over,

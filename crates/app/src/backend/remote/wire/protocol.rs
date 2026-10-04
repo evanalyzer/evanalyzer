@@ -14,6 +14,7 @@ use crate::api::ImageChannel;
 use crate::api::ImageEntry;
 use crate::api::ImageHeatmapFilter;
 use crate::api::ImageMeta;
+use crate::api::JobInfo;
 use crate::api::JobOutput;
 use crate::api::ListFilter;
 use crate::api::Place;
@@ -43,7 +44,7 @@ use std::sync::Arc;
 /// Bumped on every incompatible change to the messages below. Client and
 /// server must also run the same app version, since requests carry the
 /// app's own settings types.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -71,7 +72,20 @@ pub(crate) enum ClientMsg {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Request {
+    /// Runs on the worker independent of this connection: it continues when
+    /// the client disconnects (see `job_registry`). At most one at a time.
     StartAnalysis(AnalysisRequest),
+    /// The worker's analyses: running and recently finished.
+    ListJobs,
+    /// Follow analysis `job_id` as if this connection had started it:
+    /// answered like `StartAnalysis`.
+    AttachJob {
+        job_id: String,
+    },
+    /// Forget finished analysis `job_id`.
+    ForgetJob {
+        job_id: String,
+    },
     StartPreview(PreviewRequest),
     StartTraining(TrainingRequest),
     OpenImage {
@@ -201,7 +215,10 @@ pub(crate) enum Reply {
     JobStarted {
         output_path: PathBuf,
         parallelism: usize,
+        /// Set for analyses, which the worker keeps track of.
+        job_id: Option<String>,
     },
+    Jobs(Vec<JobInfo>),
     PreviewTooManyTiles {
         tiles: usize,
     },
@@ -249,7 +266,7 @@ pub(crate) enum Reply {
 
 /// An `InternalErrors` reduced to what survives the trip: whether it was a
 /// cancel (front ends treat that differently) and its message.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WireError {
     cancelled: bool,
     message: String,
@@ -272,6 +289,14 @@ impl WireError {
         }
     }
 
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.message
+    }
+
     pub(crate) fn into_internal(self) -> InternalErrors {
         if self.cancelled {
             InternalErrors::Cancelled
@@ -281,7 +306,7 @@ impl WireError {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) enum WireProgressEvent {
     Started {
         total: usize,

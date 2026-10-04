@@ -22,5 +22,7 @@ pub fn run(command: CliCommand, backend: &dyn Backend) -> Result<(), InternalErr
         CliCommand::View(args) => commands::view::run(args, backend),
         CliCommand::Columns(args) => commands::view::run_columns(args, backend),
         CliCommand::TrainClassifier(args) => commands::train_classifier::run(args, backend),
+        CliCommand::Jobs => commands::jobs::run_list(backend),
+        CliCommand::Attach(args) => commands::jobs::run_attach(args, backend),
     }
 }

@@ -12,6 +12,7 @@ use crate::api::ConnectionSecurity;
 use crate::api::FileSystem;
 use crate::api::ImageMeta;
 use crate::api::ImageSource;
+use crate::api::JobInfo;
 use crate::api::PreviewRequest;
 use crate::api::ResultsSource;
 use crate::api::RunningJob;
@@ -77,19 +78,37 @@ impl Backend for RemoteBackend {
     fn start_analysis(&self, req: AnalysisRequest) -> Result<RunningJob, InternalErrors> {
         let session = &self.session;
         let (id, rx) = session.request(Request::StartAnalysis(req))?;
-        match session.recv(&rx)?.msg {
-            Reply::JobStarted {
-                output_path,
-                parallelism,
-            } => Ok(session.running_job(id, rx, output_path, parallelism)),
-            Reply::Failed(e) => {
-                session.finish(id);
-                Err(e.into_internal())
-            }
-            _ => {
-                session.finish(id);
-                Err(unexpected_reply())
-            }
+        session.job_started(id, rx)
+    }
+
+    fn list_jobs(&self) -> Result<Vec<JobInfo>, InternalErrors> {
+        match self.files.call(Request::ListJobs, Vec::new())?.msg {
+            Reply::Jobs(jobs) => Ok(jobs),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn attach_job(&self, id: &str) -> Result<RunningJob, InternalErrors> {
+        let session = &self.session;
+        let (request_id, rx) = session.request(Request::AttachJob {
+            job_id: id.to_string(),
+        })?;
+        session.job_started(request_id, rx)
+    }
+
+    fn forget_job(&self, id: &str) -> Result<(), InternalErrors> {
+        match self
+            .files
+            .call(
+                Request::ForgetJob {
+                    job_id: id.to_string(),
+                },
+                Vec::new(),
+            )?
+            .msg
+        {
+            Reply::Done => Ok(()),
+            _ => Err(unexpected_reply()),
         }
     }
 
@@ -104,6 +123,7 @@ impl Backend for RemoteBackend {
             Reply::JobStarted {
                 output_path,
                 parallelism,
+                ..
             } => Ok(session.running_job(id, rx, output_path, parallelism)),
             Reply::PreviewTooManyTiles { tiles } => Err(StartPreviewError::TooManyTiles { tiles }),
             Reply::Failed(e) => Err(StartPreviewError::Failed(e.into_internal())),
