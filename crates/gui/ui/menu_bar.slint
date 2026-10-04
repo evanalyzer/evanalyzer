@@ -152,7 +152,7 @@ export component CustomMenuBar inherits Rectangle {
                     MenuSeparator { }
 
                     MenuItem {
-                        text: ConnectionState.remote ? "Connect to another server…" : "Connect to server…";
+                        text: ConnectionState.remote ? "Connect to other server…" : "Connect to server…";
                         icon: @image-url("icons/regular-black/cloud.svg");
                         clicked => {
                             ToolbarState.connect_clicked();
