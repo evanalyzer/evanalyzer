@@ -44,7 +44,7 @@ use std::sync::Arc;
 /// Bumped on every incompatible change to the messages below. Client and
 /// server must also run the same app version, since requests carry the
 /// app's own settings types.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -160,6 +160,7 @@ pub(crate) enum ResultsQuery {
     AvailableColumns,
     ZStacks,
     TStacks,
+    RunStatus,
     Boxplot(BoxplotFilter),
     Histogram(HistogramFilter),
     Scatter(ScatterFilter),
@@ -177,6 +178,7 @@ pub(crate) enum ResultsAnswer {
     Boxplot(BoxplotResult),
     Histogram(HistogramResult),
     Scatter(ScatterResult),
+    RunStatus(crate::api::RunStatus),
     Done,
 }
 

@@ -100,6 +100,10 @@ impl ResultsSource for LocalResults {
         self.with(|db| db.get_nr_of_t_stacks())
     }
 
+    fn run_status(&self) -> Result<crate::api::RunStatus, InternalErrors> {
+        self.with(|db| db.run_status())
+    }
+
     fn boxplot(&self, filter: &BoxplotFilter) -> Result<BoxplotResult, InternalErrors> {
         self.with(|db| ResultCharts {}.paint_boxplot(db, filter))
     }

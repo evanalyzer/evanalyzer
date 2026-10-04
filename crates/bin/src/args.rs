@@ -135,6 +135,11 @@ pub enum TopCommand {
         /// (templates) lives below it. Default: this account's.
         #[arg(long, value_name = "FOLDER")]
         home: Option<std::path::PathBuf>,
+
+        /// Stop once no client has been connected and no analysis has run
+        /// for this many minutes. Default: run until stopped.
+        #[arg(long, value_name = "MINUTES")]
+        idle_timeout: Option<u64>,
     },
 }
 

@@ -74,6 +74,10 @@ pub struct SessionManagement {
     pub worker_command: PathBuf,
     /// Passed to every worker as `--log-level`, so it logs like the server.
     pub worker_log_level: Option<String>,
+    /// Passed to every worker as `--idle-timeout`.
+    pub worker_idle_timeout_minutes: Option<u64>,
+    /// At most this many workers at once (`limits.max_workers`).
+    pub max_workers: Option<usize>,
     state: Mutex<State>,
 }
 
@@ -109,6 +113,8 @@ impl SessionManagement {
             path_to_session_store,
             worker_command,
             worker_log_level: None,
+            worker_idle_timeout_minutes: None,
+            max_workers: None,
             state: Mutex::new(State {
                 sessions,
                 children: HashMap::new(),
@@ -136,12 +142,54 @@ impl SessionManagement {
             warn!("Worker of {} is gone, starting a new one", user.username);
             state.remove(index);
         }
+        if let Some(max) = self.max_workers {
+            // Workers that stopped by themselves (idle) don't count.
+            let mut index = 0;
+            while index < state.sessions.len() {
+                if state.is_alive(index) {
+                    index += 1;
+                } else {
+                    state.remove(index);
+                }
+            }
+            if state.sessions.len() >= max {
+                self.persist(&state.sessions)?;
+                warn!(
+                    "Not starting a worker for {}: {max} running already",
+                    user.username
+                );
+                return Err(io::Error::new(
+                    io::ErrorKind::QuotaExceeded,
+                    format!("The server is busy ({max} users working) - try again later"),
+                ));
+            }
+        }
         let entry = self.create_session(&mut state, user)?;
         self.persist(&state.sessions)?;
         Ok(entry)
     }
 
-    /// Stops the session's worker and forgets the session.
+    /// The running session with `session_token` - for a client coming back
+    /// after its connection dropped. `None` once that worker has ended.
+    pub fn resume_session(&self, session_token: &str) -> Option<SessionEntry> {
+        let mut state = self.state.lock().unwrap();
+        let index = state
+            .sessions
+            .iter()
+            .position(|s| constant_time_eq(s.session_token.as_bytes(), session_token.as_bytes()))?;
+        if !state.is_alive(index) {
+            warn!("Worker of user {} is gone", state.sessions[index].user_id);
+            state.remove(index);
+            let _ = self.persist(&state.sessions);
+            return None;
+        }
+        Some(state.sessions[index].clone())
+    }
+
+    /// Stops the session's worker and forgets the session. Only tests stop
+    /// workers: on a server they end by themselves once idle, so a logout
+    /// can't end a running analysis.
+    #[cfg(test)]
     pub fn close_session(&self, session_token: &str) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         if let Some(index) = state
@@ -173,6 +221,9 @@ impl SessionManagement {
         }
         if let Some(level) = &self.worker_log_level {
             command.arg("--log-level").arg(level);
+        }
+        if let Some(minutes) = self.worker_idle_timeout_minutes {
+            command.arg("--idle-timeout").arg(minutes.to_string());
         }
         command
             .current_dir(&user.home)
@@ -354,6 +405,12 @@ fn terminate(pid: u32) {
     }
 }
 
+/// Compares tokens without leaking through timing how much of a guess was
+/// right.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 fn generate_token() -> io::Result<String> {
     let mut bytes = [0u8; 24];
     getrandom::fill(&mut bytes).map_err(|e| io::Error::other(e.to_string()))?;
@@ -497,6 +554,65 @@ pub(crate) mod tests {
 
         sessions.close_session(&first.session_token).unwrap();
         sessions.close_session(&other.session_token).unwrap();
+    }
+
+    #[test]
+    fn beyond_max_workers_new_users_are_refused_but_running_ones_get_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sessions = manager(dir.path());
+        sessions.max_workers = Some(1);
+        let alice = sessions.open_or_create_session(&user("alice")).unwrap();
+
+        let error = sessions.open_or_create_session(&user("bob")).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::QuotaExceeded);
+        assert!(error.to_string().contains("try again later"), "{error}");
+        let again = sessions.open_or_create_session(&user("alice")).unwrap();
+        assert_eq!(again.pid, alice.pid, "alice's worker runs already");
+
+        // A worker that stopped frees its place.
+        sessions.close_session(&alice.session_token).unwrap();
+        let bob = sessions.open_or_create_session(&user("bob")).unwrap();
+        sessions.close_session(&bob.session_token).unwrap();
+    }
+
+    #[test]
+    fn workers_get_the_idle_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sessions = SessionManagement::with_store(
+            dir.path().join("run/sessions.json"),
+            recording_worker(dir.path()),
+        )
+        .unwrap();
+        sessions.worker_idle_timeout_minutes = Some(45);
+        let mut alice = user("alice");
+        alice.home = dir.path().to_path_buf();
+
+        let entry = sessions.open_or_create_session(&alice).unwrap();
+
+        let args = fs::read_to_string(dir.path().join("args.txt")).unwrap();
+        let args: Vec<&str> = args.lines().collect();
+        let at = args.iter().position(|a| *a == "--idle-timeout").unwrap();
+        assert_eq!(args[at + 1], "45");
+        sessions.close_session(&entry.session_token).unwrap();
+    }
+
+    #[test]
+    fn a_session_can_be_resumed_with_its_token_while_its_worker_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = manager(dir.path());
+        let entry = sessions.open_or_create_session(&user("alice")).unwrap();
+
+        let resumed = sessions.resume_session(&entry.session_token).unwrap();
+        assert_eq!(resumed.pid, entry.pid);
+        assert_eq!(resumed.user_id, "id-alice");
+        assert!(sessions.resume_session("not-a-token").is_none());
+        assert!(sessions.resume_session("").is_none());
+
+        sessions.close_session(&entry.session_token).unwrap();
+        assert!(
+            sessions.resume_session(&entry.session_token).is_none(),
+            "worker ended"
+        );
     }
 
     #[test]

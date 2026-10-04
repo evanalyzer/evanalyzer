@@ -350,6 +350,7 @@ fn training_without_labeled_data_maps_to_no_training_data() {
         project: ProjectSettings::default(),
         settings: two_class_object_settings(),
         pixel_params: PixelTrainingParams::default(),
+        save_to: None,
     });
     assert!(matches!(result, Err(StartTrainingError::NoTrainingData)));
 }
@@ -362,6 +363,7 @@ fn a_remotely_trained_model_comes_back_and_saves_like_a_local_one() {
             project: project_with_labeled_objects(&[1, 2]),
             settings: two_class_object_settings(),
             pixel_params: PixelTrainingParams::default(),
+            save_to: None,
         })
         .unwrap();
     assert_eq!(training.items(), TrainingItems::Objects(2));

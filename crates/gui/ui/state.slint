@@ -19,6 +19,7 @@ export enum DialogType {
     template_meta,
     project_template,
     unsaved_changes_confirm,
+    analysis_running_close,
     run_analysis_confirm,
     ai_learning,
     shortcuts_help }
@@ -38,6 +39,11 @@ export global ConnectionState {
     /// The server's certificate was checked - `false` with
     /// `--no-tls-verification`.
     in property <bool> verified: true;
+    /// While disconnected: what the reconnecting is up to.
+    in property <string> lost-message: "";
+    /// Reconnecting is still possible (the user's worker may still run).
+    in property <bool> can-reconnect: true;
+    callback reconnect-now();
     }
 
 export global GlobalAppState {
@@ -119,6 +125,19 @@ export global UnsavedChangesState {
         callback save();
         callback discard();
         callback cancel();
+    }
+
+//
+// Closing the window while an analysis runs. Rust shows it (switch
+// GlobalAppState.active_dialog to DialogType.analysis_running_close) and
+// reacts to the answer. On a server the analysis can keep running without
+// the window; locally it ends with the process.
+//
+export global AnalysisRunningCloseState {
+        in property <bool> remote: false;
+        callback keep_running();
+        callback cancel_analysis();
+        callback back();
     }
 
 

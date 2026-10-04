@@ -66,7 +66,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 token,
                 roots,
                 home,
-            } => start_worker(listen, token, roots, home),
+                idle_timeout,
+            } => start_worker(listen, token, roots, home, idle_timeout),
             TopCommand::HashPassword => print_password_hash(),
             TopCommand::Server { .. } => {
                 start_server(server_config.expect("loaded above for the server command"))
@@ -158,6 +159,7 @@ fn start_worker(
     token: Option<String>,
     roots: Vec<PathBuf>,
     home: Option<PathBuf>,
+    idle_timeout_minutes: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let token = match token {
         Some(token) => token,
@@ -168,7 +170,11 @@ fn start_worker(
             token
         }
     };
-    let worker = evanalyzer_app::backends::remote::Worker::bind(&listen, token)?;
+    let mut worker = evanalyzer_app::backends::remote::Worker::bind(&listen, token)?;
+    if let Some(minutes) = idle_timeout_minutes {
+        info!("Stopping after {minutes} min without client and analysis");
+        worker = worker.with_idle_timeout(std::time::Duration::from_secs(minutes * 60));
+    }
     info!(
         "EVAnalyzer worker listening on ws://{}",
         worker.local_addr()?

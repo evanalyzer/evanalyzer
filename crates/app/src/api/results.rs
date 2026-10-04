@@ -12,6 +12,42 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::range::Range;
 
+/// How the analysis that wrote a results database ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RunStatus {
+    /// Every image was processed.
+    Finished,
+    /// Still being written - or the run was interrupted (crash, killed
+    /// process) and never finished: the results are incomplete.
+    NotFinished,
+    /// Stopped by the user: the results are incomplete.
+    Cancelled,
+    /// Stopped by an error: the results are incomplete.
+    Failed(String),
+    /// Written before EVAnalyzer recorded this.
+    Unknown,
+}
+
+impl RunStatus {
+    /// What to tell the user, `None` for a complete run.
+    pub fn warning(&self) -> Option<String> {
+        match self {
+            RunStatus::Finished | RunStatus::Unknown => None,
+            RunStatus::NotFinished => Some(
+                "This analysis has not finished - it is still running, or was interrupted. \
+                 The results are incomplete."
+                    .into(),
+            ),
+            RunStatus::Cancelled => {
+                Some("This analysis was cancelled - the results are incomplete.".into())
+            }
+            RunStatus::Failed(message) => Some(format!(
+                "This analysis stopped with an error - the results are incomplete. ({message})"
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum View {
     List,

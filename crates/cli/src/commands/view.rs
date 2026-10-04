@@ -144,6 +144,14 @@ pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> 
     );
     println!("T-stack:  0..{}", db.get_nr_of_t_stacks());
     println!("Z-stack:  0..{}", db.get_nr_of_z_stacks());
+    match db.run_status() {
+        Ok(status) => {
+            if let Some(warning) = status.warning() {
+                println!("WARNING:  {warning}");
+            }
+        }
+        Err(e) => eprintln!("Warning: could not read how the analysis ended: {e}"),
+    }
     println!();
 
     if result.rows.is_empty() {

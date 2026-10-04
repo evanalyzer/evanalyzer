@@ -138,6 +138,9 @@ impl DuckDbExporter {
             }
         }
 
+        conn.execute("INSERT INTO run (status) VALUES ('running')", [])
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+
         // Tuning for sustained tile-by-tile appends:
         //
         // * checkpoint_threshold: DuckDB defaults to folding the WAL back into the
@@ -579,6 +582,17 @@ CREATE TABLE IF NOT EXISTS classes (
     name      VARCHAR NOT NULL,
     color     UINTEGER
 );
+
+-- How the analysis run that wrote this file ended: 'running' from its start
+-- until 'finished', 'cancelled' or 'failed' (with `message`). Still
+-- 'running' afterwards means it was interrupted (crash, killed process).
+-- One row. Files from before this table existed have none.
+CREATE TABLE IF NOT EXISTS run (
+    status       VARCHAR NOT NULL,
+    message      VARCHAR,
+    started_at   TIMESTAMP NOT NULL DEFAULT current_timestamp,
+    finished_at  TIMESTAMP
+);
 ";
 
 // ---------------------------------------------------------------------------
@@ -598,6 +612,23 @@ fn json_string_array(values: &[String]) -> String {
 // ---------------------------------------------------------------------------
 
 impl PipelineResultExporter for DuckDbExporter {
+    fn finish_run(&self, outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
+        let (status, message) = match outcome {
+            Ok(()) => ("finished", None),
+            Err(InternalErrors::Cancelled) => ("cancelled", None),
+            Err(e) => ("failed", Some(e.to_string())),
+        };
+        self.conn
+            .lock()
+            .map_err(|_| InternalErrors::Internal("results database lock poisoned".into()))?
+            .execute(
+                "UPDATE run SET status = ?, message = ?, finished_at = current_timestamp",
+                params![status, message],
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        Ok(())
+    }
+
     fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
         let start = Instant::now();
         let object_count = cache.object_cache.len();
@@ -825,6 +856,46 @@ mod tests {
             area: 4,
             ..Default::default()
         })
+    }
+
+    fn run_row(exporter: &DuckDbExporter) -> (String, Option<String>, bool) {
+        exporter
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status, message, finished_at IS NOT NULL FROM run",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn a_run_is_running_until_its_outcome_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        for (outcome, status, message) in [
+            (Ok(()), "finished", None),
+            (Err(InternalErrors::Cancelled), "cancelled", None),
+            (
+                Err(InternalErrors::Internal("disk full".into())),
+                "failed",
+                Some("disk full"),
+            ),
+        ] {
+            let path = dir.path().join(format!("{status}.evadb"));
+            let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+            assert_eq!(run_row(&exporter), ("running".into(), None, false));
+
+            exporter.finish_run(&outcome).unwrap();
+            let (got_status, got_message, finished) = run_row(&exporter);
+            assert_eq!(got_status, status);
+            assert_eq!(
+                got_message.is_some_and(|m| m.contains("disk full")),
+                message.is_some()
+            );
+            assert!(finished);
+        }
     }
 
     #[test]

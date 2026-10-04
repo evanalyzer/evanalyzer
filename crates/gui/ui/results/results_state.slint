@@ -98,6 +98,10 @@ export struct ChartBoxplotBox {
 }
 
 export global ResultsState {
+    // Set when the analysis that wrote the open database didn't finish
+    // (cancelled, failed, interrupted) - the results are incomplete.
+    in-out property <string> run-warning: "";
+
     // -------- Navigation --------
     in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;
     in-out property <MatrixLevel> matrix-level: MatrixLevel.plate;

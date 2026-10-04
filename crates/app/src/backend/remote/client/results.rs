@@ -1,6 +1,7 @@
 //! [`RemoteResults`]: a results database opened on the worker; every query
-//! is one request.
+//! is one request. Survives a reconnect: opened again on the new connection.
 
+use super::link::{Link, Reopen};
 use super::session::{Session, unexpected_reply};
 use crate::api::BoxplotFilter;
 use crate::api::BoxplotResult;
@@ -26,30 +27,53 @@ use crate::backend::remote::wire::protocol::{
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::classification_settings::Class;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::time::Duration;
 
 pub(super) struct RemoteResults {
-    session: Arc<Session>,
-    handle: u64,
+    path: PathBuf,
+    handle: Reopen,
+}
+
+/// Opens the results database `path` on `session`: its handle.
+fn open(session: &Session, path: &Path) -> Result<u64, InternalErrors> {
+    let (id, rx) = session.request(Request::OpenResults {
+        path: path.to_path_buf(),
+    })?;
+    let reply = session.recv(&rx);
+    session.finish(id);
+    match reply?.msg {
+        Reply::ResultsOpened { handle } => Ok(handle),
+        Reply::Failed(e) => Err(e.into_internal()),
+        _ => Err(unexpected_reply()),
+    }
 }
 
 impl RemoteResults {
-    pub(super) fn new(session: Arc<Session>, handle: u64) -> Self {
-        Self { session, handle }
+    /// Opens `path` on the link's connection.
+    pub(super) fn open(link: &Arc<Link>, path: &Path) -> Result<Self, InternalErrors> {
+        let (session, generation) = link.current();
+        let handle = open(&session, path)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            handle: Reopen::new(Arc::clone(link), generation, handle),
+        })
+    }
+
+    /// The connection to use and the database's handle on it.
+    fn session(&self) -> Result<(Arc<Session>, u64), InternalErrors> {
+        self.handle.get(|session| open(session, &self.path))
     }
 
     fn query(&self, query: ResultsQuery) -> Result<ResultsAnswer, InternalErrors> {
-        let request = Request::QueryResults {
-            handle: self.handle,
-        };
-        let (id, rx) = self
-            .session
-            .request_with_blobs(request, vec![to_postcard(&query)?])?;
-        let reply = self.session.recv(&rx);
-        self.session.finish(id);
+        let (session, handle) = self.session()?;
+        let request = Request::QueryResults { handle };
+        let (id, rx) = session.request_with_blobs(request, vec![to_postcard(&query)?])?;
+        let reply = session.recv(&rx);
+        session.finish(id);
         match reply? {
             Frame {
                 msg: Reply::ResultsAnswer,
@@ -161,6 +185,13 @@ impl ResultsSource for RemoteResults {
         self.count(ResultsQuery::TStacks)
     }
 
+    fn run_status(&self) -> Result<crate::api::RunStatus, InternalErrors> {
+        match self.query(ResultsQuery::RunStatus)? {
+            ResultsAnswer::RunStatus(status) => Ok(status),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn boxplot(&self, filter: &BoxplotFilter) -> Result<BoxplotResult, InternalErrors> {
         match self.query(ResultsQuery::Boxplot(filter.clone()))? {
             ResultsAnswer::Boxplot(result) => Ok(result),
@@ -188,17 +219,14 @@ impl ResultsSource for RemoteResults {
         cancel: &AtomicBool,
         on_progress: ExportProgressFn,
     ) -> Result<(), InternalErrors> {
-        let request = Request::ExportResults {
-            handle: self.handle,
-        };
-        let (id, rx) = self
-            .session
-            .request_with_blobs(request, vec![to_postcard(export)?])?;
+        let (session, handle) = self.session()?;
+        let request = Request::ExportResults { handle };
+        let (id, rx) = session.request_with_blobs(request, vec![to_postcard(export)?])?;
         let mut cancel_sent = false;
         let result = loop {
             if !cancel_sent && cancel.load(std::sync::atomic::Ordering::SeqCst) {
                 cancel_sent = true;
-                let _ = self.session.send(&ClientMsg::Cancel { id });
+                let _ = session.send(&ClientMsg::Cancel { id });
             }
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(Frame {
@@ -221,19 +249,19 @@ impl ResultsSource for RemoteResults {
                 Ok(_) => break Err(unexpected_reply()),
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    break Err(self.session.disconnected());
+                    break Err(session.disconnected());
                 }
             }
         };
-        self.session.finish(id);
+        session.finish(id);
         result
     }
 }
 
 impl Drop for RemoteResults {
     fn drop(&mut self) {
-        let _ = self.session.send(&ClientMsg::CloseResults {
-            handle: self.handle,
-        });
+        if let Some((session, handle)) = self.handle.to_close() {
+            let _ = session.send(&ClientMsg::CloseResults { handle });
+        }
     }
 }

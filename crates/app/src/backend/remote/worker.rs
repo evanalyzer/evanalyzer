@@ -29,7 +29,7 @@ use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -40,6 +40,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct Worker {
     listener: TcpListener,
     token: String,
+    idle_timeout: Option<Duration>,
 }
 
 impl Worker {
@@ -52,7 +53,20 @@ impl Worker {
         }
         let listener = TcpListener::bind(listen)
             .map_err(|e| InternalErrors::Io(format!("Could not listen on {listen}: {e}")))?;
-        Ok(Self { listener, token })
+        Ok(Self {
+            listener,
+            token,
+            idle_timeout: None,
+        })
+    }
+
+    /// Ends the process once no client has been connected and no analysis
+    /// has run for `timeout` - what `evanalyzer server` starts its workers
+    /// with, so a user's worker doesn't outlive its use (the next login
+    /// starts a new one).
+    pub fn with_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.idle_timeout = Some(timeout);
+        self
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr, InternalErrors> {
@@ -64,6 +78,20 @@ impl Worker {
         let token = Arc::new(self.token);
         // Shared by all connections: analyses outlive the one that started them.
         let jobs = Arc::new(JobRegistry::default());
+        let connections = Arc::new(AtomicUsize::new(0));
+        if let Some(timeout) = self.idle_timeout {
+            let (jobs, connections) = (Arc::clone(&jobs), Arc::clone(&connections));
+            std::thread::spawn(move || {
+                watch_idle(timeout, || {
+                    connections.load(Ordering::SeqCst) == 0 && !jobs.any_running()
+                });
+                log::info!(
+                    "No client and no analysis for {} min - stopping",
+                    timeout.as_secs() / 60
+                );
+                std::process::exit(0);
+            });
+        }
         for stream in self.listener.incoming() {
             let stream = match stream {
                 Ok(stream) => stream,
@@ -75,6 +103,7 @@ impl Worker {
             let backend = Arc::clone(&backend);
             let token = Arc::clone(&token);
             let jobs = Arc::clone(&jobs);
+            let connections = Arc::clone(&connections);
             std::thread::spawn(move || {
                 let peer = stream
                     .peer_addr()
@@ -89,11 +118,34 @@ impl Worker {
                     log::debug!("{peer} closed without sending anything (port check)");
                     return;
                 }
+                connections.fetch_add(1, Ordering::SeqCst);
                 match serve_connection(stream, &token, backend, jobs) {
                     Ok(()) => log::info!("Client {peer} disconnected"),
                     Err(reason) => log::warn!("Client {peer} rejected: {reason}"),
                 }
+                connections.fetch_sub(1, Ordering::SeqCst);
             });
+        }
+    }
+}
+
+/// Returns once `is_idle` has held for `timeout` without interruption,
+/// checking a few times per timeout (at least every 30 s).
+fn watch_idle(timeout: Duration, is_idle: impl Fn() -> bool) {
+    let interval = (timeout / 4).clamp(Duration::from_millis(10), Duration::from_secs(30));
+    let mut idle_since: Option<std::time::Instant> = None;
+    loop {
+        std::thread::sleep(interval);
+        if !is_idle() {
+            idle_since = None;
+            continue;
+        }
+        if idle_since
+            .get_or_insert_with(std::time::Instant::now)
+            .elapsed()
+            >= timeout
+        {
+            return;
         }
     }
 }
@@ -143,6 +195,9 @@ fn native_paths(request: Request) -> Request {
         }
         Request::StartTraining(mut req) => {
             native_project_paths(&mut req.project);
+            if let Some(save_to) = &mut req.save_to {
+                save_to.project_dir = native_path(std::mem::take(&mut save_to.project_dir));
+            }
             Request::StartTraining(req)
         }
         Request::OpenImage { path } => Request::OpenImage {
@@ -268,6 +323,8 @@ fn serve_connection(
         outgoing,
         running: Mutex::new(HashMap::new()),
         analyses: Mutex::new(HashMap::new()),
+        background: Mutex::new(HashMap::new()),
+        disconnected: std::sync::atomic::AtomicBool::new(false),
         images: Mutex::new(HashMap::new()),
         results: Mutex::new(HashMap::new()),
         next_handle: AtomicU64::new(1),
@@ -277,7 +334,9 @@ fn serve_connection(
 
     // The client is gone: nobody is left to receive previews, trainings or
     // exports, so stop them instead of letting them run unseen. Analyses go
-    // on - their results land on disk, and a client can attach again.
+    // on - their results land on disk, and a client can attach again - and
+    // so do trainings that know where to save their model.
+    session.disconnected.store(true, Ordering::SeqCst);
     for cancel in session.running.lock().unwrap().values() {
         cancel.cancel();
     }
@@ -302,6 +361,12 @@ struct Session {
     /// Analyses this connection follows, by request id - for `Cancel`.
     /// Not cancelled when the connection drops.
     analyses: Mutex<HashMap<u64, Arc<JobEntry>>>,
+    /// Trainings that save their model themselves if the client is gone
+    /// (`TrainingRequest::save_to`), by request id - for `Cancel`. Not
+    /// cancelled when the connection drops.
+    background: Mutex<HashMap<u64, CancelHandle>>,
+    /// Set once the connection has dropped.
+    disconnected: std::sync::atomic::AtomicBool,
     /// Images the client has opened, by handle.
     images: Mutex<HashMap<u64, Arc<dyn ImageSource>>>,
     /// Results databases the client has opened, by handle.
@@ -330,6 +395,9 @@ impl Session {
                 }
                 if let Some(analysis) = self.analyses.lock().unwrap().get(&id) {
                     analysis.cancel_handle().cancel();
+                }
+                if let Some(cancel) = self.background.lock().unwrap().get(&id) {
+                    cancel.cancel();
                 }
             }
             ClientMsg::CloseResults { handle } => {
@@ -390,36 +458,10 @@ impl Session {
                 }
                 Err(StartPreviewError::Failed(e)) => self.fail(id, &e),
             },
-            Request::StartTraining(req) => match self.backend.start_training(req) {
-                Ok(training) => {
-                    // Registered before replying, so a cancel sent right
-                    // after "started" can't arrive before it is known.
-                    self.running
-                        .lock()
-                        .unwrap()
-                        .insert(id, training.cancel_handle());
-                    self.reply(
-                        id,
-                        Reply::TrainingStarted {
-                            items: training.items(),
-                        },
-                        Vec::new(),
-                    );
-                    for event in training.events() {
-                        self.reply(id, Reply::TrainingEvent(event), Vec::new());
-                    }
-                    let result = training.wait().and_then(|model| model.to_bytes());
-                    self.running.lock().unwrap().remove(&id);
-                    match result {
-                        Ok(bytes) => self.reply(id, Reply::TrainingDone(Ok(())), vec![bytes]),
-                        Err(e) => self.reply(id, Reply::TrainingDone(Err((&e).into())), Vec::new()),
-                    }
-                }
-                Err(StartTrainingError::NoTrainingData) => {
-                    self.reply(id, Reply::NoTrainingData, Vec::new())
-                }
-                Err(StartTrainingError::Failed(e)) => self.fail(id, &e),
-            },
+            Request::StartTraining(req) => {
+                let save_to = req.save_to.clone();
+                self.train(id, req, save_to)
+            }
             Request::OpenImage { path } => match self.backend.open_image(&path) {
                 Ok(source) => {
                     let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
@@ -572,6 +614,68 @@ impl Session {
             })
     }
 
+    /// Runs a training and streams its progress and model back. With
+    /// `save_to` it survives the client: if the connection dropped by the
+    /// time it's done, the model is saved there on this machine.
+    fn train(
+        &self,
+        id: u64,
+        req: crate::api::TrainingRequest,
+        save_to: Option<crate::api::ModelDestination>,
+    ) {
+        let training = match self.backend.start_training(req) {
+            Ok(training) => training,
+            Err(StartTrainingError::NoTrainingData) => {
+                return self.reply(id, Reply::NoTrainingData, Vec::new());
+            }
+            Err(StartTrainingError::Failed(e)) => return self.fail(id, &e),
+        };
+        // Registered before replying, so a cancel sent right after
+        // "started" can't arrive before it is known.
+        let cancellable = if save_to.is_some() {
+            &self.background
+        } else {
+            &self.running
+        };
+        cancellable
+            .lock()
+            .unwrap()
+            .insert(id, training.cancel_handle());
+        self.reply(
+            id,
+            Reply::TrainingStarted {
+                items: training.items(),
+            },
+            Vec::new(),
+        );
+        for event in training.events() {
+            self.reply(id, Reply::TrainingEvent(event), Vec::new());
+        }
+        let result = training.wait();
+        cancellable.lock().unwrap().remove(&id);
+        if let (Some(save_to), Ok(model), true) =
+            (&save_to, &result, self.disconnected.load(Ordering::SeqCst))
+        {
+            match crate::workspace::ai_learning::save_trained_model(
+                self.backend.files(),
+                model,
+                &save_to.project_dir,
+                &save_to.model_name,
+            ) {
+                Ok(path) => log::info!(
+                    "Training finished without its client - model saved to {}",
+                    path.display()
+                ),
+                Err(e) => log::error!("Training finished without its client, saving failed: {e}"),
+            }
+            return;
+        }
+        match result.and_then(|model| model.to_bytes()) {
+            Ok(bytes) => self.reply(id, Reply::TrainingDone(Ok(())), vec![bytes]),
+            Err(e) => self.reply(id, Reply::TrainingDone(Err((&e).into())), Vec::new()),
+        }
+    }
+
     /// Lets this connection follow `analysis` under request `id`.
     fn follow(&self, id: u64, analysis: Arc<JobEntry>) {
         // Known before the first reply, so a cancel sent right after
@@ -640,6 +744,7 @@ fn answer_query(
         ResultsQuery::AvailableColumns => ResultsAnswer::Columns(source.get_available_columns()?),
         ResultsQuery::ZStacks => ResultsAnswer::Count(source.get_nr_of_z_stacks()),
         ResultsQuery::TStacks => ResultsAnswer::Count(source.get_nr_of_t_stacks()),
+        ResultsQuery::RunStatus => ResultsAnswer::RunStatus(source.run_status()?),
         ResultsQuery::Boxplot(filter) => ResultsAnswer::Boxplot(source.boxplot(&filter)?),
         ResultsQuery::Histogram(filter) => ResultsAnswer::Histogram(source.histogram(&filter)?),
         ResultsQuery::Scatter(filter) => ResultsAnswer::Scatter(source.scatter(&filter)?),
@@ -718,6 +823,46 @@ mod tests {
         assert_eq!(
             images,
             [&PathBuf::from("well_A1/a.vsi"), &PathBuf::from("b.vsi")]
+        );
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Instant;
+
+    #[test]
+    fn the_watch_returns_only_after_an_uninterrupted_idle_stretch() {
+        let busy_until = Instant::now() + Duration::from_millis(150);
+        let start = Instant::now();
+        watch_idle(Duration::from_millis(100), || Instant::now() >= busy_until);
+        // Busy for 150 ms, then idle for the full 100 ms.
+        assert!(
+            start.elapsed() >= Duration::from_millis(250),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn activity_restarts_the_idle_stretch() {
+        let poke = Arc::new(AtomicBool::new(false));
+        let poker = Arc::clone(&poke);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(80));
+            poker.store(true, Ordering::SeqCst);
+        });
+        let start = Instant::now();
+        watch_idle(Duration::from_millis(100), || {
+            !poke.swap(false, Ordering::SeqCst)
+        });
+        // Interrupted at ~80 ms, so idle for 100 ms only after that.
+        assert!(
+            start.elapsed() >= Duration::from_millis(180),
+            "{:?}",
+            start.elapsed()
         );
     }
 }

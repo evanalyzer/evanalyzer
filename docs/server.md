@@ -136,19 +136,56 @@ the network without TLS, and the client's status bar shows "unencrypted".
 
 ## Workers
 
-The server starts one worker per session and configures it with
-arguments only:
+The server starts one worker per user and configures it with arguments
+only:
 
 ```
 evanalyzer worker --listen 127.0.0.1:<port> --token <token> \
-    --home <user home> --root <allowed folder>... --log-level <log_level>
+    --home <user home> --root <allowed folder>... --log-level <log_level> \
+    --idle-timeout <workers.idle_timeout_minutes>
 ```
 
 Its working directory is the user's home, and its environment is cleared
-except for what the OS needs (`PATH`; on Windows also `SystemRoot`,
-`windir`, `SystemDrive`, `TEMP`, `TMP`). Workers keep running when the
-server restarts, and the server finds them again through
-`session_store`.
+except for what the OS and the terminal need (`PATH`, `TERM`, `NO_COLOR`; on
+Windows also `SystemRoot`, `windir`, `SystemDrive`, `TEMP`, `TMP`). Every
+login of the same user - a second window, the CLI, a reconnect - lands on
+the same worker.
+
+**Lifetime.** A worker keeps running when its client disconnects or logs
+out, and when the server restarts (the server finds it again through
+`session_store`). It stops by itself once no client has been connected and
+no analysis has run for `workers.idle_timeout_minutes` (default 2 h).
+
+**Analyses run in the background.** An analysis belongs to the worker, not
+to the connection that started it: closing the window (EVAnalyzer asks
+first), a dropped network or a laptop going to sleep don't stop it. The
+next time the user connects, the GUI follows it again silently and reports
+analyses that ended in the meantime; on the command line `evanalyzer cli
+jobs` lists them and `evanalyzer cli attach` follows the running one. Each
+user runs one analysis at a time - a second one is refused until the first
+has finished. A classifier training survives a disconnect too: the worker
+saves the model into the project's `models` folder itself. Previews and
+exports stop with their connection.
+
+**Reconnecting.** When the connection drops, the GUI reconnects by itself
+(after 2, 5, 10, then every 30 s, or at once with "Reconnect now") - with
+the session it logged in with, no password needed, as long as the user's
+worker runs. Open images and results carry on.
+
+**Incomplete results.** The results database records how its analysis
+ended. One that was cancelled, failed or interrupted (crash, killed worker)
+shows a warning in the results window and in `evanalyzer cli view`.
+
+## Limits
+
+`[limits]` protects the machine from more work than it can do (not set: no
+limit):
+
+- `max_workers`: users working at the same time. A login that would start
+  one more worker is refused with "try again later"; users whose worker is
+  running can always log in.
+- `max_connections`: open client connections, all users together. Further
+  connections are refused with "try again later".
 
 ## Example: a lab server with its own accounts
 

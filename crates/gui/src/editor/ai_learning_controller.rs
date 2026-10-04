@@ -494,6 +494,10 @@ impl AiLearningController {
             project: project_settings,
             settings: ai_settings,
             pixel_params,
+            save_to: Some(evanalyzer_app::ai_learning::ModelDestination {
+                project_dir: project_dir.clone(),
+                model_name: model_name.clone(),
+            }),
         }) {
             Ok(training) => training,
             Err(e) => {

@@ -1314,6 +1314,17 @@ impl ResultsStateController {
         match db {
             Ok(results) => {
                 *self.export_populated.lock().expect("Poisened") = false;
+                let run_warning = match results.run_status() {
+                    Ok(status) => status.warning().unwrap_or_default(),
+                    Err(err) => {
+                        error!("Could not read how the analysis ended: {err}");
+                        String::new()
+                    }
+                };
+                if !run_warning.is_empty() {
+                    warn!("{}: {run_warning}", path.display());
+                }
+                self.set_run_warning_in_slint(run_warning);
                 let mut default_object_classes = Vec::new();
                 match results.get_object_classes() {
                     Ok(classes) => {
@@ -2289,6 +2300,17 @@ impl ResultsStateController {
                 warn!(
                     "Failed to upgrade UI handle in set_image_heatmap_in_slint, cannot update image heatmap view!"
                 );
+            }
+        })
+        .ok();
+    }
+
+    /// The incomplete-results banner; empty hides it.
+    fn set_run_warning_in_slint(&self, warning: String) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_run_warning(warning.into());
             }
         })
         .ok();

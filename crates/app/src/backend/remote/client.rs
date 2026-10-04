@@ -11,6 +11,7 @@
 
 mod filesystem;
 mod image_reader;
+mod link;
 mod remote_backend;
 mod results;
 mod session;

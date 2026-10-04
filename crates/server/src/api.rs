@@ -3,7 +3,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Request {
-    Login { username: String, password: String },
+    Login {
+        username: String,
+        password: String,
+    },
+    /// Back to the worker of an earlier login, after the connection dropped:
+    /// the session token from that login instead of the password. Valid as
+    /// long as that worker runs.
+    Resume {
+        session_token: String,
+    },
     Exit,
 }
 

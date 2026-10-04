@@ -378,7 +378,6 @@ struct LoginReply {
 }
 
 /// Sends the server's JSON login command and returns the session token.
-/// Text messages that aren't a reply (the server's greeting) are skipped.
 pub(super) fn login(
     ws: &mut WebSocket<NetStream>,
     url: &str,
@@ -390,6 +389,32 @@ pub(super) fn login(
         "username": username,
         "password": password,
     });
+    server_command(ws, url, request, "Login")
+}
+
+/// Attaches to the still-running worker of an earlier login with its
+/// session token - no password needed. Fails once that worker has ended.
+pub(super) fn resume(
+    ws: &mut WebSocket<NetStream>,
+    url: &str,
+    session_token: &str,
+) -> Result<(), InternalErrors> {
+    let request = serde_json::json!({
+        "cmd": "resume",
+        "session_token": session_token,
+    });
+    server_command(ws, url, request, "Reconnecting").map(|_| ())
+}
+
+/// Sends a JSON command to an `evanalyzer server` and returns the session
+/// token its acceptance carries. Text messages that aren't a reply (the
+/// server's greeting) are skipped. `what` names the command in errors.
+fn server_command(
+    ws: &mut WebSocket<NetStream>,
+    url: &str,
+    request: serde_json::Value,
+    what: &str,
+) -> Result<String, InternalErrors> {
     ws.send(Message::text(request.to_string()))
         .map_err(|e| InternalErrors::Io(format!("Could not reach {url}: {e}")))?;
     ws.get_ref().tcp().set_read_timeout(Some(LOGIN_TIMEOUT))?;
@@ -418,7 +443,7 @@ pub(super) fn login(
             "{url} accepted the login but sent no session"
         ))),
         (LoginState::Error, _) => Err(InternalErrors::InvalidArgument(format!(
-            "Login at {url} failed: {}",
+            "{what} at {url} failed: {}",
             reply.msg
         ))),
     }

@@ -393,6 +393,15 @@ impl<'a> JobExecutor {
         });
 
         info!("Pipeline completed in {:?}", start.elapsed());
+        // Before `Finished`: whoever reads the results next sees the outcome.
+        match self.result_storage.lock() {
+            Ok(storage) => {
+                if let Err(e) = storage.finish_run(&result) {
+                    warn!("Could not record how the run ended: {e}");
+                }
+            }
+            Err(_) => warn!("Could not record how the run ended: storage lock poisoned"),
+        }
         progress.send(ProgressEvent::Finished).ok();
         result
     }

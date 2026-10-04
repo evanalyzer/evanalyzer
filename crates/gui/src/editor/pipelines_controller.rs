@@ -72,6 +72,9 @@ pub struct PipelinesController {
     pub(crate) template_controller: Arc<TemplateController>,
     pub(crate) task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>,
     pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<evanalyzer_app::analysis::CancelHandle>>>,
+    /// An analysis (not a preview) is running - closing the window asks
+    /// what to do with it.
+    pub(crate) analysis_running: Arc<std::sync::atomic::AtomicBool>,
     /// Currently active breakpoint: (pipeline_id, step_id, mode).  `None` = no breakpoint.
     pub(crate) breakpoint:
         Arc<Mutex<Option<(u32, i32, evanalyzer_cfg::core_types::BreakpointMode)>>>,
@@ -105,6 +108,7 @@ impl PipelinesController {
             template_controller,
             task_request: Arc::new((Mutex::new(None), Condvar::new())),
             pipeline_cancel_flag: Arc::new(Mutex::new(None)),
+            analysis_running: Arc::default(),
             breakpoint: Arc::new(Mutex::new(None)),
             auto_preview_enabled: Mutex::new(false),
             pipeline_templates: Mutex::new(Vec::new()),
@@ -1430,6 +1434,7 @@ impl PipelinesController {
             preview: true,
             breakpoint,
             job_name: None,
+            attach: None,
         };
         drop(project);
 
@@ -1507,6 +1512,7 @@ impl PipelinesController {
             preview: false,
             breakpoint: None,
             job_name,
+            attach: None,
         };
         drop(project);
 
@@ -1578,6 +1584,76 @@ impl PipelinesController {
         };
 
         notify(&self.task_request, task);
+    }
+
+    /// On a server: follows the analysis running there, as if this window had
+    /// started it - one started before the window opened, or before the
+    /// connection dropped. Silently: the running dialog just appears. And
+    /// tells about analyses that ended while no window was following them.
+    /// Runs the server queries off the UI thread.
+    pub(crate) fn follow_server_analyses(self: &Arc<Self>) {
+        let backend = Arc::clone(self.app_state.backend());
+        if !backend.is_remote() {
+            return;
+        }
+        let manager = Arc::clone(self);
+        crate::helper::ui_thread::spawn(move || {
+            let jobs = match backend.list_jobs() {
+                Ok(jobs) => jobs,
+                Err(e) => return warn!("Could not list the server's analyses: {e}"),
+            };
+            let ended: Vec<_> = jobs.iter().filter(|job| !job.is_running()).collect();
+            if !ended.is_empty() {
+                let lines: Vec<String> = ended
+                    .iter()
+                    .map(|job| format!("'{}': {}", job.name(), describe_end(&job.state)))
+                    .collect();
+                manager.show_info(
+                    "Analyses on the server",
+                    &format!(
+                        "While no window was following them, these analyses ended:\n\n{}\n\n\
+                         Their results are in the project's results folder.",
+                        lines.join("\n")
+                    ),
+                );
+                for job in &ended {
+                    let _ = backend.forget_job(&job.id);
+                }
+            }
+            if let Some(running) = jobs.iter().find(|job| job.is_running()) {
+                info!("Following analysis {} running on the server", running.id);
+                let id = running.id.clone();
+                let manager = Arc::clone(&manager);
+                let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+                    if let Some(ui) = manager.app_state.ui_handle.upgrade() {
+                        ui.global::<PipelineRunningState>().set_processed(0);
+                        ui.global::<PipelineRunningState>().set_total(0);
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::PipelineRunning);
+                    }
+                    manager.dispatch_worker_task(PipelineTask {
+                        attach: Some(id),
+                        ..PipelineTask::default()
+                    });
+                });
+            }
+        });
+    }
+
+    /// Shows the generic warning dialog as an information.
+    fn show_info(&self, title: &str, message: &str) {
+        let (title, message) = (title.to_owned(), message.to_owned());
+        let ui_weak = self.ui.clone();
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let warning = ui.global::<WarningState>();
+                warning.set_info(true);
+                warning.set_title(title.into());
+                warning.set_message(message.into());
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::Warning);
+            }
+        });
     }
 
     /// Shows the generic warning dialog with `message`.
@@ -4538,5 +4614,16 @@ mod tests {
         ui.global::<CommandPickerState>().invoke_import_bioimageio();
         drain_ui_queue();
         assert!(step_names(&ui_state, 1).is_empty());
+    }
+}
+
+/// How an analysis ended, for the "ended while away" notice.
+fn describe_end(state: &evanalyzer_app::analysis::JobState) -> String {
+    use evanalyzer_app::analysis::JobState;
+    match state {
+        JobState::Succeeded => "finished".into(),
+        JobState::Cancelled => "cancelled".into(),
+        JobState::Failed(message) => format!("failed ({message})"),
+        JobState::Running { .. } => "running".into(),
     }
 }

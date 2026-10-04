@@ -81,3 +81,21 @@ enabled = true
 # system service, otherwise .evanalyzer-server/tls in the server account's
 # home folder.
 # self_signed_dir = "/var/lib/evanalyzer/tls"
+
+[workers]
+# Each logged-in user gets a worker process. It stops by itself once no
+# client has been connected and no analysis has run for this many minutes;
+# the user's next login starts a new one. A running analysis keeps it alive
+# however long it takes - logging out or losing the connection doesn't stop
+# it. At least 1.
+idle_timeout_minutes = 120
+
+[limits]
+# Not set: no limit.
+# At most this many workers (= users working at the same time). A login that
+# would start one more is refused with "try again later"; users whose worker
+# runs already can always log in.
+# max_workers = 20
+# At most this many client connections at once, all users together (one GUI
+# or CLI is one connection).
+# max_connections = 100

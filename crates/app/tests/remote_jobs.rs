@@ -103,6 +103,7 @@ impl Backend for GatedBackend {
         self.local.start_preview(req)
     }
 
+    /// Waits at the gate, then trains for real.
     fn start_training(
         &self,
         req: evanalyzer_app::ai_learning::TrainingRequest,
@@ -110,7 +111,22 @@ impl Backend for GatedBackend {
         evanalyzer_app::ai_learning::RunningTraining,
         evanalyzer_app::ai_learning::StartTrainingError,
     > {
-        self.local.start_training(req)
+        // No progress events: the stream ends at once.
+        let (_, events_rx) = mpsc::channel();
+        let gate = Arc::clone(&self.gate);
+        Ok(evanalyzer_app::ai_learning::RunningTraining::from_parts(
+            events_rx,
+            evanalyzer_app::analysis::CancelHandle::with_callback(|| {}),
+            evanalyzer_app::ai_learning::TrainingItems::Objects(2),
+            Box::new(move || {
+                gate.wait(&AtomicBool::new(false));
+                let training = LocalBackend::default()
+                    .start_training(req)
+                    .map_err(|e| InternalErrors::Internal(e.to_string()))?;
+                training.events().iter().for_each(drop);
+                training.wait()
+            }),
+        ))
     }
 
     fn open_image(
@@ -399,4 +415,149 @@ fn a_real_analysis_is_tracked_too() {
     wait_for_state(&remote, |state| *state == JobState::Succeeded);
     assert_eq!(remote.list_jobs().unwrap()[0].id, id);
     assert!(LocalBackend::default().list_jobs().unwrap().is_empty());
+
+    // The results database records that the run is complete.
+    let output = remote.list_jobs().unwrap()[0].output_path.clone();
+    let database = std::fs::read_dir(&output)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "evadb"))
+        .expect("a results database");
+    let results = remote.open_results(&database).unwrap();
+    assert_eq!(
+        results.run_status().unwrap(),
+        evanalyzer_app::results::RunStatus::Finished
+    );
+}
+
+fn fixture_image() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/tests/multi-channel-4D-series.ome.tif")
+}
+
+/// The top-left 32x32 tile of series 0.
+fn first_tile() -> evanalyzer_app::images::TileRequest {
+    use evanalyzer_cfg::core_types::{ImageTile, ZProjection};
+    evanalyzer_app::images::TileRequest {
+        series: 0,
+        resolution_idx: 0,
+        z_projection: ZProjection::None,
+        z_range: None,
+        t_stack: 0,
+        tile: ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 32,
+            height: 32,
+        },
+    }
+}
+
+#[test]
+fn after_a_reconnect_open_images_work_again_and_the_analysis_is_still_there() {
+    let (worker, gate) = gated_worker();
+    let proxy = Proxy::to(worker);
+    let remote = RemoteBackend::connect(&proxy.url, TOKEN).unwrap();
+    let image = remote.open_image(&fixture_image()).unwrap();
+    let tile = first_tile();
+    let before = image.read_tile(&tile).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let job = remote.start_analysis(request(dir.path())).unwrap();
+    let id = job.id().unwrap().to_string();
+
+    proxy.cut();
+    assert!(job.wait().is_err());
+    for _ in 0..500 {
+        if !remote.is_connected() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!remote.is_connected());
+    assert!(image.read_tile(&tile).is_err(), "no connection");
+
+    remote.reconnect().unwrap();
+    assert!(remote.is_connected());
+    remote.reconnect().unwrap(); // connected: nothing to do
+
+    // The image handle belonged to the old connection: reopened by path.
+    let after = image.read_tile(&tile).unwrap();
+    assert_eq!(before.len(), after.len());
+    // The analysis kept running and can be followed again.
+    let attached = remote.attach_job(&id).unwrap();
+    gate.open();
+    attached.events().iter().for_each(drop);
+    attached.wait().unwrap();
+}
+
+#[test]
+fn a_training_whose_client_disconnected_saves_its_model_itself() {
+    use evanalyzer_app::ai_learning::{ModelDestination, PixelTrainingParams, TrainingRequest};
+    use evanalyzer_cfg::core_types::ObjectClass;
+    use evanalyzer_cfg::settings::ai_learning_object_settings::{
+        AiLearningObjectFeatureSettings, ObjectMetric,
+    };
+    use evanalyzer_cfg::settings::ai_learning_settings::{
+        AiLearningBackendSettings, AiLearningClassifierSettings, AiLearningSettings,
+        ObjectClassLabel,
+    };
+    use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+    use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+
+    let mut series = SeriesSettings::default();
+    for (i, class) in [1, 2].into_iter().enumerate() {
+        series.objects.push(ObjectMetricSettings {
+            area: 10 + 1000 * i,
+            object_class: [ObjectClass::Valid(class)].into(),
+            ..Default::default()
+        });
+    }
+    let mut entry = ImageEntry::default();
+    entry.series.insert(0, series);
+    let mut project = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
+    project.images.list.insert(PathBuf::from("img.tif"), entry);
+    let label = |class, name: &str| ObjectClassLabel {
+        class: ObjectClass::Valid(class),
+        name: name.into(),
+    };
+    let settings = AiLearningSettings {
+        schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
+        meta: Default::default(),
+        backend: AiLearningBackendSettings::RandomForest(Default::default()),
+        classifier: AiLearningClassifierSettings::Object {
+            feature_spec: AiLearningObjectFeatureSettings {
+                metrics: vec![ObjectMetric::Area],
+            },
+            class_labels: vec![label(1, "A"), label(2, "B")],
+        },
+    };
+
+    let (worker, gate) = gated_worker();
+    let proxy = Proxy::to(worker);
+    let remote = RemoteBackend::connect(&proxy.url, TOKEN).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let training = remote
+        .start_training(TrainingRequest {
+            project,
+            settings,
+            pixel_params: PixelTrainingParams::default(),
+            save_to: Some(ModelDestination {
+                project_dir: dir.path().to_path_buf(),
+                model_name: "overnight".into(),
+            }),
+        })
+        .unwrap();
+
+    proxy.cut();
+    assert!(training.wait().is_err(), "the client is gone");
+    gate.open();
+
+    let model = dir.path().join("models/overnight.evamodel");
+    for _ in 0..500 {
+        if model.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("the worker did not save the model");
 }

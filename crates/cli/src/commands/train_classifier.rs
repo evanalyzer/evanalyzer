@@ -58,6 +58,10 @@ pub fn run(args: TrainClassifierArgs, backend: &dyn Backend) -> Result<(), Inter
             project: project.settings.clone(),
             settings,
             pixel_params,
+            save_to: Some(evanalyzer_app::ai_learning::ModelDestination {
+                project_dir: project_dir.clone(),
+                model_name: model_name.clone(),
+            }),
         })
         .map_err(|e| match e {
             StartTrainingError::NoTrainingData => InternalErrors::InvalidArgument(e.to_string()),

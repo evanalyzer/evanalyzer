@@ -230,7 +230,16 @@ pub(crate) fn ui_state_with_windows(
     results_ui: &ResultsWindow,
     project: ProjectWithRuntime,
 ) -> Arc<UiState> {
-    let owner = test_project_owner();
+    ui_state_with_windows_on(ui, results_ui, project, test_project_owner())
+}
+
+/// [`ui_state_with_windows`] on `owner`'s backend - e.g. a remote one.
+pub(crate) fn ui_state_with_windows_on(
+    ui: &AppWindow,
+    results_ui: &ResultsWindow,
+    project: ProjectWithRuntime,
+    owner: ProjectOwner,
+) -> Arc<UiState> {
     let handle = owner.handle();
     *handle.get_project_write() = project;
     use slint::ComponentHandle;

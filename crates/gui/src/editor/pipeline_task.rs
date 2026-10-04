@@ -15,6 +15,10 @@ pub struct PipelineTask {
     /// Optional user-chosen name for a full (non-preview) run, forwarded to
     /// `generate_analyze_job_from_project_settings`. Ignored for preview runs.
     pub job_name: Option<String>,
+    /// Instead of starting an analysis, follow the one with this id that is
+    /// already running on the server (started before this window existed,
+    /// or before the connection dropped).
+    pub attach: Option<String>,
 }
 
 impl Default for PipelineTask {
@@ -25,6 +29,7 @@ impl Default for PipelineTask {
             preview: false,
             breakpoint: None,
             job_name: None,
+            attach: None,
         }
     }
 }

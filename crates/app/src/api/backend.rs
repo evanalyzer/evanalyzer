@@ -5,7 +5,7 @@
 use super::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, FileSystem, GroupedByImageFilter,
     HistogramFilter, HistogramResult, ImageChannel, ImageEntry, ImageHeatmapFilter, ImageMeta,
-    JobInfo, ListFilter, PixelTrainingParams, PlateFilter, PreviewRequest, ResultExport,
+    JobInfo, ListFilter, PixelTrainingParams, PlateFilter, PreviewRequest, ResultExport, RunStatus,
     RunningJob, RunningTraining, ScatterFilter, ScatterResult, StartPreviewError,
     StartTrainingError, View, WellFilter,
 };
@@ -99,6 +99,13 @@ pub trait Backend: Send + Sync {
         ConnectionSecurity::Local
     }
 
+    /// Replaces a dropped connection with a new one to the same worker - no
+    /// password needed while the user's worker runs. Open images and results
+    /// databases carry over. Nothing to do locally or while connected.
+    fn reconnect(&self) -> Result<(), InternalErrors> {
+        Ok(())
+    }
+
     /// Who is logged in on a remote server (`--user`), if anyone.
     fn user(&self) -> Option<String> {
         None
@@ -178,6 +185,8 @@ pub trait ResultsSource: Send + Sync {
     fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors>;
     fn get_nr_of_z_stacks(&self) -> u32;
     fn get_nr_of_t_stacks(&self) -> u32;
+    /// How the analysis that wrote the database ended.
+    fn run_status(&self) -> Result<RunStatus, InternalErrors>;
     fn boxplot(&self, filter: &BoxplotFilter) -> Result<BoxplotResult, InternalErrors>;
     fn histogram(&self, filter: &HistogramFilter) -> Result<HistogramResult, InternalErrors>;
     fn scatter(&self, filter: &ScatterFilter) -> Result<ScatterResult, InternalErrors>;
@@ -216,6 +225,18 @@ pub struct TrainingRequest {
     pub project: ProjectSettings,
     pub settings: AiLearningSettings,
     pub pixel_params: PixelTrainingParams,
+    /// Where the front end will save the model (with
+    /// [`save_trained_model`](crate::workspace::ai_learning::save_trained_model)).
+    /// On a server, a training with a destination keeps running when the
+    /// client disconnects, and the worker saves the model there itself.
+    pub save_to: Option<ModelDestination>,
+}
+
+/// Where a trained model goes: `<project_dir>/models/<model_name>`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelDestination {
+    pub project_dir: PathBuf,
+    pub model_name: String,
 }
 
 /// Which tile to read, at which pyramid level and plane.

@@ -44,6 +44,7 @@ pub mod results {
     pub use crate::api::PlateFilterMulti;
     pub use crate::api::ResultExport;
     pub use crate::api::ResultsSource;
+    pub use crate::api::RunStatus;
     pub use crate::api::ScatterFilter;
     pub use crate::api::ScatterResult;
     pub use crate::api::View;
@@ -97,6 +98,7 @@ pub mod templates {
 
 pub mod ai_learning {
     pub use crate::api::CancelHandle;
+    pub use crate::api::ModelDestination;
     pub use crate::api::PixelTrainingParams;
     pub use crate::api::RunningTraining;
     pub use crate::api::StartTrainingError;

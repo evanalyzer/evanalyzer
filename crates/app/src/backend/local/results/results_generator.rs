@@ -2192,6 +2192,42 @@ impl ResultsGenerator {
             .unwrap_or(1);
         max_stack
     }
+
+    /// From the `run` table the analysis writes; `Unknown` for a database
+    /// written before it existed.
+    pub fn run_status(&self) -> Result<crate::api::RunStatus, InternalErrors> {
+        use crate::api::RunStatus;
+        let has_table: bool = self
+            .database
+            .query_row(
+                "SELECT count(*) > 0 FROM information_schema.tables WHERE table_name = 'run'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        if !has_table {
+            return Ok(RunStatus::Unknown);
+        }
+        let row: Option<(String, Option<String>)> = self
+            .database
+            .query_row("SELECT status, message FROM run LIMIT 1", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .map(Some)
+            .or_else(|e| match e {
+                duckdb::Error::QueryReturnedNoRows => Ok(None),
+                e => Err(InternalErrors::Io(e.to_string())),
+            })?;
+        Ok(match row {
+            None => RunStatus::Unknown,
+            Some((status, message)) => match status.as_str() {
+                "finished" => RunStatus::Finished,
+                "cancelled" => RunStatus::Cancelled,
+                "failed" => RunStatus::Failed(message.unwrap_or_default()),
+                _ => RunStatus::NotFinished,
+            },
+        })
+    }
 }
 
 /// One row of the `objects` table, as fetched by `get_list`'s hand-written
@@ -3632,6 +3668,39 @@ mod tests {
             z_stack: 0,
             t_stack: 0,
         }
+    }
+
+    #[test]
+    fn the_run_status_comes_from_the_run_table_and_is_unknown_without_it() {
+        use crate::api::RunStatus;
+        let old = open(&[]);
+        assert_eq!(old.run_status().unwrap(), RunStatus::Unknown);
+
+        for (sql, expected) in [
+            ("('running', NULL)", RunStatus::NotFinished),
+            ("('finished', NULL)", RunStatus::Finished),
+            ("('cancelled', NULL)", RunStatus::Cancelled),
+            (
+                "('failed', 'disk full')",
+                RunStatus::Failed("disk full".into()),
+            ),
+        ] {
+            let db = open(&[]);
+            db.database
+                .execute_batch(&format!(
+                    "CREATE TABLE run (status VARCHAR, message VARCHAR); \
+                     INSERT INTO run VALUES {sql};"
+                ))
+                .unwrap();
+            assert_eq!(db.run_status().unwrap(), expected);
+        }
+        assert!(RunStatus::Finished.warning().is_none());
+        assert!(
+            RunStatus::Cancelled
+                .warning()
+                .unwrap()
+                .contains("incomplete")
+        );
     }
 
     /// A limit generous enough to fetch every row a test seeds in one page

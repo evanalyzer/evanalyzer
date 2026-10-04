@@ -1,6 +1,7 @@
 //! [`RemoteFiles`]: the worker's file system, one request per call.
 
-use super::session::{Session, unexpected_reply};
+use super::link::Link;
+use super::session::unexpected_reply;
 use crate::api::DirEntry;
 use crate::api::FileSystem;
 use crate::api::Place;
@@ -11,12 +12,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub(super) struct RemoteFiles {
-    session: Arc<Session>,
+    link: Arc<Link>,
 }
 
 impl RemoteFiles {
-    pub(super) fn new(session: Arc<Session>) -> Self {
-        Self { session }
+    pub(super) fn new(link: Arc<Link>) -> Self {
+        Self { link }
     }
 
     /// Sends `request` and waits for its single reply; a `Failed` reply
@@ -26,9 +27,10 @@ impl RemoteFiles {
         request: Request,
         blobs: Vec<Vec<u8>>,
     ) -> Result<Frame<Reply>, InternalErrors> {
-        let (id, rx) = self.session.request_with_blobs(request, blobs)?;
-        let reply = self.session.recv(&rx);
-        self.session.finish(id);
+        let session = self.link.session();
+        let (id, rx) = session.request_with_blobs(request, blobs)?;
+        let reply = session.recv(&rx);
+        session.finish(id);
         match reply? {
             Frame {
                 msg: Reply::Failed(e),

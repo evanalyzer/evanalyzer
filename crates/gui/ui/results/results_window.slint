@@ -40,6 +40,21 @@ export component ResultsWindow inherits Window {
 
             ResultsBreadcrumb { }
 
+            // The analysis that wrote this database didn't finish: say so
+            // before anyone draws conclusions from the numbers.
+            if ResultsState.run-warning != "": Rectangle {
+                height: 30px;
+                background: Theme.warn;
+                Text {
+                    text: "⚠  " + ResultsState.run-warning;
+                    color: #000000;
+                    font-size: 12px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+
             if ResultsState.rail-mode == ResultsRailMode.list: ResultsListView {
                 vertical-stretch: 1;
             }

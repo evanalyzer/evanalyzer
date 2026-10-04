@@ -47,6 +47,43 @@ pub struct ServerConfig {
     pub users: UsersConfig,
     /// Encryption of client connections.
     pub tls: TlsConfig,
+    /// The per-user worker processes.
+    pub workers: WorkersConfig,
+    /// How many users and connections the server takes at once.
+    pub limits: LimitsConfig,
+}
+
+/// `[workers]`: the `evanalyzer worker` process each logged-in user gets.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WorkersConfig {
+    /// A worker stops once no client has been connected to it and no
+    /// analysis has run for this many minutes; the user's next login starts
+    /// a new one. A running analysis keeps it alive however long it takes.
+    /// Default 120.
+    pub idle_timeout_minutes: u64,
+}
+
+impl Default for WorkersConfig {
+    fn default() -> Self {
+        Self {
+            idle_timeout_minutes: 120,
+        }
+    }
+}
+
+/// `[limits]`: protects the machine from more work than it can do. Not set:
+/// no limit.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LimitsConfig {
+    /// At most this many workers (= users working at the same time). A
+    /// login that would start one more is refused with "try again later";
+    /// users whose worker already runs can always log in.
+    pub max_workers: Option<usize>,
+    /// At most this many client connections at once, all users together
+    /// (one GUI or CLI is one connection). Further ones are refused.
+    pub max_connections: Option<usize>,
 }
 
 impl Default for ServerConfig {
@@ -57,6 +94,8 @@ impl Default for ServerConfig {
             log_level: "debug".into(),
             users: UsersConfig::default(),
             tls: TlsConfig::default(),
+            workers: WorkersConfig::default(),
+            limits: LimitsConfig::default(),
         }
     }
 }
@@ -275,6 +314,20 @@ impl ServerConfig {
         if self.users.source == UserSource::File && self.users.file.path.is_none() {
             return invalid("users.source = \"file\" needs users.file.path".into());
         }
+        if self.workers.idle_timeout_minutes == 0 {
+            return invalid(
+                "workers.idle_timeout_minutes must be at least 1 - idle workers would \
+                 otherwise pile up"
+                    .into(),
+            );
+        }
+        if self.limits.max_workers == Some(0) || self.limits.max_connections == Some(0) {
+            return invalid(
+                "limits.max_workers and limits.max_connections must be at least 1 \
+                 (leave them out for no limit)"
+                    .into(),
+            );
+        }
         if self.tls.cert.is_some() != self.tls.key.is_some() {
             return invalid("tls.cert and tls.key go together - set both or neither".into());
         }
@@ -412,10 +465,28 @@ mod tests {
             ("[users]\nsource = \"file\"", "users.file.path"),
             ("[users]\nsource = \"ldap\"", "ldap"),
             ("[tls]\ncert = \"/etc/evanalyzer/cert.pem\"", "tls.key"),
+            (
+                "[workers]\nidle_timeout_minutes = 0",
+                "idle_timeout_minutes",
+            ),
+            ("[limits]\nmax_workers = 0", "max_workers"),
         ] {
             let error = parse(text).unwrap_err();
             assert!(error.contains(key), "{text}: {error}");
         }
+    }
+
+    #[test]
+    fn workers_stop_after_two_idle_hours_and_nothing_is_limited_by_default() {
+        let config = parse("").unwrap();
+        assert_eq!(config.workers.idle_timeout_minutes, 120);
+        assert_eq!(config.limits, LimitsConfig::default());
+        let limited =
+            parse("[limits]\nmax_workers = 10\nmax_connections = 40\n[workers]\nidle_timeout_minutes = 30")
+                .unwrap();
+        assert_eq!(limited.limits.max_workers, Some(10));
+        assert_eq!(limited.limits.max_connections, Some(40));
+        assert_eq!(limited.workers.idle_timeout_minutes, 30);
     }
 
     #[test]

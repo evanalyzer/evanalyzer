@@ -1,3 +1,4 @@
+use crate::AnalysisRunningCloseState;
 use crate::AppWindow;
 use crate::DialogType;
 use crate::FileRequest;
@@ -31,6 +32,7 @@ use slint::ComponentHandle;
 use slint::{ModelRc, SharedString, VecModel};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 /// Sentinel shown as the first entry of the category `ComboBox`; selecting it
@@ -522,15 +524,48 @@ impl ProjectController {
             // Save/Discard/Cancel guard as opening another project - the
             // default behaviour (silently hide the window) would otherwise
             // discard unsaved work with no confirmation.
+            // A running analysis is asked about first (keep it running on
+            // the server, or cancel it), then unsaved changes.
             let manager = Arc::clone(self);
             ui.window().on_close_requested(move || {
-                if manager.app_state.is_dirty() {
+                if manager
+                    .pipelines_controller
+                    .analysis_running
+                    .load(Ordering::SeqCst)
+                {
+                    if let Some(ui) = manager.ui.upgrade() {
+                        ui.global::<AnalysisRunningCloseState>()
+                            .set_remote(manager.app_state.backend().is_remote());
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::AnalysisRunningClose);
+                    }
+                    slint::CloseRequestResponse::KeepWindowShown
+                } else if manager.app_state.is_dirty() {
                     manager.guard_discard(PendingAction::Quit);
                     slint::CloseRequestResponse::KeepWindowShown
                 } else {
                     slint::CloseRequestResponse::HideWindow
                 }
             });
+
+            let manager = Arc::clone(self);
+            ui.global::<AnalysisRunningCloseState>()
+                .on_keep_running(move || manager.quit_unless_unsaved());
+            let manager = Arc::clone(self);
+            ui.global::<AnalysisRunningCloseState>()
+                .on_cancel_analysis(move || {
+                    if let Some(cancel) = manager
+                        .pipelines_controller
+                        .pipeline_cancel_flag
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                    {
+                        cancel.cancel();
+                    }
+                    manager.quit_unless_unsaved();
+                });
+            ui.global::<AnalysisRunningCloseState>().on_back(|| {});
         }
     }
 
@@ -787,6 +822,15 @@ impl ProjectController {
             }
         })
         .ok();
+    }
+
+    /// Closes the window - through the unsaved-changes dialog if needed.
+    fn quit_unless_unsaved(self: &Arc<Self>) {
+        if self.app_state.is_dirty() {
+            self.guard_discard(PendingAction::Quit);
+        } else {
+            self.run_pending_action(PendingAction::Quit);
+        }
     }
 
     /// Executes a [`PendingAction`], safe to call from either the UI thread

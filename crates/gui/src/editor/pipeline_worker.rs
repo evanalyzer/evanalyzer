@@ -147,12 +147,17 @@ impl PipelineWorker {
                     }
                 }
             } else {
-                match self.app_state.backend().start_analysis(AnalysisRequest {
-                    settings: task.project_settings,
-                    project_path: task.project_path,
-                    job_name: task.job_name,
-                    threads: None,
-                }) {
+                let backend = self.app_state.backend();
+                let started = match &task.attach {
+                    Some(id) => backend.attach_job(id),
+                    None => backend.start_analysis(AnalysisRequest {
+                        settings: task.project_settings,
+                        project_path: task.project_path,
+                        job_name: task.job_name,
+                        threads: None,
+                    }),
+                };
+                match started {
                     Ok(job) => job,
                     Err(e) => {
                         self.report_start_failure("The analysis", &e);
@@ -160,6 +165,9 @@ impl PipelineWorker {
                     }
                 }
             };
+            let analysis_running = &self.pipeline_controller.analysis_running;
+            analysis_running.store(!is_preview, std::sync::atomic::Ordering::SeqCst);
+            let job_id = job.id().map(str::to_string);
 
             info!("Pipeline job started ...");
 
@@ -343,7 +351,23 @@ impl PipelineWorker {
             // (see `RunningJob::wait`), so the user sees it and this worker
             // survives to run the next job.
             let job_result = job.wait();
+            analysis_running.store(false, std::sync::atomic::Ordering::SeqCst);
+            let backend = self.app_state.backend();
+            let connection_lost = job_result.is_err() && !backend.is_connected();
+            // Seen through to its end here: no need to report it again
+            // the next time a window opens.
+            if let (Some(id), false) = (&job_id, connection_lost) {
+                if let Err(e) = backend.forget_job(id) {
+                    log::warn!("Could not forget analysis {id} on the server: {e}");
+                }
+            }
             let (status_message, is_error) = match job_result {
+                Err(_) if connection_lost && job_id.is_some() => (
+                    "The connection to the server was lost. The analysis keeps running \
+                     there - it is shown again once EVAnalyzer is connected."
+                        .to_string(),
+                    true,
+                ),
                 Err(InternalErrors::Cancelled) => {
                     info!("Pipeline cancelled by user");
                     ("Cancelled by user.".to_string(), false)
@@ -492,6 +516,11 @@ mod tests {
     /// A worker wired to real windows and a project with a copy of the
     /// fixture image in a temp folder.
     fn fixture() -> Fixture {
+        fixture_on(crate::editor::test_support::test_project_owner())
+    }
+
+    /// [`fixture`] on `owner`'s backend.
+    fn fixture_on(owner: evanalyzer_app::project::ProjectOwner) -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let images = dir.path().join("images");
         std::fs::create_dir_all(&images).unwrap();
@@ -502,7 +531,8 @@ mod tests {
         let settings = project.settings.clone();
 
         let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, project);
+        let ui_state =
+            crate::editor::test_support::ui_state_with_windows_on(&ui, &results_ui, project, owner);
         let w = ui.as_weak();
         let viewport = Arc::new(ViewportController::new(w.clone(), ui_state.clone()));
         let objects = Arc::new(ObjectListController::new(
@@ -588,6 +618,7 @@ mod tests {
                 preview,
                 breakpoint: None,
                 job_name: Some("worker_test".into()),
+                attach: None,
             }
         }
         fn running(&self) -> PipelineRunningState<'_> {
@@ -630,6 +661,77 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// A remote fixture: an in-process worker serving the local backend,
+    /// and the GUI connected to it.
+    fn remote_fixture() -> (Fixture, Arc<dyn evanalyzer_app::backends::Backend>) {
+        use evanalyzer_app::backends::remote::{RemoteBackend, Worker};
+        let worker = Worker::bind("127.0.0.1:0", "gui-test".into()).unwrap();
+        let url = format!("ws://{}", worker.local_addr().unwrap());
+        std::thread::spawn(move || worker.run(Arc::new(LocalBackend::default())));
+        let remote: Arc<dyn evanalyzer_app::backends::Backend> =
+            Arc::new(RemoteBackend::connect(&url, "gui-test").unwrap());
+        let owner = evanalyzer_app::project::ProjectOwner::with_backend(Arc::clone(&remote));
+        (fixture_on(owner), remote)
+    }
+
+    #[test]
+    fn an_analysis_running_on_the_server_is_followed_to_its_end_and_then_forgotten() {
+        let (f, remote) = remote_fixture();
+        // Started elsewhere - e.g. by this window before the connection dropped.
+        let mut task = f.task(false);
+        let job = remote
+            .start_analysis(AnalysisRequest {
+                settings: task.project_settings.clone(),
+                project_path: task.project_path.clone(),
+                job_name: Some("elsewhere".into()),
+                threads: Some(1),
+            })
+            .unwrap();
+        let id = job.id().unwrap().to_string();
+
+        task.attach = Some(id.clone());
+        f.worker.run_task(task);
+        drain_ui_queue();
+
+        assert!(f.running().get_done());
+        assert!(
+            !f.running().get_has_error(),
+            "{}",
+            f.running().get_status_message()
+        );
+        assert_eq!(
+            f.running().get_status_message(),
+            "Analysis completed successfully."
+        );
+        assert!(f.running().get_total() >= 1);
+        let analysis_running = &f.worker.pipeline_controller.analysis_running;
+        assert!(!analysis_running.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            remote.list_jobs().unwrap().iter().all(|j| j.id != id),
+            "shown here, so not reported again"
+        );
+        drop(job);
+    }
+
+    #[test]
+    fn attaching_where_nothing_is_tracked_is_reported() {
+        let f = fixture();
+        let mut task = f.task(false);
+        task.attach = Some("0123456789abcdef".into());
+        f.worker.run_task(task);
+        drain_ui_queue();
+        assert!(f.running().get_has_error());
+        assert!(
+            f.running()
+                .get_status_message()
+                .contains("could not be started"),
+            "{}",
+            f.running().get_status_message()
+        );
+        let analysis_running = &f.worker.pipeline_controller.analysis_running;
+        assert!(!analysis_running.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]

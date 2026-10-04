@@ -244,6 +244,14 @@ impl Editor {
 
         self.viewport_worker.start_worker();
         self.pipeline_worker.start_worker();
+        self.pipelines_controller.follow_server_analyses();
+    }
+
+    /// What to do once the server connection is back after it dropped:
+    /// follow the analysis running there again. Callable from any thread.
+    pub fn on_reconnected(&self) -> impl Fn() + Send + Sync + 'static {
+        let pipelines = Arc::clone(&self.pipelines_controller);
+        move || pipelines.follow_server_analyses()
     }
 }
 

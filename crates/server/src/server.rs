@@ -73,6 +73,8 @@ impl Write for ClientStream {
 struct Server {
     /// `None`: clients connect without encryption (`tls.enabled = false`).
     tls: Option<Arc<rustls::ServerConfig>>,
+    /// `limits.max_connections`.
+    max_connections: Option<usize>,
     user_management: Arc<dyn UserManagement>,
     session_management: Arc<SessionManagement>,
     sessions: Sessions,
@@ -117,10 +119,14 @@ pub fn serve(config: ServerConfig) -> std::io::Result<()> {
             config.listen
         ),
     }
+    let mut session_management = SessionManagement::new(session_store, config.log_level.clone())?;
+    session_management.worker_idle_timeout_minutes = Some(config.workers.idle_timeout_minutes);
+    session_management.max_workers = config.limits.max_workers;
     Server {
         tls: tls.map(|tls| tls.config),
+        max_connections: config.limits.max_connections,
         user_management: config.user_management()?,
-        session_management: Arc::new(SessionManagement::new(session_store, config.log_level)?),
+        session_management: Arc::new(session_management),
         sessions: Arc::default(),
         next_session_id: AtomicU64::new(1),
     }
@@ -128,6 +134,34 @@ pub fn serve(config: ServerConfig) -> std::io::Result<()> {
 }
 
 impl Server {
+    /// Tells a client over `limits.max_connections` why it can't come in -
+    /// in the WebSocket it expects, as the answer to its first command.
+    fn refuse(&self, stream: TcpStream, max: usize) {
+        let tls = self.tls.clone();
+        thread::spawn(move || {
+            // Don't let a client that never speaks hold the thread.
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+            let stream = match tls {
+                None => ClientStream::Plain(stream),
+                Some(config) => match ServerConnection::new(config) {
+                    Ok(tls) => ClientStream::Tls(Box::new(StreamOwned::new(tls, stream))),
+                    Err(_) => return,
+                },
+            };
+            let Ok(mut socket) = tungstenite::accept(stream) else {
+                return;
+            };
+            let answer = Response::error(format!(
+                "The server is busy ({max} connections open) - try again later"
+            ));
+            let json = serde_json::to_string(&answer).expect("Response serializes");
+            let _ = socket.read();
+            let _ = socket.send(Message::text(json));
+            let _ = socket.close(None);
+            let _ = socket.flush();
+        });
+    }
+
     pub fn serve(&self, listen: &str) -> std::io::Result<()> {
         let listener = TcpListener::bind(listen)?;
         let scheme = if self.tls.is_some() { "wss" } else { "ws" };
@@ -137,6 +171,12 @@ impl Server {
                 continue;
             };
             let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
+            let open = self.sessions.lock().unwrap().len();
+            if let Some(max) = self.max_connections.filter(|max| open >= *max) {
+                warn!("Session {session_id}: {peer} refused, {max} connections open already");
+                self.refuse(stream, max);
+                continue;
+            }
             self.sessions.lock().unwrap().insert(
                 session_id,
                 SessionInfo {
@@ -264,6 +304,9 @@ impl Connection {
                         }
                         let session = match self.session_management.open_or_create_session(&user) {
                             Ok(session) => session,
+                            Err(err) if err.kind() == io::ErrorKind::QuotaExceeded => {
+                                return Response::error(err.to_string());
+                            }
                             Err(err) => {
                                 error!("Cannot start EVAnalyzer for {}: {err}", user.username);
                                 return Response::error("Could not start EVAnalyzer for this user");
@@ -286,7 +329,36 @@ impl Connection {
                     }
                 }
             }
-            (State::WaitingForCommands, Request::Login { .. }) => {
+            (State::WaitingForLogin, Request::Resume { session_token }) => {
+                match self.session_management.resume_session(&session_token) {
+                    Some(session) => {
+                        info!(
+                            "Session {}: resumed the session of user {}",
+                            self.session_id, session.user_id
+                        );
+                        if let Some(info) = self.sessions.lock().unwrap().get_mut(&self.session_id)
+                        {
+                            info.user_id = Some(session.user_id.clone());
+                        }
+                        self.user_id = Some(session.user_id);
+                        self.worker_port = Some(session.port);
+                        self.session_token = Some(session.session_token.clone());
+                        self.state = State::WaitingForCommands;
+                        Response {
+                            session_token: Some(session.session_token),
+                            ..Response::accepted("Resumed")
+                        }
+                    }
+                    None => {
+                        warn!(
+                            "Session {}: resume with an unknown session",
+                            self.session_id
+                        );
+                        Response::error("The session has ended - log in again")
+                    }
+                }
+            }
+            (State::WaitingForCommands, Request::Login { .. } | Request::Resume { .. }) => {
                 Response::error("Already logged in")
             }
             (State::WaitingForCommands, Request::Exit) => self.exit(),
@@ -296,17 +368,14 @@ impl Connection {
 }
 
 impl Connection {
-    /// Stops the user's EVAnalyzer worker, closes the session and logs this
-    /// connection out. The WebSocket stays open for a new login.
+    /// Logs this connection out. The user's worker keeps running - a
+    /// running analysis must not end because one client logged out - and
+    /// stops by itself once idle (`workers.idle_timeout_minutes`). The
+    /// WebSocket stays open for a new login.
     fn exit(&mut self) -> Response {
-        if let Some(token) = self.session_token.take()
-            && let Err(err) = self.session_management.close_session(&token)
-        {
-            error!("Session {}: closing failed: {err}", self.session_id);
-            return Response::error("Could not close the session");
-        }
+        self.session_token = None;
         info!(
-            "Session {}: user {} exited",
+            "Session {}: user {} logged out",
             self.session_id,
             self.user_id.as_deref().unwrap_or_default()
         );
@@ -316,7 +385,7 @@ impl Connection {
         self.user_id = None;
         self.worker_port = None;
         self.state = State::WaitingForLogin;
-        Response::accepted("Session closed")
+        Response::accepted("Logged out")
     }
 }
 
@@ -734,11 +803,24 @@ mod tests {
             start_server_with(dir, None).0
         }
 
+        /// [`start_server`] taking at most `max` connections at once.
+        fn start_limited_server(dir: &std::path::Path, max: usize) -> String {
+            start_server_on(dir, None, Some(max)).0
+        }
+
         /// [`start_server`], encrypting with `tls` if given. Also returns
         /// the address.
         fn start_server_with(
             dir: &std::path::Path,
             tls: Option<&tls::Tls>,
+        ) -> (String, SocketAddr) {
+            start_server_on(dir, tls, None)
+        }
+
+        fn start_server_on(
+            dir: &std::path::Path,
+            tls: Option<&tls::Tls>,
+            max_connections: Option<usize>,
         ) -> (String, SocketAddr) {
             let port = TcpListener::bind("127.0.0.1:0")
                 .unwrap()
@@ -747,6 +829,7 @@ mod tests {
                 .port();
             let server = Server {
                 tls: tls.map(|tls| Arc::clone(&tls.config)),
+                max_connections,
                 user_management: Arc::new(SingleUser::default()),
                 session_management: Arc::new(
                     SessionManagement::with_store(dir.join("sessions.json"), fake_worker(dir))
@@ -832,11 +915,80 @@ mod tests {
             assert_eq!(reply["session_token"], token.as_str());
 
             let reply = ask(&mut client, text(r#"{"cmd":"exit"}"#));
-            assert_eq!(reply["msg"], "Session closed");
+            assert_eq!(reply["msg"], "Logged out");
             // Logged out again: commands need a new login.
             let reply = ask(&mut client, text(r#"{"cmd":"exit"}"#));
             assert_eq!(reply["msg"], "Not logged in");
             client.close(None).unwrap();
+        }
+
+        #[test]
+        fn connections_beyond_the_limit_are_refused_with_a_reason() {
+            let dir = tempfile::tempdir().unwrap();
+            let url = start_limited_server(dir.path(), 1);
+            // The start-up probe counts as a connection until it's gone. An
+            // accepted client is greeted first; a refused one gets the
+            // refusal as the answer to its first command.
+            let mut first = (0..200)
+                .find_map(|_| {
+                    let (mut client, _) = tungstenite::connect(url.as_str()).ok()?;
+                    client.send(text(r#"{"cmd":"exit"}"#)).ok()?;
+                    let first_text = client.read().ok()?.into_text().ok()?;
+                    if first_text.starts_with("Welcome") {
+                        client.read().ok()?; // the answer to `exit`
+                        Some(client)
+                    } else {
+                        thread::sleep(std::time::Duration::from_millis(10));
+                        None
+                    }
+                })
+                .expect("a connection once the probe is gone");
+
+            let (mut second, _) = tungstenite::connect(url.as_str()).unwrap();
+            let reply = ask(
+                &mut second,
+                text(r#"{"cmd":"login","username":"admin","password":"1234"}"#),
+            );
+            assert_eq!(reply["response"], "Error");
+            assert!(
+                reply["msg"].as_str().unwrap().contains("try again later"),
+                "{reply}"
+            );
+
+            // The first one is unaffected.
+            let reply = ask(
+                &mut first,
+                text(r#"{"cmd":"login","username":"admin","password":"nope"}"#),
+            );
+            assert_eq!(reply["msg"], "Invalid username or password");
+        }
+
+        #[test]
+        fn a_dropped_client_resumes_its_session_with_the_token_instead_of_the_password() {
+            let dir = tempfile::tempdir().unwrap();
+            let url = start_server(dir.path());
+            let mut first = connect(&url);
+            let reply = ask(
+                &mut first,
+                text(r#"{"cmd":"login","username":"admin","password":"1234"}"#),
+            );
+            let token = reply["session_token"].as_str().unwrap().to_string();
+            drop(first); // connection gone
+
+            let mut again = connect(&url);
+            let reply = ask(
+                &mut again,
+                text(r#"{"cmd":"resume","session_token":"guess"}"#),
+            );
+            assert_eq!(reply["msg"], "The session has ended - log in again");
+            let reply = ask(
+                &mut again,
+                text(&format!(r#"{{"cmd":"resume","session_token":"{token}"}}"#)),
+            );
+            assert_eq!(reply["response"], "Accepted");
+            assert_eq!(reply["session_token"], token.as_str());
+            let reply = ask(&mut again, text(r#"{"cmd":"exit"}"#));
+            assert_eq!(reply["msg"], "Logged out");
         }
 
         #[test]
@@ -854,7 +1006,7 @@ mod tests {
             );
             assert_eq!(reply["response"], "Accepted");
             let reply = ask(&mut client, text(r#"{"cmd":"exit"}"#));
-            assert_eq!(reply["msg"], "Session closed");
+            assert_eq!(reply["msg"], "Logged out");
 
             // ws:// to a TLS server fails instead of hanging.
             let plain = TcpStream::connect(addr).unwrap();

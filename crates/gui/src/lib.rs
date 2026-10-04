@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
+use crate::remote::reconnector::Reconnector;
+
 /// How many steps of undo/redo history to keep - `ProjectSettings` is small
 /// (metadata/geometry only, no pixel buffers - see the doc comment on
 /// `UiState::undo_stack`), so this is a memory non-issue; it just bounds
@@ -33,6 +35,7 @@ mod editor;
 mod file_browser;
 mod helper;
 mod license_text;
+mod remote;
 mod third_party_licenses;
 
 // ----------------------------------------------------------------
@@ -424,8 +427,6 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     ui_state.set_window_title(false);
     apply_user_settings(&ui, &results_ui, &ui_state);
     attach_system_info(&ui, Arc::clone(ui_state.backend()));
-    // Kept alive until the window closes.
-    let _connection_watch = show_connection(&ui, ui_state.backend());
     ui_state.file_browser.attach(&ui);
     ui_state.results_file_browser.attach(&results_ui);
 
@@ -439,6 +440,8 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
         ui_state.clone(),
     ));
     editor.attach_callbacks();
+    // Kept alive until the window closes.
+    let _connection_watch = show_connection(&ui, ui_state.backend(), editor.on_reconnected());
 
     ui.run()
 }
@@ -533,6 +536,97 @@ fn format_ram(bytes: u64) -> String {
     format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
 }
 
+/// Apply the persisted dark/light preference to both windows. Each window
+/// owns its own `Appearance`/`Palette` instance, so this has to be done
+/// for both explicitly - see the comment on `Appearance` in style.slint.
+/// "alice @ workstation:7400" for a server, "This computer" otherwise.
+pub fn connection_label(backend: &dyn Backend) -> String {
+    if !backend.is_remote() {
+        return "This computer".into();
+    }
+    let url = backend.description();
+    let host = url
+        .trim_start_matches("ws://")
+        .trim_start_matches("wss://")
+        .trim_end_matches('/');
+    match backend.user() {
+        Some(user) => format!("{user} @ {host}"),
+        None => host.to_string(),
+    }
+}
+
+/// Fills `ConnectionState` (status bar badge, lost-connection banner) and,
+/// for a server, polls the connection once a second - cheap, it's an atomic
+/// flag. A dropped connection is reconnected in the background (see
+/// [`Reconnector`]); `on_reconnected` runs once it's back. Returns the
+/// timer, which must stay alive as long as the window.
+fn show_connection(
+    ui: &AppWindow,
+    backend: &Arc<dyn Backend>,
+    on_reconnected: impl Fn() + Send + Sync + 'static,
+) -> Option<slint::Timer> {
+    let state = ui.global::<ConnectionState>();
+    state.set_remote(backend.is_remote());
+    state.set_label(connection_label(backend.as_ref()).into());
+    state.set_connected(backend.is_connected());
+    let security = backend.connection_security();
+    state.set_encrypted(matches!(
+        security,
+        ConnectionSecurity::Local
+            | ConnectionSecurity::Encrypted
+            | ConnectionSecurity::EncryptedUnverified
+    ));
+    state.set_verified(security != ConnectionSecurity::EncryptedUnverified);
+    if !backend.is_remote() {
+        return None;
+    }
+    let reconnector = Arc::new(Reconnector {
+        ui: ui.as_weak(),
+        backend: Arc::clone(backend),
+        on_reconnected: Box::new(on_reconnected),
+        try_now: Mutex::new(None),
+    });
+    let now = Arc::clone(&reconnector);
+    state.on_reconnect_now(move || now.try_now());
+
+    let timer = slint::Timer::default();
+    let ui = ui.as_weak();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_secs(1),
+        move || {
+            if let Some(ui) = ui.upgrade() {
+                let state = ui.global::<ConnectionState>();
+                let connected = reconnector.backend.is_connected();
+                if state.get_connected() != connected {
+                    state.set_connected(connected);
+                }
+                if !connected {
+                    reconnector.start();
+                }
+            }
+        },
+    );
+    Some(timer)
+}
+
+/// Applies the remembered appearance to both windows and saves a dark-mode
+/// toggle - through `ui_state`, so in remote mode they live on the worker.
+fn apply_user_settings(ui: &AppWindow, results_ui: &ResultsWindow, ui_state: &Arc<UiState>) {
+    let dark_mode = ui_state.load_app_settings().dark_mode;
+    ui.global::<Appearance>().invoke_apply(dark_mode);
+    results_ui.global::<Appearance>().invoke_apply(dark_mode);
+
+    let results_ui_handle = results_ui.as_weak();
+    let ui_state = Arc::clone(ui_state);
+    ui.global::<Appearance>().on_dark_mode_toggled(move |dark| {
+        ui_state.update_app_settings(|settings| settings.dark_mode = dark);
+        if let Some(results_ui) = results_ui_handle.upgrade() {
+            results_ui.global::<Appearance>().invoke_apply(dark);
+        }
+    });
+}
+
 #[cfg(test)]
 mod ui_state_tests {
     use super::*;
@@ -566,7 +660,7 @@ mod ui_state_tests {
 
         let ui = AppWindow::new().unwrap();
         assert!(
-            show_connection(&ui, &backend).is_none(),
+            show_connection(&ui, &backend, || {}).is_none(),
             "no polling locally"
         );
         let state = ui.global::<ConnectionState>();
@@ -701,78 +795,4 @@ mod ui_state_tests {
         ui_state.undo();
         assert_eq!(name(&ui_state), "");
     }
-}
-
-/// Apply the persisted dark/light preference to both windows. Each window
-/// owns its own `Appearance`/`Palette` instance, so this has to be done
-/// for both explicitly - see the comment on `Appearance` in style.slint.
-/// "alice @ workstation:7400" for a server, "This computer" otherwise.
-pub fn connection_label(backend: &dyn Backend) -> String {
-    if !backend.is_remote() {
-        return "This computer".into();
-    }
-    let url = backend.description();
-    let host = url
-        .trim_start_matches("ws://")
-        .trim_start_matches("wss://")
-        .trim_end_matches('/');
-    match backend.user() {
-        Some(user) => format!("{user} @ {host}"),
-        None => host.to_string(),
-    }
-}
-
-/// Fills `ConnectionState` (status bar badge, lost-connection banner) and,
-/// for a server, polls the connection once a second - cheap, it's an atomic
-/// flag. Returns the timer, which must stay alive as long as the window.
-fn show_connection(ui: &AppWindow, backend: &Arc<dyn Backend>) -> Option<slint::Timer> {
-    let state = ui.global::<ConnectionState>();
-    state.set_remote(backend.is_remote());
-    state.set_label(connection_label(backend.as_ref()).into());
-    state.set_connected(backend.is_connected());
-    let security = backend.connection_security();
-    state.set_encrypted(matches!(
-        security,
-        ConnectionSecurity::Local
-            | ConnectionSecurity::Encrypted
-            | ConnectionSecurity::EncryptedUnverified
-    ));
-    state.set_verified(security != ConnectionSecurity::EncryptedUnverified);
-    if !backend.is_remote() {
-        return None;
-    }
-    let timer = slint::Timer::default();
-    let ui = ui.as_weak();
-    let backend = Arc::clone(backend);
-    timer.start(
-        slint::TimerMode::Repeated,
-        Duration::from_secs(1),
-        move || {
-            if let Some(ui) = ui.upgrade() {
-                let state = ui.global::<ConnectionState>();
-                let connected = backend.is_connected();
-                if state.get_connected() != connected {
-                    state.set_connected(connected);
-                }
-            }
-        },
-    );
-    Some(timer)
-}
-
-/// Applies the remembered appearance to both windows and saves a dark-mode
-/// toggle - through `ui_state`, so in remote mode they live on the worker.
-fn apply_user_settings(ui: &AppWindow, results_ui: &ResultsWindow, ui_state: &Arc<UiState>) {
-    let dark_mode = ui_state.load_app_settings().dark_mode;
-    ui.global::<Appearance>().invoke_apply(dark_mode);
-    results_ui.global::<Appearance>().invoke_apply(dark_mode);
-
-    let results_ui_handle = results_ui.as_weak();
-    let ui_state = Arc::clone(ui_state);
-    ui.global::<Appearance>().on_dark_mode_toggled(move |dark| {
-        ui_state.update_app_settings(|settings| settings.dark_mode = dark);
-        if let Some(results_ui) = results_ui_handle.upgrade() {
-            results_ui.global::<Appearance>().invoke_apply(dark);
-        }
-    });
 }
