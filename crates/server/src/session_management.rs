@@ -2,11 +2,12 @@
 //! user and records them in a session file, so a restarted server finds the
 //! still running workers again.
 //!
-//! The file lives in the runtime directory (`/run/evanalyzer/` when running
-//! as root, `$XDG_RUNTIME_DIR/evanalyzer/` otherwise): runtime state that must
-//! not survive a reboot, just like the processes it describes. It is written
-//! atomically (temp file + rename) and readable by the server's user only,
-//! because it holds the worker tokens.
+//! The file lives wherever `evanalyzer server --session-store` says - by
+//! default in the runtime directory (`/run/evanalyzer/` when running as root,
+//! the temp folder otherwise, see [`default_store_path`]): runtime state that
+//! must not survive a reboot, just like the processes it describes. It is
+//! written atomically (temp file + rename) and readable by the server's user
+//! only, because it holds the worker tokens.
 
 use crate::user_management::User;
 use log::{info, warn};
@@ -25,56 +26,26 @@ use std::{
 /// How long a freshly started worker may take until it accepts connections.
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Environment variables passed on to workers; everything else is dropped.
-/// `TERM` and the colour variables keep the worker's log output (which goes
-/// to the server's terminal) coloured like the server's own.
-const WORKER_ENV: &[&str] = &[
-    "PATH",
-    "LANG",
-    "LC_ALL",
-    "RUST_LOG",
-    "LD_LIBRARY_PATH",
-    "TERM",
-    "COLORTERM",
-    "NO_COLOR",
-    "CLICOLOR",
-    "CLICOLOR_FORCE",
-];
+/// The only environment variables a worker gets: what the operating system
+/// needs to run a process at all. Everything EVAnalyzer itself is configured
+/// with (home, allowed folders, log level) travels as arguments instead.
+const WORKER_OS_ENV: &[&str] = &["PATH"];
 
-/// On Windows, also the system variables every process expects. Without
-/// `SystemRoot` in particular, Winsock can't load its provider DLLs and the
-/// worker's `bind` fails with WSAEPROVIDERFAILEDINIT (os error 10106) -
-/// `env_clear` would otherwise drop them. (Variable names are
-/// case-insensitive on Windows, so `std::env::var_os` finds them however
-/// they are spelled.)
+/// On Windows also these: without `SystemRoot` in particular, Winsock can't
+/// load its provider DLLs and the worker's `bind` fails with
+/// WSAEPROVIDERFAILEDINIT (os error 10106); `TEMP`/`TMP` are where the OS
+/// puts temporary files. (Variable names are case-insensitive on Windows, so
+/// `std::env::var_os` finds them however they are spelled.)
 #[cfg(windows)]
-const WINDOWS_WORKER_ENV: &[&str] = &[
-    "SystemRoot",
-    "windir",
-    "SystemDrive",
-    "ComSpec",
-    "PATHEXT",
-    "TEMP",
-    "TMP",
-    "USERPROFILE",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "ProgramData",
-    "ProgramFiles",
-    "ProgramFiles(x86)",
-    "CommonProgramFiles",
-    "NUMBER_OF_PROCESSORS",
-    "PROCESSOR_ARCHITECTURE",
-    "CUDA_PATH",
-];
+const WINDOWS_WORKER_OS_ENV: &[&str] = &["SystemRoot", "windir", "SystemDrive", "TEMP", "TMP"];
 
 /// The variables of the server's environment a worker gets - see
-/// [`WORKER_ENV`] and, on Windows, [`WINDOWS_WORKER_ENV`].
+/// [`WORKER_OS_ENV`] and, on Windows, [`WINDOWS_WORKER_OS_ENV`].
 fn worker_env() -> Vec<(&'static str, std::ffi::OsString)> {
     #[cfg(windows)]
-    let keys = WORKER_ENV.iter().chain(WINDOWS_WORKER_ENV);
+    let keys = WORKER_OS_ENV.iter().chain(WINDOWS_WORKER_OS_ENV);
     #[cfg(not(windows))]
-    let keys = WORKER_ENV.iter();
+    let keys = WORKER_OS_ENV.iter();
     keys.filter_map(|k| Some((*k, std::env::var_os(k)?)))
         .collect()
 }
@@ -96,8 +67,10 @@ pub struct SessionEntry {
 
 pub struct SessionManagement {
     pub path_to_session_store: PathBuf,
-    /// Executable started as worker, with `serve --listen 127.0.0.1:<port>`.
+    /// Executable started as worker, with `worker --listen 127.0.0.1:<port>`.
     pub worker_command: PathBuf,
+    /// Passed to every worker as `--log-level`, so it logs like the server.
+    pub worker_log_level: Option<String>,
     state: Mutex<State>,
 }
 
@@ -110,10 +83,12 @@ struct State {
 }
 
 impl SessionManagement {
-    /// Session file in the default runtime directory, the running
-    /// executable as worker.
-    pub fn new() -> io::Result<Self> {
-        Self::with_store(default_store_path(), std::env::current_exe()?)
+    /// Session file at `path_to_session_store`, the running executable as
+    /// worker, logging with `worker_log_level`.
+    pub fn new(path_to_session_store: PathBuf, worker_log_level: String) -> io::Result<Self> {
+        let mut sessions = Self::with_store(path_to_session_store, std::env::current_exe()?)?;
+        sessions.worker_log_level = Some(worker_log_level);
+        Ok(sessions)
     }
 
     /// Loads the session file and keeps the sessions whose worker still runs.
@@ -130,6 +105,7 @@ impl SessionManagement {
         let manager = Self {
             path_to_session_store,
             worker_command,
+            worker_log_level: None,
             state: Mutex::new(State {
                 sessions,
                 children: HashMap::new(),
@@ -187,6 +163,16 @@ impl SessionManagement {
             .arg(format!("127.0.0.1:{port}"))
             .arg("--token")
             .arg(&session_token)
+            .arg("--home")
+            .arg(&user.home);
+        for dir in &user.allowed_dirs {
+            command.arg("--root").arg(dir);
+        }
+        if let Some(level) = &self.worker_log_level {
+            command.arg("--log-level").arg(level);
+        }
+        command
+            .current_dir(&user.home)
             .stdin(Stdio::null())
             .env_clear()
             .envs(worker_env());
@@ -262,17 +248,17 @@ impl State {
     }
 }
 
+/// Where the session file goes unless `--session-store` says otherwise:
 /// `/run/evanalyzer/sessions.json` for a system service, otherwise the
-/// user's runtime directory.
+/// OS's temp folder.
 pub fn default_store_path() -> PathBuf {
     let system = Path::new("/run/evanalyzer");
     if create_private_dir(system).is_ok() {
         return system.join("sessions.json");
     }
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("evanalyzer").join("sessions.json")
+    std::env::temp_dir()
+        .join("evanalyzer")
+        .join("sessions.json")
 }
 
 fn load(path: &Path) -> Vec<SessionEntry> {
@@ -329,9 +315,10 @@ fn wait_until_listening(child: &mut Child, port: u16) -> io::Result<()> {
     ))
 }
 
-/// When the server runs as root, the worker runs as the logged-in user, in
-/// their home folder - so it can only touch that user's files. Otherwise all
-/// workers run as the server's user.
+/// When the server runs as root, the worker runs as the logged-in user - so
+/// it can only touch that user's files. Otherwise all workers run as the
+/// server's user. (Home and allowed folders are arguments, see
+/// `create_session`.)
 #[cfg(unix)]
 fn run_as(command: &mut Command, user: &User) {
     use std::os::unix::{fs::MetadataExt, process::CommandExt};
@@ -347,13 +334,7 @@ fn run_as(command: &mut Command, user: &User) {
         return;
     }
     // std drops the supplementary groups when switching the uid as root.
-    command
-        .uid(account.uid)
-        .gid(account.gid)
-        .current_dir(&account.home)
-        .env("HOME", &account.home)
-        .env("USER", &user.username)
-        .env("LOGNAME", &user.username);
+    command.uid(account.uid).gid(account.gid);
 }
 
 #[cfg(not(unix))]
@@ -399,8 +380,73 @@ pub(crate) mod tests {
         User {
             user_id: name.into(),
             username: name.into(),
+            home: std::env::temp_dir(),
+            allowed_dirs: vec![std::env::temp_dir()],
             unix_account: None,
         }
+    }
+
+    /// Like [`fake_worker`], but first writes its arguments and its whole
+    /// environment to `<dir>/args.txt` and `<dir>/env.txt`.
+    fn recording_worker(dir: &Path) -> PathBuf {
+        let path = dir.join("recording-worker");
+        let record = dir.display();
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {record}/args.txt\n/usr/bin/env > {record}/env.txt\nexec python3 -m http.server \"${{3##*:}}\" --bind 127.0.0.1 >/dev/null 2>&1\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[test]
+    fn the_worker_gets_home_folders_and_log_level_as_arguments_not_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sessions = SessionManagement::with_store(
+            dir.path().join("run/sessions.json"),
+            recording_worker(dir.path()),
+        )
+        .unwrap();
+        sessions.worker_log_level = Some("debug".into());
+        let home = dir.path().join("home");
+        let data = dir.path().join("data");
+        fs::create_dir_all(&home).unwrap();
+        let alice = User {
+            user_id: "alice".into(),
+            username: "alice".into(),
+            home: home.clone(),
+            allowed_dirs: vec![home.clone(), data.clone()],
+            unix_account: None,
+        };
+
+        let entry = sessions.open_or_create_session(&alice).unwrap();
+
+        let args = fs::read_to_string(dir.path().join("args.txt")).unwrap();
+        let args: Vec<&str> = args.lines().collect();
+        let after = |flag: &str| -> Vec<&str> {
+            args.windows(2)
+                .filter(|w| w[0] == flag)
+                .map(|w| w[1])
+                .collect()
+        };
+        assert_eq!(after("--home"), [home.to_str().unwrap()]);
+        assert_eq!(
+            after("--root"),
+            [home.to_str().unwrap(), data.to_str().unwrap()]
+        );
+        assert_eq!(after("--log-level"), ["debug"]);
+        let env = fs::read_to_string(dir.path().join("env.txt")).unwrap();
+        for variable in ["HOME=", "USER=", "LOGNAME=", "RUST_LOG=", "LANG="] {
+            assert!(
+                !env.lines().any(|line| line.starts_with(variable)),
+                "{variable} in\n{env}"
+            );
+        }
+
+        sessions.close_session(&entry.session_token).unwrap();
     }
 
     fn manager(dir: &Path) -> SessionManagement {
@@ -532,22 +578,23 @@ mod worker_env_tests {
     use super::*;
 
     #[test]
-    fn workers_get_only_allowlisted_variables() {
+    fn workers_get_only_the_variables_the_os_needs() {
         #[cfg(windows)]
-        let allowed: Vec<&str> = WORKER_ENV
+        let allowed: Vec<&str> = WORKER_OS_ENV
             .iter()
-            .chain(WINDOWS_WORKER_ENV)
+            .chain(WINDOWS_WORKER_OS_ENV)
             .copied()
             .collect();
         #[cfg(not(windows))]
-        let allowed: Vec<&str> = WORKER_ENV.to_vec();
+        let allowed: Vec<&str> = WORKER_OS_ENV.to_vec();
 
         let env = worker_env();
 
         assert!(env.iter().all(|(key, _)| allowed.contains(key)));
-        if std::env::var_os("PATH").is_some() {
-            assert!(env.iter().any(|(key, _)| *key == "PATH"));
-        }
+        assert!(
+            env.iter()
+                .all(|(key, _)| !matches!(*key, "HOME" | "USER" | "RUST_LOG"))
+        );
     }
 
     /// Without it the worker can't open a socket (os error 10106).

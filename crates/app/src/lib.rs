@@ -12,21 +12,10 @@ pub mod prelude {
 }
 
 pub mod global {
-    pub use crate::backend::local::system::SUPPORTED_IMAGE_FORMATS;
     pub use crate::workspace::AppHandle;
     pub use crate::workspace::Frontend;
     pub use crate::workspace::crash_log;
     pub use crate::workspace::settings::AppSettings;
-    pub use crate::workspace::settings::load_app_settings;
-    pub use crate::workspace::settings::load_app_settings_from;
-    pub use crate::workspace::settings::save_app_settings;
-    pub use crate::workspace::settings::save_app_settings_to;
-    pub use crate::workspace::settings::settings_file_path;
-}
-
-pub mod system {
-    pub use crate::backend::local::system::cpu_ram_diagnostics;
-    pub use crate::backend::local::system::cuda_is_available;
 }
 
 pub mod results {
@@ -120,6 +109,7 @@ pub mod ai_learning {
 
 pub mod backends {
     pub use crate::api::Backend;
+    pub use crate::api::SystemInfo;
     pub mod local {
         pub use crate::backend::LocalBackend;
     }

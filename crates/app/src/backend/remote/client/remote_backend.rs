@@ -16,11 +16,13 @@ use crate::api::RunningJob;
 use crate::api::RunningTraining;
 use crate::api::StartPreviewError;
 use crate::api::StartTrainingError;
+use crate::api::SystemInfo;
 use crate::api::TemplateFolders;
 use crate::api::TrainedClassifier;
 use crate::api::TrainingRequest;
 use crate::backend::remote::wire::frame::Frame;
 use crate::backend::remote::wire::protocol::{Reply, Request};
+use crate::workspace::settings::AppSettings;
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::path::Path;
 use std::sync::Arc;
@@ -232,5 +234,31 @@ impl Backend for RemoteBackend {
 
     fn user(&self) -> Option<String> {
         self.user.clone()
+    }
+
+    fn system_info(&self) -> Result<SystemInfo, InternalErrors> {
+        match self.files.call(Request::SystemInfo, Vec::new())?.msg {
+            Reply::SystemInfo(info) => Ok(info),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn load_app_settings(&self) -> Result<AppSettings, InternalErrors> {
+        match self.files.call(Request::LoadAppSettings, Vec::new())?.msg {
+            Reply::AppSettings(settings) => Ok(settings),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn save_app_settings(&self, settings: &AppSettings) -> Result<(), InternalErrors> {
+        let request = Request::SaveAppSettings(settings.clone());
+        match self.files.call(request, Vec::new())?.msg {
+            Reply::Done => Ok(()),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
+    fn image_formats(&self) -> Vec<String> {
+        self.session.image_formats().to_vec()
     }
 }

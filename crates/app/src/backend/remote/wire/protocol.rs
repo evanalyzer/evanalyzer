@@ -22,6 +22,7 @@ use crate::api::PreviewRequest;
 use crate::api::ProgressEvent;
 use crate::api::ScatterFilter;
 use crate::api::ScatterResult;
+use crate::api::SystemInfo;
 use crate::api::TemplateFolders;
 use crate::api::TileRequest;
 use crate::api::TrainingItems;
@@ -31,6 +32,7 @@ use crate::api::WellFilter;
 use crate::backend::remote::wire::pixels::RawImageInfo;
 use crate::backend::remote::wire::pixels::image_from_raw;
 use crate::backend::remote::wire::pixels::image_to_raw;
+use crate::workspace::settings::AppSettings;
 use evanalyzer_cfg::core_types::{InternalErrors, TrainingProgressEvent};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -41,7 +43,7 @@ use std::sync::Arc;
 /// Bumped on every incompatible change to the messages below. Client and
 /// server must also run the same app version, since requests carry the
 /// app's own settings types.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -119,6 +121,11 @@ pub(crate) enum Request {
     RemoveAll {
         path: PathBuf,
     },
+    /// The worker machine's [`SystemInfo`].
+    SystemInfo,
+    /// The user's app preferences, stored in their user folder there.
+    LoadAppSettings,
+    SaveAppSettings(AppSettings),
 }
 
 /// One results-database operation. Travels as postcard (not JSON) because
@@ -174,9 +181,19 @@ pub(crate) fn from_postcard<T: serde::de::DeserializeOwned>(
 
 #[derive(Serialize, Deserialize)]
 pub(crate) enum ServerMsg {
-    Welcome { app_version: String },
-    Rejected { reason: String },
-    Reply { id: u64, reply: Reply },
+    Welcome {
+        app_version: String,
+        /// The worker's [`Backend::image_formats`](crate::api::Backend::image_formats),
+        /// so the client knows them without asking.
+        image_formats: Vec<String>,
+    },
+    Rejected {
+        reason: String,
+    },
+    Reply {
+        id: u64,
+        reply: Reply,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -217,6 +234,8 @@ pub(crate) enum Reply {
     },
     ExportDone(Result<(), WireError>),
     TemplateFolders(TemplateFolders),
+    SystemInfo(SystemInfo),
+    AppSettings(AppSettings),
     Places(Vec<Place>),
     DirEntries(Vec<DirEntry>),
     Stat(Option<DirEntry>),

@@ -1,6 +1,7 @@
-//! What this build and host machine can do - the About dialog's diagnostics
-//! and the image formats the readers accept. Front ends ask here instead of
-//! `evanalyzer_core`, so a future remote backend can answer for its own host.
+//! What this build and host machine can do - the image formats the readers
+//! accept and the host's diagnostics. Read by `LocalBackend`
+//! (`Backend::system_info`/`image_formats`); front ends ask the backend, so
+//! in remote mode the worker answers for its own machine.
 
 /// File extensions (lowercase, no dot) the image readers accept. Depends on
 /// which reader features `evanalyzer_core` was built with.

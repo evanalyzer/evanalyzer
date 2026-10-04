@@ -6,7 +6,7 @@ mod image_reader;
 pub(crate) mod job;
 mod local_backend;
 pub mod results;
-pub mod system;
+pub(crate) mod system;
 pub(crate) mod templates;
 pub(crate) mod training;
 

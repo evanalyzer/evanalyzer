@@ -18,7 +18,6 @@ use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_list_controller::ResultsListController;
 use crate::editor::template_controller::TemplateController;
 use evanalyzer_app::exporter::cite_project;
-use evanalyzer_app::global::SUPPORTED_IMAGE_FORMATS;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::SaveProjectActions;
 use evanalyzer_app::templates::load_project_template_from_file;
@@ -550,14 +549,17 @@ impl ProjectController {
     /// type, it may spawn background threads for heavy I/O (e.g., loading large
     /// project manifests or decoding high-resolution images).
     fn open_file_handler(self: &Arc<Self>) {
-        let mut allowed_files = SUPPORTED_IMAGE_FORMATS.to_vec();
+        // The backend's formats - in remote mode the worker's.
+        let image_formats = self.app_state.backend().image_formats();
+        let image_formats: Vec<&str> = image_formats.iter().map(String::as_str).collect();
+        let mut allowed_files = image_formats.clone();
         allowed_files.push(PROJECT_FILE_EXTENSIONS);
         allowed_files.push(LEGACY_PROJECT_FILE_EXTENSION);
         allowed_files.push(PROJECT_FILE_TEMPLATE_EXTENSIONS);
 
         let request = FileRequest::open_file("Open")
             .filter("Supported files", &allowed_files)
-            .filter("Image files", SUPPORTED_IMAGE_FORMATS)
+            .filter("Image files", &image_formats)
             .filter("Project files", &[PROJECT_FILE_EXTENSIONS])
             .filter("Legacy project files", &[LEGACY_PROJECT_FILE_EXTENSION])
             .filter(

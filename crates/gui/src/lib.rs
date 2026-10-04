@@ -78,10 +78,10 @@ pub struct UiState {
     /// "Redo" could later resurrect a state that no longer follows from what
     /// the user just did.
     force_next_checkpoint: AtomicBool,
-    /// The user's settings file (`settings.json`) the editor's remembered
-    /// preferences are read from and written to. Tests point it at a
-    /// temporary file.
-    pub app_settings_file: std::path::PathBuf,
+    /// The user's remembered preferences, loaded once from the backend (the
+    /// worker's user folder in remote mode) and saved back there on every
+    /// change - kept here so reading one doesn't cost a round trip.
+    app_settings: Mutex<evanalyzer_app::global::AppSettings>,
 }
 
 impl UiState {
@@ -91,6 +91,10 @@ impl UiState {
         results_handle: slint::Weak<ResultsWindow>,
     ) -> Self {
         let backend = Arc::clone(app.backend());
+        let app_settings = backend.load_app_settings().unwrap_or_else(|e| {
+            log::warn!("Could not load the app settings, using defaults: {e}");
+            Default::default()
+        });
         Self {
             file_browser: Arc::new(FileBrowser::new(handle.clone(), Arc::clone(&backend))),
             results_file_browser: Arc::new(FileBrowser::new(results_handle.clone(), backend)),
@@ -102,24 +106,28 @@ impl UiState {
             redo_stack: Mutex::new(VecDeque::new()),
             last_checkpoint_at: Mutex::new(Instant::now()),
             force_next_checkpoint: AtomicBool::new(false),
-            app_settings_file: evanalyzer_app::global::settings_file_path(),
+            app_settings: Mutex::new(app_settings),
         }
     }
 
-    /// The user's remembered preferences (see `app_settings_file`).
+    /// The user's remembered preferences (see `app_settings`).
     pub fn load_app_settings(&self) -> evanalyzer_app::global::AppSettings {
-        evanalyzer_app::global::load_app_settings_from(&self.app_settings_file)
+        self.app_settings.lock().unwrap().clone()
     }
 
-    /// Changes one preference and saves - loading first, so every other
-    /// preference keeps its value.
+    /// Changes one preference and saves all of them through the backend.
     pub fn update_app_settings(
         &self,
         change: impl FnOnce(&mut evanalyzer_app::global::AppSettings),
     ) {
-        let mut settings = self.load_app_settings();
-        change(&mut settings);
-        evanalyzer_app::global::save_app_settings_to(&self.app_settings_file, &settings);
+        let settings = {
+            let mut settings = self.app_settings.lock().unwrap();
+            change(&mut settings);
+            settings.clone()
+        };
+        if let Err(e) = self.app.backend().save_app_settings(&settings) {
+            log::warn!("Could not save the app settings: {e}");
+        }
     }
 
     /// Acquire a read guard for the project.
@@ -400,9 +408,7 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     let results_ui = ResultsWindow::new()?;
     let results_ui_handle = results_ui.as_weak();
 
-    // Load and apply settings
     load_about_dialog_information(&ui);
-    load_user_settings(&ui, &results_ui);
 
     // Build AppHandle from owner - shares the same Arc<RwLock<ProjectSettings>>
     let app_handle = owner.handle();
@@ -416,6 +422,8 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     // (loaded into `owner` before the GUI was created, so it's already
     // sitting in the shared `ProjectWithRuntime` `ui_state` now points at).
     ui_state.set_window_title(false);
+    apply_user_settings(&ui, &results_ui, &ui_state);
+    attach_system_info(&ui, Arc::clone(ui_state.backend()));
     // Kept alive until the window closes.
     let _connection_watch = show_connection(&ui, ui_state.backend());
     ui_state.file_browser.attach(&ui);
@@ -436,19 +444,11 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
 }
 
 /// About dialog content: version comes from the crate version (which the
-/// release CI patches to the git tag before building), the rest is read
-/// from the host machine once at startup - none of it changes at runtime.
-///
-/// The CUDA check is probed on a background thread rather than here: loading
-/// the CUDA driver and creating a context on first use is slow (commonly
-/// hundreds of ms), and nobody looks at the About dialog in the first instant
-/// after launch, so there's no reason to make the window wait on it.
+/// release CI patches to the git tag before building), licenses are fixed.
+/// The system tab is filled per opening by [`attach_system_info`].
 fn load_about_dialog_information(ui: &AppWindow) {
-    let (cpu_cores, total_ram_bytes) = evanalyzer_app::system::cpu_ram_diagnostics();
     let info = ui.global::<AppInfoState>();
     info.set_version(env!("CARGO_PKG_VERSION").into());
-    info.set_cpu_cores(cpu_cores as i32);
-    info.set_ram_total(format!("{:.1} GB", total_ram_bytes as f64 / 1_073_741_824.0).into());
     let paragraphs: Vec<slint::SharedString> = license_text::LICENSE_TEXT
         .split("\n\n")
         .map(|p| p.into())
@@ -474,18 +474,63 @@ fn load_about_dialog_information(ui: &AppWindow) {
     info.set_third_party_licenses(slint::ModelRc::new(slint::VecModel::from(
         third_party_groups,
     )));
+}
 
+/// The About dialog's system tab: whenever it opens, asks `backend` for the
+/// machine the work runs on - in remote mode the worker's, not this one.
+/// Fetched on a background thread: the CUDA probe is slow on first use
+/// (loading the driver, commonly hundreds of ms), plus a round trip in
+/// remote mode.
+fn attach_system_info(ui: &AppWindow, backend: Arc<dyn Backend>) {
     let ui_weak = ui.as_weak();
-    crate::helper::ui_thread::spawn(move || {
-        let cuda_available = evanalyzer_app::system::cuda_is_available();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<AppInfoState>()
-                    .set_cuda_available(cuda_available);
-            }
-        })
-        .ok();
+    ui.global::<AppInfoState>().on_refresh_system_info(move || {
+        let Some(ui) = ui_weak.upgrade() else {
+            return;
+        };
+        let info = ui.global::<AppInfoState>();
+        let source = if backend.is_remote() {
+            format!("worker at {}", backend.description())
+        } else {
+            "this computer".to_string()
+        };
+        info.set_system_source(source.into());
+        info.set_system_error("".into());
+        info.set_system_loading(true);
+
+        let backend = Arc::clone(&backend);
+        let ui_weak = ui_weak.clone();
+        crate::helper::ui_thread::spawn(move || {
+            let result = backend.system_info();
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                let Some(ui) = ui_weak.upgrade() else {
+                    return;
+                };
+                let info = ui.global::<AppInfoState>();
+                info.set_system_loading(false);
+                match result {
+                    Ok(system) => {
+                        info.set_system_os(system.os.into());
+                        info.set_cpu_cores(system.cpu_cores as i32);
+                        info.set_ram_total(format_ram(system.ram_total_bytes).into());
+                        info.set_cuda_available(system.cuda_available);
+                    }
+                    Err(e) => {
+                        info.set_system_os("-".into());
+                        info.set_cpu_cores(0);
+                        info.set_ram_total("-".into());
+                        info.set_cuda_available(false);
+                        info.set_system_error(format!("Could not read the system: {e}").into());
+                    }
+                }
+            })
+            .ok();
+        });
     });
+}
+
+/// `bytes` of RAM as GB with one decimal.
+fn format_ram(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
 }
 
 #[cfg(test)]
@@ -703,21 +748,17 @@ fn show_connection(ui: &AppWindow, backend: &Arc<dyn Backend>) -> Option<slint::
     Some(timer)
 }
 
-fn load_user_settings(ui: &AppWindow, results_ui: &ResultsWindow) {
-    let settings = evanalyzer_app::global::load_app_settings();
-    let results_ui_handle = results_ui.as_weak();
-    ui.global::<Appearance>().invoke_apply(settings.dark_mode);
-    results_ui
-        .global::<Appearance>()
-        .invoke_apply(settings.dark_mode);
+/// Applies the remembered appearance to both windows and saves a dark-mode
+/// toggle - through `ui_state`, so in remote mode they live on the worker.
+fn apply_user_settings(ui: &AppWindow, results_ui: &ResultsWindow, ui_state: &Arc<UiState>) {
+    let dark_mode = ui_state.load_app_settings().dark_mode;
+    ui.global::<Appearance>().invoke_apply(dark_mode);
+    results_ui.global::<Appearance>().invoke_apply(dark_mode);
 
-    let results_ui_handle = results_ui_handle.clone();
+    let results_ui_handle = results_ui.as_weak();
+    let ui_state = Arc::clone(ui_state);
     ui.global::<Appearance>().on_dark_mode_toggled(move |dark| {
-        // Load-modify-save: a fresh `AppSettings` would reset every other
-        // preference to its default.
-        let mut settings = evanalyzer_app::global::load_app_settings();
-        settings.dark_mode = dark;
-        evanalyzer_app::global::save_app_settings(&settings);
+        ui_state.update_app_settings(|settings| settings.dark_mode = dark);
         if let Some(results_ui) = results_ui_handle.upgrade() {
             results_ui.global::<Appearance>().invoke_apply(dark);
         }

@@ -9,11 +9,13 @@ use crate::api::RunningJob;
 use crate::api::RunningTraining;
 use crate::api::StartPreviewError;
 use crate::api::StartTrainingError;
+use crate::api::SystemInfo;
 use crate::api::TemplateFolders;
 use crate::api::TrainingRequest;
 use crate::backend::LocalFileSystem;
 use crate::backend::local::image_reader::ReaderPool;
 use crate::backend::local::results::LocalResults;
+use crate::workspace::settings::{self, AppSettings};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::{ImageReader, ReadMode};
 use std::path::{Path, PathBuf};
@@ -26,6 +28,9 @@ use std::sync::Arc;
 #[derive(Debug, Default)]
 pub struct LocalBackend {
     files: LocalFileSystem,
+    /// The user folder (templates) when set explicitly - a worker's
+    /// `--home`, see [`Self::with_home`]. `None`: this machine's user's.
+    user_folder: Option<PathBuf>,
 }
 
 impl LocalBackend {
@@ -39,7 +44,29 @@ impl LocalBackend {
             .collect();
         Ok(Self {
             files: LocalFileSystem::restricted_to(roots)?.also_allowing(&template_folders)?,
+            user_folder: None,
         })
+    }
+
+    /// Keeps the user folder (templates) in `home` - a worker serving a
+    /// logged-in user - instead of this process's account. Its templates
+    /// folder stays reachable when restricted to `--root`s.
+    pub fn with_home(mut self, home: &Path) -> Result<Self, InternalErrors> {
+        let user_folder = settings::user_folder_in(home);
+        let templates = super::templates::user_templates_folder_in(&user_folder);
+        if self.files.is_restricted() {
+            self.files = std::mem::take(&mut self.files).also_allowing(&[templates])?;
+        }
+        self.user_folder = Some(user_folder);
+        Ok(self)
+    }
+
+    /// Where this backend keeps the user's folder (templates, settings):
+    /// the one set by [`Self::with_home`], else this account's.
+    fn user_folder(&self) -> PathBuf {
+        self.user_folder
+            .clone()
+            .unwrap_or_else(settings::get_user_folder)
     }
 
     /// The paths a project makes the backend read or write.
@@ -62,6 +89,36 @@ impl LocalBackend {
 }
 
 impl Backend for LocalBackend {
+    fn system_info(&self) -> Result<SystemInfo, InternalErrors> {
+        let (cpu_cores, ram_total_bytes) = super::system::cpu_ram_diagnostics();
+        Ok(SystemInfo {
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            os: std::env::consts::OS.to_string(),
+            cpu_cores,
+            ram_total_bytes,
+            cuda_available: super::system::cuda_is_available(),
+        })
+    }
+
+    fn load_app_settings(&self) -> Result<AppSettings, InternalErrors> {
+        Ok(settings::load_app_settings_from(
+            &settings::settings_file_in(&self.user_folder()),
+        ))
+    }
+
+    fn save_app_settings(&self, app_settings: &AppSettings) -> Result<(), InternalErrors> {
+        let path = settings::settings_file_in(&self.user_folder());
+        settings::save_app_settings_to(&path, app_settings)
+            .map_err(|e| InternalErrors::Io(format!("Could not save {}: {e}", path.display())))
+    }
+
+    fn image_formats(&self) -> Vec<String> {
+        super::system::SUPPORTED_IMAGE_FORMATS
+            .iter()
+            .map(|format| format.to_string())
+            .collect()
+    }
+
     fn start_analysis(&self, req: AnalysisRequest) -> Result<RunningJob, InternalErrors> {
         self.check_project_paths(Some(&req.project_path), &req.settings)?;
         super::job::start_analysis(req.settings, req.project_path, req.job_name, req.threads)
@@ -95,7 +152,13 @@ impl Backend for LocalBackend {
     }
 
     fn template_folders(&self) -> Result<TemplateFolders, InternalErrors> {
-        Ok(local_template_folders())
+        Ok(match &self.user_folder {
+            Some(user_folder) => TemplateFolders {
+                user: super::templates::user_templates_folder_in(user_folder),
+                bundled: super::templates::get_app_templates_folder(),
+            },
+            None => local_template_folders(),
+        })
     }
 
     fn files(&self) -> &dyn FileSystem {
@@ -115,5 +178,70 @@ fn local_template_folders() -> TemplateFolders {
     TemplateFolders {
         user: crate::backend::local::templates::get_user_templates_folder(),
         bundled: crate::backend::local::templates::get_app_templates_folder(),
+    }
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::*;
+
+    #[test]
+    fn a_worker_s_templates_live_in_the_user_s_home() {
+        let home = tempfile::tempdir().unwrap();
+
+        let backend = LocalBackend::default().with_home(home.path()).unwrap();
+
+        let templates = backend.template_folders().unwrap().user;
+        assert!(
+            templates.starts_with(home.path()),
+            "{}",
+            templates.display()
+        );
+        assert!(templates.ends_with("evanalyzer/templates"));
+        assert!(templates.is_dir(), "created on demand");
+    }
+
+    #[test]
+    fn a_worker_keeps_the_user_s_app_settings_in_their_home() {
+        let home = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::default().with_home(home.path()).unwrap();
+        assert!(
+            !backend.load_app_settings().unwrap().dark_mode,
+            "defaults first"
+        );
+
+        let settings = AppSettings {
+            dark_mode: true,
+            ..Default::default()
+        };
+        backend.save_app_settings(&settings).unwrap();
+
+        let file = settings::settings_file_in(&settings::user_folder_in(home.path()));
+        assert!(file.is_file(), "{}", file.display());
+        assert!(backend.load_app_settings().unwrap().dark_mode);
+    }
+
+    #[test]
+    fn a_restricted_worker_can_still_reach_its_templates_folder() {
+        let home = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+
+        let backend = LocalBackend::restricted_to(&[data.path().to_path_buf()])
+            .unwrap()
+            .with_home(home.path())
+            .unwrap();
+
+        let templates = backend.template_folders().unwrap().user;
+        backend
+            .files()
+            .write_file(&templates.join("t.evaproj.template"), b"{}")
+            .expect("templates folder is reachable");
+        assert!(
+            backend
+                .files()
+                .write_file(&home.path().join("outside.txt"), b"x")
+                .is_err(),
+            "the rest of the home stays outside the allowed folders"
+        );
     }
 }

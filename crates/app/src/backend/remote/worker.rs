@@ -24,8 +24,10 @@ use crate::api::ResultsSource;
 use crate::api::StartPreviewError;
 use crate::api::StartTrainingError;
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -92,6 +94,95 @@ impl Worker {
     }
 }
 
+/// `path` as this machine spells paths. A client on another OS joins the
+/// paths it got from here with its own separator: a Windows client turns
+/// `/home/me/images` + `a.vsi` into `/home/me/images\a.vsi`, which on Linux
+/// names a file called `images\a.vsi`. So on Linux/macOS a `\` from a
+/// client is taken as the separator it was meant to be (a file name that
+/// really contains `\` can't be reached remotely then). Windows itself
+/// accepts `/` as well, so paths stay as they are there.
+fn native_path(path: PathBuf) -> PathBuf {
+    if cfg!(windows) {
+        return path;
+    }
+    match path.to_str() {
+        Some(text) if text.contains('\\') => PathBuf::from(text.replace('\\', "/")),
+        _ => path,
+    }
+}
+
+/// The project's image paths in this machine's spelling - see
+/// [`native_path`]; relative image paths of a project saved on Windows
+/// contain `\` too.
+fn native_project_paths(project: &mut ProjectSettings) {
+    let images = &mut project.images;
+    images.root = images.root.take().map(native_path);
+    images.list = std::mem::take(&mut images.list)
+        .into_iter()
+        .map(|(path, entry)| (native_path(path), entry))
+        .collect();
+}
+
+/// `request` with every path from the client in this machine's spelling -
+/// see [`native_path`].
+fn native_paths(request: Request) -> Request {
+    match request {
+        Request::StartAnalysis(mut req) => {
+            req.project_path = native_path(req.project_path);
+            native_project_paths(&mut req.settings);
+            Request::StartAnalysis(req)
+        }
+        Request::StartPreview(mut req) => {
+            req.project_path = native_path(req.project_path);
+            native_project_paths(&mut req.settings);
+            Request::StartPreview(req)
+        }
+        Request::StartTraining(mut req) => {
+            native_project_paths(&mut req.project);
+            Request::StartTraining(req)
+        }
+        Request::OpenImage { path } => Request::OpenImage {
+            path: native_path(path),
+        },
+        Request::ReadImageMeta { path } => Request::ReadImageMeta {
+            path: native_path(path),
+        },
+        Request::OpenResults { path } => Request::OpenResults {
+            path: native_path(path),
+        },
+        Request::ListDir { path } => Request::ListDir {
+            path: native_path(path),
+        },
+        Request::Stat { path } => Request::Stat {
+            path: native_path(path),
+        },
+        Request::ReadFile { path } => Request::ReadFile {
+            path: native_path(path),
+        },
+        Request::WriteFile { path } => Request::WriteFile {
+            path: native_path(path),
+        },
+        Request::CreateDir { path } => Request::CreateDir {
+            path: native_path(path),
+        },
+        Request::Rename { from, to } => Request::Rename {
+            from: native_path(from),
+            to: native_path(to),
+        },
+        Request::RemoveAll { path } => Request::RemoveAll {
+            path: native_path(path),
+        },
+        other @ (Request::ReadTile { .. }
+        | Request::QueryResults { .. }
+        | Request::ExportResults { .. }
+        | Request::TemplateFolders
+        | Request::Places
+        | Request::SystemInfo
+        | Request::LoadAppSettings
+        | Request::SaveAppSettings(_)) => other,
+    }
+}
+
 /// Generates a random token for a worker started without one.
 pub fn generate_token() -> Result<String, InternalErrors> {
     let mut bytes = [0u8; 24];
@@ -152,6 +243,7 @@ fn serve_connection(
     let welcome = frame::encode(
         &ServerMsg::Welcome {
             app_version: APP_VERSION.into(),
+            image_formats: backend.image_formats(),
         },
         &[],
     )
@@ -249,7 +341,7 @@ impl Session {
     fn handle(&self, id: u64, request: Request, blobs: Vec<Vec<u8>>) {
         let files = self.backend.files();
         let none = Vec::new;
-        match request {
+        match native_paths(request) {
             Request::StartAnalysis(req) => match self.backend.start_analysis(req) {
                 Ok(job) => self.stream_job(id, job),
                 Err(e) => self.fail(id, &e),
@@ -379,6 +471,18 @@ impl Session {
                 Ok(places) => self.reply(id, Reply::Places(places), none()),
                 Err(e) => self.fail(id, &e),
             },
+            Request::SystemInfo => match self.backend.system_info() {
+                Ok(info) => self.reply(id, Reply::SystemInfo(info), none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::LoadAppSettings => match self.backend.load_app_settings() {
+                Ok(settings) => self.reply(id, Reply::AppSettings(settings), none()),
+                Err(e) => self.fail(id, &e),
+            },
+            Request::SaveAppSettings(settings) => match self.backend.save_app_settings(&settings) {
+                Ok(()) => self.reply(id, Reply::Done, none()),
+                Err(e) => self.fail(id, &e),
+            },
             Request::ListDir { path } => match files.list_dir(&path) {
                 Ok(entries) => self.reply(id, Reply::DirEntries(entries), none()),
                 Err(e) => self.fail(id, &e),
@@ -491,4 +595,80 @@ fn answer_query(
         ResultsQuery::Histogram(filter) => ResultsAnswer::Histogram(source.histogram(&filter)?),
         ResultsQuery::Scatter(filter) => ResultsAnswer::Scatter(source.scatter(&filter)?),
     })
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+    use crate::api::AnalysisRequest;
+    use evanalyzer_cfg::settings::images_settings::ImageEntry;
+
+    #[test]
+    fn a_windows_client_s_separators_become_slashes() {
+        // `/home/me/images` from this worker, joined on a Windows client.
+        let path = native_path(PathBuf::from(r"/home/me/images\sub\a.vsi"));
+
+        assert_eq!(path, PathBuf::from("/home/me/images/sub/a.vsi"));
+    }
+
+    #[test]
+    fn a_path_without_backslashes_is_left_alone() {
+        let path = PathBuf::from("/home/me/images/a.vsi");
+
+        assert_eq!(native_path(path.clone()), path);
+    }
+
+    #[test]
+    fn every_path_of_a_request_is_converted() {
+        let Request::Rename { from, to } = native_paths(Request::Rename {
+            from: PathBuf::from(r"/data\old.tif"),
+            to: PathBuf::from(r"/data\new.tif"),
+        }) else {
+            panic!("expected a rename");
+        };
+        assert_eq!(from, PathBuf::from("/data/old.tif"));
+        assert_eq!(to, PathBuf::from("/data/new.tif"));
+
+        let Request::OpenImage { path } = native_paths(Request::OpenImage {
+            path: PathBuf::from(r"/home/me/images\image.vsi"),
+        }) else {
+            panic!("expected an image open");
+        };
+        assert_eq!(path, PathBuf::from("/home/me/images/image.vsi"));
+    }
+
+    #[test]
+    fn an_analysis_gets_its_project_and_image_paths_converted() {
+        // A project saved on Windows: relative image paths with `\`.
+        let mut settings = ProjectSettings::default();
+        settings.images.root = Some(PathBuf::from(r"/home/me\images"));
+        settings
+            .images
+            .list
+            .insert(PathBuf::from(r"well_A1\a.vsi"), ImageEntry::default());
+        settings
+            .images
+            .list
+            .insert(PathBuf::from("b.vsi"), ImageEntry::default());
+
+        let Request::StartAnalysis(req) = native_paths(Request::StartAnalysis(AnalysisRequest {
+            settings,
+            project_path: PathBuf::from(r"/home/me\project"),
+            job_name: None,
+            threads: None,
+        })) else {
+            panic!("expected an analysis");
+        };
+
+        assert_eq!(req.project_path, PathBuf::from("/home/me/project"));
+        assert_eq!(
+            req.settings.images.root,
+            Some(PathBuf::from("/home/me/images"))
+        );
+        let images: Vec<&PathBuf> = req.settings.images.list.keys().collect();
+        assert_eq!(
+            images,
+            [&PathBuf::from("well_A1/a.vsi"), &PathBuf::from("b.vsi")]
+        );
+    }
 }

@@ -24,7 +24,6 @@ use crate::{
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::fs::DirEntry;
 use evanalyzer_app::fs::PlaceKind;
-use evanalyzer_app::global::SUPPORTED_IMAGE_FORMATS;
 use evanalyzer_cfg::{
     EVANALYZER_TRAINED_AI_MODELS, LEGACY_PROJECT_FILE_EXTENSION, PIPELINE_EXTENSIONS,
     PROJECT_FILE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS, RESULTS_FILE_EXTENSION,
@@ -425,7 +424,11 @@ where
                 .collect();
             s.shown = shown;
             s.selected = None;
-            let rows: Vec<FileBrowserEntry> = s.shown.iter().map(entry_row).collect();
+            // The backend's formats - a worker may read other ones than
+            // this build.
+            let formats = self.backend.image_formats();
+            let rows: Vec<FileBrowserEntry> =
+                s.shown.iter().map(|e| entry_row(e, &formats)).collect();
             (rows, summary(&s.shown))
         };
         self.with_state(|state| {
@@ -695,13 +698,15 @@ fn crumbs_for(dir: &Path) -> Vec<FileBrowserCrumb> {
     crumbs
 }
 
-fn entry_kind(entry: &DirEntry) -> i32 {
+/// The icon kind of `entry`; `image_formats` are the backend's (lowercase,
+/// no dot).
+fn entry_kind(entry: &DirEntry, image_formats: &[String]) -> i32 {
     if entry.is_dir {
         return 0;
     }
     let lower = entry.name.to_lowercase();
     let has = |ext: &str| lower.ends_with(&format!(".{ext}"));
-    if SUPPORTED_IMAGE_FORMATS.iter().any(|ext| has(ext)) {
+    if image_formats.iter().any(|ext| has(ext)) {
         1
     } else if [
         PROJECT_FILE_EXTENSIONS,
@@ -722,7 +727,7 @@ fn entry_kind(entry: &DirEntry) -> i32 {
     }
 }
 
-fn entry_row(entry: &DirEntry) -> FileBrowserEntry {
+fn entry_row(entry: &DirEntry, image_formats: &[String]) -> FileBrowserEntry {
     FileBrowserEntry {
         name: entry.name.as_str().into(),
         path: entry.path.to_string_lossy().as_ref().into(),
@@ -733,7 +738,7 @@ fn entry_row(entry: &DirEntry) -> FileBrowserEntry {
             format_size(entry.size).into()
         },
         modified: entry.modified.map(format_time).unwrap_or_default().into(),
-        kind: entry_kind(entry),
+        kind: entry_kind(entry, image_formats),
     }
 }
 
@@ -827,11 +832,14 @@ mod tests {
         assert_eq!(format_size(512), "512 B");
         assert_eq!(format_size(1536), "1.5 KB");
         assert_eq!(format_size(3 * 1024 * 1024 * 1024), "3.0 GB");
-        assert_eq!(entry_kind(&file("a.czi")), 1);
-        assert_eq!(entry_kind(&file("p.evaproj")), 2);
-        assert_eq!(entry_kind(&file("m.evamodel")), 3);
-        assert_eq!(entry_kind(&file("r.evadb")), 4);
-        assert_eq!(entry_kind(&file("notes.txt")), 5);
+        let formats = vec!["czi".to_string()];
+        assert_eq!(entry_kind(&file("a.czi"), &formats), 1);
+        assert_eq!(entry_kind(&file("p.evaproj"), &formats), 2);
+        assert_eq!(entry_kind(&file("m.evamodel"), &formats), 3);
+        assert_eq!(entry_kind(&file("r.evadb"), &formats), 4);
+        assert_eq!(entry_kind(&file("notes.txt"), &formats), 5);
+        // Not one of the backend's formats: not shown as an image.
+        assert_eq!(entry_kind(&file("b.vsi"), &formats), 5);
     }
 
     #[test]

@@ -9,6 +9,7 @@ use super::{
     RunningTraining, ScatterFilter, ScatterResult, StartPreviewError, StartTrainingError, View,
     WellFilter,
 };
+use crate::workspace::settings::AppSettings;
 use evanalyzer_cfg::core_types::{ImageTile, InternalErrors, ZProjection};
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -73,6 +74,41 @@ pub trait Backend: Send + Sync {
     fn user(&self) -> Option<String> {
         None
     }
+
+    /// The machine the work runs on - the worker's in remote mode - for the
+    /// About dialog. Slow on first call (probing CUDA loads the driver), so
+    /// call it off the UI thread.
+    fn system_info(&self) -> Result<SystemInfo, InternalErrors>;
+
+    /// Image file extensions (lowercase, no dot) the backend's readers
+    /// accept - which files the file browser and folder scans treat as
+    /// images. Depends on how the backend's build was configured, so a
+    /// worker can accept other formats than the client.
+    fn image_formats(&self) -> Vec<String>;
+
+    /// The user's app preferences (dark mode, focus mode, ...), kept in the
+    /// user folder on the backend's machine - in remote mode in the
+    /// logged-in user's home on the server, so they follow the user to
+    /// every client. Defaults if none were saved yet.
+    fn load_app_settings(&self) -> Result<AppSettings, InternalErrors>;
+
+    /// Saves the user's app preferences - see [`Self::load_app_settings`].
+    fn save_app_settings(&self, settings: &AppSettings) -> Result<(), InternalErrors>;
+}
+
+/// What the machine a backend computes on offers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SystemInfo {
+    /// EVAnalyzer version running there.
+    pub app_version: String,
+    /// Operating system (`linux`, `windows`, `macos`).
+    pub os: String,
+    /// Logical CPU cores.
+    pub cpu_cores: usize,
+    /// Total RAM in bytes.
+    pub ram_total_bytes: u64,
+    /// Whether a CUDA device is usable.
+    pub cuda_available: bool,
 }
 
 /// An opened image, readable tile by tile.

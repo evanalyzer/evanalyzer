@@ -34,23 +34,54 @@ pub(crate) fn test_ui_state() -> Arc<UiState> {
 /// A settings file of its own for every test `UiState`, so a test saving a
 /// preference never touches the user's real `settings.json` (nor another
 /// test's).
-pub(crate) fn temp_settings_file() -> std::path::PathBuf {
+/// A project owner whose backend keeps the user folder (app settings,
+/// templates) in a fresh temporary home - tests must never touch the real
+/// user's settings, and each test gets its own.
+pub(crate) fn test_project_owner() -> ProjectOwner {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
-    std::env::temp_dir().join(format!(
-        "evanalyzer-test-settings-{}-{}.json",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ))
+    let index = NEXT.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join("evanalyzer-gui-test-homes");
+    if index == 0 {
+        remove_homes_of_earlier_runs(&root);
+    }
+    let home = root.join(format!("{}-{index}", std::process::id()));
+    let backend = evanalyzer_app::backends::local::LocalBackend::default()
+        .with_home(&home)
+        .expect("temporary home");
+    ProjectOwner::with_backend(Arc::new(backend))
+}
+
+/// The test homes of earlier test processes - not this one's, and only ones
+/// no test touched for a while, so a run in parallel keeps its homes.
+fn remove_homes_of_earlier_runs(root: &std::path::Path) {
+    let this_run = format!("{}-", std::process::id());
+    let stale = std::time::Duration::from_secs(600);
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > stale);
+        if old && !entry.file_name().to_string_lossy().starts_with(&this_run) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 pub(crate) fn test_ui_state_with_project(project: ProjectWithRuntime) -> Arc<UiState> {
-    let owner = ProjectOwner::new();
+    let owner = test_project_owner();
     let handle = owner.handle();
     *handle.get_project_write() = project;
-    let mut ui_state = UiState::new(handle, slint::Weak::default(), slint::Weak::default());
-    ui_state.app_settings_file = temp_settings_file();
-    Arc::new(ui_state)
+    Arc::new(UiState::new(
+        handle,
+        slint::Weak::default(),
+        slint::Weak::default(),
+    ))
 }
 
 /// A minimal project with one 2x2, 2-channel image set as "current" (i.e.
@@ -199,13 +230,11 @@ pub(crate) fn ui_state_with_windows(
     results_ui: &ResultsWindow,
     project: ProjectWithRuntime,
 ) -> Arc<UiState> {
-    let owner = ProjectOwner::new();
+    let owner = test_project_owner();
     let handle = owner.handle();
     *handle.get_project_write() = project;
     use slint::ComponentHandle;
-    let mut ui_state = UiState::new(handle, ui.as_weak(), results_ui.as_weak());
-    ui_state.app_settings_file = temp_settings_file();
-    let ui_state = Arc::new(ui_state);
+    let ui_state = Arc::new(UiState::new(handle, ui.as_weak(), results_ui.as_weak()));
     ui_state.file_browser.attach(ui);
     ui_state.results_file_browser.attach(results_ui);
     ui_state

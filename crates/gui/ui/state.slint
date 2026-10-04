@@ -74,6 +74,14 @@ export global AppInfoState {
         in-out property <int> cpu_cores: 1;
         in-out property <string> ram_total: "-";
         in-out property <bool> cuda_available: false;
+    // The machine the numbers above describe - where the work runs: "This
+    // computer", or the worker in remote mode. Filled by
+    // `refresh_system_info`, which the About dialog calls whenever it opens.
+    in-out property <string> system_source: "This computer";
+        in-out property <string> system_os: "-";
+        in-out property <bool> system_loading: false;
+        in-out property <string> system_error: "";
+        callback refresh_system_info();
     // Split into paragraphs (rather than one giant string) so each Text
     // element stays small - a single Text with the ~34KB full license blew
     // past a size limit in the software-rendering fallback and rendered

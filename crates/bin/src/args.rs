@@ -8,6 +8,12 @@ pub struct Args {
     #[arg(long)]
     pub project: Option<std::path::PathBuf>,
 
+    /// What to log, in env_logger filter syntax: a level (`error`, `warn`,
+    /// `info`, `debug`, `trace`, `off`) or per module, e.g.
+    /// `info,evanalyzer_core=debug`.
+    #[arg(long, global = true, value_name = "FILTER", default_value = "debug")]
+    pub log_level: String,
+
     /// EVAnalyzer server to work on instead of this machine, e.g.
     /// `ws://workstation:7400`. Projects, images and results are then read
     /// and written there; all paths refer to that machine.
@@ -62,6 +68,12 @@ pub enum TopCommand {
     Server {
         #[arg(long, default_value = "127.0.0.1:7400")]
         listen: String,
+
+        /// File the running workers are recorded in, so a restarted server
+        /// finds them again. Default: `/run/evanalyzer/sessions.json` for a
+        /// system service, otherwise in the temp folder.
+        #[arg(long, value_name = "FILE")]
+        session_store: Option<std::path::PathBuf>,
     },
     /// Run one compute instance. Started by `evanalyzer server` for each
     /// logged-in user, or by hand for a direct `--remote-token` connection.
@@ -77,6 +89,11 @@ pub enum TopCommand {
         /// Folder clients may browse and use (repeatable).
         #[arg(long = "root", value_name = "FOLDER")]
         roots: Vec<std::path::PathBuf>,
+
+        /// Home folder of the user this worker serves: its user folder
+        /// (templates) lives below it. Default: this account's.
+        #[arg(long, value_name = "FOLDER")]
+        home: Option<std::path::PathBuf>,
     },
 }
 

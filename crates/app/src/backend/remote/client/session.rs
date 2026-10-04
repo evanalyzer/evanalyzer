@@ -31,6 +31,8 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) struct Session {
     url: String,
+    /// The worker's image formats, from its `Welcome`.
+    image_formats: Vec<String>,
     outgoing: Sender<Vec<u8>>,
     /// Requests waiting for replies, by id. Emptied when the connection
     /// drops, which turns every pending `recv` into a "connection lost".
@@ -60,9 +62,13 @@ impl Session {
             .map_err(|e| InternalErrors::Io(format!("Could not reach {url}: {e}")))?;
         let answer = conn::read_binary(&mut ws)
             .map_err(|e| InternalErrors::Io(format!("No answer from {url}: {e}")))?;
-        match frame::decode::<ServerMsg>(&answer)?.msg {
-            ServerMsg::Welcome { app_version } => {
+        let image_formats = match frame::decode::<ServerMsg>(&answer)?.msg {
+            ServerMsg::Welcome {
+                app_version,
+                image_formats,
+            } => {
                 log::info!("Connected to EVAnalyzer {app_version} server at {url}");
+                image_formats
             }
             ServerMsg::Rejected { reason } => {
                 return Err(InternalErrors::InvalidArgument(format!(
@@ -74,11 +80,12 @@ impl Session {
                     "unexpected reply before handshake".into(),
                 ));
             }
-        }
+        };
 
         let (outgoing, outgoing_rx) = mpsc::channel();
         let session = Arc::new(Self {
             url: url.into(),
+            image_formats,
             outgoing,
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -107,6 +114,10 @@ impl Session {
 
     pub(super) fn url(&self) -> &str {
         &self.url
+    }
+
+    pub(super) fn image_formats(&self) -> &[String] {
+        &self.image_formats
     }
 
     pub(super) fn is_connected(&self) -> bool {

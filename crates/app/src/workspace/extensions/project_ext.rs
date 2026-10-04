@@ -33,7 +33,6 @@ use evanalyzer_cfg::{
     core_types::SegmentationClass, object_class_set_from_u32,
     settings::object_settings::ObjectMetricSettings,
 };
-use evanalyzer_core::SUPPORTED_IMAGE_FORMATS;
 use human_sort::compare;
 use log::{info, trace, warn};
 use rayon::prelude::*;
@@ -179,7 +178,8 @@ pub trait ProjectExt {
         backend: &dyn Backend,
         dir: &Path,
     ) -> Vec<(PathBuf, ImageMeta)>;
-    fn is_supported_image(&self, path: &Path) -> bool;
+    /// Whether `backend` can read `path` as an image (by its extension).
+    fn is_supported_image(&self, backend: &dyn Backend, path: &Path) -> bool;
 
     fn save_project(&mut self, files: &dyn FileSystem) -> SaveProjectActions;
     fn save_project_as(
@@ -963,7 +963,7 @@ impl ProjectExt for ProjectWithRuntime {
         backend: &dyn Backend,
         absolute_path: &Path,
     ) -> ProjectAction {
-        if self.is_supported_image(&absolute_path) {
+        if self.is_supported_image(backend, absolute_path) {
             match backend.read_image_meta(absolute_path) {
                 Ok(image_meta) => {
                     self.add_image(absolute_path, &image_meta);
@@ -1164,8 +1164,8 @@ impl ProjectExt for ProjectWithRuntime {
         collect_images_at_root(backend, dir)
     }
 
-    fn is_supported_image(&self, path: &Path) -> bool {
-        is_supported_image_path(path)
+    fn is_supported_image(&self, backend: &dyn Backend, path: &Path) -> bool {
+        is_supported_image_path(path, &backend.image_formats())
     }
 
     fn save_project(&mut self, files: &dyn FileSystem) -> SaveProjectActions {
@@ -1524,6 +1524,9 @@ pub fn collect_images_at_root(backend: &dyn Backend, dir: &Path) -> Vec<(PathBuf
     let Ok(entries) = backend.files().list_dir(dir) else {
         return vec![];
     };
+    // The backend's formats - in remote mode the worker decides what it can
+    // read, not the client's build.
+    let formats = backend.image_formats();
 
     entries
         .into_par_iter()
@@ -1531,7 +1534,7 @@ pub fn collect_images_at_root(backend: &dyn Backend, dir: &Path) -> Vec<(PathBuf
             if entry.is_dir {
                 // The check happens again here for subdirectories
                 collect_images_at_root(backend, &entry.path)
-            } else if is_supported_image_path(&entry.path) {
+            } else if is_supported_image_path(&entry.path, &formats) {
                 match backend.read_image_meta(&entry.path) {
                     Ok(meta) => vec![(entry.path, meta)],
                     Err(_) => vec![],
@@ -1543,14 +1546,15 @@ pub fn collect_images_at_root(backend: &dyn Backend, dir: &Path) -> Vec<(PathBuf
         .collect()
 }
 
-fn is_supported_image_path(path: &Path) -> bool {
+/// Whether `path`'s extension is one of `formats` (lowercase, no dot).
+fn is_supported_image_path(path: &Path, formats: &[String]) -> bool {
     path.extension()
-        .and_then(|ext| ext.to_str()) // Convert OsStr to &str
-        .map(|ext_str| {
-            let ext_lower = ext_str.to_lowercase();
-            SUPPORTED_IMAGE_FORMATS.iter().any(|&fmt| fmt == ext_lower)
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            let ext = ext.to_lowercase();
+            formats.iter().any(|format| *format == ext)
         })
-        .unwrap_or(false) // Return false if no extension exists
+        .unwrap_or(false)
 }
 
 /// Reads a project file through `files` (the backend's - the server's in
@@ -3046,18 +3050,25 @@ mod tests {
     #[test]
     fn is_supported_image_checks_the_extension_case_insensitively() {
         let project = ProjectWithRuntime::default();
-        assert!(project.is_supported_image(Path::new("a.tif")));
-        assert!(project.is_supported_image(Path::new("a.TIF")));
-        assert!(!project.is_supported_image(Path::new("a.txt")));
-        assert!(!project.is_supported_image(Path::new("no_extension")));
+        let backend = backend();
+        assert!(project.is_supported_image(&backend, Path::new("a.tif")));
+        assert!(project.is_supported_image(&backend, Path::new("a.TIF")));
+        assert!(!project.is_supported_image(&backend, Path::new("a.txt")));
+        assert!(!project.is_supported_image(&backend, Path::new("no_extension")));
     }
 
     #[test]
     fn is_supported_image_path_matches_against_the_supported_formats_list() {
-        assert!(is_supported_image_path(Path::new("scan.czi")));
-        assert!(is_supported_image_path(Path::new("scan.CZI")));
-        assert!(!is_supported_image_path(Path::new("scan.pdf")));
-        assert!(!is_supported_image_path(Path::new("no_extension")));
+        let formats = vec!["czi".to_string(), "tif".to_string()];
+        assert!(is_supported_image_path(Path::new("scan.czi"), &formats));
+        assert!(is_supported_image_path(Path::new("scan.CZI"), &formats));
+        assert!(!is_supported_image_path(Path::new("scan.pdf"), &formats));
+        assert!(!is_supported_image_path(
+            Path::new("no_extension"),
+            &formats
+        ));
+        // Only the given formats count - a worker may accept others.
+        assert!(!is_supported_image_path(Path::new("scan.vsi"), &formats));
     }
 
     // -- collect_images_at_root / collect_images_parallel --------------------

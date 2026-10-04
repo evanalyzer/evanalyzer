@@ -89,6 +89,59 @@ fn tile_request(source: &dyn ImageSource, offset: usize) -> TileRequest {
 }
 
 #[test]
+fn the_worker_reports_its_own_system_and_image_formats() {
+    // The worker runs in this process here, so its answers must equal the
+    // local backend's - what matters is that they come over the connection.
+    let remote = connect();
+    let local = LocalBackend::default();
+
+    let system = remote.system_info().unwrap();
+
+    assert_eq!(system, local.system_info().unwrap());
+    assert!(system.cpu_cores > 0 && system.ram_total_bytes > 0);
+    assert_eq!(system.os, std::env::consts::OS);
+    // Sent in the handshake - no request needed.
+    assert_eq!(remote.image_formats(), local.image_formats());
+    assert!(remote.image_formats().iter().any(|format| format == "tif"));
+}
+
+#[test]
+fn app_settings_are_kept_in_the_worker_s_user_home() {
+    let home = tempfile::tempdir().unwrap();
+    let worker = Worker::bind("127.0.0.1:0", TOKEN.into()).unwrap();
+    let addr = worker.local_addr().unwrap();
+    let backend = LocalBackend::default().with_home(home.path()).unwrap();
+    std::thread::spawn(move || worker.run(Arc::new(backend)));
+    let remote = RemoteBackend::connect(&format!("ws://{addr}"), TOKEN).unwrap();
+
+    let mut settings = remote.load_app_settings().unwrap();
+    settings.pipeline_focus_mode = true;
+    remote.save_app_settings(&settings).unwrap();
+
+    assert!(remote.load_app_settings().unwrap().pipeline_focus_mode);
+    // Written on the worker's side, in the user's home - not on the client.
+    let saved: Vec<_> = walk(home.path())
+        .into_iter()
+        .filter(|path| path.ends_with("evanalyzer/settings.json"))
+        .collect();
+    assert_eq!(saved.len(), 1, "{saved:?}");
+}
+
+/// Every file below `dir`.
+fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
+#[test]
 fn a_wrong_token_is_rejected_with_a_readable_message() {
     let url = start_server();
     let error = match RemoteBackend::connect(&url, "wrong") {

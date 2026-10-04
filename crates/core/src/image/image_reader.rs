@@ -265,8 +265,8 @@ impl ImageReader {
     pub fn new(path: &PathBuf, mode: ReadMode) -> Result<Self, InternalErrors> {
         if !path.exists() {
             return Err(InternalErrors::Io(format!(
-                "File '{:?}' not existing",
-                path
+                "File '{}' does not exist",
+                path.display()
             )));
         }
 

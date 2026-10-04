@@ -13,9 +13,8 @@ use log::{LevelFilter, info, warn};
 use std::{path::PathBuf, sync::Arc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_logger();
-
     let args = parse_args();
+    init_logger(&args.log_level);
 
     // The one place that decides where compute runs - front ends only ever
     // see the `Backend` trait.
@@ -29,8 +28,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 listen,
                 token,
                 roots,
-            } => start_worker(listen, token, roots),
-            TopCommand::Server { listen } => start_server(listen),
+                home,
+            } => start_worker(listen, token, roots, home),
+            TopCommand::Server {
+                listen,
+                session_store,
+            } => start_server(listen, session_store, args.log_level.clone()),
         },
         None => start_gui(backend, args.project),
     };
@@ -116,6 +119,7 @@ fn start_worker(
     listen: String,
     token: Option<String>,
     roots: Vec<PathBuf>,
+    home: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let token = match token {
         Some(token) => token,
@@ -140,18 +144,31 @@ fn start_worker(
         }
         LocalBackend::restricted_to(&roots)?
     };
+    let backend = match home {
+        Some(home) => {
+            info!("Serving user at home in {}", home.display());
+            backend.with_home(&home)?
+        }
+        None => backend,
+    };
     worker.run(Arc::new(backend));
     return Ok(());
 }
 
-/// Start evanalyzer server
-fn start_server(listen: String) -> Result<(), Box<dyn std::error::Error>> {
-    serve(listen)?;
+/// Start evanalyzer server; its workers log with the same `log_level`.
+fn start_server(
+    listen: String,
+    session_store: Option<PathBuf>,
+    log_level: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session_store = session_store.unwrap_or_else(evanalyzer_server::default_store_path);
+    serve(listen, session_store, log_level)?;
     Ok(())
 }
 
-/// Init the logger
-fn init_logger() {
+/// Init the logger with `log_level` (env_logger filter syntax, from
+/// `--log-level`) on top of the noisy-crate defaults.
+fn init_logger(log_level: &str) {
     evanalyzer_app::global::crash_log::install_panic_hook();
     let mut builder = Builder::new();
     builder.filter_level(LevelFilter::Debug);
@@ -166,8 +183,6 @@ fn init_logger() {
         .filter_module("wgpu_hal", LevelFilter::Off)
         .filter_module("tracing::span", LevelFilter::Off);
 
-    if let Ok(rust_log) = std::env::var("RUST_LOG") {
-        builder.parse_filters(&rust_log);
-    }
+    builder.parse_filters(log_level);
     builder.init();
 }

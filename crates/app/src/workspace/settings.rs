@@ -30,20 +30,26 @@ pub fn get_user_folder() -> PathBuf {
     folder
 }
 
-/// The user's settings file (`<user folder>/settings.json`).
-pub fn settings_file_path() -> std::path::PathBuf {
-    get_user_folder().join("settings.json")
+/// The user folder for an explicitly given `home` - a worker's `--home` -
+/// at the place this platform's data folder has below a home folder, so a
+/// user finds the same folder whether they work on the machine directly or
+/// through a worker: `<home>/.local/share/evanalyzer` (Linux),
+/// `<home>/Library/Application Support/evanalyzer` (macOS),
+/// `<home>/AppData/Roaming/evanalyzer` (Windows).
+pub fn user_folder_in(home: &Path) -> PathBuf {
+    let data = if cfg!(windows) {
+        home.join("AppData").join("Roaming")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library").join("Application Support")
+    } else {
+        home.join(".local").join("share")
+    };
+    data.join("evanalyzer")
 }
 
-/// Loads the persisted app settings, falling back to defaults if the file
-/// doesn't exist yet or fails to parse.
-pub fn load_app_settings() -> AppSettings {
-    load_app_settings_from(&settings_file_path())
-}
-
-/// Persists the app settings, overwriting whatever was there before.
-pub fn save_app_settings(settings: &AppSettings) {
-    save_app_settings_to(&settings_file_path(), settings)
+/// The settings file inside a user folder (`<user folder>/settings.json`).
+pub fn settings_file_in(user_folder: &Path) -> PathBuf {
+    user_folder.join("settings.json")
 }
 
 /// Loads the app settings from `path` - defaults if it doesn't exist yet or
@@ -55,21 +61,33 @@ pub fn load_app_settings_from(path: &Path) -> AppSettings {
         .unwrap_or_default()
 }
 
-/// Writes the app settings to `path`, overwriting whatever was there.
-pub fn save_app_settings_to(path: &Path, settings: &AppSettings) {
-    match serde_json::to_string_pretty(settings) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(path, json) {
-                log::warn!("Failed to save app settings: {e}");
-            }
-        }
-        Err(e) => log::warn!("Failed to serialize app settings: {e}"),
+/// Writes the app settings to `path`, overwriting whatever was there and
+/// creating its folder if needed.
+pub fn save_app_settings_to(path: &Path, settings: &AppSettings) -> std::io::Result<()> {
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder)?;
     }
+    let json = serde_json::to_string_pretty(settings).map_err(std::io::Error::other)?;
+    std::fs::write(path, json)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_user_folder_of_an_explicit_home_follows_the_platform_layout() {
+        let folder = user_folder_in(Path::new("/home/alice"));
+
+        let expected = if cfg!(windows) {
+            Path::new("/home/alice/AppData/Roaming/evanalyzer").to_path_buf()
+        } else if cfg!(target_os = "macos") {
+            Path::new("/home/alice/Library/Application Support/evanalyzer").to_path_buf()
+        } else {
+            Path::new("/home/alice/.local/share/evanalyzer").to_path_buf()
+        };
+        assert_eq!(folder, expected);
+    }
 
     #[test]
     fn missing_file_returns_defaults() {
@@ -118,7 +136,7 @@ mod tests {
             ..Default::default()
         };
 
-        save_app_settings_to(&path, &settings);
+        save_app_settings_to(&path, &settings).unwrap();
         let loaded = load_app_settings_from(&path);
 
         assert!(loaded.dark_mode);
@@ -134,7 +152,8 @@ mod tests {
                 pipeline_focus_mode: true,
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         assert!(load_app_settings_from(&path).pipeline_focus_mode);
 
         // A settings file written before the field existed.

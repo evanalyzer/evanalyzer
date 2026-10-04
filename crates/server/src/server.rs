@@ -56,15 +56,24 @@ struct Connection {
     worker_port: Option<u16>,
 }
 
-pub fn serve(listen: String) -> std::io::Result<()> {
-    Server::new()?.serve(&listen)
+/// `evanalyzer server`: listens on `listen`, keeps its session file at
+/// `session_store` and starts workers logging with `worker_log_level`.
+pub fn serve(
+    listen: String,
+    session_store: std::path::PathBuf,
+    worker_log_level: String,
+) -> std::io::Result<()> {
+    Server::new(session_store, worker_log_level)?.serve(&listen)
 }
 
 impl Server {
-    pub fn new() -> std::io::Result<Self> {
+    pub fn new(
+        session_store: std::path::PathBuf,
+        worker_log_level: String,
+    ) -> std::io::Result<Self> {
         Ok(Self {
             user_management: Arc::new(SingleUser::default()),
-            session_management: Arc::new(SessionManagement::new()?),
+            session_management: Arc::new(SessionManagement::new(session_store, worker_log_level)?),
             sessions: Arc::default(),
             next_session_id: AtomicU64::new(1),
         })

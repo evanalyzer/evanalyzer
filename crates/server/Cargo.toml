@@ -19,3 +19,6 @@ serde = { workspace = true, features = ["derive","rc"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+dirs = { workspace = true }
