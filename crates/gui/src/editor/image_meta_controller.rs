@@ -6,6 +6,7 @@ use crate::{
     AppWindow, ChannelInfo, ChannelState, ImageMetaData, IntensityProjection, SeriesInfo,
     WavelengthOption,
 };
+use evanalyzer_app::prelude::utils::channel_colors;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::utils::{channel_display_name, wavelength_to_rgb_float};
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -226,9 +227,6 @@ impl ImageMetaController {
                 })
                 .unwrap_or_default()
         };
-        // Each channel's colour, decided for exactly the channels the image
-        // file has: its wavelength (the project's, else the file's), a
-        // default colour without one, white in grayscale mode.
         let display_colors = {
             let channels: Vec<(i32, f32)> = image_meta
                 .series
@@ -250,9 +248,7 @@ impl ImageMetaController {
                         .collect()
                 })
                 .unwrap_or_default();
-            self.app_state
-                .get_project()
-                .channel_display_colors(&channels)
+            channel_colors(&channels)
         };
         let ui_weak = self.ui.clone();
 
@@ -413,6 +409,7 @@ impl ImageMetaController {
 
         Ok(())
     }
+
     /// Manually updates the physical pixel dimensions (nm) for the current project.
     ///
     /// This method overrides any automatically detected metadata and establishes

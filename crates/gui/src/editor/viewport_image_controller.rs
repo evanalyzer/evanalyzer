@@ -554,6 +554,7 @@ impl ViewportImageController {
         // one visible channel at most; the list then shows that, too.
         let allowed = project.with_one_visible_channel(&channel_visibility);
         self.show_channel_visibilities(allowed.clone(), allowed != channel_visibility);
+
         project.set_global_preferences(&allowed);
 
         project.set_global_z_stack(&ZStackSettings {
@@ -581,10 +582,13 @@ impl ViewportImageController {
             };
             let visible = visibilities.values().filter(|visible| **visible).count();
             ui.global::<ChannelState>().set_active_count(visible as i32);
+
             if !update_rows {
                 return;
             }
-            let channels = ui.global::<ChannelState>().get_channels();
+
+            let channels = ui.global::<ChannelState>().get_channels().clone();
+
             for row in 0..channels.row_count() {
                 if let Some(mut channel) = channels.row_data(row)
                     && let Some(visible) = visibilities.get(&channel.idx)
@@ -593,6 +597,8 @@ impl ViewportImageController {
                     channels.set_row_data(row, channel);
                 }
             }
+            ui.global::<ChannelState>()
+                .set_channels(std::rc::Rc::new(channels).into());
         })
         .ok();
     }
