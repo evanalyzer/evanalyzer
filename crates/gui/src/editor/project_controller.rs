@@ -1554,6 +1554,45 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn opening_a_project_shows_its_images_in_the_list() {
+        // What `--project` does at startup, too.
+        use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+        use crate::helper::ui_thread::drain_ui_queue;
+        use slint::Model;
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        let (_, controller) =
+            make_controller_on(ui.as_weak(), results_ui.as_weak(), ui_state.clone());
+        let image = crate::editor::test_support::fixture_image_path();
+        let mut settings = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
+        settings.images.root = Some(image.parent().unwrap().to_path_buf());
+        let name = std::path::PathBuf::from(image.file_name().unwrap());
+        settings.images.list.insert(
+            name.clone(),
+            evanalyzer_cfg::settings::images_settings::ImageEntry {
+                rel_path: name,
+                ..Default::default()
+            },
+        );
+        let path = temp_project_file(&settings);
+
+        controller.clone().open_new_project(&path);
+        drain_ui_queue();
+
+        assert_eq!(
+            ui.global::<crate::ImagesListState>()
+                .get_images_list()
+                .row_count(),
+            1
+        );
+        assert_eq!(
+            ui_state.get_project().tmp_settings.current_project.as_ref(),
+            Some(&path)
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
     fn open_new_project_loads_the_file_and_clears_the_dirty_flag() {
         let (ui_state, controller) = make_controller();
         ui_state.mark_dirty();

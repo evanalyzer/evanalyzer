@@ -257,6 +257,11 @@ impl Editor {
         self.pipelines_controller.follow_server_analyses();
     }
 
+    /// Opens the project file at `path`, as "File > Open" does.
+    pub fn open_project(&self, path: &std::path::PathBuf) {
+        Arc::clone(&self.project_controller).open_new_project(path);
+    }
+
     /// What to do once the server connection is back after it dropped:
     /// follow the analysis running there again. Callable from any thread.
     pub fn on_reconnected(&self) -> impl Fn() + Send + Sync + 'static {

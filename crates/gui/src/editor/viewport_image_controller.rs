@@ -553,9 +553,7 @@ impl ViewportImageController {
         // Store the new settings to the project - in grayscale mode with
         // one visible channel at most; the list then shows that, too.
         let allowed = project.with_one_visible_channel(&channel_visibility);
-        if allowed != channel_visibility {
-            self.show_channel_visibilities(allowed.clone());
-        }
+        self.show_channel_visibilities(allowed.clone(), allowed != channel_visibility);
         project.set_global_preferences(&allowed);
 
         project.set_global_z_stack(&ZStackSettings {
@@ -573,13 +571,19 @@ impl ViewportImageController {
             .trigger_redraw_low_res_and_high_res();
     }
 
-    /// Shows `visibilities` in the channel list.
-    fn show_channel_visibilities(&self, visibilities: BTreeMap<i32, bool>) {
+    /// Shows how many channels are visible - and with `update_rows` which,
+    /// when grayscale mode changed the user's choice.
+    fn show_channel_visibilities(&self, visibilities: BTreeMap<i32, bool>, update_rows: bool) {
         let ui = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             let Some(ui) = ui.upgrade() else {
                 return;
             };
+            let visible = visibilities.values().filter(|visible| **visible).count();
+            ui.global::<ChannelState>().set_active_count(visible as i32);
+            if !update_rows {
+                return;
+            }
             let channels = ui.global::<ChannelState>().get_channels();
             for row in 0..channels.row_count() {
                 if let Some(mut channel) = channels.row_data(row)

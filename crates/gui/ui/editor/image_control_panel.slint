@@ -536,7 +536,7 @@ export component ImageControlPanel inherits Rectangle {
                 }
 
                 Text {
-                    text: "\{root.active-channel-count()}/\{ChannelState.channels.length}";
+                    text: "\{ChannelState.active_count}/\{ChannelState.channels.length}";
                     font-size: 10.5px;
                     font-family: Theme.font-mono;
                     color: Theme.text-mute;
@@ -558,11 +558,4 @@ export component ImageControlPanel inherits Rectangle {
         }
     }
 
-    // The host should expose this as an in property for accuracy across the
-    // whole pipeline; this stub keeps the file self-contained.
-    pure function active-channel-count() -> int {
-        // Returns 0 by default. Replace with an `in property <int> active-channel-count;`
-        // computed in your Rust/C++ model and bound from the parent.
-        return 0;
-    }
 }

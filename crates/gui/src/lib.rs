@@ -426,12 +426,23 @@ impl UiState {
 // Registered with ProjectOwner so app can push snapshots
 // ----------------------------------------------------------------
 
-pub struct GuiFrontend;
+pub struct GuiFrontend {
+    /// Opened once the window is up, as with "File > Open".
+    project: Option<std::path::PathBuf>,
+}
+
+impl GuiFrontend {
+    /// Opens the project file at `path` at startup (`--project`).
+    pub fn with_project(mut self, path: Option<std::path::PathBuf>) -> Self {
+        self.project = path;
+        self
+    }
+}
 
 impl Frontend for GuiFrontend {
     /// Called by main - starts the Slint event loop.
     fn start(self: Box<Self>, owner: ProjectOwner) {
-        if let Err(e) = run(owner) {
+        if let Err(e) = run(owner, self.project) {
             log::error!("GUI exited with error: {}", e);
         }
     }
@@ -439,14 +450,17 @@ impl Frontend for GuiFrontend {
 
 /// Public constructor - called by main.rs
 pub fn create() -> GuiFrontend {
-    GuiFrontend
+    GuiFrontend { project: None }
 }
 
 // ----------------------------------------------------------------
 // Internal startup
 // ----------------------------------------------------------------
 
-fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
+fn run(
+    owner: ProjectOwner,
+    project: Option<std::path::PathBuf>,
+) -> Result<(), slint::PlatformError> {
     unsafe {
         // Skia has documented first-frame rendering glitches on this backend
         // path (see https://github.com/slint-ui/slint/issues/7845) that
@@ -489,6 +503,11 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
         ui_state.clone(),
     ));
     editor.attach_callbacks();
+    // `--project`: opened like "File > Open" - a file that can't be read
+    // shows the usual warning in the window.
+    if let Some(path) = project {
+        editor.open_project(&path);
+    }
     // Kept alive until the window closes.
     let app = ui_state.app.clone();
     let _connection_watch = show_connection(&ui, move || app.backend(), editor.on_reconnected());

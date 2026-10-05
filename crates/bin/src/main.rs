@@ -125,10 +125,7 @@ fn start_gui(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // GUI mode (default)
     let owner = ProjectOwner::with_backend(backend);
-    if let Some(path) = &project {
-        owner.load_project(path)?;
-    }
-    let frontend: Box<dyn Frontend> = Box::new(evanalyzer_gui::create());
+    let frontend: Box<dyn Frontend> = Box::new(evanalyzer_gui::create().with_project(project));
     frontend.start(owner);
     Ok(())
 }

@@ -347,6 +347,7 @@ impl ImageMetaController {
                 && channels[1].name == "Green"
                 && channels[2].name == "Blue";
 
+            ch_state.set_active_count(channels.iter().filter(|c| c.active).count() as i32);
             ch_state.set_channels(std::rc::Rc::new(slint::VecModel::from(channels)).into());
             ch_state.set_grayscale(grayscale);
 
@@ -687,6 +688,12 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert!(channels().len() > 1, "the fixture has several channels");
+        let state = || ui.global::<ChannelState>();
+        assert_eq!(
+            state().get_active_count() as usize,
+            channels().iter().filter(|c| c.active).count(),
+            "the counter shows the visible channels"
+        );
         let white = slint::Color::from_rgb_u8(255, 255, 255);
 
         ui.global::<ChannelState>().invoke_grayscale_toggled(true);
@@ -694,6 +701,7 @@ mod tests {
         assert!(ui.global::<ChannelState>().get_grayscale());
         assert!(channels().iter().all(|c| c.color == white));
         assert_eq!(channels().iter().filter(|c| c.active).count(), 1);
+        assert_eq!(state().get_active_count(), 1);
         assert!(ui_state.get_project().images.settings.grayscale);
         assert!(ui_state.is_dirty());
 
