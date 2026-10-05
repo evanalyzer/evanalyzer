@@ -236,6 +236,16 @@ impl UiState {
         self.push_undo_redo_state_to_ui();
     }
 
+    /// Forgets every undo/redo step - when another project replaces the
+    /// current one, the steps belong to the old project: undoing one would
+    /// put the old project's content into the new one (and saving it, over
+    /// the new project's file).
+    pub fn clear_undo_history(&self) {
+        self.undo_stack.lock().expect("Poisoned").clear();
+        self.redo_stack.lock().expect("Poisoned").clear();
+        self.push_undo_redo_state_to_ui();
+    }
+
     /// Restores the most recent undo checkpoint, if any. Returns whether
     /// there was one to restore - the caller is responsible for refreshing
     /// every panel from the restored `settings` afterwards (there's no single
@@ -332,13 +342,16 @@ impl UiState {
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        self.app.load_project(path)
+        self.app.load_project(path)?;
+        self.clear_undo_history();
+        Ok(())
     }
 
     /// Replaces the current project with a fresh, blank, unsaved one -
     /// "File > New".
     pub fn new_project(&self) {
         self.app.new_project();
+        self.clear_undo_history();
     }
 
     /// Imports an old (`.icproj`) project, replacing the current project.
@@ -347,7 +360,9 @@ impl UiState {
         &self,
         path: &PathBuf,
     ) -> Result<(Vec<String>, Option<String>), InternalErrors> {
-        self.app.import_legacy_project(path)
+        let imported = self.app.import_legacy_project(path)?;
+        self.clear_undo_history();
+        Ok(imported)
     }
 
     /// Marks the project as having unsaved changes.

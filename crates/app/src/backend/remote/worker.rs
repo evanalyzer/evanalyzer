@@ -6,10 +6,13 @@
 //!
 //! Security model: every client must present the shared token in its first
 //! message, and the worker binds to localhost unless told otherwise. The
-//! connection itself is plain `ws://` - not encrypted - so across machines it
-//! belongs behind an SSH tunnel or VPN. An authenticated client can make the
-//! worker read any image and write results anywhere this process may, so the
-//! token must be treated like a password.
+//! worker itself speaks plain `ws://`: started by `evanalyzer server`, it
+//! listens on 127.0.0.1 only and clients reach it through the server, whose
+//! client connections are encrypted (`wss://`, see `crates/server`). A
+//! worker started by hand on another address is unencrypted - put it behind
+//! an SSH tunnel or VPN. An authenticated client can make the worker read
+//! any image and write results anywhere this process may (within its
+//! `--root` folders), so the token must be treated like a password.
 
 use super::job_registry::{JobEntry, JobRegistry};
 use super::wire::conn::{self, HANDSHAKE_MESSAGE_SIZE, MAX_MESSAGE_SIZE};

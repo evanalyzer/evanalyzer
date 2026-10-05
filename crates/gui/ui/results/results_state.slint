@@ -111,16 +111,13 @@ export global ResultsState {
     callback breadcrumb-nav(int);
 
     // -------- Global Z/T plane filter (applies to every view) --------
-    // TEMPORARY: -active defaults flipped to true and -max given non-zero
-    // previews so GlobalPlaneStepper is visible for design review before
-    // Rust wires these up (see "Rust wiring notes" below). Reset both to
-    // `false` once results_table_controller.rs drives ResultsState.
+    // Set by Rust when a database opens; hidden (inactive) until then.
     in-out property <int> z-stack: 0;
-    in-out property <int> z-stack-max: 6;
+    in-out property <int> z-stack-max: 0;
     in-out property <int> t-stack: 0;
-    in-out property <int> t-stack-max: 3;
-    in-out property <bool> z-stack-active: true;
-    in-out property <bool> t-stack-active: true;
+    in-out property <int> t-stack-max: 0;
+    in-out property <bool> z-stack-active: false;
+    in-out property <bool> t-stack-active: false;
     callback z-changed(int);
     callback t-changed(int);
 
@@ -139,31 +136,15 @@ export global ResultsState {
     in-out property <string> list-image-summary: "All images";
 
     // Class selector
-    in-out property <[MultiSelectItem]> list-class-items: [
-        { key: "nucleus", value: "Nucleus", color: #4d8dff, group: "", selected: true },
-        { key: "cell", value: "Cell", color: #34c759, group: "", selected: true },
-        { key: "mitochondria", value: "Mitochondria", color: #ff9f0a, group: "", selected: false },
-        { key: "debris", value: "Debris", color: #8e8e93, group: "", selected: false },
-    ];
-    in-out property <string> list-class-summary: "x of y classes";
+    // Filled by Rust from the open database.
+    in-out property <[MultiSelectItem]> list-class-items: [];
+    in-out property <string> list-class-summary: "";
 
     // Column selector
-    in-out property <[MultiSelectItem]> list-columns: [
-        { key: "object_id", value: "Object ID", group: "General", selected: true },
-        { key: "object_class_name", value: "Class", group: "General", selected: true },
-        { key: "area_px", value: "Area [px]", group: "Geometry", selected: true },
-        { key: "area_nm2", value: "Area [nm²]", group: "Geometry", selected: false },
-        { key: "area_nm2", value: "Area [nm²]", group: "Geometry", selected: false },
-        { key: "area_nm2", value: "Area [nm²]", group: "Geometry", selected: false },
-        { key: "area_nm2", value: "Area [nm²]", group: "XXX", selected: false },
-        { key: "area_nm2", value: "Area [nm²]", group: "XXX", selected: false },
-        { key: "area_nm2", value: "Area [nm²]", group: "XXX", selected: false },
-        { key: "area_nm2", value: "Area [nm²]", group: "YYY", selected: false },
-        { key: "area_nm2", value: "Area [nm²]", group: "YYY", selected: false },
-        { key: "area_nm2", value: "Area [nm²]", group: "YYY", selected: false },
-    ];
-    in-out property <[string]> list-columns-groups: ["General", "Geometry", "XXX", "YYY", "ZZZ"];
-    in-out property <string> list-columns-summary: "3 of 4 columns";
+    // Filled by Rust from the open database.
+    in-out property <[MultiSelectItem]> list-columns: [];
+    in-out property <[string]> list-columns-groups: [];
+    in-out property <string> list-columns-summary: "";
 
     // Objects (one row per object, the default) vs Images (one row per
     // image, each selected column aggregated across that image's objects —
@@ -213,20 +194,7 @@ export global ResultsState {
     // ResultsStateController::update_list_view) — never the full result set
     // — so it stays cheap to diff/render no matter how large the underlying
     // database is.
-    in-out property <[string]> list-column-headers: [
-        "Column 1",
-        "Col 2",
-        "Test",
-        "Test",
-        "Test",
-        "Test",
-        "Test",
-        "Test",
-        "Test",
-        "Test",
-        "AAAAA",
-        "BBBB"
-    ];
+    in-out property <[string]> list-column-headers: [];
     // One entry per `list-column-headers`/per-row `cells` position, in
     // pixels (plain `float`, not `length`, so Rust can hand back a bare
     // number) - `results_list.slint` multiplies each back out by `1px` at
@@ -234,42 +202,8 @@ export global ResultsState {
     // longest header/cell text actually on this page, capped at 260px -
     // see that function's own comment for why a real font-metrics
     // measurement isn't needed here.
-    in-out property <[float]> list-column-widths: [120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120];
-    in-out property <[ResultRow]> list-rows: [
-        { cells: ["long text", "short"] },
-        {
-            cells: [
-                "short",
-                "short",
-                "adlsdkö",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-            ]
-        },
-        {
-            cells: [
-                "eab1ce1b-d4f2-40fb-9c18-aad6e4af0ac4",
-                "adlsdkö",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-                "aaa",
-            ]
-        }
-    ];
+    in-out property <[float]> list-column-widths: [];
+    in-out property <[ResultRow]> list-rows: [];
     in-out property <int> list-row-count: 0;
 
     // Next/previous pagination (not infinite scroll — see the discussion on

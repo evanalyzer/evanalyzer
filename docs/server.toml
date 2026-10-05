@@ -22,7 +22,7 @@ listen = "127.0.0.1:7400"
 
 # What the server and its workers log: error, warn, info, debug, trace, off,
 # or per module, e.g. "info,evanalyzer_core=debug".
-log_level = "debug"
+log_level = "info"
 
 [users]
 # Who may log in:

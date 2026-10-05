@@ -2,7 +2,12 @@
 
 - [x] feat: "old" or non used objects in the respective pipelines should not be displayed.
 - [x] feat: channel should change with pipeline automatically
-- [ ] feat: Allow to switch to grayscale mode
+- [x] feat: Allow to switch to grayscale mode — "Grayscale" switch in the CHANNELS heading: all channels white, one visible at a time (`images.settings.grayscale`)
+- [x] feat: Channels without wavelength get distinct default colours (Fiji order: red, green, blue, gray, cyan, magenta, yellow) and names ("Channel 1", …) instead of all white and unnamed
+- [x] fix: Channel counter "x/y" in the CHANNELS heading always showed 0 (Slint stub) — now `ChannelState.active_count`
+- [x] fix: `--project` loaded the project but left every panel empty — now opened like "File > Open"
+- [x] fix: Undo after opening another project restored the *previous* project's content into the new one (saving overwrote the new file) — undo history is cleared on open/new/legacy import/server switch
+- [x] fix: Results window and object list started with fake preview data ("Nucleus", "AAAAA", "adlsdkö", …) that could look like real results — all start empty
 
 ## Results
 
@@ -20,7 +25,7 @@
 
 - [x] **Dark mode is fully implemented but forced off, with no toggle in the UI** — fixed: added a sun/moon `ToolToggleButton` in the toolbar ([`crates/gui/ui/toolbar.slint`](crates/gui/ui/toolbar.slint)) bound to `Theme.dark-mode`, backed by a new `Appearance` global ([`crates/gui/ui/style.slint`](crates/gui/ui/style.slint)) whose `apply()` function sets `Palette.color-scheme` in each window (`AppWindow`/`ResultsWindow` each own a private instance, so both are updated explicitly). The forced `Palette.color-scheme = ColorScheme.light` inits in `main.slint`/`results_window.slint` are gone, replaced by Rust applying the persisted preference right after each window is constructed. The preference is saved to `<user folder>/settings.json` via new `evanalyzer_app::settings::{AppSettings, load_app_settings, save_app_settings}`, backed by a new `evanalyzer_app::templates::get_user_folder()`.
 
-- [ ] **Deleting/classifying a preview object silently no-ops** — [`crates/gui/src/editor/object_list_controller.rs:76-126`](crates/gui/src/editor/object_list_controller.rs#L76-L126)
+- [x] **Deleting/classifying a preview object silently no-ops** — fixed: every handler resolves the row through `resolve_object_id` (manual ++ preview list) — [`crates/gui/src/editor/object_list_controller.rs:76-126`](crates/gui/src/editor/object_list_controller.rs#L76-L126)
   `on_object_add_class`, `on_object_remove_class`, and `on_object_delete` resolve `object_id` via `project.get_objects().get((object_id-1) as usize)` only — i.e. the manual object list. But the row list shown in the panel is `manual ++ preview` (see `on_object_selected` at line 60, which correctly branches on `manual_len`). Clicking Delete/Add Class/Remove Class on a row that's a live pipeline-preview object does nothing, with no error shown.
   *Fix:* reuse the `manual_len` branch from `on_object_selected` in the other three handlers.
 
@@ -40,11 +45,13 @@
 ## Other
 
 - [ ] Add open recent files
-- [ ] **Image decoder can panic on real files, not just corrupt ones** — [`crates/core/src/image/image_reader.rs:970-984,1034-1036`](crates/core/src/image/image_reader.rs#L970-L1036)
+- [ ] **Log file for end users** — the log goes to stderr only (lost when started by double-click); only panics reach `<user folder>/crash.log`, which the GUI never mentions. Write a (size-limited) log file to the user folder and add "Help > Open log folder" so users can attach both to bug reports. (Default log level is `info` now, was `debug`.)
+- [ ] **Security: bump `quick-xml` to >= 0.41 in bioformats-rs** (RUSTSEC-2026-0194/0195: quadratic time / unbounded allocation on crafted XML - every opened image's metadata goes through it). Same fork: `lru` via `zarrs` is flagged unsound (RUSTSEC-2026-0253).
+- [x] **Image decoder can panic on real files, not just corrupt ones** — fixed: `nr_bits == 0` is rejected with a clean error before the decode path (`image_reader.rs`) — [`crates/core/src/image/image_reader.rs:970-984,1034-1036`](crates/core/src/image/image_reader.rs#L970-L1036)
   If per-resolution metadata omits `BitsPerPixel` (plausible for pyramid sub-levels in real-world files), `nr_bits` defaults to 0 (`image_meta.rs:13` / `image_ome_parser.rs:251-254`). The decode path then calls `buffer.par_chunks_exact(0)` (panics unconditionally) or divides by `bytes_per_sample * source_planes` (divide-by-zero) — hard panic on open.
   *Fix:* validate `nr_bits != 0` after metadata parsing, fall back or return a clean `InternalErrors` instead of reaching the decode path.
 
-- [ ] **StarDist panics on NaN model output** — [`crates/core/src/algos/ai_segmentation/stardist.rs:341,395`](crates/core/src/algos/ai_segmentation/stardist.rs#L341)
+- [x] **StarDist panics on NaN model output** — fixed: both sorts use `partial_cmp(..).unwrap_or(Ordering::Equal)` — [`crates/core/src/algos/ai_segmentation/stardist.rs:341,395`](crates/core/src/algos/ai_segmentation/stardist.rs#L341)
   `partial_cmp().unwrap()` in both the polygon scanline x-crossing sort and NMS score sort will panic if the model emits NaN (degenerate/blank tile, incompatible model export) — kills the whole segmentation job. Zero test coverage on this file.
   *Fix:* use `partial_cmp(...).unwrap_or(Ordering::Equal)` or filter NaN candidates before sorting; add tests.
 
@@ -52,7 +59,7 @@
   Logging is `env_logger`→stderr only; nothing when double-clicked as a packaged app. No `std::panic::set_hook` anywhere in `gui`/`app`/`bin`. Combined with the next item, a crash is completely silent and unreportable — beta feedback will be "it just closed" with no way to diagnose it.
   *Fix:* add a file log sink and a panic hook that writes the panic message/backtrace to a log file the user can attach to a bug report.
 
-  - [ ] `ImageMath` silently truncates output on mismatched cached-image sizes (`.zip()`s two differently-sized slices with no check) instead of erroring — silent wrong output, not a crash — [`crates/core/src/algos/math/image_math.rs`](crates/core/src/algos/math/image_math.rs).
+  - [x] (fixed: sizes are checked and a mismatch is an error) `ImageMath` silently truncates output on mismatched cached-image sizes (`.zip()`s two differently-sized slices with no check) instead of erroring — silent wrong output, not a crash — [`crates/core/src/algos/math/image_math.rs`](crates/core/src/algos/math/image_math.rs).
 
   ## Performance
 

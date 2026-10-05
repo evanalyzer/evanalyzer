@@ -1045,7 +1045,7 @@ impl<'a> JobExecutor {
     ///
     /// Resolves settings as **per-series override -> global setting -> default**
     /// (matching the equivalent resolution the GUI itself uses, in
-    /// `evanalyzer_app`'s `images_ext.rs`/`project_ext.rs`). A series entry always
+    /// `evanalyzer_app`'s `project_ext.rs`). A series entry always
     /// exists once an image is added to a project, but its `t_stack` field is only
     /// ever populated by an explicit per-series override - so checking *whether
     /// the field is set* (not whether the entry exists) is what makes the global

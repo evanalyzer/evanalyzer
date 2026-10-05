@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     init_logger(match &server_config {
         Some(config) => &config.log_level,
-        None => args.log_level.as_deref().unwrap_or("debug"),
+        None => args.log_level.as_deref().unwrap_or("info"),
     });
 
     // The one place that decides where compute runs - front ends only ever

@@ -10,7 +10,7 @@ pub struct Args {
 
     /// What to log, in env_logger filter syntax: a level (`error`, `warn`,
     /// `info`, `debug`, `trace`, `off`) or per module, e.g.
-    /// `info,evanalyzer_core=debug`. Default `debug`, or for `server` the
+    /// `info,evanalyzer_core=debug`. Default `info`, or for `server` the
     /// config file's `log_level`.
     #[arg(long, global = true, value_name = "FILTER")]
     pub log_level: Option<String>,

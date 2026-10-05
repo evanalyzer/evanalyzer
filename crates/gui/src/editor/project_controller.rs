@@ -216,6 +216,8 @@ impl ProjectController {
         // Special handling. We set the image root dir to check if the images exist, else a root dir selection dialof will be opened
         self.image_list_controller
             .set_new_image_root(&image_root_dir);
+        // Opening wrote to the project above - nothing of that to undo.
+        self.app_state.clear_undo_history();
         info!("Project opened!")
     }
 
@@ -1590,6 +1592,32 @@ pub(crate) mod tests {
             Some(&path)
         );
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn after_opening_another_project_there_is_nothing_to_undo() {
+        let (ui_state, controller) = make_controller();
+        ui_state.get_project_write().meta.name = "Project A".to_string();
+        let mut settings = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
+        settings.meta.name = "Project B".to_string();
+        let path = temp_project_file(&settings);
+
+        controller.clone().open_new_project(&path);
+
+        assert!(!ui_state.undo(), "Project A's steps are gone");
+        assert_eq!(ui_state.get_project().meta.name, "Project B");
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_new_project_starts_without_undo_steps() {
+        let (ui_state, controller) = make_controller();
+        ui_state.get_project_write().meta.name = "Project A".to_string();
+
+        controller.clone().create_new_project();
+
+        assert!(!ui_state.undo());
+        assert!(ui_state.get_project().meta.name.is_empty());
     }
 
     #[test]

@@ -32,56 +32,8 @@ export struct ObjectItemDataSlint {
 export global ObjectListState {
     in-out property <bool> is_scanning: false;
     in-out property <int> scroll_to_object_index: -1;
-    in property <[ObjectItemDataSlint]> object_list: [
-        {
-            id: 1,
-            name: "Annotation",
-            display_color: #ff0000,
-            display_name: "object_1",
-            class_names: ["Nucleus"],
-            class_colors: [#0066ff],
-            class_ids: [0],
-            label_name: "Nucleus",
-            label_id: 0,
-            area: 1234,
-            intensities: ["128.4", "64.0"],
-            intensity_avgs: ["12.8", "6.4"],
-            circularity: "0.92",
-            label_count: 1,
-        },
-        {
-            id: 2,
-            name: "Annotation",
-            display_color: #00ff00,
-            display_name: "object_2",
-            class_names: ["Cytoplasm", "Membrane", "Artifact", "Background"],
-            class_colors: [#ff6600, #ffff00, #00ffff, #cccccc],
-            class_ids: [1, 2, 3, 4],
-            label_name: "Multi-class",
-            label_id: 1,
-            area: 5678,
-            intensities: ["64.2", "32.1"],
-            intensity_avgs: ["6.4", "3.2"],
-            circularity: "0.71",
-            label_count: 2,
-        },
-        {
-            id: 3,
-            name: "Annotation",
-            display_color: #ff0000,
-            display_name: "object_3",
-            class_names: [],
-            class_colors: [],
-            class_ids: [],
-            label_name: "Multi-class",
-            label_id: 1,
-            area: 0,
-            intensities: [],
-            intensity_avgs: [],
-            circularity: "",
-            label_count: 2,
-        }
-    ];
+    // Filled by Rust from the open image's objects.
+    in property <[ObjectItemDataSlint]> object_list: [];
 
     in-out property <ObjectItemDataSlint> selected_object;
 

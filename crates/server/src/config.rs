@@ -41,7 +41,7 @@ pub struct ServerConfig {
     pub session_store: Option<PathBuf>,
     /// What the server and its workers log, in env_logger filter syntax: a
     /// level (`error`, `warn`, `info`, `debug`, `trace`, `off`) or per
-    /// module, e.g. `info,evanalyzer_core=debug`. Default `debug`.
+    /// module, e.g. `info,evanalyzer_core=debug`. Default `info`.
     pub log_level: String,
     /// Who may log in, and where their workers may read and write.
     pub users: UsersConfig,
@@ -91,7 +91,7 @@ impl Default for ServerConfig {
         Self {
             listen: "127.0.0.1:7400".into(),
             session_store: None,
-            log_level: "debug".into(),
+            log_level: "info".into(),
             users: UsersConfig::default(),
             tls: TlsConfig::default(),
             workers: WorkersConfig::default(),
