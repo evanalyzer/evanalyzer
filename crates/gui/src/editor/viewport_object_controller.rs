@@ -15,6 +15,7 @@ use evanalyzer_app::images::ImageContainer;
 use evanalyzer_app::images::object_from_mask;
 use evanalyzer_app::project::ObjectExt;
 use evanalyzer_app::project::ProjectExt;
+use evanalyzer_cfg::core_types::ObjectClass;
 use log::warn;
 use slint::ComponentHandle;
 use slint::Model;
@@ -454,6 +455,11 @@ impl ViewPortObjectController {
                 project.get_selected_object_class(),
             )
         };
+
+        if object_class == ObjectClass::Unset {
+            // Tell the user to select an object class
+            return;
+        }
 
         if let Some((_, selected_channel)) = data_tmp.get(idx as usize) {
             let object = object_from_mask(

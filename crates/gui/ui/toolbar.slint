@@ -12,6 +12,7 @@ import {
 import { PipelinesPanelState } from "editor/pipelines_panel.slint";
 import { ObjectListState } from "editor/object_list_panel.slint";
 import { AiLearningState } from "dialogs/ai_learning_dialog.slint";
+import { ClassificationState } from "editor/classification_panel.slint";
 
 // Define the enum
 
@@ -154,6 +155,7 @@ export component Toolbar inherits Rectangle {
         ToolToggleButton {
             icon: @image-url("icons/regular-red/rectangle.svg");
             checked: ViewportObjectState.act_tool_state == ToolState.PaintRectangle;
+            enabled: ClassificationState.selected_class_id >= 0;
             clicked => {
                 ViewportObjectState.act_tool_state = ToolState.PaintRectangle;
             }
@@ -162,6 +164,7 @@ export component Toolbar inherits Rectangle {
         ToolToggleButton {
             icon: @image-url("icons/regular-red/circle.svg");
             checked: ViewportObjectState.act_tool_state == ToolState.PaintOval;
+            enabled: ClassificationState.selected_class_id >= 0;
             clicked => {
                 ViewportObjectState.act_tool_state = ToolState.PaintOval;
             }
@@ -170,6 +173,7 @@ export component Toolbar inherits Rectangle {
         ToolToggleButton {
             icon: @image-url("icons/regular-red/polygon.svg");
             checked: ViewportObjectState.act_tool_state == ToolState.PaintPolygon;
+            enabled: ClassificationState.selected_class_id >= 0;
             clicked => {
                 ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
             }

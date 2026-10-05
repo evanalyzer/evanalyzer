@@ -1,0 +1,48 @@
+import {
+    Button,
+    LineEdit,
+    ComboBox,
+    SpinBox,
+    VerticalBox,
+    HorizontalBox,
+    Palette,
+    CheckBox,
+    ScrollView,
+} from "std-widgets.slint";
+import { DialogType, GlobalAppState } from "../state.slint";
+import { Theme } from "../style.slint";
+import { AppButton } from "../components/app_button.slint";
+import { ClassificationPanel } from "../editor/classification_panel.slint";
+import { BaseDialog } from "dialog_base.slint";
+
+
+
+
+export component ClassSelectDialog inherits BaseDialog {
+    title-text: "Select class";
+    icon: "⚠️";
+    main-height: 520px;
+    main-width: 480px;
+
+    VerticalLayout {
+        spacing: 12px;
+
+        ClassificationPanel { }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: end;
+
+            AppButton {
+                text: "Back";
+                clicked => {
+                    GlobalAppState.active-dialog = DialogType.none;
+                }
+            }
+        }
+    }
+}

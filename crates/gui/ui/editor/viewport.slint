@@ -12,7 +12,7 @@ import {
     ToolState,
     MarkerData,
 } from "viewport_state.slint";
-
+import { ClassificationState } from "classification_panel.slint";
 
 
 export component Viewport inherits Rectangle {
@@ -344,14 +344,14 @@ export component Viewport inherits Rectangle {
             if (evt.kind == PointerEventKind.down) {
                 root.last_mouse_x = self.mouse-x;
                 root.last_mouse_y = self.mouse-y;
-
+                
                 // Object selection
-                if (ViewportObjectState.act_tool_state == ToolState.Select) {
+                    if (ViewportObjectState.act_tool_state == ToolState.Select) {
                     ViewportObjectState.viewport_clicked(root.last_mouse_x, root.last_mouse_y);
                 }
 
-                // Marker tool
-                if (ViewportObjectState.act_tool_state == ToolState.PaintMarker) {
+                    // Marker tool
+                    if (ViewportObjectState.act_tool_state == ToolState.PaintMarker) {
                     if (evt.button == PointerEventButton.left) {
                         ViewportObjectState.marker-placed(root.last_mouse_x, root.last_mouse_y);
                     }
@@ -360,33 +360,37 @@ export component Viewport inherits Rectangle {
                     }
                 }
 
-                // Paint object
+                    // Paint object
                 if (ViewportObjectState.act_tool_state != ToolState.Move && ViewportObjectState.act_tool_state != ToolState.Select && ViewportObjectState.act_tool_state != ToolState.PaintMarker) {
-                    if (ViewportObjectState.act_tool_state != ToolState.PaintPolygon) {
-                        if (!ViewportObjectState.is_drawing) {
-                            ViewportObjectState.is_drawing = true;
-                            ViewportObjectState.polygon_points[0] = { x: self.mouse-x, y: self.mouse-y };
-                            ViewportObjectState.polygon_points[1] = { x: self.mouse-x, y: self.mouse-y };
-                            ViewportObjectState.poly_idx = 1;
-                        } else {
-                            ViewportObjectState.object_paint_finished(ViewportObjectState.polygon_points,ViewportObjectState.act_tool_state, ViewportObjectState.poly_idx);
-                            ViewportObjectState.is_drawing = false;
-                            ViewportObjectState.poly_idx = 0;
-                        }
+                    if ClassificationState.selected_class_id < 0 {
+                        // Tell the user to select a class
                     } else {
-                        if (!ViewportObjectState.is_drawing) {
-                            ViewportObjectState.is_drawing = true;
-                        }
-                        if (animation-tick() - last-click-time) < 300ms {
-                            ViewportObjectState.object_paint_finished(ViewportObjectState.polygon_points,ViewportObjectState.act_tool_state, ViewportObjectState.poly_idx);
-                            ViewportObjectState.is_drawing = false;
-                            ViewportObjectState.poly_idx = 0;
+                        if (ViewportObjectState.act_tool_state != ToolState.PaintPolygon) {
+                            if (!ViewportObjectState.is_drawing) {
+                                ViewportObjectState.is_drawing = true;
+                                ViewportObjectState.polygon_points[0] = { x: self.mouse-x, y: self.mouse-y };
+                                ViewportObjectState.polygon_points[1] = { x: self.mouse-x, y: self.mouse-y };
+                                ViewportObjectState.poly_idx = 1;
+                            } else {
+                                ViewportObjectState.object_paint_finished(ViewportObjectState.polygon_points,ViewportObjectState.act_tool_state, ViewportObjectState.poly_idx);
+                                ViewportObjectState.is_drawing = false;
+                                ViewportObjectState.poly_idx = 0;
+                            }
                         } else {
-                            ViewportObjectState.polygon_points[ViewportObjectState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
-                            ViewportObjectState.poly_idx = ViewportObjectState.poly_idx + 1;
-                            ViewportObjectState.polygon_points[ViewportObjectState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
+                            if (!ViewportObjectState.is_drawing) {
+                                ViewportObjectState.is_drawing = true;
+                            }
+                            if (animation-tick() - last-click-time) < 300ms {
+                                ViewportObjectState.object_paint_finished(ViewportObjectState.polygon_points,ViewportObjectState.act_tool_state, ViewportObjectState.poly_idx);
+                                ViewportObjectState.is_drawing = false;
+                                ViewportObjectState.poly_idx = 0;
+                            } else {
+                                ViewportObjectState.polygon_points[ViewportObjectState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
+                                ViewportObjectState.poly_idx = ViewportObjectState.poly_idx + 1;
+                                ViewportObjectState.polygon_points[ViewportObjectState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
+                            }
+                            last-click-time = animation-tick();
                         }
-                        last-click-time = animation-tick();
                     }
                 }
             }
