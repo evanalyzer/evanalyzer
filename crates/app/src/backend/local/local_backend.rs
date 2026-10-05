@@ -245,3 +245,24 @@ mod home_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    /// The workspace builds core with the GPL Bio-Formats readers
+    /// (`bioformats-gpl` in the workspace Cargo.toml); their file extensions
+    /// must then be offered too, or the file dialog and folder scans silently
+    /// skip every VSI/CZI/ND2/LIF image. If the GPL readers are switched off
+    /// on purpose, this test goes with them.
+    #[test]
+    fn the_gpl_reader_formats_are_offered() {
+        let formats = LocalBackend::default().image_formats();
+        for format in ["tif", "vsi", "czi", "nd2", "lif"] {
+            assert!(
+                formats.iter().any(|f| f == format),
+                "{format} missing in {formats:?}"
+            );
+        }
+    }
+}

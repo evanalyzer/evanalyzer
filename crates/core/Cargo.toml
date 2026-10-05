@@ -42,7 +42,7 @@ clru = { workspace = true }
 
 [features]
 ai = ["dep:tch", "dep:smartcore", "dep:burn", "dep:serde_json"]
-
+bioformats-gpl = ["bioformats/gpl"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 duckdb = { workspace = true, features = ["bundled"] }
