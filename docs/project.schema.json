@@ -880,6 +880,13 @@
           ],
           "format": "int32"
         },
+        "selectedSeries": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
         "tStack": {
           "anyOf": [
             {

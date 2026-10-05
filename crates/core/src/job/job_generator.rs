@@ -10,7 +10,10 @@ use chrono::Utc;
 use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types::ImageAddress};
 use evanalyzer_cfg::{
     core_types::InternalErrors,
-    settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
+    settings::{
+        images_settings::ImageEntry, object_settings::ObjectMetricSettings,
+        project_settings::ProjectSettings,
+    },
 };
 use log::{error, info, warn};
 use std::{
@@ -33,6 +36,7 @@ pub fn generate_preview_job_from_project_settings(
     config: ProjectSettings,
     project_path: PathBuf,
 ) -> Result<(JobExecutor, Arc<Mutex<Vec<ObjectMetricSettings>>>), InternalErrors> {
+    check_series(&config)?;
     check_pipeline_channels(&config)?;
     let out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>> = Arc::new(Mutex::new(vec![]));
     let memory_storage = Arc::new(Mutex::new(MemoryExporter {
@@ -72,6 +76,7 @@ pub fn generate_analyze_job_from_project_settings(
 ) -> Result<JobExecutor, InternalErrors> {
     // Before anything is created on disk: a refused start leaves no empty
     // results folder behind.
+    check_series(&config)?;
     check_pipeline_channels(&config)?;
     let class_names: std::collections::HashMap<_, _> = config
         .classification
@@ -138,7 +143,8 @@ pub fn check_pipeline_channels(config: &ProjectSettings) -> Result<(), InternalE
             .list
             .values()
             .filter_map(|image| {
-                let series = image.series.get(&image.selected_series)?;
+                let active = active_series(image, config.images.settings.selected_series);
+                let series = image.series.get(&active)?;
                 if series.channels.is_empty() || series.channels.contains_key(&channel) {
                     return None;
                 }
@@ -178,6 +184,65 @@ pub fn check_pipeline_channels(config: &ProjectSettings) -> Result<(), InternalE
         "Cannot start: {}. Change the pipeline's image source, or remove those images.",
         problems.join("; ")
     )))
+}
+
+/// The series that counts for `image`: the project-wide choice
+/// `project_series` (`images.settings.selected_series`) if there is one,
+/// else the image's own, else its first series. The one place this is
+/// decided - analysis, preview, training and the GUI all ask here.
+pub fn active_series(image: &ImageEntry, project_series: Option<i32>) -> i32 {
+    if let Some(series) = project_series {
+        return series;
+    }
+    match image.series.keys().next() {
+        Some(first) if !image.series.contains_key(&image.selected_series) => *first,
+        _ => image.selected_series,
+    }
+}
+
+/// Refuses to start when the project-wide series (`images.settings
+/// .selected_series`) is one some images don't
+/// have: they would fail one by one, or - worse - be measured on another
+/// series. Images whose series haven't been read yet are left to the run.
+pub fn check_series(config: &ProjectSettings) -> Result<(), InternalErrors> {
+    const LISTED: usize = 5;
+    let Some(series) = config.images.settings.selected_series else {
+        return Ok(());
+    };
+    let missing: Vec<String> = config
+        .images
+        .list
+        .values()
+        .filter(|image| !image.series.is_empty() && !image.series.contains_key(&series))
+        .map(|image| {
+            let available: Vec<String> = image.series.keys().map(|s| (s + 1).to_string()).collect();
+            format!(
+                "{} (series {})",
+                image.rel_path.display(),
+                available.join(", ")
+            )
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let mut listed = missing
+        .iter()
+        .take(LISTED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if missing.len() > LISTED {
+        listed.push_str(&format!(" and {} more", missing.len() - LISTED));
+    }
+    let message = format!(
+        "Cannot start: series {} is selected, which {} image(s) don't have: {listed}. \
+         Select another series, or remove those images.",
+        series + 1,
+        missing.len()
+    );
+    warn!("{message}");
+    Err(InternalErrors::InvalidArgument(message))
 }
 
 /// Writes a full copy of `config` as `<job_name>.evaproj` next to the run's
@@ -347,6 +412,71 @@ mod tests {
     }
 
     // ---- pipelines reading channels the images don't have ----
+
+    /// An image with the series `keys` (empty = not read yet).
+    fn image_with_series(
+        name: &str,
+        keys: &[i32],
+    ) -> evanalyzer_cfg::settings::images_settings::ImageEntry {
+        evanalyzer_cfg::settings::images_settings::ImageEntry {
+            rel_path: PathBuf::from(name),
+            series: keys.iter().map(|k| (*k, Default::default())).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_series_comes_from_the_project_then_the_image_then_its_first_one() {
+        let mut image = image_with_series("a.vsi", &[0, 1, 2]);
+        image.selected_series = 1;
+        assert_eq!(active_series(&image, None), 1, "the image's own");
+        assert_eq!(active_series(&image, Some(2)), 2, "the project's wins");
+        assert_eq!(
+            active_series(&image, Some(7)),
+            7,
+            "even one the image lacks - check_series refuses that"
+        );
+
+        let mut stale = image_with_series("b.vsi", &[3, 4]);
+        stale.selected_series = 0;
+        assert_eq!(active_series(&stale, None), 3, "its first series");
+        let mut unread = image_with_series("c.vsi", &[]);
+        unread.selected_series = 5;
+        assert_eq!(active_series(&unread, None), 5, "series not read yet");
+    }
+
+    #[test]
+    fn project_files_without_a_project_wide_series_still_load() {
+        let settings: evanalyzer_cfg::settings::images_settings::GlobalImageSettings =
+            serde_json::from_str(r#"{"channels":{}}"#).unwrap();
+        assert_eq!(settings.selected_series, None);
+    }
+
+    #[test]
+    fn a_project_wide_series_some_images_lack_refuses_the_start() {
+        let mut project = ProjectSettings::default();
+        for (name, keys) in [
+            ("a.vsi", &[0, 1][..]),
+            ("b.vsi", &[0][..]),
+            ("c.vsi", &[][..]),
+        ] {
+            project
+                .images
+                .list
+                .insert(PathBuf::from(name), image_with_series(name, keys));
+        }
+        assert!(check_series(&project).is_ok(), "no project-wide series");
+
+        project.images.settings.selected_series = Some(0);
+        assert!(check_series(&project).is_ok(), "all have series 1");
+
+        project.images.settings.selected_series = Some(1);
+        let error = check_series(&project).unwrap_err().to_string();
+        assert!(error.contains("series 2 is selected"), "{error}");
+        assert!(error.contains("b.vsi (series 1)"), "{error}");
+        assert!(!error.contains("a.vsi"), "{error}");
+        assert!(!error.contains("c.vsi"), "not read yet: {error}");
+    }
 
     /// An image whose selected series has the given channels (empty = no
     /// channel information stored).

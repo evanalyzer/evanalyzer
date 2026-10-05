@@ -7,6 +7,7 @@ use crate::{
 use evanalyzer_app::ai_learning::CancelHandle;
 use evanalyzer_app::ai_learning::PixelTrainingParams;
 use evanalyzer_app::ai_learning::TrainingRequest;
+use evanalyzer_app::project::ImageEntryExt;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::TrainingProgressEvent;
@@ -263,8 +264,9 @@ impl AiLearningController {
 
         let image_path = PathBuf::from(row.image_path.as_str());
         let object_id = row.object_id;
+        let project_series = project.images.settings.selected_series;
         if let Some(entry) = project.images.list.get_mut(&image_path) {
-            let series_idx = entry.selected_series;
+            let series_idx = entry.series_for(project_series);
             if let Some(series) = entry.series.get_mut(&series_idx) {
                 if let Some(obj) = series
                     .objects
@@ -302,8 +304,9 @@ impl AiLearningController {
         let object_id = row.object_id;
         let mut project = self.app_state.get_project_write();
         let mut excluded = row.excluded;
+        let project_series = project.images.settings.selected_series;
         if let Some(entry) = project.images.list.get_mut(&image_path) {
-            let series_idx = entry.selected_series;
+            let series_idx = entry.series_for(project_series);
             if let Some(series) = entry.series.get_mut(&series_idx)
                 && let Some(obj) = series
                     .objects
@@ -767,7 +770,7 @@ impl AiLearningController {
                 .map(|(path, entry)| {
                     let annotated = entry
                         .series
-                        .get(&entry.selected_series)
+                        .get(&entry.active_series(&project.images.settings))
                         .map(|s| {
                             s.objects
                                 .iter()
@@ -832,7 +835,8 @@ impl AiLearningController {
             }
             for path in &selected_other_images {
                 if let Some(entry) = project.images.list.get(path) {
-                    if let Some(series) = entry.series.get(&entry.selected_series) {
+                    let active = entry.active_series(&project.images.settings);
+                    if let Some(series) = entry.series.get(&active) {
                         push_object_rows(&mut rows, path, &series.objects, &classes);
                     }
                 }

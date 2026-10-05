@@ -19,11 +19,7 @@ kornia-imgproc = { workspace = true }
 zune-core = "=0.5.3"
 image = { workspace = true }
 log = { workspace = true }
-bioformats = { git = "https://github.com/joda01/bioformats-rs", branch = "tif-read-fix", features = [
-    "jpegxr",
-    "zarr",
-    "tissuefaxs",
-] }
+bioformats = { workspace = true }
 ndarray = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
@@ -46,7 +42,7 @@ clru = { workspace = true }
 
 [features]
 ai = ["dep:tch", "dep:smartcore", "dep:burn", "dep:serde_json"]
-bioformats-gpl = ["bioformats/gpl"]
+
 
 [target.'cfg(target_os = "linux")'.dependencies]
 duckdb = { workspace = true, features = ["bundled"] }

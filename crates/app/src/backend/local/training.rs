@@ -7,6 +7,7 @@ use crate::api::{
     TrainingItems,
 };
 use crate::backend::local::job::join_job;
+use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
 use evanalyzer_cfg::core_types::{
     InternalErrors, ObjectClass, SegmentationClass, TrainingProgressEvent,
 };
@@ -137,7 +138,8 @@ fn gather_pixel_training_images(
 ) -> Result<Vec<TrainingImage>, InternalErrors> {
     let mut images = Vec::new();
     for (rel_path, entry) in &project.images.list {
-        let Some(series) = entry.series.get(&entry.selected_series) else {
+        let active = entry.active_series(&project.images.settings);
+        let Some(series) = entry.series.get(&active) else {
             continue;
         };
         let labeled_objects: Vec<ObjectMetricSettings> = series
@@ -161,7 +163,7 @@ fn gather_pixel_training_images(
         };
         images.push(TrainingImage {
             path: root.join(rel_path),
-            series: entry.selected_series,
+            series: active,
             labeled_objects,
         });
     }
@@ -173,7 +175,11 @@ fn gather_labeled_objects(project: &ProjectSettings) -> Vec<ObjectMetricSettings
         .images
         .list
         .values()
-        .filter_map(|entry| entry.series.get(&entry.selected_series))
+        .filter_map(|entry| {
+            entry
+                .series
+                .get(&entry.active_series(&project.images.settings))
+        })
         .flat_map(|series| series.objects.iter())
         .filter(|object| !object.object_class.is_empty() && !object.exclude_from_training)
         .cloned()

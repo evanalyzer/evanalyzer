@@ -4,6 +4,7 @@ use crate::api::ImageMeta;
 use crate::workspace::ProjectTmpSettings;
 use crate::workspace::ProjectWithRuntime;
 use crate::workspace::extensions::classification_ext::ClassificationExt;
+use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
 use crate::workspace::extensions::object_ext::ObjectExt;
 use crate::workspace::extensions::utils::{get_relative_key, is_in_root, wavelength_to_rgb_u32};
 use crate::workspace::{FocusChannels, PipelineFocus};
@@ -363,8 +364,10 @@ impl ProjectExt for ProjectWithRuntime {
     where
         F: FnOnce(&mut SeriesSettings) -> R,
     {
+        let project_series = self.images.settings.selected_series;
         self.with_current_image_mut(|image| {
-            if let Some(series) = image.series.get_mut(&image.selected_series) {
+            let active = image.series_for(project_series);
+            if let Some(series) = image.series.get_mut(&active) {
                 return Some(f(series));
             }
             None
@@ -421,10 +424,8 @@ impl ProjectExt for ProjectWithRuntime {
     /// Returns the active series index and its settings for the current image.
     fn get_current_image_channel_settings(&self) -> Option<(i32, &SeriesSettings)> {
         let image = self.get_current_image_settings()?;
-        image
-            .series
-            .get(&image.selected_series)
-            .map(|s| (image.selected_series, s))
+        let active = image.active_series(&self.images.settings);
+        image.series.get(&active).map(|s| (active, s))
     }
 
     /// Returns a map of channel IDs to their visibility, falling back to global settings if not set locally.
@@ -494,16 +495,16 @@ impl ProjectExt for ProjectWithRuntime {
 
     /// Returns the index of the currently selected series.
     fn get_selected_series_idx(&self) -> i32 {
+        let global = &self.images.settings;
         self.get_current_image_settings()
-            .map(|img| img.selected_series)
-            .unwrap_or(0)
+            .map(|img| img.active_series(global))
+            .unwrap_or_else(|| global.selected_series.unwrap_or(0))
     }
 
-    /// Updates the active series index for the current image.
+    /// Selects the series for every image of the project - shown and
+    /// analysed (see `ImageEntry::active_series`).
     fn set_active_series(&mut self, selected_series: &i32) {
-        self.with_current_image_mut(|image| {
-            image.selected_series = *selected_series;
-        });
+        self.images.settings.selected_series = Some(*selected_series);
     }
 
     /// Updates channel visibility preferences for the current image series.
@@ -755,21 +756,21 @@ impl ProjectExt for ProjectWithRuntime {
     /// Returns the active series index for the current image.
     fn get_selected_image_series_idx(&self) -> Option<i32> {
         self.get_current_image_settings()
-            .map(|img| img.selected_series)
+            .map(|img| img.active_series(&self.images.settings))
     }
 
     fn get_selected_image_series(&self) -> Option<&SeriesSettings> {
-        let Some(set) = self.get_current_image_settings() else {
-            return None;
-        };
-        set.series.get(&set.selected_series).clone()
+        let image = self.get_current_image_settings()?;
+        image
+            .series
+            .get(&image.active_series(&self.images.settings))
     }
 
     fn get_selected_image_series_mut(&mut self) -> Option<&mut SeriesSettings> {
-        let Some(set) = self.get_current_image_settings_mut() else {
-            return None;
-        };
-        set.series.get_mut(&set.selected_series)
+        let project_series = self.images.settings.selected_series;
+        let image = self.get_current_image_settings_mut()?;
+        let active = image.series_for(project_series);
+        image.series.get_mut(&active)
     }
 
     fn auto_add_classes_based_on_image_meta(&mut self) {
@@ -780,7 +781,11 @@ impl ProjectExt for ProjectWithRuntime {
                 .get_current_image_settings()
                 .or_else(|| self.settings.images.list.values().next());
             image
-                .and_then(|image| image.series.get(&image.selected_series))
+                .and_then(|image| {
+                    image
+                        .series
+                        .get(&image.active_series(&self.images.settings))
+                })
                 .map(|series_data| {
                     series_data
                         .channels

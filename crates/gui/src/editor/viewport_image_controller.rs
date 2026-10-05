@@ -912,16 +912,17 @@ mod tests {
     // -- update_active_series_in_project --------------------------------------------
 
     #[test]
-    fn update_active_series_stores_the_selected_series_on_the_current_image() {
+    fn update_active_series_selects_the_series_for_every_image() {
+        use evanalyzer_app::project::ImageEntryExt;
         let (ui_state, controller) = make_controller();
 
         controller.update_active_series_in_project(&2);
 
         let project = ui_state.get_project();
-        let entry = project
-            .get_current_image_settings()
-            .expect("fixture project has a current image");
-        assert_eq!(entry.selected_series, 2);
+        assert_eq!(project.images.settings.selected_series, Some(2));
+        for entry in project.images.list.values() {
+            assert_eq!(entry.active_series(&project.images.settings), 2);
+        }
     }
 
     // -- sync_pixel_info_throttled / sync_actual_mouse_position_information_to_slint

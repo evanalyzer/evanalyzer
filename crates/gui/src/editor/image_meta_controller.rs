@@ -609,9 +609,7 @@ mod tests {
     #[test]
     fn a_selected_series_the_image_lacks_leaves_the_ui_alone() {
         let mut project = project_with_fixture_image();
-        for entry in project.images.list.values_mut() {
-            entry.selected_series = 99;
-        }
+        project.images.settings.selected_series = Some(99);
         let (ui, _ui_state, controller) = with_window(project);
         ui.global::<ImageMetaData>()
             .set_image_name("untouched".into());

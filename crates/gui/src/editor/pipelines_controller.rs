@@ -14,6 +14,7 @@ use crate::{
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use evanalyzer_app::ai_learning::load_classifier_settings;
 use evanalyzer_app::fs::FileSystem;
+use evanalyzer_app::project::ImageEntryExt;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
@@ -1276,9 +1277,10 @@ impl PipelinesController {
         // the project-wide setting, so both are forced to `SingleStack`
         // here to guarantee one frame either way, keeping whichever t index
         // was actually active.
+        let active = image_settings.active_series(&project.images.settings);
         let effective_t = image_settings
             .series
-            .get(&image_settings.selected_series)
+            .get(&active)
             .and_then(|series| series.t_stack.clone())
             .or_else(|| project.images.settings.t_stack.clone())
             .unwrap_or_default();
@@ -1286,10 +1288,7 @@ impl PipelinesController {
             stack_handling: TStackHandling::SingleStack,
             ..effective_t
         };
-        if let Some(series) = image_settings
-            .series
-            .get_mut(&image_settings.selected_series)
-        {
+        if let Some(series) = image_settings.series.get_mut(&active) {
             series.t_stack = Some(single_stack_t.clone());
         }
         let mut settings = project.images.settings.clone();

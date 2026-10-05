@@ -535,7 +535,7 @@ impl<'a> JobExecutor {
             let series_info = reader
                 .image_meta
                 .series
-                .get(&image_entry.selected_series)
+                .get(&self.active_series(image_entry))
                 .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
 
             let py_meta = series_info
@@ -662,7 +662,7 @@ impl<'a> JobExecutor {
         let series_annotations: &[ObjectMetricSettings] = match loads_annotations {
             true => image_entry
                 .series
-                .get(&image_entry.selected_series)
+                .get(&self.active_series(image_entry))
                 .map(|series| series.objects.as_slice())
                 .unwrap_or(&[]),
             false => &[],
@@ -1067,7 +1067,7 @@ impl<'a> JobExecutor {
     ) -> RangeInclusive<i32> {
         let local = image_entry
             .series
-            .get(&image_entry.selected_series)
+            .get(&self.active_series(image_entry))
             .and_then(|s| s.t_stack.clone());
         let settings = local
             .or_else(|| self.global_image_settings.t_stack.clone())
@@ -1086,10 +1086,19 @@ impl<'a> JobExecutor {
     /// overridden, so the previous entry-existence check meant a project-wide
     /// projection choice (e.g. Maximum Intensity) was silently discarded in favor
     /// of the `SingleStack` default for every image.
+    /// The series that counts for `image_entry` - see
+    /// [`crate::job::job_generator::active_series`].
+    fn active_series(&self, image_entry: &ImageEntry) -> i32 {
+        crate::job::job_generator::active_series(
+            image_entry,
+            self.global_image_settings.selected_series,
+        )
+    }
+
     fn get_z_stack_settings(&self, image_entry: &ImageEntry) -> ZStackSettings {
         let local = image_entry
             .series
-            .get(&image_entry.selected_series)
+            .get(&self.active_series(image_entry))
             .and_then(|s| s.z_stack.clone());
 
         local
@@ -1183,7 +1192,7 @@ impl<'a> JobExecutor {
         resolution_index: i32,
     ) -> Result<GlobalPipelineCache, InternalErrors> {
         let loaded_channels = image_reader.read_image_tile_combined(
-            image_entry.selected_series,
+            self.active_series(&image_entry),
             resolution_index,
             z_projection.clone(),
             z_range,
@@ -1252,7 +1261,7 @@ impl<'a> JobExecutor {
             let series_info = reader
                 .image_meta
                 .series
-                .get(&image_entry.selected_series)
+                .get(&self.active_series(image_entry))
                 .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
             let py_meta = series_info
                 .resolutions
@@ -1433,7 +1442,7 @@ impl<'a> JobExecutor {
     pub fn estimate_ram_budget(&self) -> crate::resources::RamBudget {
         self.images
             .values()
-            .filter_map(|entry| entry.series.get(&entry.selected_series))
+            .filter_map(|entry| entry.series.get(&self.active_series(entry)))
             .map(|series| {
                 let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
                 let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);

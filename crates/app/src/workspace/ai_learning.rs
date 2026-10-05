@@ -3,6 +3,7 @@
 //! files through the backend.
 
 use crate::api::TrainedClassifier;
+use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
 use evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, SegmentationClass};
 use evanalyzer_cfg::settings::ai_learning_settings::{
@@ -26,7 +27,11 @@ pub fn used_object_classes(project: &ProjectSettings) -> std::collections::HashS
         .images
         .list
         .values()
-        .filter_map(|entry| entry.series.get(&entry.selected_series))
+        .filter_map(|entry| {
+            entry
+                .series
+                .get(&entry.active_series(&project.images.settings))
+        })
         .flat_map(|series| series.objects.iter())
         .filter(|object| !object.exclude_from_training)
         .flat_map(|object| object.object_class.iter().copied())

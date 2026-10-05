@@ -73,6 +73,7 @@ pub mod utils {
 pub mod project {
     pub use crate::workspace::ProjectOwner;
     pub use crate::workspace::ProjectWithRuntime;
+    pub use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
     pub use crate::workspace::extensions::object_ext::ObjectExt;
     pub use crate::workspace::extensions::project_ext::ProjectExt;
     pub use crate::workspace::extensions::project_ext::SaveProjectActions;
