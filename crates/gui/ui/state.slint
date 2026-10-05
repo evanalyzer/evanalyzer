@@ -242,6 +242,9 @@ export global ChannelState {
         in-out property <int> play_back_speed_hz: 1;
         in-out property <IntensityProjection> intensity_projection: IntensityProjection.single-stack;
         in-out property <int> selected_channel_index: 0;
+        // All channels in gray, one visible at a time.
+        in-out property <bool> grayscale: false;
+        callback grayscale_toggled(bool);
 
         // Callback sends the updated array to Rust
     callback channel_state_changed([ChannelInfo], int, int, int, IntensityProjection, int, int);

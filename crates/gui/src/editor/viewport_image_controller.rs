@@ -550,8 +550,13 @@ impl ViewportImageController {
             IntensityProjection::Middle => (None, ZStackHandling::TakeTheMiddle),
         };
 
-        // Store the new settings to the project
-        project.set_global_preferences(&channel_visibility);
+        // Store the new settings to the project - in grayscale mode with
+        // one visible channel at most; the list then shows that, too.
+        let allowed = project.with_one_visible_channel(&channel_visibility);
+        if allowed != channel_visibility {
+            self.show_channel_visibilities(allowed.clone());
+        }
+        project.set_global_preferences(&allowed);
 
         project.set_global_z_stack(&ZStackSettings {
             z_projection: z_projection,
@@ -566,6 +571,26 @@ impl ViewportImageController {
 
         self.viewport_controller
             .trigger_redraw_low_res_and_high_res();
+    }
+
+    /// Shows `visibilities` in the channel list.
+    fn show_channel_visibilities(&self, visibilities: BTreeMap<i32, bool>) {
+        let ui = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui.upgrade() else {
+                return;
+            };
+            let channels = ui.global::<ChannelState>().get_channels();
+            for row in 0..channels.row_count() {
+                if let Some(mut channel) = channels.row_data(row)
+                    && let Some(visible) = visibilities.get(&channel.idx)
+                {
+                    channel.active = *visible;
+                    channels.set_row_data(row, channel);
+                }
+            }
+        })
+        .ok();
     }
 
     /// Updates the currently selected image channel in the project and triggers a UI histogram refresh.
@@ -803,6 +828,35 @@ mod tests {
             emission_wave_length: 0.0,
             wavelength_overridden: false,
         }
+    }
+
+    #[test]
+    fn in_grayscale_switching_a_channel_on_hides_the_other() {
+        let (ui_state, controller) = make_controller();
+        controller.update_channel_options_in_project(
+            vec![channel(0, true), channel(1, false)],
+            0,
+            0,
+            IntensityProjection::SingleStack,
+            1.0,
+        );
+        ui_state.get_project_write().set_grayscale(true);
+
+        controller.update_channel_options_in_project(
+            vec![channel(0, true), channel(1, true)],
+            0,
+            0,
+            IntensityProjection::SingleStack,
+            1.0,
+        );
+
+        let visibilities = ui_state.get_project().get_image_channel_visibilities();
+        assert_eq!(visibilities.get(&0), Some(&false));
+        assert_eq!(
+            visibilities.get(&1),
+            Some(&true),
+            "the one just switched on"
+        );
     }
 
     #[test]

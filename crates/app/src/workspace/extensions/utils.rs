@@ -109,11 +109,70 @@ pub fn is_in_root(image_path: &Path, data_root: &Path) -> bool {
 }
 
 pub fn wavelength_to_rgb_u32(wavelength: f32) -> u32 {
-    let color = wavelength_to_rgb_float(wavelength);
-    let ret_color: u32 = ((color[0] * 255.0) as u32) << 16
-        | ((color[1] * 255.0) as u32) << 8
-        | (color[2] * 255.0) as u32;
-    ret_color
+    rgb_to_u32(wavelength_to_rgb_float(wavelength))
+}
+
+/// `[r, g, b]` (0..1) as `0xRRGGBB`.
+pub fn rgb_to_u32(color: [f32; 3]) -> u32 {
+    ((color[0] * 255.0) as u32) << 16 | ((color[1] * 255.0) as u32) << 8 | (color[2] * 255.0) as u32
+}
+
+/// Colours for channels without an emission wavelength, by position - the
+/// order Fiji/ImageJ uses for composite images, so it looks familiar:
+/// red, green, blue, gray, cyan, magenta, yellow.
+pub const DEFAULT_CHANNEL_COLORS: [[f32; 3]; 7] = [
+    [1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [1.0, 1.0, 1.0],
+    [0.0, 1.0, 1.0],
+    [1.0, 0.0, 1.0],
+    [1.0, 1.0, 0.0],
+];
+
+/// The display colour of each channel of a series, from `(channel,
+/// emission wavelength in nm)` (`<= 1.0`: unknown): a known wavelength's
+/// colour; otherwise - for an image with several channels - the next
+/// [`DEFAULT_CHANNEL_COLORS`] entry no channel shows yet, so no two
+/// channels look alike; a single channel without one stays white.
+pub fn channel_colors(channels: &[(i32, f32)]) -> std::collections::BTreeMap<i32, [f32; 3]> {
+    let mut colors: std::collections::BTreeMap<i32, [f32; 3]> = channels
+        .iter()
+        .filter(|(_, nm)| *nm > 1.0)
+        .map(|(id, nm)| (*id, wavelength_to_rgb_float(*nm)))
+        .collect();
+    let unknown = channels
+        .iter()
+        .filter(|(_, nm)| *nm <= 1.0)
+        .map(|(id, _)| *id);
+    if channels.len() == 1 {
+        colors.extend(unknown.map(|id| (id, [1.0, 1.0, 1.0])));
+        return colors;
+    }
+    let free: Vec<[f32; 3]> = DEFAULT_CHANNEL_COLORS
+        .iter()
+        .filter(|color| !colors.values().any(|used| used == *color))
+        .copied()
+        .collect();
+    // All seven taken by wavelengths: repeat the palette.
+    let palette = if free.is_empty() {
+        DEFAULT_CHANNEL_COLORS.to_vec()
+    } else {
+        free
+    };
+    let assigned: Vec<(i32, [f32; 3])> = unknown.zip(palette.iter().copied().cycle()).collect();
+    colors.extend(assigned);
+    colors
+}
+
+/// A channel's name for display: its own, or "Channel N" (1-based) when the
+/// image has none.
+pub fn channel_display_name(name: &str, channel: i32) -> String {
+    if name.trim().is_empty() {
+        format!("Channel {}", channel + 1)
+    } else {
+        name.to_string()
+    }
 }
 
 /// Converts a wavelength in nm to an RGB [f32; 3] color.
@@ -179,6 +238,49 @@ pub fn wavelength_to_rgb_float(wavelength: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const RED: [f32; 3] = DEFAULT_CHANNEL_COLORS[0];
+    const GREEN: [f32; 3] = DEFAULT_CHANNEL_COLORS[1];
+    const BLUE: [f32; 3] = DEFAULT_CHANNEL_COLORS[2];
+    const WHITE: [f32; 3] = [1.0, 1.0, 1.0];
+
+    #[test]
+    fn channels_without_a_wavelength_get_the_fiji_colours_in_order() {
+        let colors = channel_colors(&[(0, 0.0), (1, 0.0), (2, 0.0), (3, 0.0)]);
+        assert_eq!(
+            colors.values().copied().collect::<Vec<_>>(),
+            [RED, GREEN, BLUE, WHITE]
+        );
+    }
+
+    #[test]
+    fn a_single_channel_without_a_wavelength_is_white() {
+        assert_eq!(channel_colors(&[(0, 0.0)])[&0], WHITE);
+    }
+
+    #[test]
+    fn known_wavelengths_keep_their_colour_and_the_others_skip_it() {
+        // 635 nm is pure red: the unknown channels start with green.
+        let colors = channel_colors(&[(0, 0.0), (1, 635.0), (2, 0.0)]);
+        assert_eq!(colors[&1], RED);
+        assert_eq!(colors[&0], GREEN);
+        assert_eq!(colors[&2], BLUE);
+    }
+
+    #[test]
+    fn more_channels_than_colours_repeat_the_palette() {
+        let channels: Vec<(i32, f32)> = (0..9).map(|c| (c, 0.0)).collect();
+        let colors = channel_colors(&channels);
+        assert_eq!(colors[&7], RED);
+        assert_eq!(colors[&8], GREEN);
+    }
+
+    #[test]
+    fn unnamed_channels_are_numbered_from_one() {
+        assert_eq!(channel_display_name("", 0), "Channel 1");
+        assert_eq!(channel_display_name("  ", 2), "Channel 3");
+        assert_eq!(channel_display_name("DAPI", 0), "DAPI");
+    }
 
     // ---- get_relative_key ----
 

@@ -7,7 +7,7 @@ use crate::{
     WavelengthOption,
 };
 use evanalyzer_app::project::ProjectExt;
-use evanalyzer_app::utils::wavelength_to_rgb_float;
+use evanalyzer_app::utils::{channel_display_name, wavelength_to_rgb_float};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use log::warn;
@@ -103,6 +103,10 @@ impl ImageMetaController {
                 .on_reset_emission_wave_length(move |channel_idx| {
                     manager.set_channel_emission_wave_length(channel_idx, None);
                 });
+
+            let manager = Arc::clone(self);
+            ui.global::<ChannelState>()
+                .on_grayscale_toggled(move |grayscale| manager.set_grayscale(grayscale));
         }
     }
 
@@ -117,6 +121,17 @@ impl ImageMetaController {
                 None => project.reset_global_emission_wavel_length(channel_idx),
             }
         }
+        self.app_state.mark_dirty();
+        if let Err(e) = self.sync_image_meta_to_slint() {
+            warn!("Could not refresh the channel list: {e}");
+        }
+        self.viewport_controller.trigger_image_redraw();
+    }
+
+    /// Switches grayscale mode (all channels white, one visible at a time),
+    /// then shows the colours and visibilities that result.
+    pub(crate) fn set_grayscale(&self, grayscale: bool) {
+        self.app_state.get_project_write().set_grayscale(grayscale);
         self.app_state.mark_dirty();
         if let Err(e) = self.sync_image_meta_to_slint() {
             warn!("Could not refresh the channel list: {e}");
@@ -146,8 +161,10 @@ impl ImageMetaController {
             z_proj,
             hz,
             pixel_sizes,
+            grayscale,
         ) = {
             let project = self.app_state.get_project();
+            let grayscale = project.images.settings.grayscale;
 
             let image_path = project.get_current_image_path_cloned();
             let selected_series = project.get_selected_series_idx();
@@ -174,6 +191,7 @@ impl ImageMetaController {
                 z_proj,
                 hz,
                 pixel_sizes,
+                grayscale,
             )
         }; // ← lock dropped here
 
@@ -207,6 +225,34 @@ impl ImageMetaController {
                         .collect()
                 })
                 .unwrap_or_default()
+        };
+        // Each channel's colour, decided for exactly the channels the image
+        // file has: its wavelength (the project's, else the file's), a
+        // default colour without one, white in grayscale mode.
+        let display_colors = {
+            let channels: Vec<(i32, f32)> = image_meta
+                .series
+                .get(&selected_series)
+                .map(|series| {
+                    series
+                        .channels
+                        .iter()
+                        .map(|(idx, channel)| {
+                            let project_nm =
+                                channel_wavelengths.get(idx).map_or(0.0, |(nm, _)| *nm);
+                            let nm = if project_nm > 0.0 {
+                                project_nm
+                            } else {
+                                channel.emission_wave_length
+                            };
+                            (*idx, nm)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.app_state
+                .get_project()
+                .channel_display_colors(&channels)
         };
         let ui_weak = self.ui.clone();
 
@@ -277,11 +323,18 @@ impl ImageMetaController {
                     } else {
                         channel.emission_wave_length
                     };
+                    // Without a wavelength: a distinct default colour (white
+                    // for everything in grayscale mode) - see
+                    // `ProjectExt::get_channel_display_colors`.
+                    let color = display_colors
+                        .get(idx)
+                        .copied()
+                        .unwrap_or_else(|| wavelength_to_rgb_float(nm));
                     channel_copy.get(*idx as usize).map(|_| ChannelInfo {
-                        name: channel.name.clone().into(),
+                        name: channel_display_name(&channel.name, *idx).into(),
                         active: *channel_visibilities.get(idx).unwrap_or(&true),
                         idx: *idx,
-                        color: color_from_rgb(wavelength_to_rgb_float(nm)),
+                        color: color_from_rgb(color),
                         emission_wave_length: nm,
                         wavelength_overridden: overridden,
                     })
@@ -295,6 +348,7 @@ impl ImageMetaController {
                 && channels[2].name == "Blue";
 
             ch_state.set_channels(std::rc::Rc::new(slint::VecModel::from(channels)).into());
+            ch_state.set_grayscale(grayscale);
 
             // --- Image meta ---
             let image_meta_ui = ui.global::<ImageMetaData>();
@@ -604,6 +658,49 @@ mod tests {
                 shown
             );
         }
+    }
+
+    #[test]
+    fn the_grayscale_switch_shows_one_white_channel_and_back_in_colour() {
+        // The project knows the file's real channels, as after adding it.
+        use evanalyzer_app::backends::Backend;
+        use evanalyzer_app::project::ProjectExt;
+        let path = crate::editor::test_support::fixture_image_path();
+        let meta = evanalyzer_app::backends::local::LocalBackend::default()
+            .read_image_meta(&path)
+            .unwrap();
+        let mut project = evanalyzer_app::project::ProjectWithRuntime::default();
+        project.images.root = Some(path.parent().unwrap().to_path_buf());
+        project.add_image_to_list(
+            std::path::Path::new(path.file_name().unwrap()),
+            &path,
+            &meta,
+        );
+        project.set_current_image_path(&path);
+        let (ui, ui_state, controller) = with_window(project);
+        controller.sync_image_meta_to_slint().unwrap();
+        drain_ui_queue();
+        let channels = || {
+            let model = ui.global::<ChannelState>().get_channels();
+            (0..model.row_count())
+                .filter_map(|row| model.row_data(row))
+                .collect::<Vec<_>>()
+        };
+        assert!(channels().len() > 1, "the fixture has several channels");
+        let white = slint::Color::from_rgb_u8(255, 255, 255);
+
+        ui.global::<ChannelState>().invoke_grayscale_toggled(true);
+        drain_ui_queue();
+        assert!(ui.global::<ChannelState>().get_grayscale());
+        assert!(channels().iter().all(|c| c.color == white));
+        assert_eq!(channels().iter().filter(|c| c.active).count(), 1);
+        assert!(ui_state.get_project().images.settings.grayscale);
+        assert!(ui_state.is_dirty());
+
+        ui.global::<ChannelState>().invoke_grayscale_toggled(false);
+        drain_ui_queue();
+        assert!(!ui.global::<ChannelState>().get_grayscale());
+        assert!(channels().iter().any(|c| c.color != white), "colours again");
     }
 
     #[test]

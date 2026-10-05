@@ -6,7 +6,9 @@ use crate::workspace::ProjectWithRuntime;
 use crate::workspace::extensions::classification_ext::ClassificationExt;
 use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
 use crate::workspace::extensions::object_ext::ObjectExt;
-use crate::workspace::extensions::utils::{get_relative_key, is_in_root, wavelength_to_rgb_u32};
+use crate::workspace::extensions::utils::{
+    channel_colors, channel_display_name, get_relative_key, is_in_root, rgb_to_u32,
+};
 use crate::workspace::{FocusChannels, PipelineFocus};
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::ImageAddress;
@@ -116,6 +118,10 @@ pub trait ProjectExt {
     fn set_global_emission_wavel_length(&mut self, channel_id: i32, emission_wave_length: f32);
     fn reset_global_emission_wavel_length(&mut self, channel_id: i32);
     fn get_emission_wave_length(&self, channel_id: i32) -> f32;
+    fn get_channel_display_colors(&self) -> BTreeMap<i32, [f32; 3]>;
+    fn channel_display_colors(&self, channels: &[(i32, f32)]) -> BTreeMap<i32, [f32; 3]>;
+    fn set_grayscale(&mut self, grayscale: bool);
+    fn with_one_visible_channel(&self, requested: &BTreeMap<i32, bool>) -> BTreeMap<i32, bool>;
     fn set_image_z_stack(&mut self, z_stack: &ZStackSettings);
     fn set_global_z_stack(&mut self, z_stack: &ZStackSettings);
     fn get_z_stack(&self) -> Option<&ZStackSettings>;
@@ -596,6 +602,87 @@ impl ProjectExt for ProjectWithRuntime {
             .unwrap_or(0.0)
     }
 
+    /// The colour each channel of the current image is shown in - see
+    /// `utils::channel_colors` - or white for all of them in grayscale mode.
+    fn get_channel_display_colors(&self) -> BTreeMap<i32, [f32; 3]> {
+        let channels: Vec<(i32, f32)> = self
+            .get_current_image_channel_settings()
+            .map(|(_, series)| {
+                series
+                    .channels
+                    .keys()
+                    .map(|id| (*id, self.get_emission_wave_length(*id)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.channel_display_colors(&channels)
+    }
+
+    /// [`Self::get_channel_display_colors`] for the given `(channel,
+    /// emission wavelength)` list - e.g. the one the image file reports.
+    fn channel_display_colors(&self, channels: &[(i32, f32)]) -> BTreeMap<i32, [f32; 3]> {
+        if self.images.settings.grayscale {
+            return channels
+                .iter()
+                .map(|(id, _)| (*id, [1.0, 1.0, 1.0]))
+                .collect();
+        }
+        channel_colors(channels)
+    }
+
+    /// Switches grayscale mode. Switching it on leaves one channel visible
+    /// (gray channels can't be told apart when overlaid): the selected one
+    /// if it is visible, else the first visible one.
+    fn set_grayscale(&mut self, grayscale: bool) {
+        self.images.settings.grayscale = grayscale;
+        if !grayscale {
+            return;
+        }
+        let visibilities = self.get_image_channel_visibilities();
+        let visible: Vec<i32> = visibilities
+            .iter()
+            .filter(|(_, visible)| **visible)
+            .map(|(id, _)| *id)
+            .collect();
+        if visible.len() <= 1 {
+            return;
+        }
+        let selected = self.get_selected_image_channel_idx();
+        let keep = if visible.contains(&selected) {
+            selected
+        } else {
+            visible[0]
+        };
+        let only: BTreeMap<i32, bool> = visibilities.keys().map(|id| (*id, *id == keep)).collect();
+        self.set_global_preferences(&only);
+    }
+
+    /// `requested` channel visibilities as grayscale mode allows them: at
+    /// most one visible - the one just switched on, which hides the others.
+    /// Unchanged outside grayscale mode.
+    fn with_one_visible_channel(&self, requested: &BTreeMap<i32, bool>) -> BTreeMap<i32, bool> {
+        if !self.images.settings.grayscale {
+            return requested.clone();
+        }
+        let visible: Vec<i32> = requested
+            .iter()
+            .filter(|(_, visible)| **visible)
+            .map(|(id, _)| *id)
+            .collect();
+        if visible.len() <= 1 {
+            return requested.clone();
+        }
+        let before = self.get_image_channel_visibilities();
+        let selected = self.get_selected_image_channel_idx();
+        let keep = visible
+            .iter()
+            .find(|id| !before.get(id).copied().unwrap_or(false))
+            .copied()
+            .or_else(|| visible.contains(&selected).then_some(selected))
+            .unwrap_or(visible[0]);
+        requested.keys().map(|id| (*id, *id == keep)).collect()
+    }
+
     /// Sets the Z-stack settings for the current image series.
     fn set_image_z_stack(&mut self, z_stack: &ZStackSettings) {
         self.with_current_series_mut(|series| {
@@ -787,12 +874,13 @@ impl ProjectExt for ProjectWithRuntime {
                         .get(&image.active_series(&self.images.settings))
                 })
                 .map(|series_data| {
-                    series_data
+                    // A global wavelength set by the user wins over the image's own,
+                    // so the class gets the colour the viewer shows for the channel -
+                    // and channels without one get distinct default colours.
+                    let wave_lengths: Vec<(i32, f32)> = series_data
                         .channels
                         .iter()
                         .map(|(channel_id, ch)| {
-                            // A global wavelength set by the user wins over the image's own,
-                            // so the class gets the colour the viewer shows for the channel.
                             let wave_length = self
                                 .images
                                 .settings
@@ -801,12 +889,18 @@ impl ProjectExt for ProjectWithRuntime {
                                 .and_then(|channel| channel.emission_wave_length)
                                 .or(ch.emission_wave_length)
                                 .unwrap_or(0.0);
-                            Class {
-                                id: ObjectClass::Unset,
-                                color: wavelength_to_rgb_u32(wave_length),
-                                name: ch.name.clone(),
-                                notes: "".into(),
-                            }
+                            (*channel_id, wave_length)
+                        })
+                        .collect();
+                    let colors = channel_colors(&wave_lengths);
+                    series_data
+                        .channels
+                        .iter()
+                        .map(|(channel_id, ch)| Class {
+                            id: ObjectClass::Unset,
+                            color: rgb_to_u32(colors[channel_id]),
+                            name: channel_display_name(&ch.name, *channel_id),
+                            notes: "".into(),
                         })
                         .collect()
                 })
@@ -1628,6 +1722,7 @@ mod tests {
     use crate::backend::LocalFileSystem;
 
     use super::*;
+    use crate::workspace::extensions::utils::wavelength_to_rgb_u32;
 
     fn fs() -> LocalFileSystem {
         Default::default()
@@ -1969,6 +2064,95 @@ mod tests {
         let visible_only = project.get_image_channel_visibilities_vec();
         assert!(!visible_only.contains(&0));
         assert!(visible_only.contains(&1));
+    }
+
+    /// [`project_with_one_image`] with a third channel and no wavelengths.
+    fn project_with_three_unnamed_channels() -> ProjectWithRuntime {
+        let mut project = project_with_one_image();
+        project.with_current_series_mut(|series| {
+            series.channels.insert(2, series.channels[&0].clone());
+            for channel in series.channels.values_mut() {
+                channel.emission_wave_length = None;
+                channel.name.clear();
+            }
+        });
+        project
+    }
+
+    #[test]
+    fn channels_without_wavelengths_get_distinct_colours_and_grayscale_makes_them_white() {
+        let mut project = project_with_three_unnamed_channels();
+        let colors = project.get_channel_display_colors();
+        assert_eq!(colors[&0], [1.0, 0.0, 0.0]);
+        assert_eq!(colors[&1], [0.0, 1.0, 0.0]);
+        assert_eq!(colors[&2], [0.0, 0.0, 1.0]);
+
+        project.set_grayscale(true);
+        assert!(
+            project
+                .get_channel_display_colors()
+                .values()
+                .all(|c| *c == [1.0, 1.0, 1.0])
+        );
+    }
+
+    #[test]
+    fn switching_grayscale_on_keeps_only_the_selected_channel_visible() {
+        let mut project = project_with_three_unnamed_channels();
+        project.set_global_preferences(&BTreeMap::from([(0, true), (1, true), (2, true)]));
+        project.set_global_selected_channel(&1);
+
+        project.set_grayscale(true);
+
+        assert_eq!(
+            project.get_image_channel_visibilities(),
+            BTreeMap::from([(0, false), (1, true), (2, false)])
+        );
+    }
+
+    #[test]
+    fn in_grayscale_switching_a_channel_on_switches_the_other_off() {
+        let mut project = project_with_three_unnamed_channels();
+        project.set_global_preferences(&BTreeMap::from([(0, true), (1, false), (2, false)]));
+        let requested = BTreeMap::from([(0, true), (1, false), (2, true)]);
+
+        assert_eq!(
+            project.with_one_visible_channel(&requested),
+            requested,
+            "colour mode"
+        );
+
+        project.set_grayscale(true);
+        assert_eq!(
+            project.with_one_visible_channel(&requested),
+            BTreeMap::from([(0, false), (1, false), (2, true)]),
+            "the newly switched on one wins"
+        );
+        let none = BTreeMap::from([(0, false), (1, false), (2, false)]);
+        assert_eq!(
+            project.with_one_visible_channel(&none),
+            none,
+            "none visible is fine"
+        );
+    }
+
+    #[test]
+    fn auto_added_classes_of_unnamed_channels_get_names_and_distinct_colours() {
+        let mut project = project_with_three_unnamed_channels();
+        project.auto_add_classes_based_on_image_meta();
+        // Besides the "Background" class every project has.
+        let classes: Vec<_> = project
+            .classification
+            .classes()
+            .iter()
+            .filter(|c| c.name != "Background")
+            .collect();
+        let names: Vec<&str> = classes.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Channel 1", "Channel 2", "Channel 3"]);
+        assert_eq!(
+            classes.iter().map(|c| c.color).collect::<Vec<_>>(),
+            [0xFF0000, 0x00FF00, 0x0000FF]
+        );
     }
 
     #[test]

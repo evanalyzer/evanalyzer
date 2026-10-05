@@ -78,7 +78,9 @@ component ChannelRow inherits Rectangle {
                     height: 14px;
                     border-radius: 3px;
                     background: active ? root.channel-color(idx) : transparent;
-                    border-width: active ? 0 : 1.5px;
+                    // A thin edge when active, so a white swatch (grayscale
+                    // mode, channels without colour) shows on a light panel.
+                    border-width: active ? 1px : 1.5px;
                     border-color: Theme.border;
                     TouchArea {
                         clicked => {
@@ -507,6 +509,30 @@ export component ImageControlPanel inherits Rectangle {
                 alignment: space-between;
                 SectionTitle {
                     text: "CHANNELS";
+                }
+
+                // Grayscale: every channel white, one visible at a time.
+                grayscale-toggle := Rectangle {
+                    width: grayscale-label.preferred-width + 12px;
+                    height: 18px;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: ChannelState.grayscale ? Theme.accent : Theme.border;
+                    background: ChannelState.grayscale ? Theme.accent : (grayscale-touch.has-hover ? Theme.hover : transparent);
+                    grayscale-label := Text {
+                        text: "Grayscale";
+                        font-size: 10.5px;
+                        color: ChannelState.grayscale ? #FFFFFF : Theme.text-mute;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                    grayscale-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            ChannelState.grayscale = !ChannelState.grayscale;
+                            ChannelState.grayscale_toggled(ChannelState.grayscale);
+                        }
+                    }
                 }
 
                 Text {

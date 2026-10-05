@@ -67,6 +67,7 @@ pub mod fs {
 }
 
 pub mod utils {
+    pub use crate::workspace::extensions::utils::channel_display_name;
     pub use crate::workspace::extensions::utils::wavelength_to_rgb_float;
 }
 

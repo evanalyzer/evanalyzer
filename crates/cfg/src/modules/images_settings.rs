@@ -31,6 +31,8 @@ pub struct ImageEntry {
 #[serde(rename_all = "camelCase")]
 pub struct GlobalImageSettings {
     pub selected_series: Option<i32>,
+    #[serde(default)]
+    pub grayscale: bool,
     pub selected_channel: Option<i32>,
     pub channels: BTreeMap<i32, ChannelSettings>, // Key is the channel
     pub pixel_sizes: Option<PixelSizeSettings>,

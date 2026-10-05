@@ -333,13 +333,13 @@ impl ViewportWorker {
 
                 // STEP 6: Re-read histogram settings after potential write.
                 // Fresh read lock - safe because write lock was released above.
-                let (hist_settings_fresh, project_wavelengths) = {
+                let (hist_settings_fresh, display_colors, grayscale) = {
                     let project = self.app_state.get_project();
-                    let wavelengths: std::collections::BTreeMap<i32, f32> = render_src
-                        .iter()
-                        .map(|c| (c.c_stack, project.get_emission_wave_length(c.c_stack)))
-                        .collect();
-                    (project.get_image_channel_histograms().clone(), wavelengths)
+                    (
+                        project.get_image_channel_histograms().clone(),
+                        project.get_channel_display_colors(),
+                        project.images.settings.grayscale,
+                    )
                 };
 
                 // Build channel contexts for rendering
@@ -371,7 +371,8 @@ impl ViewportWorker {
                             } else {
                                 channel_display_color(
                                     channel,
-                                    project_wavelengths.get(&idx).copied().unwrap_or(0.0),
+                                    display_colors.get(&idx).copied(),
+                                    grayscale,
                                 )
                             };
                             channel_contexts.push(ChannelCtx {
@@ -634,15 +635,31 @@ impl RenderBuffers {
     }
 }
 
-/// The colour a channel is drawn in: from the project's emission wavelength
-/// for it (which the user may have changed - see
-/// `ProjectExt::get_emission_wave_length`), or the reader's colour when the
-/// project knows none. RGB images keep their fixed per-channel colours.
-fn channel_display_color(channel: &ImageChannel, project_nm: f32) -> [f32; 3] {
-    if channel.is_rgb || project_nm <= 0.0 {
-        channel.color
+/// The colour a channel is drawn in: the project's for it (its emission
+/// wavelength's, a default colour without one, white in grayscale mode - see
+/// `ProjectExt::get_channel_display_colors`), or the reader's colour when the
+/// project knows the channel not. RGB images keep their fixed colours -
+/// except in grayscale mode, where every channel is white.
+fn channel_display_color(
+    channel: &ImageChannel,
+    project_color: Option<[f32; 3]>,
+    grayscale: bool,
+) -> [f32; 3] {
+    match project_color {
+        _ if grayscale => [1.0, 1.0, 1.0],
+        Some(color) if !channel.is_rgb => color,
+        _ => channel.color,
+    }
+}
+
+/// The colour a channel's histogram curve is drawn in: the channel's own,
+/// except that white (grayscale mode, a lone channel without colour) turns a
+/// medium gray - white wouldn't show on the light histogram panel.
+fn histogram_color(channel_color: [f32; 3]) -> [f32; 3] {
+    if channel_color.iter().all(|c| *c > 0.9) {
+        [0.45, 0.45, 0.45]
     } else {
-        evanalyzer_app::utils::wavelength_to_rgb_float(project_nm)
+        channel_color
     }
 }
 
@@ -902,6 +919,7 @@ pub(crate) fn histogram_to_svg_fast(
 
             write!(path_data, " 100 100 Z").unwrap();
 
+            let color = histogram_color(*color);
             HistogramData {
                 color: slint::Color::from_rgb_f32(color[0], color[1], color[2]),
                 path: path_data.into(),
@@ -1353,23 +1371,37 @@ mod tests {
     }
 
     #[test]
-    fn channels_are_drawn_in_the_projects_wavelength_colour() {
+    fn white_channels_get_a_gray_histogram_curve() {
+        assert_eq!(histogram_color([1.0, 1.0, 1.0]), [0.45, 0.45, 0.45]);
+        assert_eq!(histogram_color([1.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn channels_are_drawn_in_the_projects_colour() {
         let reader_red = [1.0, 0.0, 0.0];
+        let green = [0.0, 1.0, 0.0];
         assert_eq!(
-            channel_display_color(&image_channel(false, reader_red), 532.0),
-            [0.0, 1.0, 0.0],
-            "the project's wavelength wins"
+            channel_display_color(&image_channel(false, reader_red), Some(green), false),
+            green,
+            "the project's colour wins"
         );
         assert_eq!(
-            channel_display_color(&image_channel(false, reader_red), 0.0),
+            channel_display_color(&image_channel(false, reader_red), None, false),
             reader_red,
-            "no project value: the reader's colour"
+            "a channel the project doesn't know: the reader's colour"
         );
         assert_eq!(
-            channel_display_color(&image_channel(true, reader_red), 532.0),
+            channel_display_color(&image_channel(true, reader_red), Some(green), false),
             reader_red,
             "RGB images keep their colours"
         );
+        for is_rgb in [false, true] {
+            assert_eq!(
+                channel_display_color(&image_channel(is_rgb, reader_red), None, true),
+                [1.0, 1.0, 1.0],
+                "grayscale mode: white, RGB images too"
+            );
+        }
     }
 
     #[test]

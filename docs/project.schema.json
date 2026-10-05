@@ -863,6 +863,10 @@
             }
           }
         },
+        "grayscale": {
+          "type": "boolean",
+          "default": false
+        },
         "pixelSizes": {
           "anyOf": [
             {
