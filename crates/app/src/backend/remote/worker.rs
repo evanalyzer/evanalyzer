@@ -278,12 +278,25 @@ fn serve_connection(
         }) => {
             if !constant_time_eq(client_token.as_bytes(), token.as_bytes()) {
                 Some("invalid token".to_string())
-            } else if protocol_version != PROTOCOL_VERSION || app_version != APP_VERSION {
+            } else if protocol_version != PROTOCOL_VERSION {
+                // Only the protocol has to match - see `PROTOCOL_VERSION`.
+                let update = if protocol_version < PROTOCOL_VERSION {
+                    "update EVAnalyzer on this computer"
+                } else {
+                    "the server needs a newer EVAnalyzer"
+                };
                 Some(format!(
-                    "version mismatch: server is EVAnalyzer {APP_VERSION} (protocol {PROTOCOL_VERSION}), \
-                     client is {app_version} (protocol {protocol_version}) - both sides must run the same version"
+                    "incompatible versions: server is EVAnalyzer {APP_VERSION} (protocol \
+                     {PROTOCOL_VERSION}), client is {app_version} (protocol {protocol_version}) \
+                     - {update}"
                 ))
             } else {
+                if app_version != APP_VERSION {
+                    log::info!(
+                        "Client runs EVAnalyzer {app_version}, this worker {APP_VERSION} \
+                         (same protocol {PROTOCOL_VERSION})"
+                    );
+                }
                 None
             }
         }
@@ -863,6 +876,63 @@ mod idle_tests {
             start.elapsed() >= Duration::from_millis(180),
             "{:?}",
             start.elapsed()
+        );
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+    use crate::backend::local::LocalBackend;
+
+    /// What a worker answers a `Hello` with these versions.
+    fn hello(protocol_version: u32, app_version: &str) -> ServerMsg {
+        let worker = Worker::bind("127.0.0.1:0", "t".into()).unwrap();
+        let url = format!("ws://{}/", worker.local_addr().unwrap());
+        std::thread::spawn(move || worker.run(Arc::new(LocalBackend::default())));
+        let (mut ws, _) = tungstenite::connect(url).unwrap();
+        let hello = frame::encode(
+            &ClientMsg::Hello {
+                protocol_version,
+                app_version: app_version.into(),
+                token: "t".into(),
+            },
+            &[],
+        )
+        .unwrap();
+        ws.send(tungstenite::Message::Binary(hello.into())).unwrap();
+        let answer = loop {
+            match ws.read().unwrap() {
+                tungstenite::Message::Binary(bytes) => break bytes,
+                _ => continue,
+            }
+        };
+        frame::decode::<ServerMsg>(&answer).unwrap().msg
+    }
+
+    #[test]
+    fn another_app_version_with_the_same_protocol_is_welcome() {
+        assert!(matches!(
+            hello(PROTOCOL_VERSION, "0.0.1-older"),
+            ServerMsg::Welcome { .. }
+        ));
+    }
+
+    #[test]
+    fn another_protocol_is_refused_saying_which_side_to_update() {
+        let ServerMsg::Rejected { reason } = hello(PROTOCOL_VERSION - 1, APP_VERSION) else {
+            panic!("expected a rejection");
+        };
+        assert!(
+            reason.contains("update EVAnalyzer on this computer"),
+            "{reason}"
+        );
+        let ServerMsg::Rejected { reason } = hello(PROTOCOL_VERSION + 1, APP_VERSION) else {
+            panic!("expected a rejection");
+        };
+        assert!(
+            reason.contains("the server needs a newer EVAnalyzer"),
+            "{reason}"
         );
     }
 }

@@ -34,6 +34,7 @@ postcard = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+serde-reflection = { workspace = true }
 rcgen = { workspace = true }
 duckdb = { workspace = true, features = ["bundled"] }
 calamine = "0.36.1"

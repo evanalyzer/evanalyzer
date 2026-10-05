@@ -41,9 +41,25 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Bumped on every incompatible change to the messages below. Client and
-/// server must also run the same app version, since requests carry the
-/// app's own settings types.
+/// What decides whether a client and a worker can talk: they must speak the
+/// same protocol version - their app versions may differ.
+///
+/// Bump it on every incompatible change to
+/// - the messages below (`ClientMsg`, `Request`, `ServerMsg`, `Reply`, ...):
+///   a renamed, removed or retyped variant or field. They travel as JSON, so
+///   a new field with `#[serde(default)]` is compatible;
+/// - any type that travels as postcard - [`ResultsQuery`], [`ResultsAnswer`]
+///   and `ResultExport` with everything in them. Postcard isn't
+///   self-describing: *any* change there is incompatible, and the other side
+///   misreads it instead of failing. The test
+///   `the_binary_wire_format_only_changes_with_the_protocol_version` (with
+///   `postcard_format.json`) catches a change without a bump.
+///
+/// The app's settings types (`ProjectSettings` & co.) travel as JSON like
+/// the project files, so the rules that keep older project files loadable
+/// keep requests between versions working too. Something one side doesn't
+/// know (a new pipeline command, say) fails that one request with a clear
+/// error, not the connection.
 pub const PROTOCOL_VERSION: u32 = 7;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -536,6 +552,87 @@ pub(crate) fn channels_from_wire(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The serde format of every type that travels as postcard - the
+    /// results view's queries, answers and exports. Postcard isn't
+    /// self-describing: a changed field there is misread rather than
+    /// rejected, so any change needs a new [`PROTOCOL_VERSION`]. The
+    /// snapshot file pins the format to the version.
+    #[test]
+    fn the_binary_wire_format_only_changes_with_the_protocol_version() {
+        use serde_reflection::{Samples, Tracer, TracerConfig};
+        let mut tracer = Tracer::new(TracerConfig::default().record_samples_for_structs(true));
+        let mut samples = Samples::new();
+        // Types that deserialize from a string with a format (the hex
+        // color) need a real value to trace.
+        tracer.trace_value(&mut samples, &Class::default()).unwrap();
+        // Enums inside the traced types: each traced on its own, so all
+        // their variants are seen. A new one shows up as `MissingVariants`
+        // - add it here.
+        tracer
+            .trace_simple_type::<crate::api::Aggregation>()
+            .unwrap();
+        tracer.trace_simple_type::<crate::api::CellValue>().unwrap();
+        tracer
+            .trace_simple_type::<crate::api::ColorScale>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<crate::api::ColorSchema>()
+            .unwrap();
+        tracer.trace_simple_type::<crate::api::Column>().unwrap();
+        tracer
+            .trace_simple_type::<crate::api::ExportFormat>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<evanalyzer_cfg::core_types::ObjectClass>()
+            .unwrap();
+        tracer
+            .trace_simple_type::<crate::api::PlateDimensions>()
+            .unwrap();
+        tracer.trace_simple_type::<crate::api::RunStatus>().unwrap();
+        tracer.trace_simple_type::<crate::api::View>().unwrap();
+        tracer.trace_type::<ResultsQuery>(&samples).unwrap();
+        tracer.trace_type::<ResultsAnswer>(&samples).unwrap();
+        tracer
+            .trace_type::<crate::api::ResultExport>(&samples)
+            .unwrap();
+        let registry = tracer.registry().unwrap();
+        let current = serde_json::to_string_pretty(&serde_json::json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "postcard_types": registry,
+        }))
+        .unwrap()
+            + "\n";
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/backend/remote/wire/postcard_format.json");
+        if std::env::var_os("UPDATE_WIRE_FORMAT").is_some() {
+            std::fs::write(&path, &current).unwrap();
+            return;
+        }
+        let stored = std::fs::read_to_string(&path).unwrap_or_default();
+        if stored == current {
+            return;
+        }
+        let stored_version = serde_json::from_str::<serde_json::Value>(&stored)
+            .ok()
+            .and_then(|stored| stored["protocol_version"].as_u64());
+        if stored_version == Some(u64::from(PROTOCOL_VERSION)) {
+            panic!(
+                "The binary wire format changed (a type in ResultsQuery, ResultsAnswer or \
+                 ResultExport) without a new protocol version: clients and workers of \
+                 different builds would misread each other. Bump PROTOCOL_VERSION in \
+                 protocol.rs, then update {} with\n  \
+                 UPDATE_WIRE_FORMAT=1 cargo test -p evanalyzer_app --lib wire_format",
+                path.display()
+            );
+        }
+        panic!(
+            "PROTOCOL_VERSION is {PROTOCOL_VERSION}, {} describes version {stored_version:?}. \
+             Update it with\n  UPDATE_WIRE_FORMAT=1 cargo test -p evanalyzer_app --lib wire_format",
+            path.display()
+        );
+    }
     use crate::api::ImageContainer;
     use crate::api::ManagedImage;
     use crate::api::Point2d;

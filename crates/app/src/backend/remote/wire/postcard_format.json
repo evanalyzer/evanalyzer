@@ -1,0 +1,1161 @@
+{
+  "protocol_version": 7,
+  "postcard_types": {
+    "Aggregation": {
+      "ENUM": {
+        "0": {
+          "Avg": "UNIT"
+        },
+        "1": {
+          "Min": "UNIT"
+        },
+        "2": {
+          "Max": "UNIT"
+        },
+        "3": {
+          "Stddev": "UNIT"
+        },
+        "4": {
+          "Sum": "UNIT"
+        },
+        "5": {
+          "Median": "UNIT"
+        },
+        "6": {
+          "Skewness": "UNIT"
+        }
+      }
+    },
+    "BoxplotBox": {
+      "STRUCT": [
+        {
+          "label": "STR"
+        },
+        {
+          "color": "U32"
+        },
+        {
+          "min": "F64"
+        },
+        {
+          "q1": "F64"
+        },
+        {
+          "median": "F64"
+        },
+        {
+          "q3": "F64"
+        },
+        {
+          "max": "F64"
+        },
+        {
+          "outliers": {
+            "SEQ": "F64"
+          }
+        },
+        {
+          "object_count": "U64"
+        }
+      ]
+    },
+    "BoxplotFilter": {
+      "STRUCT": [
+        {
+          "plane": {
+            "TYPENAME": "PlaneFilter"
+          }
+        },
+        {
+          "images": {
+            "OPTION": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        {
+          "object_classes": {
+            "OPTION": {
+              "SEQ": {
+                "TYPENAME": "ObjectClass"
+              }
+            }
+          }
+        },
+        {
+          "column": {
+            "TYPENAME": "Column"
+          }
+        }
+      ]
+    },
+    "BoxplotResult": {
+      "STRUCT": [
+        {
+          "boxes": {
+            "SEQ": {
+              "TYPENAME": "BoxplotBox"
+            }
+          }
+        }
+      ]
+    },
+    "Cell": {
+      "STRUCT": [
+        {
+          "value": {
+            "TYPENAME": "CellValue"
+          }
+        },
+        {
+          "bg_color": "U32"
+        },
+        {
+          "alternating_color": "BOOL"
+        },
+        {
+          "search_key": {
+            "OPTION": {
+              "TUPLEARRAY": {
+                "CONTENT": "STR",
+                "SIZE": 2
+              }
+            }
+          }
+        },
+        {
+          "disabled": "BOOL"
+        },
+        {
+          "any_disabled": "BOOL"
+        },
+        {
+          "failed": "BOOL"
+        },
+        {
+          "any_failed": "BOOL"
+        }
+      ]
+    },
+    "CellValue": {
+      "ENUM": {
+        "0": {
+          "Empty": "UNIT"
+        },
+        "1": {
+          "String": {
+            "NEWTYPE": "STR"
+          }
+        },
+        "2": {
+          "Float": {
+            "NEWTYPE": "F32"
+          }
+        },
+        "3": {
+          "Integer": {
+            "NEWTYPE": "I32"
+          }
+        },
+        "4": {
+          "Class": {
+            "NEWTYPE": {
+              "TUPLE": [
+                "STR",
+                "U32"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "Class": {
+      "STRUCT": [
+        {
+          "id": {
+            "TYPENAME": "ObjectClass"
+          }
+        },
+        {
+          "color": "STR"
+        },
+        {
+          "name": "STR"
+        },
+        {
+          "notes": "STR"
+        }
+      ]
+    },
+    "ColorScale": {
+      "ENUM": {
+        "0": {
+          "Auto": "UNIT"
+        },
+        "1": {
+          "Manual": {
+            "TUPLE": [
+              "F32",
+              "F32"
+            ]
+          }
+        }
+      }
+    },
+    "ColorSchema": {
+      "ENUM": {
+        "0": {
+          "Excel": "UNIT"
+        },
+        "1": {
+          "Viridis": "UNIT"
+        },
+        "2": {
+          "Plasma": "UNIT"
+        },
+        "3": {
+          "Inferno": "UNIT"
+        },
+        "4": {
+          "Cividis": "UNIT"
+        },
+        "5": {
+          "Coolwarm": "UNIT"
+        },
+        "6": {
+          "RedBlue": "UNIT"
+        },
+        "7": {
+          "YlGnBu": "UNIT"
+        },
+        "8": {
+          "Haline": "UNIT"
+        },
+        "9": {
+          "Algae": "UNIT"
+        },
+        "10": {
+          "Thermal": "UNIT"
+        }
+      }
+    },
+    "Column": {
+      "ENUM": {
+        "0": {
+          "ObjectId": "UNIT"
+        },
+        "1": {
+          "ImageName": "UNIT"
+        },
+        "2": {
+          "ObjectClass": "UNIT"
+        },
+        "3": {
+          "Count": "UNIT"
+        },
+        "4": {
+          "AreaSizePx": "UNIT"
+        },
+        "5": {
+          "AreaSizeNm": "UNIT"
+        },
+        "6": {
+          "PerimeterPx": "UNIT"
+        },
+        "7": {
+          "PerimeterNm": "UNIT"
+        },
+        "8": {
+          "Circularity": "UNIT"
+        },
+        "9": {
+          "Solidity": "UNIT"
+        },
+        "10": {
+          "Eccentricity": "UNIT"
+        },
+        "11": {
+          "ColocCount": {
+            "NEWTYPE": {
+              "TYPENAME": "ObjectClass"
+            }
+          }
+        },
+        "12": {
+          "IntensityAvg": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "13": {
+          "IntensitySum": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "14": {
+          "IntensityMin": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "15": {
+          "IntensityMax": {
+            "NEWTYPE": "U32"
+          }
+        }
+      }
+    },
+    "ColumnEntry": {
+      "STRUCT": [
+        {
+          "display_name": "STR"
+        },
+        {
+          "key": {
+            "TYPENAME": "Column"
+          }
+        },
+        {
+          "group": "STR"
+        }
+      ]
+    },
+    "DatabaseResult": {
+      "STRUCT": [
+        {
+          "column_names": {
+            "SEQ": "STR"
+          }
+        },
+        {
+          "row_names": {
+            "SEQ": "STR"
+          }
+        },
+        {
+          "rows": {
+            "SEQ": {
+              "SEQ": {
+                "TYPENAME": "Cell"
+              }
+            }
+          }
+        },
+        {
+          "min": "F32"
+        },
+        {
+          "max": "F32"
+        },
+        {
+          "source_object_count": "U64"
+        },
+        {
+          "row_locations": {
+            "SEQ": {
+              "TUPLE": [
+                "STR",
+                {
+                  "TUPLEARRAY": {
+                    "CONTENT": "U32",
+                    "SIZE": 4
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ExportFormat": {
+      "ENUM": {
+        "0": {
+          "XLSX": "UNIT"
+        },
+        "1": {
+          "CSV": "UNIT"
+        },
+        "2": {
+          "Parquet": "UNIT"
+        }
+      }
+    },
+    "GroupedByImageFilter": {
+      "STRUCT": [
+        {
+          "plane": {
+            "TYPENAME": "PlaneFilter"
+          }
+        },
+        {
+          "images": {
+            "OPTION": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        {
+          "object_classes": {
+            "OPTION": {
+              "SEQ": {
+                "TYPENAME": "ObjectClass"
+              }
+            }
+          }
+        },
+        {
+          "columns": {
+            "SEQ": {
+              "TYPENAME": "Column"
+            }
+          }
+        },
+        {
+          "aggregation": {
+            "SEQ": {
+              "TYPENAME": "Aggregation"
+            }
+          }
+        },
+        {
+          "page": {
+            "TYPENAME": "Pagination"
+          }
+        },
+        {
+          "transpond_table": "BOOL"
+        }
+      ]
+    },
+    "HistogramFilter": {
+      "STRUCT": [
+        {
+          "plane": {
+            "TYPENAME": "PlaneFilter"
+          }
+        },
+        {
+          "images": {
+            "OPTION": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        {
+          "object_classes": {
+            "OPTION": {
+              "SEQ": {
+                "TYPENAME": "ObjectClass"
+              }
+            }
+          }
+        },
+        {
+          "column": {
+            "TYPENAME": "Column"
+          }
+        },
+        {
+          "bins": "U64"
+        }
+      ]
+    },
+    "HistogramResult": {
+      "STRUCT": [
+        {
+          "bin_edges": {
+            "SEQ": "F64"
+          }
+        },
+        {
+          "counts": {
+            "SEQ": "U64"
+          }
+        },
+        {
+          "min": "F64"
+        },
+        {
+          "max": "F64"
+        }
+      ]
+    },
+    "ImageEntry": {
+      "STRUCT": [
+        {
+          "name": "STR"
+        },
+        {
+          "rel_path": "STR"
+        },
+        {
+          "disabled": "BOOL"
+        }
+      ]
+    },
+    "ImageHeatmapFilter": {
+      "STRUCT": [
+        {
+          "plane": {
+            "TYPENAME": "PlaneFilter"
+          }
+        },
+        {
+          "image_rel_path": "STR"
+        },
+        {
+          "aggregation": {
+            "TYPENAME": "Aggregation"
+          }
+        },
+        {
+          "object_class": {
+            "TYPENAME": "ObjectClass"
+          }
+        },
+        {
+          "column": {
+            "TYPENAME": "Column"
+          }
+        },
+        {
+          "color_schema": {
+            "TYPENAME": "ColorSchema"
+          }
+        },
+        {
+          "color_scale": {
+            "TYPENAME": "ColorScale"
+          }
+        },
+        {
+          "square_size": {
+            "OPTION": "U64"
+          }
+        }
+      ]
+    },
+    "ListFilter": {
+      "STRUCT": [
+        {
+          "plane": {
+            "TYPENAME": "PlaneFilter"
+          }
+        },
+        {
+          "images": {
+            "OPTION": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        {
+          "object_classes": {
+            "OPTION": {
+              "SEQ": {
+                "TYPENAME": "ObjectClass"
+              }
+            }
+          }
+        },
+        {
+          "columns": {
+            "SEQ": {
+              "TYPENAME": "Column"
+            }
+          }
+        },
+        {
+          "with_coloc_details": "BOOL"
+        },
+        {
+          "page": {
+            "TYPENAME": "Pagination"
+          }
+        },
+        {
+          "transpond_table": "BOOL"
+        }
+      ]
+    },
+    "ObjectClass": {
+      "ENUM": {
+        "0": {
+          "UNSET": "UNIT"
+        },
+        "1": {
+          "VALID": {
+            "NEWTYPE": "U32"
+          }
+        }
+      }
+    },
+    "Pagination": {
+      "STRUCT": [
+        {
+          "limit": "I32"
+        },
+        {
+          "after": {
+            "OPTION": "STR"
+          }
+        }
+      ]
+    },
+    "PlaneFilter": {
+      "STRUCT": [
+        {
+          "z_stack": "U32"
+        },
+        {
+          "t_stack": "U32"
+        }
+      ]
+    },
+    "PlateDimensions": {
+      "ENUM": {
+        "0": {
+          "PLate2x3": "UNIT"
+        },
+        "1": {
+          "Plate3x4": "UNIT"
+        },
+        "2": {
+          "Plate4x6": "UNIT"
+        },
+        "3": {
+          "Plate6x8": "UNIT"
+        },
+        "4": {
+          "Plate8x12": "UNIT"
+        },
+        "5": {
+          "Plate16x24": "UNIT"
+        },
+        "6": {
+          "Plate32x48": "UNIT"
+        }
+      }
+    },
+    "PlateFilter": {
+      "STRUCT": [
+        {
+          "plane": {
+            "TYPENAME": "PlaneFilter"
+          }
+        },
+        {
+          "grouping_regex": "STR"
+        },
+        {
+          "aggregation": {
+            "TYPENAME": "Aggregation"
+          }
+        },
+        {
+          "object_class": {
+            "TYPENAME": "ObjectClass"
+          }
+        },
+        {
+          "column": {
+            "TYPENAME": "Column"
+          }
+        },
+        {
+          "color_schema": {
+            "TYPENAME": "ColorSchema"
+          }
+        },
+        {
+          "color_scale": {
+            "TYPENAME": "ColorScale"
+          }
+        },
+        {
+          "matrix_dimension": {
+            "OPTION": {
+              "TYPENAME": "PlateDimensions"
+            }
+          }
+        }
+      ]
+    },
+    "ResultExport": {
+      "STRUCT": [
+        {
+          "output_dir": "STR"
+        },
+        {
+          "outputfile_prefix": {
+            "OPTION": "STR"
+          }
+        },
+        {
+          "format": {
+            "TYPENAME": "ExportFormat"
+          }
+        },
+        {
+          "t_stacks": {
+            "TUPLEARRAY": {
+              "CONTENT": "U32",
+              "SIZE": 2
+            }
+          }
+        },
+        {
+          "z_stacks": {
+            "TUPLEARRAY": {
+              "CONTENT": "U32",
+              "SIZE": 2
+            }
+          }
+        },
+        {
+          "image_rel_paths": {
+            "SEQ": "STR"
+          }
+        },
+        {
+          "columns": {
+            "SEQ": {
+              "TYPENAME": "Column"
+            }
+          }
+        },
+        {
+          "color_schema": {
+            "TYPENAME": "ColorSchema"
+          }
+        },
+        {
+          "color_scale": {
+            "TYPENAME": "ColorScale"
+          }
+        },
+        {
+          "grouping_regex": "STR"
+        },
+        {
+          "object_classes": {
+            "SEQ": {
+              "TYPENAME": "ObjectClass"
+            }
+          }
+        },
+        {
+          "aggregations": {
+            "SEQ": {
+              "TYPENAME": "Aggregation"
+            }
+          }
+        },
+        {
+          "plate_dimension": {
+            "OPTION": {
+              "TYPENAME": "PlateDimensions"
+            }
+          }
+        },
+        {
+          "well_size": {
+            "OPTION": {
+              "TYPENAME": "WellSize"
+            }
+          }
+        },
+        {
+          "well_order": {
+            "OPTION": {
+              "SEQ": "U32"
+            }
+          }
+        },
+        {
+          "square_size": {
+            "OPTION": "U64"
+          }
+        },
+        {
+          "with_list_view": "BOOL"
+        },
+        {
+          "with_list_coloc_details": "BOOL"
+        },
+        {
+          "with_list_one_file_per_image": "BOOL"
+        },
+        {
+          "with_grouped_by_image_list": "BOOL"
+        },
+        {
+          "with_plate_view_heatmap": "BOOL"
+        },
+        {
+          "with_well_view_heatmap": "BOOL"
+        },
+        {
+          "with_plate_view_list": "BOOL"
+        },
+        {
+          "with_well_view_list": "BOOL"
+        },
+        {
+          "with_heatmap": "BOOL"
+        },
+        {
+          "transpond_table": "BOOL"
+        }
+      ]
+    },
+    "ResultsAnswer": {
+      "ENUM": {
+        "0": {
+          "Table": {
+            "NEWTYPE": {
+              "TYPENAME": "DatabaseResult"
+            }
+          }
+        },
+        "1": {
+          "Images": {
+            "NEWTYPE": {
+              "SEQ": {
+                "TYPENAME": "ImageEntry"
+              }
+            }
+          }
+        },
+        "2": {
+          "Classes": {
+            "NEWTYPE": {
+              "SEQ": {
+                "TYPENAME": "Class"
+              }
+            }
+          }
+        },
+        "3": {
+          "Columns": {
+            "NEWTYPE": {
+              "SEQ": {
+                "TYPENAME": "ColumnEntry"
+              }
+            }
+          }
+        },
+        "4": {
+          "Count": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "5": {
+          "Boxplot": {
+            "NEWTYPE": {
+              "TYPENAME": "BoxplotResult"
+            }
+          }
+        },
+        "6": {
+          "Histogram": {
+            "NEWTYPE": {
+              "TYPENAME": "HistogramResult"
+            }
+          }
+        },
+        "7": {
+          "Scatter": {
+            "NEWTYPE": {
+              "TYPENAME": "ScatterResult"
+            }
+          }
+        },
+        "8": {
+          "RunStatus": {
+            "NEWTYPE": {
+              "TYPENAME": "RunStatus"
+            }
+          }
+        },
+        "9": {
+          "Done": "UNIT"
+        }
+      }
+    },
+    "ResultsQuery": {
+      "ENUM": {
+        "0": {
+          "ObjectList": {
+            "NEWTYPE": {
+              "TYPENAME": "ListFilter"
+            }
+          }
+        },
+        "1": {
+          "GroupedByImage": {
+            "NEWTYPE": {
+              "TYPENAME": "GroupedByImageFilter"
+            }
+          }
+        },
+        "2": {
+          "GroupByPlate": {
+            "TUPLE": [
+              {
+                "TYPENAME": "PlateFilter"
+              },
+              {
+                "TYPENAME": "View"
+              }
+            ]
+          }
+        },
+        "3": {
+          "GroupByWell": {
+            "TUPLE": [
+              {
+                "TYPENAME": "WellFilter"
+              },
+              {
+                "TYPENAME": "View"
+              }
+            ]
+          }
+        },
+        "4": {
+          "ImageHeatmap": {
+            "TUPLE": [
+              {
+                "TYPENAME": "ImageHeatmapFilter"
+              },
+              {
+                "TYPENAME": "View"
+              }
+            ]
+          }
+        },
+        "5": {
+          "Images": "UNIT"
+        },
+        "6": {
+          "EnableImage": {
+            "STRUCT": [
+              {
+                "image_rel_path": "STR"
+              },
+              {
+                "disable": "BOOL"
+              }
+            ]
+          }
+        },
+        "7": {
+          "ObjectClasses": "UNIT"
+        },
+        "8": {
+          "AvailableColumns": "UNIT"
+        },
+        "9": {
+          "ZStacks": "UNIT"
+        },
+        "10": {
+          "TStacks": "UNIT"
+        },
+        "11": {
+          "RunStatus": "UNIT"
+        },
+        "12": {
+          "Boxplot": {
+            "NEWTYPE": {
+              "TYPENAME": "BoxplotFilter"
+            }
+          }
+        },
+        "13": {
+          "Histogram": {
+            "NEWTYPE": {
+              "TYPENAME": "HistogramFilter"
+            }
+          }
+        },
+        "14": {
+          "Scatter": {
+            "NEWTYPE": {
+              "TYPENAME": "ScatterFilter"
+            }
+          }
+        }
+      }
+    },
+    "RunStatus": {
+      "ENUM": {
+        "0": {
+          "Finished": "UNIT"
+        },
+        "1": {
+          "NotFinished": "UNIT"
+        },
+        "2": {
+          "Cancelled": "UNIT"
+        },
+        "3": {
+          "Failed": {
+            "NEWTYPE": "STR"
+          }
+        },
+        "4": {
+          "Unknown": "UNIT"
+        }
+      }
+    },
+    "ScatterFilter": {
+      "STRUCT": [
+        {
+          "plane": {
+            "TYPENAME": "PlaneFilter"
+          }
+        },
+        {
+          "images": {
+            "OPTION": {
+              "SEQ": "STR"
+            }
+          }
+        },
+        {
+          "object_classes": {
+            "OPTION": {
+              "SEQ": {
+                "TYPENAME": "ObjectClass"
+              }
+            }
+          }
+        },
+        {
+          "x_column": {
+            "TYPENAME": "Column"
+          }
+        },
+        {
+          "y_column": {
+            "TYPENAME": "Column"
+          }
+        },
+        {
+          "max_points": {
+            "OPTION": "U64"
+          }
+        }
+      ]
+    },
+    "ScatterPoint": {
+      "STRUCT": [
+        {
+          "x": "F64"
+        },
+        {
+          "y": "F64"
+        }
+      ]
+    },
+    "ScatterResult": {
+      "STRUCT": [
+        {
+          "points": {
+            "SEQ": {
+              "TYPENAME": "ScatterPoint"
+            }
+          }
+        },
+        {
+          "x_min": "F64"
+        },
+        {
+          "x_max": "F64"
+        },
+        {
+          "y_min": "F64"
+        },
+        {
+          "y_max": "F64"
+        },
+        {
+          "total_object_count": "U64"
+        }
+      ]
+    },
+    "View": {
+      "ENUM": {
+        "0": {
+          "List": "UNIT"
+        },
+        "1": {
+          "Heatmap": "UNIT"
+        }
+      }
+    },
+    "WellFilter": {
+      "STRUCT": [
+        {
+          "plane": {
+            "TYPENAME": "PlaneFilter"
+          }
+        },
+        {
+          "group_name": "STR"
+        },
+        {
+          "grouping_regex": "STR"
+        },
+        {
+          "aggregation": {
+            "TYPENAME": "Aggregation"
+          }
+        },
+        {
+          "object_class": {
+            "TYPENAME": "ObjectClass"
+          }
+        },
+        {
+          "column": {
+            "TYPENAME": "Column"
+          }
+        },
+        {
+          "color_schema": {
+            "TYPENAME": "ColorSchema"
+          }
+        },
+        {
+          "color_scale": {
+            "TYPENAME": "ColorScale"
+          }
+        },
+        {
+          "well_size": {
+            "OPTION": {
+              "TYPENAME": "WellSize"
+            }
+          }
+        },
+        {
+          "well_order": {
+            "OPTION": {
+              "SEQ": "U32"
+            }
+          }
+        }
+      ]
+    },
+    "WellSize": {
+      "STRUCT": [
+        {
+          "rows": "U64"
+        },
+        {
+          "cols": "U64"
+        }
+      ]
+    }
+  }
+}

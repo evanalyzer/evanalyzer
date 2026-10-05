@@ -71,6 +71,12 @@ impl Session {
                 image_formats,
             } => {
                 log::info!("Connected to EVAnalyzer {app_version} server at {url}");
+                if app_version != APP_VERSION {
+                    log::info!(
+                        "This is EVAnalyzer {APP_VERSION}, the server {app_version} - \
+                         compatible (same protocol {PROTOCOL_VERSION})"
+                    );
+                }
                 image_formats
             }
             ServerMsg::Rejected { reason } => {

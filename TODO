@@ -1,7 +1,7 @@
 ## Editor
 
-- [ ] feat: "old" or non used objects in the respective pipelines should not be displayed.
-- [ ] feat: channel should change with pipeline automatically
+- [x] feat: "old" or non used objects in the respective pipelines should not be displayed.
+- [x] feat: channel should change with pipeline automatically
 - [ ] feat: Allow to switch to grayscale mode
 
 ## Results
@@ -13,8 +13,8 @@
 - [x] Allow to train pixel classifier
 - [x] Add fill holes command
 - [x] Add AI Object classifier command
-- [ ] Support for sam-vit
-- [ ] Merge tiled objects (See docs(tile_merge_plan-md))
+- [x] Support for sam-vit
+- [x] Merge tiled objects (See docs(tile_merge_plan-md))
 
 ## GUI review (Slint/gui crate)
 

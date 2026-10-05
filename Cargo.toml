@@ -49,6 +49,7 @@ rustls = { version = "0.23.45", default-features = false, features = ["std", "ri
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 ring = "0.17"
 webpki-roots = "1"
+serde-reflection = "0.6"
 toml = "1.1.6"
 rpassword = "7"
 getrandom = "0.4.3"
