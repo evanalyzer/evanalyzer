@@ -39,9 +39,9 @@ pub fn generate_preview_job_from_project_settings(
     check_series(&config)?;
     check_pipeline_channels(&config)?;
     let out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>> = Arc::new(Mutex::new(vec![]));
-    let memory_storage = Arc::new(Mutex::new(MemoryExporter {
+    let memory_storage = Arc::new(MemoryExporter {
         out_objects: out_objects.clone(),
-    }));
+    });
 
     let output_path = project_path.join("results").join("preview");
     if let Err(e) = std::fs::create_dir_all(&output_path) {
@@ -110,7 +110,7 @@ pub fn generate_analyze_job_from_project_settings(
 
     let db_out_name = output_path.join(format!("{job_name}.{RESULTS_FILE_EXTENSION}"));
     let database_storage = match DuckDbExporter::new(&db_out_name, class_names) {
-        Ok(exp) => Arc::new(Mutex::new(exp)),
+        Ok(exp) => Arc::new(exp),
         Err(e) => {
             error!(
                 "Failed to open result database {}: {e}",
@@ -294,7 +294,7 @@ fn generate_job_from_project_settings_intenal(
     config: ProjectSettings,
     project_path: PathBuf,
     output_path: PathBuf,
-    result_storage: Arc<Mutex<dyn PipelineResultExporter>>,
+    result_storage: Arc<dyn PipelineResultExporter>,
 ) -> Result<JobExecutor, InternalErrors> {
     let Some(image_base_path) = config.images.root else {
         return Err(InternalErrors::InvalidArgument(

@@ -1,4 +1,4 @@
-use crate::object::Intensity;
+use crate::object::{Intensity, Object};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
 use duckdb::arrow::array::{
@@ -611,41 +611,26 @@ fn json_string_array(values: &[String]) -> String {
 // PipelineResultExporter impl
 // ---------------------------------------------------------------------------
 
-impl PipelineResultExporter for DuckDbExporter {
-    fn finish_run(&self, outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
-        let (status, message) = match outcome {
-            Ok(()) => ("finished", None),
-            Err(InternalErrors::Cancelled) => ("cancelled", None),
-            Err(e) => ("failed", Some(e.to_string())),
-        };
-        self.conn
-            .lock()
-            .map_err(|_| InternalErrors::Internal("results database lock poisoned".into()))?
-            .execute(
-                "UPDATE run SET status = ?, message = ?, finished_at = current_timestamp",
-                params![status, message],
-            )
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
-        Ok(())
+impl DuckDbExporter {
+    /// The connection, also after another image's export panicked while
+    /// holding it: every image runs on its own thread, and one panic must
+    /// not fail all others. The panicking export's transaction was rolled
+    /// back when it was dropped, so the connection is consistent.
+    fn lock_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
-        let start = Instant::now();
-        let object_count = cache.object_cache.len();
-        let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
-        // Objects and their colocalization stats must land together or not at
-        // all - without a transaction, a failure partway through (disk full,
-        // a DuckDB error) could leave one written with no matching rows in
-        // the other. `unchecked_transaction` (rather than `transaction`,
-        // which needs `&mut Connection`) is safe here because `conn` is
-        // already the only handle to this connection, serialized by the
-        // exporter's own Mutex - nothing else can be mid-transaction on it
-        // concurrently. Uncommitted (the `?` early-returns below) rolls back
-        // on drop.
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
-
+    /// The `objects` rows for the next up to `ARROW_BATCH_ROWS` objects
+    /// taken from `objects`, or `None` once it is exhausted. Needs no
+    /// database connection - see `export` for why that matters.
+    fn next_object_batch<'a>(
+        &self,
+        cache: &GlobalPipelineCache,
+        objects: &mut std::iter::Peekable<impl Iterator<Item = &'a Object>>,
+    ) -> Result<Option<RecordBatch>, InternalErrors> {
+        if objects.peek().is_none() {
+            return Ok(None);
+        }
         let px = &cache.image_meta.pixel_sizes;
         let nr_of_bits = cache.image_meta.nr_of_bits;
         // Same implausible-bit-depth guard as image_reader.rs's read path -
@@ -669,126 +654,170 @@ impl PipelineResultExporter for DuckDbExporter {
         let image_rel = cache.image_rel_path.display().to_string();
         let image_name = image_display_name(&cache.image_rel_path);
 
-        let label = |c: &ObjectClass| self.class_label(c);
+        let mut columns =
+            ObjectColumns::with_capacity(cache.object_cache.len().min(ARROW_BATCH_ROWS));
+        for object in objects.by_ref().take(ARROW_BATCH_ROWS) {
+            // get_perimeter()/get_ellipse() are precomputed at object creation (see
+            // Object::finalize_geometry), so here they are just field reads - which
+            // matters for batches built under the connection lock. We pull each into a local and
+            // derive the dependent metrics (circularity/roundness from the perimeter;
+            // min_feret/aspect_ratio from the ellipse) to build the row from one read.
+            let perimeter_f32 = object.get_perimeter();
+            let perimeter = perimeter_f32 as f64;
+            let ellipse = object.get_ellipse();
+            let centroid = object.get_centroid();
+            let feret = object.get_feret_diameter() as f64;
+            let min_feret = ellipse.minor as f64;
+            let aspect_ratio = if ellipse.minor > 0.0 {
+                (ellipse.major / ellipse.minor) as f64
+            } else {
+                1.0
+            };
+
+            let object_class_names: Vec<String> = object
+                .object_class
+                .iter()
+                .filter(|c| **c != ObjectClass::Unset)
+                .map(|c| self.class_label(c))
+                .collect();
+            let children_ids: Vec<String> =
+                object.children.iter().map(|id| id.to_string()).collect();
+
+            let centroid_x_px = centroid.0 as f64;
+            let centroid_y_px = centroid.1 as f64;
+            // circularity and roundness use the identical 4π·area/perimeter² formula,
+            // so compute it once from the perimeter local. (get_roundness also guards
+            // perimeter == 0, which object.circularity() does not.)
+            let roundness = object.get_roundness(perimeter_f32) as f64;
+
+            let c = &mut columns;
+            c.image_name.append_value(&image_name);
+            c.image_rel_path.append_value(&image_rel);
+            c.c_stack.append_value(object.plane.c);
+            c.z_stack.append_value(object.plane.z);
+            c.t_stack.append_value(object.plane.t);
+            c.object_id.append_value(object.id.to_string());
+            c.seg_class_name
+                .append_value(object.segmentation_class.to_string());
+            c.seg_class_id
+                .append_value(object.segmentation_class.0 as i32);
+            c.object_class_name
+                .append_value(json_string_array(&object_class_names));
+            for class in &object.object_class {
+                if let ObjectClass::Valid(n) = class {
+                    c.object_class_id.values().append_value(*n as i32);
+                }
+            }
+            c.object_class_id.append(true);
+            c.parent_id
+                .append_option(object.parent_id.as_ref().map(|id| id.to_string()));
+            c.children.append_value(json_string_array(&children_ids));
+            c.track_id.append_value(object.track.id.0);
+            c.f64(F64::CentroidXPx, centroid_x_px);
+            c.f64(F64::CentroidYPx, centroid_y_px);
+            c.f64(F64::CentroidXNm, centroid_x_px * pxx);
+            c.f64(F64::CentroidYNm, centroid_y_px * pxy);
+            for (column, value) in c.bbox_px.iter_mut().zip(object.bbox) {
+                column.append_value(value);
+            }
+            c.f64(F64::BboxXminNm, object.bbox[0] as f64 * pxx);
+            c.f64(F64::BboxYminNm, object.bbox[1] as f64 * pxy);
+            c.f64(F64::BboxXmaxNm, object.bbox[2] as f64 * pxx);
+            c.f64(F64::BboxYmaxNm, object.bbox[3] as f64 * pxy);
+            c.area_px.append_value(object.area as u64);
+            c.f64(F64::AreaNm2, object.area as f64 * pxx * pxy);
+            c.f64(F64::PerimeterPx, perimeter);
+            c.f64(F64::PerimeterNm, perimeter * px_len);
+            c.f64(F64::Circularity, roundness);
+            c.f64(F64::Solidity, object.get_solidity() as f64);
+            c.f64(F64::AspectRatio, aspect_ratio);
+            c.f64(F64::Roundness, roundness);
+            c.f64(
+                F64::Compactness,
+                object.get_compactness(perimeter_f32) as f64,
+            );
+            c.f64(F64::MajorAxisPx, ellipse.major as f64);
+            c.f64(F64::MinorAxisPx, ellipse.minor as f64);
+            c.f64(F64::MajorAxisNm, ellipse.major as f64 * px_len);
+            c.f64(F64::MinorAxisNm, ellipse.minor as f64 * px_len);
+            c.f64(F64::MajorAxisAngle, ellipse.angle as f64);
+            c.f64(F64::Eccentricity, ellipse.eccentricity as f64);
+            c.f64(F64::FeretDiameterPx, feret);
+            c.f64(F64::MinFeretPx, min_feret);
+            c.f64(F64::FeretDiameterNm, feret * px_len);
+            c.f64(F64::MinFeretNm, min_feret * px_len);
+            c.touches_edge.append_value(object.touches_edge);
+            c.f64(F64::PixelSizeXNm, pxx);
+            c.f64(F64::PixelSizeYNm, pxy);
+            c.f64(F64::PixelSizeZNm, px.px_size_z as f64);
+            c.image_bit_depth.append_value(nr_of_bits as u8);
+            c.append_intensities(&object.intensities, bit_max);
+            c.append_coloc(&object.colocalized_with)?;
+        }
+        columns.finish().map(Some)
+    }
+}
+
+impl PipelineResultExporter for DuckDbExporter {
+    fn finish_run(&self, outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
+        let (status, message) = match outcome {
+            Ok(()) => ("finished", None),
+            Err(InternalErrors::Cancelled) => ("cancelled", None),
+            Err(e) => ("failed", Some(e.to_string())),
+        };
+        self.conn
+            .lock()
+            .map_err(|_| InternalErrors::Internal("results database lock poisoned".into()))?
+            .execute(
+                "UPDATE run SET status = ?, message = ?, finished_at = current_timestamp",
+                params![status, message],
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+        let start = Instant::now();
+        let object_count = cache.object_cache.len();
+        let mut objects = cache.object_cache.values().peekable();
+
+        // The first batch - for typical images every object - is built
+        // before taking the connection lock: building the Arrow columns is
+        // about half of the export time and needs no database, so images
+        // finishing at the same time build theirs in parallel and only take
+        // turns for the append and commit. Further batches of a huge image
+        // are built under the lock, as before, so no thread ever holds more
+        // than one batch in memory.
+        let first_batch = self.next_object_batch(cache, &mut objects)?;
+
+        let conn = self.lock_conn();
+        // Objects and their colocalization stats must land together or not at
+        // all - without a transaction, a failure partway through (disk full,
+        // a DuckDB error) could leave one written with no matching rows in
+        // the other. `unchecked_transaction` (rather than `transaction`,
+        // which needs `&mut Connection`) is safe here because `conn` is
+        // already the only handle to this connection, serialized by the
+        // `conn` Mutex - nothing else can be mid-transaction on it
+        // concurrently. Uncommitted (the `?` early-returns below) rolls back
+        // on drop.
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
         // --- object rows via the Arrow appender ---
         // Rows are collected into Arrow columns and appended a batch at a
         // time: row by row, a 3.8M-object run took ~47 s instead of ~36 s
         // (and `append_row` can't append the `object_class_id` list at all -
-        // see `ObjectColumns`). Batches are capped at `ARROW_BATCH_ROWS`, so
-        // a huge image never holds all its rows twice at once. The Appender
-        // flushes to the database when dropped.
-        {
+        // see `ObjectColumns`). The Appender flushes to the database when
+        // dropped.
+        if let Some(batch) = first_batch {
             let mut app = tx
                 .appender("objects")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
-            let mut columns = ObjectColumns::with_capacity(object_count.min(ARROW_BATCH_ROWS));
-
-            for object in cache.object_cache.values() {
-                // get_perimeter()/get_ellipse() are precomputed at object creation on the
-                // parallel workers (see Object::finalize_geometry), so here on the single
-                // writer thread they are just field reads. We pull each into a local and
-                // derive the dependent metrics (circularity/roundness from the perimeter;
-                // min_feret/aspect_ratio from the ellipse) to build the row from one read.
-                let perimeter_f32 = object.get_perimeter();
-                let perimeter = perimeter_f32 as f64;
-                let ellipse = object.get_ellipse();
-                let centroid = object.get_centroid();
-                let feret = object.get_feret_diameter() as f64;
-                let min_feret = ellipse.minor as f64;
-                let aspect_ratio = if ellipse.minor > 0.0 {
-                    (ellipse.major / ellipse.minor) as f64
-                } else {
-                    1.0
-                };
-
-                let object_class_names: Vec<String> = object
-                    .object_class
-                    .iter()
-                    .filter(|c| **c != ObjectClass::Unset)
-                    .map(|c| label(c))
-                    .collect();
-                let children_ids: Vec<String> =
-                    object.children.iter().map(|id| id.to_string()).collect();
-
-                let centroid_x_px = centroid.0 as f64;
-                let centroid_y_px = centroid.1 as f64;
-                // circularity and roundness use the identical 4π·area/perimeter² formula,
-                // so compute it once from the perimeter local. (get_roundness also guards
-                // perimeter == 0, which object.circularity() does not.)
-                let roundness = object.get_roundness(perimeter_f32) as f64;
-
-                let c = &mut columns;
-                c.image_name.append_value(&image_name);
-                c.image_rel_path.append_value(&image_rel);
-                c.c_stack.append_value(object.plane.c);
-                c.z_stack.append_value(object.plane.z);
-                c.t_stack.append_value(object.plane.t);
-                c.object_id.append_value(object.id.to_string());
-                c.seg_class_name
-                    .append_value(object.segmentation_class.to_string());
-                c.seg_class_id
-                    .append_value(object.segmentation_class.0 as i32);
-                c.object_class_name
-                    .append_value(json_string_array(&object_class_names));
-                for class in &object.object_class {
-                    if let ObjectClass::Valid(n) = class {
-                        c.object_class_id.values().append_value(*n as i32);
-                    }
-                }
-                c.object_class_id.append(true);
-                c.parent_id
-                    .append_option(object.parent_id.as_ref().map(|id| id.to_string()));
-                c.children.append_value(json_string_array(&children_ids));
-                c.track_id.append_value(object.track.id.0);
-                c.f64(F64::CentroidXPx, centroid_x_px);
-                c.f64(F64::CentroidYPx, centroid_y_px);
-                c.f64(F64::CentroidXNm, centroid_x_px * pxx);
-                c.f64(F64::CentroidYNm, centroid_y_px * pxy);
-                for (column, value) in c.bbox_px.iter_mut().zip(object.bbox) {
-                    column.append_value(value);
-                }
-                c.f64(F64::BboxXminNm, object.bbox[0] as f64 * pxx);
-                c.f64(F64::BboxYminNm, object.bbox[1] as f64 * pxy);
-                c.f64(F64::BboxXmaxNm, object.bbox[2] as f64 * pxx);
-                c.f64(F64::BboxYmaxNm, object.bbox[3] as f64 * pxy);
-                c.area_px.append_value(object.area as u64);
-                c.f64(F64::AreaNm2, object.area as f64 * pxx * pxy);
-                c.f64(F64::PerimeterPx, perimeter);
-                c.f64(F64::PerimeterNm, perimeter * px_len);
-                c.f64(F64::Circularity, roundness);
-                c.f64(F64::Solidity, object.get_solidity() as f64);
-                c.f64(F64::AspectRatio, aspect_ratio);
-                c.f64(F64::Roundness, roundness);
-                c.f64(
-                    F64::Compactness,
-                    object.get_compactness(perimeter_f32) as f64,
-                );
-                c.f64(F64::MajorAxisPx, ellipse.major as f64);
-                c.f64(F64::MinorAxisPx, ellipse.minor as f64);
-                c.f64(F64::MajorAxisNm, ellipse.major as f64 * px_len);
-                c.f64(F64::MinorAxisNm, ellipse.minor as f64 * px_len);
-                c.f64(F64::MajorAxisAngle, ellipse.angle as f64);
-                c.f64(F64::Eccentricity, ellipse.eccentricity as f64);
-                c.f64(F64::FeretDiameterPx, feret);
-                c.f64(F64::MinFeretPx, min_feret);
-                c.f64(F64::FeretDiameterNm, feret * px_len);
-                c.f64(F64::MinFeretNm, min_feret * px_len);
-                c.touches_edge.append_value(object.touches_edge);
-                c.f64(F64::PixelSizeXNm, pxx);
-                c.f64(F64::PixelSizeYNm, pxy);
-                c.f64(F64::PixelSizeZNm, px.px_size_z as f64);
-                c.image_bit_depth.append_value(nr_of_bits as u8);
-                c.append_intensities(&object.intensities, bit_max);
-                c.append_coloc(&object.colocalized_with)?;
-
-                if columns.len() >= ARROW_BATCH_ROWS {
-                    app.append_record_batch(columns.finish()?)
-                        .map_err(|e| InternalErrors::Io(e.to_string()))?;
-                }
-            }
-            if columns.len() > 0 {
-                app.append_record_batch(columns.finish()?)
+            app.append_record_batch(batch)
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            while let Some(batch) = self.next_object_batch(cache, &mut objects)? {
+                app.append_record_batch(batch)
                     .map_err(|e| InternalErrors::Io(e.to_string()))?;
             }
         }
@@ -820,10 +849,7 @@ impl PipelineResultExporter for DuckDbExporter {
         nr_t_stacks: u32,
         error: Option<&str>,
     ) -> Result<(), InternalErrors> {
-        let conn = self
-            .conn
-            .lock()
-            .expect("Database connection mutex poisoned");
+        let conn = self.lock_conn();
         let image_rel = image_rel_path.display().to_string();
         let image_name = image_display_name(image_rel_path);
         let successful = error.is_none();
@@ -939,6 +965,89 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(classes, ["[]", "[4]", "[1, 3]"]);
+    }
+
+    fn cache_with_objects(image: &str, count: u128) -> GlobalPipelineCache {
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from(image);
+        cache.image_meta.nr_of_bits = 8;
+        for id in 1..=count {
+            cache
+                .object_cache
+                .insert(ObjectId(id), object_in_classes(id, &[1]));
+        }
+        cache
+    }
+
+    fn object_count(path: &Path) -> i64 {
+        shared_connection(path)
+            .unwrap()
+            .query_row("SELECT count(*) FROM objects", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn export_writes_every_object_of_an_image_larger_than_one_batch() {
+        // The first batch is built before the connection lock, the rest
+        // under it - none may be lost or written twice at the seam.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+        let count = ARROW_BATCH_ROWS as u128 * 2 + 1;
+
+        exporter
+            .export(&cache_with_objects("a.tif", count))
+            .unwrap();
+
+        assert_eq!(object_count(&path), count as i64);
+        let distinct: i64 = shared_connection(&path)
+            .unwrap()
+            .query_row("SELECT count(DISTINCT object_id) FROM objects", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(distinct, count as i64);
+    }
+
+    #[test]
+    fn concurrent_exports_of_several_images_write_every_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+        let caches: Vec<_> = (0..8)
+            .map(|i| cache_with_objects(&format!("{i}.tif"), 500))
+            .collect();
+
+        std::thread::scope(|s| {
+            for cache in &caches {
+                let exporter = &exporter;
+                s.spawn(move || exporter.export(cache).unwrap());
+            }
+        });
+
+        assert_eq!(object_count(&path), 8 * 500);
+    }
+
+    #[test]
+    fn export_still_works_after_another_export_panicked_holding_the_connection() {
+        // Every image exports from its own thread: one panicking while it
+        // holds the connection must not fail the export of all others.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _conn = exporter.conn.lock().unwrap();
+            panic!("simulated export panic while holding the connection");
+        }));
+        assert!(panicked.is_err());
+        assert!(exporter.conn.is_poisoned());
+
+        exporter.export(&cache_with_objects("a.tif", 3)).unwrap();
+        exporter
+            .finalize_image(Path::new("a.tif"), 1, 1, 1, 1, 1, None)
+            .unwrap();
+
+        assert_eq!(object_count(&path), 3);
     }
 
     #[test]

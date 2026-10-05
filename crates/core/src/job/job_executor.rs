@@ -173,7 +173,7 @@ pub struct JobExecutor {
     pub image_base_path: PathBuf,
     pub images: IndexMap<PathBuf, ImageEntry>,
     pub global_image_settings: GlobalImageSettings,
-    pub result_storage: Arc<Mutex<dyn PipelineResultExporter>>,
+    pub result_storage: Arc<dyn PipelineResultExporter>,
     pub override_pixel_sizes: Option<PixelSizes>,
     /// When set, tile selection in single-image preview runs is guided by the
     /// viewport position.  `None` means process all tiles (normal full run).
@@ -190,7 +190,7 @@ impl<'a> JobExecutor {
         images: IndexMap<PathBuf, ImageEntry>,
         image_base_path: PathBuf,
         global_image_settings: GlobalImageSettings,
-        result_storage: Arc<Mutex<dyn PipelineResultExporter>>,
+        result_storage: Arc<dyn PipelineResultExporter>,
         override_pixel_sizes: Option<PixelSizes>,
     ) -> Self {
         Self {
@@ -394,13 +394,8 @@ impl<'a> JobExecutor {
 
         info!("Pipeline completed in {:?}", start.elapsed());
         // Before `Finished`: whoever reads the results next sees the outcome.
-        match self.result_storage.lock() {
-            Ok(storage) => {
-                if let Err(e) = storage.finish_run(&result) {
-                    warn!("Could not record how the run ended: {e}");
-                }
-            }
-            Err(_) => warn!("Could not record how the run ended: storage lock poisoned"),
+        if let Err(e) = self.result_storage.finish_run(&result) {
+            warn!("Could not record how the run ended: {e}");
         }
         progress.send(ProgressEvent::Finished).ok();
         result
@@ -498,7 +493,7 @@ impl<'a> JobExecutor {
         image_path: &PathBuf,
         image_entry: &ImageEntry,
         order: &[PipelineId],
-        exporter: Arc<Mutex<dyn PipelineResultExporter>>,
+        exporter: Arc<dyn PipelineResultExporter>,
         cancel: Arc<AtomicBool>,
         progress: Option<Sender<ProgressEvent>>,
         image_cache_bytes: u64,
@@ -949,10 +944,7 @@ impl<'a> JobExecutor {
                         }
                     }
 
-                    exporter
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .export(&merged_cache)?;
+                    exporter.export(&merged_cache)?;
 
                     if let Some(sender) = &progress {
                         let idx = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -979,18 +971,15 @@ impl<'a> JobExecutor {
         // is passed through so it's recorded as failed rather than looking
         // identical to a genuinely complete image.
         let combined_error = analyze_result.as_ref().err().map(|e| e.to_string());
-        let finalize_result = exporter
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .finalize_image(
-                image_rel_path,
-                full_size.width as u32,
-                full_size.height as u32,
-                nr_c_stacks,
-                nr_z_stacks,
-                nr_t_stacks,
-                combined_error.as_deref(),
-            );
+        let finalize_result = exporter.finalize_image(
+            image_rel_path,
+            full_size.width as u32,
+            full_size.height as u32,
+            nr_c_stacks,
+            nr_z_stacks,
+            nr_t_stacks,
+            combined_error.as_deref(),
+        );
 
         let duration = start_image.elapsed();
         info!("Executed image pipeline in {:?}", duration);
@@ -1490,9 +1479,9 @@ mod z_t_stack_precedence_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             global_image_settings,
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         )
     }
@@ -1707,9 +1696,9 @@ mod preview_visible_tile_count_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         );
         job.preview_tile_settings = preview_tile_settings;
@@ -1793,9 +1782,9 @@ mod preview_tile_size_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         );
         job.preview_tile_settings = zoom.map(|zoom| PreviewTileSettings {
@@ -1863,9 +1852,9 @@ mod tile_iterator_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         )
     }
@@ -2023,9 +2012,9 @@ mod z_stack_iterator_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             global_image_settings,
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         )
     }
@@ -2164,9 +2153,9 @@ mod execution_order_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         )
     }
@@ -2424,7 +2413,7 @@ mod full_run_integration_tests {
             images,
             PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter { out_objects })),
+            Arc::new(MemoryExporter { out_objects }),
             None,
         );
         job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
@@ -2521,7 +2510,7 @@ mod full_run_integration_tests {
             images,
             PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter { out_objects })),
+            Arc::new(MemoryExporter { out_objects }),
             None,
         );
         job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
@@ -2920,9 +2909,9 @@ mod full_run_integration_tests {
             images,
             PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: out_objects.clone(),
-            })),
+            }),
             None,
         );
         // Built like `job_generator` does for a pipeline holding only this
@@ -3504,9 +3493,9 @@ mod estimate_ram_per_worker_bytes_tests {
             images,
             PathBuf::new(),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         )
     }
@@ -3540,50 +3529,6 @@ mod estimate_ram_per_worker_bytes_tests {
     fn falls_back_sanely_when_the_job_has_no_images() {
         let job = job_with(IndexMap::new());
         assert!(job.estimate_ram_per_worker_bytes() > 0);
-    }
-}
-
-#[cfg(test)]
-mod exporter_poison_tests {
-    use crate::storage::PipelineResultExporter;
-    use crate::storage::memory::MemoryExporter;
-    use std::sync::{Arc, Mutex};
-
-    #[test]
-    fn locking_the_shared_exporter_recovers_from_poison_instead_of_panicking() {
-        // `exporter` (`Arc<Mutex<dyn PipelineResultExporter>>`) is shared
-        // across every concurrently-running image's writer thread - see
-        // `analyze_image`. One image's writer panicking while holding this
-        // lock must not crash every other image's export/finalize_image
-        // call too.
-        let exporter: Arc<Mutex<dyn PipelineResultExporter>> =
-            Arc::new(Mutex::new(MemoryExporter {
-                out_objects: Arc::new(Mutex::new(Vec::new())),
-            }));
-
-        let exporter_for_panic = exporter.clone();
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = exporter_for_panic.lock().unwrap();
-            panic!("simulated writer-thread panic while holding the exporter lock");
-        }));
-        assert!(panicked.is_err(), "the panic should have propagated");
-
-        // Same recovery pattern used at every real call site in this module.
-        let recovered = exporter.lock().unwrap_or_else(|e| e.into_inner());
-        assert!(
-            recovered
-                .finalize_image(
-                    std::path::Path::new("after-poison.tif"),
-                    0,
-                    0,
-                    1,
-                    1,
-                    1,
-                    None
-                )
-                .is_ok(),
-            "the exporter must still be usable after recovering from poison"
-        );
     }
 }
 
