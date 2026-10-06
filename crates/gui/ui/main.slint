@@ -136,6 +136,9 @@ import {
     FileBrowserEntry,
 } from "dialogs/file_browser_dialog.slint";
 import { ClassSelectDialog } from "dialogs/classification_select_dialog.slint";
+import {
+    ConfirmDeleteManualAnnotatedObjectDialog,
+} from "dialogs/object_list_confirm_delete_manual_annotated_dialog.slint";
 
 export {
     GlobalAppState,
@@ -349,6 +352,8 @@ export component AppWindow inherits Window {
             if (GlobalAppState.active_dialog == DialogType.classification_confirm_auto_add_dialog): ConfirmAutoAddClassesDialog { }
             if (GlobalAppState.active_dialog == DialogType.classification-edit-class-dialog): ClassEditDialog { }
             if (GlobalAppState.active_dialog == DialogType.object-confirm-delete): ConfirmDeleteObjectDialog { }
+            if (GlobalAppState.active_dialog == DialogType.object-confirm-delete-manual-annotated): ConfirmDeleteManualAnnotatedObjectDialog { }
+
             if (GlobalAppState.active_dialog == DialogType.command-selection-dialog): CommandSelectionDialog {
                 width: 100%;
                 height: 100%;

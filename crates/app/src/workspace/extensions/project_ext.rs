@@ -84,6 +84,7 @@ pub trait ProjectExt {
     fn add_object(&mut self, object: &ObjectMetricSettings);
     fn get_objects(&self) -> Option<&[ObjectMetricSettings]>;
     fn delete_object(&mut self, id: ObjectId);
+    fn delete_all_manual_annoted_objects(&mut self);
     fn get_reference_object(&self) -> Option<Vec<ObjectMetricSettings>>;
     fn get_class_from_id(&self, id: &ObjectClass) -> Option<&Class>;
     fn get_current_relative_path(&self) -> Option<PathBuf>;
@@ -268,8 +269,10 @@ impl ProjectExt for ProjectWithRuntime {
     /// * `object_class` - The ObjectClass to add to the object
     fn replace_classes_of_object(&mut self, id: ObjectId, object_class: ObjectClass) {
         if let Some(series) = self.get_selected_image_series_mut() {
-            series.objects.clear();
-            self.add_class_to_object(id, object_class);
+            if let Some(object) = series.objects.iter_mut().find(|object| object.id == id) {
+                object.remove_all_object_classes();
+                object.add_object_class(object_class);
+            }
         }
     }
 
@@ -303,6 +306,12 @@ impl ProjectExt for ProjectWithRuntime {
     fn delete_object(&mut self, id: ObjectId) {
         if let Some(series) = self.get_selected_image_series_mut() {
             series.objects.retain(|object| object.id != id);
+        }
+    }
+
+    fn delete_all_manual_annoted_objects(&mut self) {
+        if let Some(series) = self.get_selected_image_series_mut() {
+            series.objects.clear();
         }
     }
 

@@ -8,6 +8,7 @@ import {
 import { Theme } from "../style.slint";
 import { GlobalAppState } from "../state.slint";
 import { DialogType, ChannelState } from "../state.slint";
+import { AppButton } from "../components/app_button.slint";
 
 export struct ObjectItemDataSlint {
     id: int,
@@ -41,6 +42,7 @@ export global ObjectListState {
     callback object_copy(int);
     callback object_edit(int);
     callback object_delete(int);
+    callback object_delete_all_manual_annotated();
     // Params: Adds the given class to the selected object (params are: object id, class id)
     callback object_add_class(int, int);
      // Params: Replaces all classed of the selected object by the given class (params are: object id, class id)
@@ -53,6 +55,7 @@ export global ObjectListState {
 component ActionButton inherits Rectangle {
     in property <image> icon;
     in property <bool> enabled: true;
+    in property <color> colorize: Theme.text;
     callback clicked;
 
     width: 28px;
@@ -66,7 +69,7 @@ component ActionButton inherits Rectangle {
         source: root.icon;
         width: 13px;
         height: 13px;
-        colorize: ta.has-hover && root.enabled ? Theme.text : Theme.text-dim;
+        colorize: ta.has-hover && root.enabled ? root.colorize : Theme.text-dim;
         animate colorize { duration: 100ms; }
     }
 
@@ -578,6 +581,28 @@ export component ObjectListPanel inherits Rectangle {
                 spacing: 2px;
                 alignment: stretch;
 
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        icon: @image-url("../icons/regular-white/trash-simple.svg");
+                        enabled: ObjectListState.selected_object.id != 0;
+                        clicked => {
+                            GlobalAppState.active_dialog = DialogType.object_confirm_delete;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        icon: @image-url("../icons/regular-red/backspace.svg");
+                        colorize: Theme.err;
+                        clicked => {
+                            GlobalAppState.active_dialog = DialogType.object_confirm_delete_manual_annotated;
+                        }
+                    }
+                }
+
                 /*   VerticalLayout {
                     alignment: center;
                     ActionButton {
@@ -589,17 +614,6 @@ export component ObjectListPanel inherits Rectangle {
                     }
                 }
                     */
-
-                VerticalLayout {
-                    alignment: center;
-                    ActionButton {
-                        icon: @image-url("../icons/regular-white/trash-simple.svg");
-                        enabled: ObjectListState.selected_object.id != 0;
-                        clicked => {
-                            GlobalAppState.active_dialog = DialogType.object_confirm_delete;
-                        }
-                    }
-                }
 
                 /*
                 VerticalLayout {

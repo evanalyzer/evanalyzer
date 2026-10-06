@@ -4,6 +4,7 @@ pub trait ObjectExt {
     fn is_part_of(&self, x: u32, y: u32) -> bool;
     fn add_object_class(&mut self, object_class: ObjectClass);
     fn remove_object_class(&mut self, object_class: &ObjectClass);
+    fn remove_all_object_classes(&mut self);
 }
 
 impl ObjectExt for ObjectMetricSettings {
@@ -35,6 +36,10 @@ impl ObjectExt for ObjectMetricSettings {
 
     fn remove_object_class(&mut self, object_class: &ObjectClass) {
         self.object_class.remove(object_class);
+    }
+
+    fn remove_all_object_classes(&mut self) {
+        self.object_class.clear();
     }
 }
 

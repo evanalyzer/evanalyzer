@@ -126,6 +126,22 @@ impl ClassificationController {
                     manager.sync_classification_to_slint();
                     manager.viewport_controller.trigger_image_redraw_objects();
                 });
+
+            // Delete manual annotated objects
+            let manager = self.clone();
+            ui.global::<ObjectListState>()
+                .on_object_delete_all_manual_annotated(move || {
+                    let mut project = manager.app_state.get_project_write();
+                    project.delete_all_manual_annoted_objects();
+                    project.set_selected_object(None);
+                    drop(project);
+                    manager.app_state.mark_dirty();
+                    manager.object_list_controller.sync_objects_to_slint();
+                    // The object's classes changed: so do the class counts.
+                    manager.sync_classification_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
+                });
+
             // Selected class changed
             let manager = self.clone();
             ui.global::<ClassificationState>()
