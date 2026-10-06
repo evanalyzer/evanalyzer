@@ -108,7 +108,9 @@ pub fn default_self_signed_dir() -> PathBuf {
         }
     }
     crate::user_management::single_user::server_account_home()
-        .join(".evanalyzer-server")
+        .join(".local")
+        .join("share")
+        .join("evanalyzer")
         .join("tls")
 }
 
