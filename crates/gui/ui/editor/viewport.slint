@@ -346,7 +346,7 @@ export component Viewport inherits Rectangle {
                 root.last_mouse_y = self.mouse-y;
                 
                 // Object selection
-                    if (ViewportObjectState.act_tool_state == ToolState.Select) {
+                 if (ViewportObjectState.act_tool_state == ToolState.Select) {
                     ViewportObjectState.viewport_clicked(root.last_mouse_x, root.last_mouse_y);
                 }
 
@@ -375,6 +375,7 @@ export component Viewport inherits Rectangle {
                                 ViewportObjectState.object_paint_finished(ViewportObjectState.polygon_points,ViewportObjectState.act_tool_state, ViewportObjectState.poly_idx);
                                 ViewportObjectState.is_drawing = false;
                                 ViewportObjectState.poly_idx = 0;
+                                ViewportObjectState.act_tool_state = ToolState.Move;
                             }
                         } else {
                             if (!ViewportObjectState.is_drawing) {
@@ -384,6 +385,7 @@ export component Viewport inherits Rectangle {
                                 ViewportObjectState.object_paint_finished(ViewportObjectState.polygon_points,ViewportObjectState.act_tool_state, ViewportObjectState.poly_idx);
                                 ViewportObjectState.is_drawing = false;
                                 ViewportObjectState.poly_idx = 0;
+                                ViewportObjectState.act_tool_state = ToolState.Move;
                             } else {
                                 ViewportObjectState.polygon_points[ViewportObjectState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
                                 ViewportObjectState.poly_idx = ViewportObjectState.poly_idx + 1;
@@ -409,6 +411,11 @@ export component Viewport inherits Rectangle {
                 // swallowing every keyboard shortcut afterwards.
                 GlobalAppState.reclaim_focus_requested += 1;
             }
+        }
+
+        // Double glick for select
+        double-clicked => {
+            ViewportObjectState.viewport_clicked(self.mouse-x, self.mouse-y);
         }
 
         moved => {
