@@ -31,14 +31,14 @@ import { ScrollView, ComboBox } from "std-widgets.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Theme } from "../style.slint";
 
+export struct ProjectAuthor { full_name: string, organization: string }
+
 export struct ProjectTemplateDef {
     id: int,
     name: string,
     short-description: string,
     description: string,
-    author: string,
-    co-authors: string,
-    organization: string,
+    authors: [ProjectAuthor],
     creation-time: string,
     pipeline-count: int,
     category: string,
@@ -262,7 +262,7 @@ component ProjectTemplateDetailPane inherits Rectangle {
 
         VerticalLayout {
             spacing: 4px;
-            if tmpl.author != "": HorizontalLayout {
+            if tmpl.authors.length > 0: HorizontalLayout {
                 spacing: 8px;
                 alignment: space-between;
                 Text {
@@ -272,7 +272,7 @@ component ProjectTemplateDetailPane inherits Rectangle {
                 }
 
                 Text {
-                    text: tmpl.author;
+                    text: tmpl.authors[0].full-name + " (" + tmpl.authors[0].organization + ")";
                     color: Theme.text-dim;
                     font-size: 10.5px;
                     font-family: Theme.font-mono;
@@ -280,39 +280,28 @@ component ProjectTemplateDetailPane inherits Rectangle {
                 }
             }
 
-            if tmpl.co-authors != "": HorizontalLayout {
-                spacing: 8px;
+            if tmpl.authors.length > 1: VerticalLayout {
+                spacing: 4px;
                 alignment: space-between;
-                Text {
-                    text: "Co-authors";
-                    color: Theme.text-mute;
-                    font-size: 10.5px;
-                }
+                for author[index] in tmpl.authors: HorizontalLayout {
+                    if index > 0: HorizontalLayout {
+                        spacing: 8px;
+                        alignment: space-between;
 
-                Text {
-                    text: tmpl.co-authors;
-                    color: Theme.text-dim;
-                    font-size: 10.5px;
-                    font-family: Theme.font-mono;
-                    overflow: elide;
-                }
-            }
+                        Text {
+                            text: index == 1 ? "Co-authors" : "";
+                            color: Theme.text-mute;
+                            font-size: 10.5px;
+                        }
 
-            if tmpl.organization != "": HorizontalLayout {
-                spacing: 8px;
-                alignment: space-between;
-                Text {
-                    text: "Organization";
-                    color: Theme.text-mute;
-                    font-size: 10.5px;
-                }
-
-                Text {
-                    text: tmpl.organization;
-                    color: Theme.text-dim;
-                    font-size: 10.5px;
-                    font-family: Theme.font-mono;
-                    overflow: elide;
+                        Text {
+                            text: author.full-name + " (" + author.organization + ")";
+                            color: Theme.text-dim;
+                            font-size: 10.5px;
+                            font-family: Theme.font-mono;
+                            overflow: elide;
+                        }
+                    }
                 }
             }
 
@@ -392,7 +381,7 @@ component ProjectTemplateDetailPane inherits Rectangle {
     }
 }
 
-// ===========================================================================
+    // ===========================================================================
 // Main dialog
 // ===========================================================================
 

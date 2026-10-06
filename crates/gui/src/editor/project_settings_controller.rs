@@ -1,5 +1,6 @@
 use crate::UiState;
 use crate::{AppWindow, ProjectSettingsSlint, ProjectSettingsState, ResultsWindow};
+use evanalyzer_app::global::UserInformation;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::plate_settings::GroupingMode;
 use evanalyzer_cfg::settings::project_settings::TileMergeConnectivity;
@@ -35,6 +36,12 @@ impl ProjectSettingsController {
     }
 
     pub fn attach_callbacks(self: &Arc<Self>) {
+        // Load user settings
+        if let Some(_author) = &self.app_state.load_app_settings().author {
+            self.sync_project_settings_to_slint();
+        }
+
+        // Attache callbacks
         if let Some(ui) = self.ui.upgrade() {
             let manager = self.clone();
             ui.global::<ProjectSettingsState>()
@@ -130,23 +137,17 @@ impl ProjectSettingsController {
     /// 3. Plate Geometry: Updating well dimensions and the flat-mapped image sequence order.
     pub fn update_project_settings_in_project(&self, project_settings: &ProjectSettingsSlint) {
         {
-            let mut project = self.app_state.get_project_write();
-
             // Meta settings
             {
-                let meta = &mut project.meta;
-                let full_name: String = project_settings.author_name.clone().into();
-                // This field only ever edits the primary author (authors[0]);
-                // any co-authors past that (only settable today by
-                // hand-editing the project file) are left untouched.
-                match meta.authors.first_mut() {
-                    Some(primary) => *primary = full_name,
-                    None if !full_name.is_empty() => meta.authors.push(full_name),
-                    None => {}
-                }
-                meta.author_organization = project_settings.organization_name.clone().into();
-                meta.name = project_settings.project_name.clone().into();
+                self.app_state.update_app_settings(|settings| {
+                    settings.author = Some(UserInformation {
+                        full_name: project_settings.author_name.clone().into(),
+                        organization: project_settings.organization_name.clone().into(),
+                    });
+                });
             }
+
+            let mut project = self.app_state.get_project_write();
 
             // Plate settings
             {
@@ -195,9 +196,12 @@ impl ProjectSettingsController {
         let results_ui_handle = self.results_ui.clone();
 
         let (author_name, organization) = {
-            let addr = &project.meta;
-            let full_name = addr.authors.first().cloned().unwrap_or_default();
-            (full_name, addr.author_organization.clone())
+            let addr = &*self.app_state.app_settings.lock().expect("Poisened");
+            if let Some(usr) = &addr.author {
+                (usr.full_name.clone(), usr.organization.clone())
+            } else {
+                ("".into(), "".into())
+            }
         };
 
         let (plate_rows, plate_cols, well_rows, well_cols, well_image_order, regex, mode_index) = {
@@ -541,8 +545,8 @@ mod tests {
         controller.update_project_settings_in_project(&sample_settings());
 
         let project = ui_state.get_project();
-        assert_eq!(project.meta.authors, vec!["Ada Lovelace".to_string()]);
-        assert_eq!(project.meta.author_organization, "Analytical Engines");
+        assert_eq!(project.meta.authors[0].full_name, "Ada Lovelace");
+        assert_eq!(project.meta.authors[0].organization, "Analytical Engines");
         assert_eq!(project.meta.name, "Test Project");
         assert_eq!(project.plate.well_rows, 2);
         assert_eq!(project.plate.well_cols, 3);

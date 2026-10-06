@@ -29,6 +29,7 @@ use evanalyzer_cfg::settings::ai_learning_settings::{
 use evanalyzer_cfg::settings::images_settings::{
     ImageEntry, ImageSettings, TStackHandling, TStackSettings,
 };
+use evanalyzer_cfg::settings::meta_data::AuthorInformation;
 use evanalyzer_cfg::settings::parameter_def::{ParamType as CfgParamType, ParameterDef};
 use evanalyzer_cfg::settings::pipeline_command::CommandMeta;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
@@ -42,6 +43,7 @@ use evanalyzer_cfg::settings::pipeline_command_settings::{
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use evanalyzer_cfg::settings::templates::PipelineTemplate;
+use evanalyzer_gui_slint::CommandAuthor;
 use log::debug;
 use log::info;
 use log::warn;
@@ -1502,6 +1504,14 @@ impl PipelinesController {
         let mut project_settings = project.settings.clone();
         Self::force_all_t_stacks(&mut project_settings);
 
+        // User settings from app settings if available
+        if let Some(user_info) = &self.app_state.app_settings.lock().expect("Poisened").author {
+            project_settings.meta.authors.push(AuthorInformation {
+                full_name: user_info.full_name.clone(),
+                organization: user_info.organization.clone(),
+            });
+        }
+
         let task: PipelineTask = PipelineTask {
             project_settings,
             project_path: current_project
@@ -2398,8 +2408,16 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         })
         .unwrap_or(StepCategory::Preprocess);
 
-    let author = template.meta.authors.first().cloned().unwrap_or_default();
-    let co_authors = template.meta.authors.get(1..).unwrap_or(&[]).join(", ");
+    let authors: Vec<CommandAuthor> = template
+        .meta
+        .authors
+        .clone()
+        .into_iter()
+        .map(|x| CommandAuthor {
+            full_name: x.full_name.into(),
+            organization: x.organization.into(),
+        })
+        .collect();
 
     CommandDef {
         id: -(idx as i32) - 1,
@@ -2414,9 +2432,7 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         recent: false,
         default_params: ModelRc::default(),
         is_template: true,
-        author: author.into(),
-        co_authors: co_authors.into(),
-        organization: template.meta.author_organization.clone().into(),
+        authors: ModelRc::new(VecModel::from(authors)),
         creation_time: template
             .meta
             .creation_time
@@ -2447,9 +2463,7 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
         recent: false,
         default_params: ModelRc::default(),
         is_template: false,
-        author: "".into(),
-        co_authors: "".into(),
-        organization: "".into(),
+        authors: ModelRc::default(),
         creation_time: "".into(),
     };
     detail
@@ -2601,7 +2615,15 @@ fn format_classifier_model_info(settings: &AiLearningSettings) -> String {
         out.push_str(&format!("\n{}\n", meta.description));
     }
     if !meta.authors.is_empty() {
-        out.push_str(&format!("\nAuthor: {}\n", meta.authors.join(", ")));
+        out.push_str(&format!(
+            "\nAuthor: {}\n",
+            meta.authors
+                .clone()
+                .into_iter()
+                .map(|x| x.full_name)
+                .collect::<Vec<String>>()
+                .join(", ")
+        ));
     }
     match &settings.classifier {
         AiLearningClassifierSettings::Pixel {
@@ -2958,7 +2980,10 @@ mod tests {
                 name: format!("Template {idx_seed}"),
                 short_description: "short".into(),
                 description: "long description".into(),
-                authors: vec!["Ada Lovelace".into()],
+                authors: vec![AuthorInformation {
+                    full_name: "Ada Lovelace".into(),
+                    organization: "".into(),
+                }],
                 ..Default::default()
             },
             steps: steps,
@@ -2998,21 +3023,31 @@ mod tests {
     fn template_to_command_def_uses_the_first_author_and_joins_the_rest_as_co_authors() {
         let mut t = template("X", vec![]);
         let def = template_to_command_def(0, &t);
-        assert_eq!(def.author, SharedString::from("Ada Lovelace"));
-        assert_eq!(def.co_authors, SharedString::from(""));
+        assert_eq!(
+            def.authors.row_data(0).unwrap().full_name,
+            SharedString::from("Ada Lovelace")
+        );
+        assert_eq!(def.authors.row_count(), 1);
 
-        t.meta.authors.push("Alan Turing".into());
+        t.meta.authors.push(AuthorInformation {
+            full_name: "Alan Turing".into(),
+            organization: "University".into(),
+        });
         let def_with_co_author = template_to_command_def(0, &t);
         assert_eq!(
-            def_with_co_author.co_authors,
+            def_with_co_author.authors.row_data(1).unwrap().full_name,
             SharedString::from("Alan Turing")
+        );
+        assert_eq!(
+            def_with_co_author.authors.row_data(1).unwrap().organization,
+            SharedString::from("University")
         );
 
         t.meta.authors.clear();
         let def_empty = template_to_command_def(0, &t);
         assert_eq!(
-            def_empty.author,
-            SharedString::from(""),
+            def_empty.authors.row_count(),
+            0,
             "no author when the authors list is empty"
         );
     }
@@ -3225,7 +3260,7 @@ mod tests {
                 name: "Model".into(),
                 short_description: "A short summary".into(),
                 description: "A longer description.".into(),
-                authors: vec!["Ada Lovelace".into()],
+                authors: vec![AuthorInformation{full_name: "Ada Lovelace".into(), organization: "University".into()}],
                 ..Default::default()
             },
         );

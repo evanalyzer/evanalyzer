@@ -28,6 +28,7 @@ use evanalyzer_cfg::LEGACY_PROJECT_FILE_EXTENSION;
 use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
 use evanalyzer_cfg::PROJECT_FILE_TEMPLATE_EXTENSIONS;
 use evanalyzer_cfg::settings::templates::ProjectTemplate;
+use evanalyzer_gui_slint::ProjectAuthor;
 use log::{info, warn};
 use slint::ComponentHandle;
 use slint::{ModelRc, SharedString, VecModel};
@@ -137,7 +138,6 @@ impl ProjectController {
     /// no reason.
     pub fn create_new_project(self: Arc<Self>) {
         self.app_state.new_project();
-
         self.image_list_controller.sync_image_list_to_slint();
         self.project_settings_controller
             .sync_project_settings_to_slint();
@@ -1183,8 +1183,16 @@ impl ProjectController {
 /// Builds the `ProjectTemplateDef` shown in the "New from Project Template"
 /// dialog for a loaded `ProjectTemplate`.
 fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTemplateDef {
-    let author = template.meta.authors.first().cloned().unwrap_or_default();
-    let co_authors = template.meta.authors.get(1..).unwrap_or(&[]).join(", ");
+    let authors: Vec<ProjectAuthor> = template
+        .meta
+        .authors
+        .clone()
+        .into_iter()
+        .map(|x| ProjectAuthor {
+            full_name: x.full_name.into(),
+            organization: x.organization.into(),
+        })
+        .collect();
 
     let tags: Vec<SharedString> = template
         .meta
@@ -1199,9 +1207,7 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
         name: template.meta.name.clone().into(),
         short_description: template.meta.short_description.clone().into(),
         description: template.meta.description.clone().into(),
-        author: author.into(),
-        co_authors: co_authors.into(),
-        organization: template.meta.author_organization.clone().into(),
+        authors: ModelRc::new(VecModel::from(authors)),
         creation_time: template
             .meta
             .creation_time
@@ -1219,7 +1225,7 @@ pub(crate) mod tests {
     use super::*;
     use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
     use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
-    use evanalyzer_cfg::settings::meta_data::MetaData;
+    use evanalyzer_cfg::settings::meta_data::{AuthorInformation, MetaData};
     use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
     use evanalyzer_cfg::settings::plate_settings::PlateSettings;
     use slint::Model;
@@ -1255,37 +1261,54 @@ pub(crate) mod tests {
     #[test]
     fn project_template_to_def_uses_the_first_author_as_the_primary_author() {
         let meta = MetaData {
-            authors: vec!["Ada Lovelace".into()],
+            authors: vec![AuthorInformation {
+                full_name: "Ada Lovelace".into(),
+                organization: "Org 01".into(),
+            }],
             ..Default::default()
         };
         let def = project_template_to_def(0, &template_with_meta(meta, 0));
 
-        assert_eq!(def.author.as_str(), "Ada Lovelace");
-        assert_eq!(def.co_authors.as_str(), "");
+        assert_eq!(def.authors.row_data(0).unwrap().full_name, "Ada Lovelace");
+        assert_eq!(def.authors.row_data(0).unwrap().organization, "Org 01");
     }
 
     #[test]
     fn project_template_to_def_joins_remaining_authors_as_co_authors() {
         let meta = MetaData {
             authors: vec![
-                "Ada Lovelace".into(),
-                "Alan Turing".into(),
-                "Grace Hopper".into(),
+                AuthorInformation {
+                    full_name: "Ada Lovelace".into(),
+                    organization: "Org 01".into(),
+                },
+                AuthorInformation {
+                    full_name: "Alan Turing".into(),
+                    organization: "Org 02".into(),
+                },
+                AuthorInformation {
+                    full_name: "Grace Hopper".into(),
+                    organization: "Org 03".into(),
+                },
             ],
             ..Default::default()
         };
         let def = project_template_to_def(0, &template_with_meta(meta, 0));
 
-        assert_eq!(def.author.as_str(), "Ada Lovelace");
-        assert_eq!(def.co_authors.as_str(), "Alan Turing, Grace Hopper");
+        assert_eq!(def.authors.row_data(0).unwrap().full_name, "Ada Lovelace");
+        assert_eq!(def.authors.row_data(0).unwrap().organization, "Org 01");
+
+        assert_eq!(def.authors.row_data(1).unwrap().full_name, "Alan Turing");
+        assert_eq!(def.authors.row_data(1).unwrap().organization, "Org 02");
+
+        assert_eq!(def.authors.row_data(2).unwrap().full_name, "Grace Hopper");
+        assert_eq!(def.authors.row_data(2).unwrap().organization, "Org 03");
     }
 
     #[test]
     fn project_template_to_def_leaves_author_empty_when_no_authors_are_set() {
         let def = project_template_to_def(0, &template_with_meta(MetaData::default(), 0));
 
-        assert_eq!(def.author.as_str(), "");
-        assert_eq!(def.co_authors.as_str(), "");
+        assert_eq!(def.authors.row_count(), 0);
     }
 
     #[test]

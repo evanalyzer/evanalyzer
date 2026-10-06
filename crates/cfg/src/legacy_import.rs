@@ -21,6 +21,7 @@
 
 use crate::core_types::{ImageAddress, ObjectClass, PipelineId, SegmentationClass, SizeUnits};
 use crate::legacy_schema::*;
+use crate::modules::meta_data::AuthorInformation;
 use crate::settings::classification_settings::{Class, ClassificationSettings};
 use crate::settings::images_settings::{
     GlobalImageSettings, PixelSizeSettings, ZStackHandling, ZStackSettings,
@@ -113,12 +114,17 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(chrono::Utc::now);
-    let authors = m
+    let authors: Vec<AuthorInformation> = m
         .author
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| vec![s.to_string()])
+        .map(|s| {
+            vec![AuthorInformation {
+                full_name: s.to_string(),
+                organization: m.organization.clone().unwrap_or_default(),
+            }]
+        })
         .unwrap_or_default();
 
     MetaData {
@@ -126,7 +132,6 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         short_description: String::new(),
         description,
         authors,
-        author_organization: m.organization.clone().unwrap_or_default(),
         creation_time,
         category: String::new(),
         tags: Vec::new(),
@@ -1117,8 +1122,8 @@ mod tests {
         let p = &outcome.project;
 
         assert_eq!(p.meta.name, "Legacy Demo");
-        assert_eq!(p.meta.authors, vec!["Joachim Danmayr".to_string()]);
-        assert_eq!(p.meta.author_organization, "evanalyzer.org");
+        assert_eq!(p.meta.authors[0].full_name, "Joachim Danmayr".to_string());
+        assert_eq!(p.meta.authors[0].organization, "evanalyzer.org".to_string());
 
         // classes()[0] is always the auto-prepended Background class - see
         // `ClassificationSettings::new_from_existing`.
@@ -1561,7 +1566,6 @@ mod tests {
         assert_eq!(outcome.project.meta.name, "Fallback Name");
         assert_eq!(outcome.project.meta.description, "fallback notes");
         assert!(outcome.project.meta.authors.is_empty());
-        assert_eq!(outcome.project.meta.author_organization, "");
     }
 
     #[test]

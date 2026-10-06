@@ -167,6 +167,23 @@
         "channels"
       ]
     },
+    "AuthorInformation": {
+      "type": "object",
+      "properties": {
+        "fullName": {
+          "description": "Full name of the author",
+          "type": "string"
+        },
+        "organization": {
+          "description": "Author organization",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fullName",
+        "organization"
+      ]
+    },
     "EdgeDetectionSobelSettings": {
       "description": "Extracts directional boundaries by computing spatial image intensity gradients.\n\nThis algorithm applies localized 3x3 kernels to approximate the first derivative\nof pixel intensities across the horizontal and vertical axes. It highlights\nareas of sharp luminance changes, producing a continuous gradient map that\nemphasizes prominent structural edges and surface transitions.\n\n# Examples\n\n```\n# use imagec::backend::algos::EdgeDetectionSobel;\nlet filter = EdgeDetectionSobel { kernel_size: 3 };\n```",
       "type": "object",
@@ -426,16 +443,12 @@
           "type": "string",
           "default": ""
         },
-        "authorOrganization": {
-          "description": "Author organization",
-          "type": "string"
-        },
         "authors": {
           "description": "Every author, in display order (the first entry is treated as the\nprimary author in template/pipeline picker dialogs, the rest as\nco-authors). Free-form display strings, not split into first/last.",
           "type": "array",
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/AuthorInformation"
           }
         },
         "category": {
@@ -473,7 +486,6 @@
         "name",
         "shortDescription",
         "description",
-        "authorOrganization",
         "creationTime"
       ]
     },

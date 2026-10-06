@@ -92,6 +92,23 @@
         }
       ]
     },
+    "AuthorInformation": {
+      "type": "object",
+      "properties": {
+        "fullName": {
+          "description": "Full name of the author",
+          "type": "string"
+        },
+        "organization": {
+          "description": "Author organization",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fullName",
+        "organization"
+      ]
+    },
     "BlurSettings": {
       "description": "Smooths an image by averaging pixel intensities within a local neighborhood.\n\nThis algorithm applies a uniform box filter where every pixel within the moving\nwindow contributes equally to the final value. It is a computationally fast\nmethod used for general image smoothing, blending variations, and rapid noise\nsuppression where edge precision is less critical.",
       "type": "object",
@@ -1202,16 +1219,12 @@
           "type": "string",
           "default": ""
         },
-        "authorOrganization": {
-          "description": "Author organization",
-          "type": "string"
-        },
         "authors": {
           "description": "Every author, in display order (the first entry is treated as the\nprimary author in template/pipeline picker dialogs, the rest as\nco-authors). Free-form display strings, not split into first/last.",
           "type": "array",
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/AuthorInformation"
           }
         },
         "category": {
@@ -1249,7 +1262,6 @@
         "name",
         "shortDescription",
         "description",
-        "authorOrganization",
         "creationTime"
       ]
     },

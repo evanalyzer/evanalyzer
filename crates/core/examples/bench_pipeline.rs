@@ -30,7 +30,9 @@ fn arg(name: &str, default: usize) -> usize {
 fn make_image(path: &PathBuf, size: u32, spots: u32, seed: u64) {
     let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
     let mut rnd = || {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (state >> 33) as u32
     };
     let mut img = image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::new(size, size);
@@ -79,15 +81,14 @@ fn main() {
             },
         );
     }
-    project
-        .classification
-        .classes_mut()
-        .push(evanalyzer_cfg::settings::classification_settings::Class {
+    project.classification.classes_mut().push(
+        evanalyzer_cfg::settings::classification_settings::Class {
             id: evanalyzer_cfg::core_types::ObjectClass::Valid(1),
             color: 0xFF0000,
             name: "Spots".into(),
             notes: String::new(),
-        });
+        },
+    );
     let step = |command| PipelineStepSettings {
         enabled: true,
         command,
@@ -106,17 +107,17 @@ fn main() {
                 }))
             })
             .chain([
-            step(PipelineCommand::Threshold(ThresholdSettings {
-                thresholds: vec![ThresholdEntrySettings {
-                    min_threshold: 1500.0,
-                    object_class_id: SegmentationClass(1),
-                    ..Default::default()
-                }],
-            })),
-            step(PipelineCommand::ConnectedComponents(Default::default())),
-            step(PipelineCommand::ExtractObjects(ExtractObjectsSettings {
-                max_objects_before_fail: 100000,
-            })),
+                step(PipelineCommand::Threshold(ThresholdSettings {
+                    thresholds: vec![ThresholdEntrySettings {
+                        min_threshold: 1500.0,
+                        object_class_id: SegmentationClass(1),
+                        ..Default::default()
+                    }],
+                })),
+                step(PipelineCommand::ConnectedComponents(Default::default())),
+                step(PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+                    max_objects_before_fail: 100000,
+                })),
             ])
             .collect(),
     });

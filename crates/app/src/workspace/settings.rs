@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// How many servers [`AppSettings::recent_servers`] keeps.
+const MAX_RECENT_SERVERS: usize = 10;
+
 /// Persisted, per-user application preferences (as opposed to project
 /// settings, which travel with the project file).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -22,6 +25,21 @@ pub struct AppSettings {
     /// [`AppSettings::remember_server`]. Kept on this computer only.
     #[serde(default)]
     pub recent_servers: Vec<RecentServer>,
+
+    #[serde(default)]
+    pub author: Option<UserInformation>,
+}
+
+/// Persisted, per-user application preferences (as opposed to project
+/// settings, which travel with the project file).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInformation {
+    /// First name of the user
+    pub full_name: String,
+
+    /// Organization of the user
+    pub organization: String,
 }
 
 /// A server the user connected to: what the connect dialog offers again.
@@ -37,9 +55,6 @@ pub struct RecentServer {
     #[serde(default)]
     pub fingerprint: Option<String>,
 }
-
-/// How many servers [`AppSettings::recent_servers`] keeps.
-const MAX_RECENT_SERVERS: usize = 10;
 
 impl AppSettings {
     /// Puts `server` first in [`Self::recent_servers`], replacing an older

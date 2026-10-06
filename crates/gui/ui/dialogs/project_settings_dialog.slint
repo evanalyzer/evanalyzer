@@ -56,8 +56,39 @@ export global ProjectSettingsState {
         plate_cols: 1,
         tile_merge_enabled: true,
         tile_merge_classes_to_not_merge_flags: [
-            "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
-            "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
         ],
         tile_merge_connectivity: 1,
         tile_merge_max_fragments_per_group: 10000,
@@ -223,6 +254,93 @@ export component ProjectSettingsDialog inherits Rectangle {
                         VerticalLayout {
                             spacing: 12px;
                             Text {
+                                text: "Cross-tile object merging";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            Text {
+                                text: "Reassemble objects split across an internal tile boundary (e.g. a whole organ on a whole-slide image) back into one correct object. On by default; every object class merges unless excluded below.";
+                                color: Theme.text-dim;
+                                font-size: 10px;
+                                wrap: word-wrap;
+                            }
+
+                            CheckBox {
+                                text: "Merge objects split across tile boundaries";
+                                checked <=> ProjectSettingsState.settings.tile_merge_enabled;
+                            }
+
+                            if (ProjectSettingsState.settings.tile_merge_enabled): VerticalLayout {
+                                spacing: 12px;
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    Text {
+                                        text: "Exclude classes:";
+                                        vertical-alignment: center;
+                                        width: 110px;
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                    }
+
+                                    MultiClassDropdown {
+                                        is-seg: false;
+                                        value: "excluded-classes";
+                                        selection-flags: ProjectSettingsState.settings.tile_merge_classes_to_not_merge_flags;
+                                        changed(v) => {
+                                            ProjectSettingsState.tile_merge_class_toggled(v);
+                                        }
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    Text {
+                                        text: "Connectivity:";
+                                        vertical-alignment: center;
+                                        width: 110px;
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                    }
+
+                                    ComboBox {
+                                        model: ["4-connected", "8-connected"];
+                                        current-index <=> ProjectSettingsState.settings.tile_merge_connectivity;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    Text {
+                                        text: "Max fragments/group:";
+                                        vertical-alignment: center;
+                                        width: 110px;
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                    }
+
+                                    SpinBox {
+                                        value: ProjectSettingsState.settings.tile_merge_max_fragments_per_group;
+                                        minimum: 1;
+                                        maximum: 1000000;
+                                        edited => {
+                                            ProjectSettingsState.settings.tile_merge_max_fragments_per_group = self.value;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        VerticalLayout {
+                            spacing: 12px;
+                            Text {
                                 text: "Analyze settings";
                                 color: Theme.text;
                                 font-size: 12px;
@@ -375,93 +493,6 @@ export component ProjectSettingsDialog inherits Rectangle {
                                         }
                                         edited => {
                                             ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
-
-                        VerticalLayout {
-                            spacing: 12px;
-                            Text {
-                                text: "Cross-tile object merging";
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 600;
-                            }
-
-                            Text {
-                                text: "Reassemble objects split across an internal tile boundary (e.g. a whole organ on a whole-slide image) back into one correct object. On by default; every object class merges unless excluded below.";
-                                color: Theme.text-dim;
-                                font-size: 10px;
-                                wrap: word-wrap;
-                            }
-
-                            CheckBox {
-                                text: "Merge objects split across tile boundaries";
-                                checked <=> ProjectSettingsState.settings.tile_merge_enabled;
-                            }
-
-                            if (ProjectSettingsState.settings.tile_merge_enabled): VerticalLayout {
-                                spacing: 12px;
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    Text {
-                                        text: "Exclude classes:";
-                                        vertical-alignment: center;
-                                        width: 110px;
-                                        color: Theme.text-dim;
-                                        font-size: 11px;
-                                    }
-
-                                    MultiClassDropdown {
-                                        is-seg: false;
-                                        value: "excluded-classes";
-                                        selection-flags: ProjectSettingsState.settings.tile_merge_classes_to_not_merge_flags;
-                                        changed(v) => {
-                                            ProjectSettingsState.tile_merge_class_toggled(v);
-                                        }
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    Text {
-                                        text: "Connectivity:";
-                                        vertical-alignment: center;
-                                        width: 110px;
-                                        color: Theme.text-dim;
-                                        font-size: 11px;
-                                    }
-
-                                    ComboBox {
-                                        model: ["4-connected", "8-connected"];
-                                        current-index <=> ProjectSettingsState.settings.tile_merge_connectivity;
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    Text {
-                                        text: "Max fragments/group:";
-                                        vertical-alignment: center;
-                                        width: 110px;
-                                        color: Theme.text-dim;
-                                        font-size: 11px;
-                                    }
-
-                                    SpinBox {
-                                        value: ProjectSettingsState.settings.tile_merge_max_fragments_per_group;
-                                        minimum: 1;
-                                        maximum: 1000000;
-                                        edited => {
-                                            ProjectSettingsState.settings.tile_merge_max_fragments_per_group = self.value;
                                         }
                                     }
                                 }

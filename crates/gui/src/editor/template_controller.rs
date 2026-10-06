@@ -7,6 +7,7 @@ use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_app::templates::load_project_templates;
 use evanalyzer_cfg::core_types::PipelineId;
+use evanalyzer_cfg::settings::meta_data::AuthorInformation;
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_cfg::{PIPELINE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS};
 use log::warn;
@@ -137,13 +138,17 @@ impl TemplateController {
 
         let tags = parse_tags(&meta_slint.tags);
         let author_name = meta_slint.author_name.trim().to_string();
+        let organization = meta_slint.author_organization.to_string();
         // Only a single "Author Name" field exists in this dialog, so it
         // only ever sets the primary author (authors[0]) - additional
         // authors are addable today only by hand-editing the saved file.
         let authors = if author_name.is_empty() {
             Vec::new()
         } else {
-            vec![author_name]
+            vec![AuthorInformation {
+                full_name: author_name,
+                organization,
+            }]
         };
 
         let meta = MetaData {
@@ -151,7 +156,6 @@ impl TemplateController {
             short_description: meta_slint.short_description.to_string(),
             description: meta_slint.description.to_string(),
             authors,
-            author_organization: meta_slint.author_organization.to_string(),
             creation_time: chrono::Utc::now(),
             category: meta_slint.category.to_string(),
             tags,
