@@ -79,6 +79,7 @@ pub enum SaveProjectActions {
 
 pub trait ProjectExt {
     fn add_class_to_object(&mut self, id: ObjectId, object_class: ObjectClass);
+    fn replace_classes_of_object(&mut self, id: ObjectId, object_class: ObjectClass);
     fn remove_class_from_object(&mut self, id: ObjectId, object_class: &ObjectClass);
     fn add_object(&mut self, object: &ObjectMetricSettings);
     fn get_objects(&self) -> Option<&[ObjectMetricSettings]>;
@@ -254,6 +255,21 @@ impl ProjectExt for ProjectWithRuntime {
             if let Some(object) = series.objects.iter_mut().find(|object| object.id == id) {
                 object.add_object_class(object_class);
             }
+        }
+    }
+
+    /// Removes all classes from the object and adds this single one
+    ///
+    /// This method finds the object with the given ID in the currently selected image series
+    /// and adds the specified object class to it.
+    ///
+    /// # Arguments
+    /// * `id` - The ObjectId of the object to modify
+    /// * `object_class` - The ObjectClass to add to the object
+    fn replace_classes_of_object(&mut self, id: ObjectId, object_class: ObjectClass) {
+        if let Some(series) = self.get_selected_image_series_mut() {
+            series.objects.clear();
+            self.add_class_to_object(id, object_class);
         }
     }
 

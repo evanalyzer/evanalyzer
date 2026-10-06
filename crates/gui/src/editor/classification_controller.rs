@@ -53,11 +53,35 @@ impl ClassificationController {
             // Add class to object
             let manager = self.clone();
             ui.global::<ObjectListState>()
-                .on_object_add_class(move |object_id| {
+                .on_object_add_class(move |object_id, class_id| {
                     let mut project = manager.app_state.get_project_write();
                     if let Some(id) = resolve_object_id(&project, object_id) {
-                        let class_id = project.get_selected_object_class();
-                        project.add_class_to_object(id, class_id);
+                        // let class_id = project.get_selected_object_class();
+                        if class_id >= 0 {
+                            let class_id = ObjectClass::Valid(class_id as u32);
+                            project.add_class_to_object(id, class_id);
+                        }
+                    }
+                    manager
+                        .object_list_controller
+                        .sync_selected_object_to_slint(false);
+                    manager.object_list_controller.sync_objects_to_slint();
+                    // The object's classes changed: so do the class counts.
+                    manager.sync_classification_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
+                });
+
+            // Rplace all classes
+            let manager = self.clone();
+            ui.global::<ObjectListState>()
+                .on_object_replace_class(move |object_id, class_id| {
+                    let mut project = manager.app_state.get_project_write();
+                    if let Some(id) = resolve_object_id(&project, object_id) {
+                        // let class_id = project.get_selected_object_class();
+                        if class_id >= 0 {
+                            let class_id = ObjectClass::Valid(class_id as u32);
+                            project.replace_classes_of_object(id, class_id);
+                        }
                     }
                     manager
                         .object_list_controller
@@ -783,7 +807,7 @@ mod tests {
                 .get_total_visible_objects()
         };
 
-        ui.global::<ObjectListState>().invoke_object_add_class(1);
+        ui.global::<ObjectListState>().invoke_object_add_class(1, 1);
         drain_ui_queue();
         assert_eq!(total(), 1);
 
@@ -834,7 +858,7 @@ mod tests {
         // in the combined list - regression coverage that the shared
         // resolution logic still picks the right one when both lists are
         // non-empty at once.
-        ui.global::<ObjectListState>().invoke_object_add_class(1);
+        ui.global::<ObjectListState>().invoke_object_add_class(1, 1);
 
         let project = ui_state.get_project();
         let manual_object = &project.get_objects().unwrap()[0];

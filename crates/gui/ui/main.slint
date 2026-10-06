@@ -46,7 +46,7 @@ import {
 
 import {
     ConfirmAutoAddClassesDialog,
-}from "dialogs/classification_confirm_auto_add_dialog.slint";
+} from "dialogs/classification_confirm_auto_add_dialog.slint";
 
 import {
     ClassEditDialog,
@@ -97,9 +97,16 @@ import { PreviewRendering } from "dialogs/preview_rendering_dialog.slint";
 import { WarningDialog } from "dialogs/warning_dialog.slint";
 import { WarningState, ConnectionState } from "state.slint";
 import { UnsavedChangesDialog } from "dialogs/unsaved_changes_dialog.slint";
-import { AnalysisRunningCloseDialog } from "dialogs/analysis_running_close_dialog.slint";
+import {
+    AnalysisRunningCloseDialog,
+} from "dialogs/analysis_running_close_dialog.slint";
 import { ConnectDialog } from "dialogs/connect_dialog.slint";
-import { UnsavedChangesState, AnalysisRunningCloseState, ConnectState, RecentServerRow } from "state.slint";
+import {
+    UnsavedChangesState,
+    AnalysisRunningCloseState,
+    ConnectState,
+    RecentServerRow,
+} from "state.slint";
 import {
     AiLearningDialog,
     AiLearningState,
@@ -128,6 +135,7 @@ import {
     FileBrowserCrumb,
     FileBrowserEntry,
 } from "dialogs/file_browser_dialog.slint";
+import { ClassSelectDialog } from "dialogs/classification_select_dialog.slint";
 
 export {
     GlobalAppState,
@@ -251,6 +259,7 @@ export component AppWindow inherits Window {
                         font-weight: 600;
                         vertical-alignment: center;
                     }
+
                     if ConnectionState.can-reconnect: Rectangle {
                         y: (parent.height - self.height) / 2;
                         height: 22px;
@@ -265,6 +274,7 @@ export component AppWindow inherits Window {
                             font-size: 12px;
                             vertical-alignment: center;
                         }
+
                         reconnect-touch := TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
@@ -426,6 +436,10 @@ export component AppWindow inherits Window {
                 height: 100%;
             }
             if (GlobalAppState.active_dialog == DialogType.ai-learning): AiLearningDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.classification-selection-dialog): ClassSelectDialog {
                 width: 100%;
                 height: 100%;
             }

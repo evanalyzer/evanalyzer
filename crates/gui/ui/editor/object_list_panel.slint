@@ -41,7 +41,10 @@ export global ObjectListState {
     callback object_copy(int);
     callback object_edit(int);
     callback object_delete(int);
-    callback object_add_class(int);
+    // Params: Adds the given class to the selected object (params are: object id, class id)
+    callback object_add_class(int, int);
+     // Params: Replaces all classed of the selected object by the given class (params are: object id, class id)
+    callback object_replace_class(int, int);
     callback object_remove_class(int, int);
 }
 
@@ -265,6 +268,7 @@ export component ObjectListPanel inherits Rectangle {
             border-radius: Theme.radius-md;
             border-width: 1px;
             border-color: Theme.border-soft;
+            max-height: 300px;
 
             VerticalLayout {
                 padding: 8px;
@@ -574,7 +578,7 @@ export component ObjectListPanel inherits Rectangle {
                 spacing: 2px;
                 alignment: stretch;
 
-                VerticalLayout {
+                /*   VerticalLayout {
                     alignment: center;
                     ActionButton {
                         icon: @image-url("../icons/regular-white/copy-simple.svg");
@@ -584,6 +588,7 @@ export component ObjectListPanel inherits Rectangle {
                         }
                     }
                 }
+                    */
 
                 VerticalLayout {
                     alignment: center;
@@ -596,6 +601,7 @@ export component ObjectListPanel inherits Rectangle {
                     }
                 }
 
+                /*
                 VerticalLayout {
                     alignment: center;
                     ActionButton {
@@ -605,9 +611,10 @@ export component ObjectListPanel inherits Rectangle {
                             ObjectListState.object_edit(ObjectListState.selected_object.id);
                         }
                     }
-                }
+                        
+            }*/
 
-                // Divider
+            // Divider
                 VerticalLayout {
                     alignment: center;
                     padding-left: 4px;
@@ -627,11 +634,11 @@ export component ObjectListPanel inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     Button {
-                        text: "+ Class";
+                        text: "Set class";
                         primary: true;
                         enabled: ObjectListState.selected_object.id != 0;
                         clicked => {
-                            ObjectListState.object_add_class(ObjectListState.selected_object.id);
+                            GlobalAppState.active-dialog = DialogType.classification_selection_dialog;
                         }
                     }
                 }

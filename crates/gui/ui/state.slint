@@ -9,6 +9,7 @@ export enum DialogType {
     classification_confirm_delete,
     classification_confirm_auto_add_dialog,
     classification_edit_class_dialog,
+    classification_selection_dialog,
     object_confirm_delete,
     command_selection_dialog,
     pipeline_edit,
@@ -44,7 +45,7 @@ export global ConnectionState {
     in property <string> lost-message: "";
     /// Reconnecting is still possible (the user's worker may still run).
     in property <bool> can-reconnect: true;
-    callback reconnect-now();
+        callback reconnect-now();
     }
 
 export global GlobalAppState {

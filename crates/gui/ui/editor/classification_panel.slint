@@ -88,7 +88,7 @@ component ActionButton inherits Rectangle {
 // One row in the class list. Encapsulating it as its own
 // component keeps the `selected` flag, the hover state, and
 // the click handler all colocated.
-component ClassListRow inherits Rectangle {
+export component ClassListRow inherits Rectangle {
     in property <ClassItemData> data;
     in property <bool> selected;
     callback row_clicked;
