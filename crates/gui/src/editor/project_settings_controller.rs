@@ -4,7 +4,7 @@ use evanalyzer_app::global::UserInformation;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::plate_settings::GroupingMode;
 use evanalyzer_cfg::settings::project_settings::TileMergeConnectivity;
-use slint::{ComponentHandle, Model};
+use slint::{ComponentHandle, Model, ModelRc, SharedString};
 use std::sync::Arc;
 
 /// `ProjectSettingsState` is edited from two places: the Project Settings
@@ -60,7 +60,11 @@ impl ProjectSettingsController {
             ui.global::<ProjectSettingsState>()
                 .on_well_value_changed(move |index, value| {
                     if let Some(ui) = ui_weak.upgrade() {
-                        set_well_value(ui.global::<ProjectSettingsState>(), index, value);
+                        let model = ui
+                            .global::<ProjectSettingsState>()
+                            .get_settings()
+                            .well_values;
+                        set_well_value(&model, index, value);
                     }
                 });
 
@@ -68,7 +72,11 @@ impl ProjectSettingsController {
             ui.global::<ProjectSettingsState>()
                 .on_well_dims_changed(move |rows, cols| {
                     if let Some(ui) = ui_weak.upgrade() {
-                        resize_well_values(ui.global::<ProjectSettingsState>(), rows, cols);
+                        let model = ui
+                            .global::<ProjectSettingsState>()
+                            .get_settings()
+                            .well_values;
+                        resize_well_values(&model, rows, cols);
                     }
                 });
 
@@ -76,7 +84,11 @@ impl ProjectSettingsController {
             ui.global::<ProjectSettingsState>()
                 .on_tile_merge_class_toggled(move |value| {
                     if let Some(ui) = ui_weak.upgrade() {
-                        toggle_tile_merge_class(ui.global::<ProjectSettingsState>(), &value);
+                        let model = ui
+                            .global::<ProjectSettingsState>()
+                            .get_settings()
+                            .tile_merge_classes_to_not_merge_flags;
+                        toggle_tile_merge_class(&model, &value);
                     }
                 });
         }
@@ -102,7 +114,11 @@ impl ProjectSettingsController {
                 .global::<ProjectSettingsState>()
                 .on_well_value_changed(move |index, value| {
                     if let Some(results_ui) = results_ui_weak.upgrade() {
-                        set_well_value(results_ui.global::<ProjectSettingsState>(), index, value);
+                        let model = results_ui
+                            .global::<ProjectSettingsState>()
+                            .get_settings()
+                            .well_values;
+                        set_well_value(&model, index, value);
                     }
                 });
 
@@ -111,7 +127,11 @@ impl ProjectSettingsController {
                 .global::<ProjectSettingsState>()
                 .on_well_dims_changed(move |rows, cols| {
                     if let Some(results_ui) = results_ui_weak.upgrade() {
-                        resize_well_values(results_ui.global::<ProjectSettingsState>(), rows, cols);
+                        let model = results_ui
+                            .global::<ProjectSettingsState>()
+                            .get_settings()
+                            .well_values;
+                        resize_well_values(&model, rows, cols);
                     }
                 });
 
@@ -120,10 +140,11 @@ impl ProjectSettingsController {
                 .global::<ProjectSettingsState>()
                 .on_tile_merge_class_toggled(move |value| {
                     if let Some(results_ui) = results_ui_weak.upgrade() {
-                        toggle_tile_merge_class(
-                            results_ui.global::<ProjectSettingsState>(),
-                            &value,
-                        );
+                        let model = results_ui
+                            .global::<ProjectSettingsState>()
+                            .get_settings()
+                            .tile_merge_classes_to_not_merge_flags;
+                        toggle_tile_merge_class(&model, &value);
                     }
                 });
         }
@@ -276,8 +297,7 @@ impl ProjectSettingsController {
 
 /// Updates a single cell in the well-order model — shared by both windows'
 /// `on_well_value_changed` handlers (see the struct-level doc comment).
-fn set_well_value(state: ProjectSettingsState<'_>, index: i32, value: i32) {
-    let model = state.get_settings().well_values;
+fn set_well_value(model: &ModelRc<i32>, index: i32, value: i32) {
     if let Some(vec_model) = model.as_any().downcast_ref::<slint::VecModel<i32>>() {
         let idx = index as usize;
         if idx < vec_model.row_count() {
@@ -289,8 +309,7 @@ fn set_well_value(state: ProjectSettingsState<'_>, index: i32, value: i32) {
 /// Resizes the well-order model to match new well row/col counts — shared by
 /// both windows' `on_well_dims_changed` handlers (see the struct-level doc
 /// comment).
-fn resize_well_values(state: ProjectSettingsState<'_>, rows: i32, cols: i32) {
-    let model = state.get_settings().well_values;
+fn resize_well_values(model: &ModelRc<i32>, rows: i32, cols: i32) {
     let new_size = (rows * cols).max(0) as usize;
     if let Some(vec_model) = model.as_any().downcast_ref::<slint::VecModel<i32>>() {
         let current = vec_model.row_count();
@@ -337,14 +356,13 @@ fn flags_to_classes(flags: &slint::ModelRc<slint::SharedString>) -> Vec<ObjectCl
 /// the tile-merge exclude-classes `MultiClassDropdown` - shared by both
 /// windows' `on_tile_merge_class_toggled` handlers (see the struct-level doc
 /// comment).
-fn toggle_tile_merge_class(state: ProjectSettingsState<'_>, value: &str) {
+fn toggle_tile_merge_class(model: &ModelRc<SharedString>, value: &str) {
     let Some(index_str) = value.strip_prefix("toggle:") else {
         return;
     };
     let Ok(index) = index_str.parse::<usize>() else {
         return;
     };
-    let model = state.get_settings().tile_merge_classes_to_not_merge_flags;
     if let Some(vec_model) = model
         .as_any()
         .downcast_ref::<slint::VecModel<slint::SharedString>>()
@@ -424,6 +442,8 @@ fn well_size_to_idx(row: i32, col: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use slint::VecModel;
+
     use super::*;
 
     // -- index_to_well_size / well_size_to_idx ---------------------------------
@@ -562,6 +582,116 @@ mod tests {
         assert_eq!(project.plate.well_cols, 3);
         // well_size_index=1 -> index_to_well_size(1) == (2, 3), see the test above.
         assert_eq!((project.plate.plate_rows, project.plate.plate_cols), (2, 3));
+    }
+
+    #[test]
+    fn update_project_well_values() {
+        let sample_data: Vec<i32> = vec![10, 20, 30, 42, 100];
+        let model: ModelRc<i32> = ModelRc::new(VecModel::from(sample_data));
+        set_well_value(&model, 2, 99);
+        assert_eq!(model.row_data(2).unwrap(), 99);
+    }
+
+    #[test]
+    fn update_project_well_values_out_of_scope() {
+        let sample_data: Vec<i32> = vec![10, 20, 30, 42, 100];
+        let model: ModelRc<i32> = ModelRc::new(VecModel::from(sample_data));
+        set_well_value(&model, 8, 99);
+        assert_eq!(model.row_data(0).unwrap(), 10);
+        assert_eq!(model.row_data(1).unwrap(), 20);
+        assert_eq!(model.row_data(2).unwrap(), 30);
+        assert_eq!(model.row_data(3).unwrap(), 42);
+        assert_eq!(model.row_data(4).unwrap(), 100);
+    }
+
+    #[test]
+    fn update_well_size() {
+        let sample_data: Vec<i32> = vec![1, 2, 3, 4];
+        let model: ModelRc<i32> = ModelRc::new(VecModel::from(sample_data));
+        resize_well_values(&model, 2, 2);
+        assert_eq!(model.row_count(), 4);
+        assert_eq!(model.row_data(0).unwrap(), 1);
+        assert_eq!(model.row_data(1).unwrap(), 2);
+        assert_eq!(model.row_data(2).unwrap(), 3);
+        assert_eq!(model.row_data(3).unwrap(), 4);
+
+        resize_well_values(&model, 3, 2);
+        assert_eq!(model.row_count(), 6);
+        assert_eq!(model.row_data(0).unwrap(), 1);
+        assert_eq!(model.row_data(1).unwrap(), 2);
+        assert_eq!(model.row_data(2).unwrap(), 3);
+        assert_eq!(model.row_data(3).unwrap(), 4);
+        assert_eq!(model.row_data(4).unwrap(), 5);
+        assert_eq!(model.row_data(5).unwrap(), 6);
+
+        resize_well_values(&model, 2, 2);
+        assert_eq!(model.row_count(), 4);
+        assert_eq!(model.row_data(0).unwrap(), 1);
+        assert_eq!(model.row_data(1).unwrap(), 2);
+        assert_eq!(model.row_data(2).unwrap(), 3);
+        assert_eq!(model.row_data(3).unwrap(), 4);
+    }
+
+    #[test]
+    fn test_toggle_tile_merge_class() {
+        let sample_data: Vec<String> = vec!["0".into(), "1".into(), "1".into(), "0".into()];
+        let model: ModelRc<SharedString> = ModelRc::new(VecModel::from(
+            sample_data
+                .into_iter()
+                .map(SharedString::from)
+                .collect::<Vec<_>>(),
+        ));
+        assert_eq!(model.row_count(), 4);
+        assert_eq!(model.row_data(0).unwrap(), "0");
+        assert_eq!(model.row_data(1).unwrap(), "1");
+        assert_eq!(model.row_data(2).unwrap(), "1");
+        assert_eq!(model.row_data(3).unwrap(), "0");
+
+        toggle_tile_merge_class(&model, "toggle:1");
+        assert_eq!(model.row_count(), 4);
+        assert_eq!(model.row_data(0).unwrap(), "0");
+        assert_eq!(model.row_data(1).unwrap(), "0");
+        assert_eq!(model.row_data(2).unwrap(), "1");
+        assert_eq!(model.row_data(3).unwrap(), "0");
+
+        toggle_tile_merge_class(&model, "toggle:1");
+        assert_eq!(model.row_count(), 4);
+        assert_eq!(model.row_data(0).unwrap(), "0");
+        assert_eq!(model.row_data(1).unwrap(), "1");
+        assert_eq!(model.row_data(2).unwrap(), "1");
+        assert_eq!(model.row_data(3).unwrap(), "0");
+
+        toggle_tile_merge_class(&model, "toggle:0");
+        assert_eq!(model.row_count(), 4);
+        assert_eq!(model.row_data(0).unwrap(), "1");
+        assert_eq!(model.row_data(1).unwrap(), "1");
+        assert_eq!(model.row_data(2).unwrap(), "1");
+        assert_eq!(model.row_data(3).unwrap(), "0");
+    }
+
+    #[test]
+    fn test_toggle_tile_abnormal_merge_class() {
+        let sample_data: Vec<String> = vec!["0".into(), "1".into(), "1".into(), "0".into()];
+        let model: ModelRc<SharedString> = ModelRc::new(VecModel::from(
+            sample_data
+                .into_iter()
+                .map(SharedString::from)
+                .collect::<Vec<_>>(),
+        ));
+
+        // Toggle out of range
+        toggle_tile_merge_class(&model, "toggle:6");
+        // Wrong syntax
+        toggle_tile_merge_class(&model, "wrong_text:6");
+        // Wrong text and bad number
+        toggle_tile_merge_class(&model, "wrong_text:bad");
+        // Wrong number
+        toggle_tile_merge_class(&model, "toggle:bad");
+        assert_eq!(model.row_count(), 4);
+        assert_eq!(model.row_data(0).unwrap(), "0");
+        assert_eq!(model.row_data(1).unwrap(), "1");
+        assert_eq!(model.row_data(2).unwrap(), "1");
+        assert_eq!(model.row_data(3).unwrap(), "0");
     }
 
     // -- tile merging -----------------------------------------------------

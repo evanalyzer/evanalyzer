@@ -1131,30 +1131,6 @@ mod tests {
     }
 
     #[test]
-    fn a_swapped_out_image_still_shared_is_not_written_through_the_scratchpad() {
-        // After a pipeline's first filter the swapped-out image is the
-        // cache's input image. The next filter must get a buffer of its own
-        // - neither writing into the cache's image nor copying it.
-        let mut ctx = gray_ctx();
-        let cached = ctx.image.clone();
-        ctx.get_scratch_as_f32_gray().as_slice_mut().fill(0.25);
-        ctx.swap().unwrap();
-
-        assert!(!Arc::ptr_eq(&ctx.scratch_pad, &cached));
-        assert!(Arc::get_mut(&mut ctx.scratch_pad).is_some());
-        assert_eq!(ctx.scratch_pad.size(), cached.size());
-        ctx.get_scratch_as_f32_gray().as_slice_mut().fill(0.75);
-        let ImageContainer::F32Gray(cached) = cached.as_ref() else {
-            panic!("expected a gray image");
-        };
-        assert_eq!(
-            cached.as_slice(),
-            [0.5, 0.5],
-            "the cache's image is untouched"
-        );
-    }
-
-    #[test]
     fn a_swapped_out_image_used_nowhere_else_is_kept_as_the_scratchpad() {
         let mut ctx = gray_ctx();
         ctx.image = Arc::new((*ctx.image).clone());

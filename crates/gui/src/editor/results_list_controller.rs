@@ -222,7 +222,13 @@ fn extract_name_from_path(path: &PathBuf) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use evanalyzer_app::fs::LocalFileSystem;
+    use evanalyzer_app::{fs::LocalFileSystem, project::ProjectWithRuntime};
+
+    use crate::editor::{
+        histogram_controller::HistogramController, image_meta_controller::ImageMetaController,
+        images_list_controller::ImagesListController, object_list_controller::ObjectListController,
+        test_support::test_ui_state_with_project, viewport_controller::ViewportController,
+    };
 
     use super::*;
 
@@ -362,5 +368,58 @@ mod tests {
         let mut items = Vec::new();
         collect_results_files(&LocalFileSystem::default(), &dir, &mut items);
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn open_results_folder_test() {
+        let ui = slint::Weak::default();
+        let results_ui = slint::Weak::default();
+        let ui_state: Arc<UiState> = test_ui_state_with_project(ProjectWithRuntime::default());
+
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+
+        let image_list_controller = Arc::new(ImagesListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+            Arc::new(HistogramController::new(
+                ui.clone(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            Arc::new(ImageMetaController::new(
+                ui.clone(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    ui.clone(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
+        ));
+
+        let results_table_controller = Arc::new(ResultsStateController::new(
+            results_ui.clone(),
+            ui_state.clone(),
+            image_list_controller.clone(),
+        ));
+
+        let results_list_controller = Arc::new(ResultsListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            results_table_controller,
+        ));
+
+        results_list_controller.open_results_folder();
     }
 }
