@@ -1296,19 +1296,19 @@ impl ResultsGenerator {
             // `any_measured`.
             let sql = format!(
                 "SELECT img.group_prefix, img.row, img.col, {agg_value_cols}, img.any_disabled,\n\
-                     img.any_failed\n\
-                 FROM (\n\
-                     SELECT\n\
-                         regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
-                         regexp_extract(image_name, '{regex}', 2) AS row,\n\
-                         regexp_extract(image_name, '{regex}', 3) AS col,\n\
-                         bool_or(disabled) AS any_disabled,\n\
-                         bool_or(NOT successful) AS any_failed,\n\
-                         bool_or(NOT disabled AND {measured}) AS any_measured\n\
-                     FROM images\n\
-                     GROUP BY group_prefix, row, col\n\
-                 ) img\n\
-                 LEFT JOIN (\n\
+                 img.any_failed\n\
+             FROM (\n\
+                 SELECT\n\
+                     regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
+                     regexp_extract(image_name, '{regex}', 2) AS row,\n\
+                     regexp_extract(image_name, '{regex}', 3) AS col,\n\
+                     bool_or(disabled) AS any_disabled,\n\
+                     bool_or(NOT successful) AS any_failed,\n\
+                     bool_or(NOT disabled AND {measured}) AS any_measured\n\
+                 FROM images\n\
+                 GROUP BY group_prefix, row, col\n\
+             ) img\n\
+             LEFT JOIN (\n\
                      SELECT\n\
                          regexp_extract(o.image_name, '{regex}', 1) AS group_prefix,\n\
                          regexp_extract(o.image_name, '{regex}', 2) AS row,\n\
@@ -1319,8 +1319,8 @@ impl ResultsGenerator {
                      JOIN images i ON i.image_rel_path = o.image_rel_path\n\
                      WHERE NOT i.disabled AND i.successful AND {object_where}\n\
                      GROUP BY group_prefix, row, col\n\
-                 ) agg USING (group_prefix, row, col)\n\
-                 ORDER BY img.group_prefix"
+             ) agg USING (group_prefix, row, col)\n\
+             ORDER BY img.group_prefix"
             );
 
             let mut stmt = self.database.prepare(&sql).map_err(err)?;
@@ -4297,6 +4297,100 @@ mod tests {
         assert_eq!(cell_f64(&result.rows[b2_idx][1]), 100.0);
     }
 
+    #[test]
+    fn get_group_by_plate_groups_by_the_default_regex_and_averages_per_well_count() {
+        // Default regex expects `<well>_<field>.<ext>`, e.g. "A1_01.tif".
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 8),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 6),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 100),
+            ObjectSpec::new("B2_02.tif", "ClassA", 1, 50),
+            ObjectSpec::new("B2_02.tif", "ClassA", 1, 50),
+        ]);
+        let result = generator
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Unset,
+                    column: Column::Count,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::List,
+            )
+            .unwrap();
+
+        assert_eq!(result.row_names.len(), 2);
+        let a1_idx = result
+            .row_names
+            .iter()
+            .position(|n| n == "A1")
+            .expect("A1 group");
+        let b2_idx = result
+            .row_names
+            .iter()
+            .position(|n| n == "B2")
+            .expect("B2 group");
+        let cell_f64 = |cell: &Cell| match &cell.value {
+            CellValue::Float(v) => *v as f64,
+            _ => panic!("expected a float cell"),
+        };
+        assert_eq!(cell_f64(&result.rows[a1_idx][1]), 2.0, "average per image");
+        assert_eq!(cell_f64(&result.rows[b2_idx][1]), 1.5);
+    }
+
+    #[test]
+    fn get_group_by_plate_groups_by_the_default_regex_and_sums_per_well_count() {
+        // Default regex expects `<well>_<field>.<ext>`, e.g. "A1_01.tif".
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 8),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 6),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 100),
+            ObjectSpec::new("B2_02.tif", "ClassA", 1, 50),
+            ObjectSpec::new("B2_02.tif", "ClassA", 1, 50),
+        ]);
+        let result = generator
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: plane(),
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Sum,
+                    object_class: ObjectClass::Unset,
+                    column: Column::Count,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::List,
+            )
+            .unwrap();
+
+        assert_eq!(result.row_names.len(), 2);
+        let a1_idx = result
+            .row_names
+            .iter()
+            .position(|n| n == "A1")
+            .expect("A1 group");
+        let b2_idx = result
+            .row_names
+            .iter()
+            .position(|n| n == "B2")
+            .expect("B2 group");
+        let cell_f64 = |cell: &Cell| match &cell.value {
+            CellValue::Float(v) => *v as f64,
+            _ => panic!("expected a float cell"),
+        };
+        assert_eq!(cell_f64(&result.rows[a1_idx][1]), 4.0);
+        assert_eq!(cell_f64(&result.rows[b2_idx][1]), 3.0);
+    }
+
     /// An image that was analyzed but produced zero objects (e.g. an empty
     /// well) must still show up as its own group rather than being silently
     /// absent from the matrix, since "absent" and "present but empty" mean
@@ -5019,11 +5113,25 @@ mod tests {
     fn group_by_plate_multi_agg_matches_group_by_plate_per_aggregation() {
         let generator = open(&[
             ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
-            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
-            ObjectSpec::new("A1_03.tif", "ClassA", 1, 30),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 11),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 12),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 21),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 22),
+            ObjectSpec::new("A1_03.tif", "ClassA", 1, 31),
+            ObjectSpec::new("A1_03.tif", "ClassA", 1, 32),
+            //
+            ObjectSpec::new("B1_01.tif", "ClassA", 1, 40),
+            ObjectSpec::new("B1_01.tif", "ClassA", 1, 41),
+            ObjectSpec::new("B1_02.tif", "ClassA", 1, 42),
+            ObjectSpec::new("B1_02.tif", "ClassA", 1, 43),
         ]);
         generator.enable_image("A1_03.tif", true).unwrap();
-        let aggregations = vec![Aggregation::Avg, Aggregation::Min, Aggregation::Max];
+        let aggregations = vec![
+            Aggregation::Avg,
+            Aggregation::Min,
+            Aggregation::Max,
+            Aggregation::Sum,
+        ];
         let multi_filter = PlateFilterMulti {
             plane: plane(),
             grouping_regex: String::new(),
@@ -5037,7 +5145,7 @@ mod tests {
         let multi = generator
             .get_group_by_plate_multi(&multi_filter, &View::List)
             .unwrap();
-        assert_eq!(multi.len(), 3);
+        assert_eq!(multi.len(), 4);
 
         for (aggregation, batched_result) in aggregations.iter().zip(&multi) {
             let mut filter = plate_filter(Column::AreaSizePx);
@@ -5059,9 +5167,87 @@ mod tests {
         }
         // Sanity on the actual numbers (A1_03's 30 excluded from every
         // aggregate since it's disabled), not just internal agreement.
-        assert_eq!(float_cell(&multi[0].rows[0][1]), 15.0); // avg(10, 20)
-        assert_eq!(float_cell(&multi[1].rows[0][1]), 10.0); // min(10, 20)
-        assert_eq!(float_cell(&multi[2].rows[0][1]), 20.0); // max(10, 20)
+        assert_eq!(
+            (float_cell(&multi[0].rows[0][1]) * 100.0).round() / 100.0,
+            15.2
+        ); //A1 avg(10, 20)
+        assert_eq!(float_cell(&multi[1].rows[0][1]), 10.0); //A1 min(10, 20)
+        assert_eq!(float_cell(&multi[2].rows[0][1]), 22.0); //A1 max(10, 20)
+        assert_eq!(float_cell(&multi[3].rows[0][1]), 76.0); //A1 sum(10, 20)
+
+        assert_eq!(float_cell(&multi[0].rows[1][1]), 41.5); //B1 avg(10, 20)
+        assert_eq!(float_cell(&multi[1].rows[1][1]), 40.0); //B1 min(10, 20)
+        assert_eq!(float_cell(&multi[2].rows[1][1]), 43.0); //B1 max(10, 20)
+        assert_eq!(float_cell(&multi[3].rows[1][1]), 166.0); //B1 sum(10, 20)
+    }
+
+    #[test]
+    fn group_by_plate_multi_agg_matches_group_by_plate_per_aggregation_count() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 11),
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 12),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 21),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 22),
+            ObjectSpec::new("A1_03.tif", "ClassA", 1, 31),
+            ObjectSpec::new("A1_03.tif", "ClassA", 1, 32),
+            //
+            ObjectSpec::new("B1_01.tif", "ClassA", 1, 40),
+            ObjectSpec::new("B1_01.tif", "ClassA", 1, 41),
+            ObjectSpec::new("B1_02.tif", "ClassA", 1, 42),
+            ObjectSpec::new("B1_02.tif", "ClassA", 1, 43),
+        ]);
+        generator.enable_image("A1_03.tif", true).unwrap();
+        let aggregations = vec![
+            Aggregation::Avg,
+            Aggregation::Min,
+            Aggregation::Max,
+            Aggregation::Sum,
+        ];
+        let multi_filter = PlateFilterMulti {
+            plane: plane(),
+            grouping_regex: String::new(),
+            aggregation: aggregations.clone(),
+            object_class: vec![ObjectClass::Unset],
+            column: vec![Column::Count],
+            color_schema: ColorSchema::default(),
+            color_scale: ColorScale::default(),
+            matrix_dimension: None,
+        };
+        let multi = generator
+            .get_group_by_plate_multi(&multi_filter, &View::List)
+            .unwrap();
+        assert_eq!(multi.len(), 4);
+
+        for (aggregation, batched_result) in aggregations.iter().zip(&multi) {
+            let mut filter = plate_filter(Column::Count);
+            filter.aggregation = aggregation.clone();
+            let single = generator.get_group_by_plate(&filter, &View::List).unwrap();
+            assert_eq!(
+                float_cell(&batched_result.rows[0][1]),
+                float_cell(&single.rows[0][1]),
+                "aggregation {aggregation:?} disagrees between multi_agg batch and single call",
+            );
+            assert_eq!(
+                batched_result.rows[0][1].disabled, single.rows[0][1].disabled,
+                "aggregation {aggregation:?}'s disabled flag disagrees between multi_agg batch and single call",
+            );
+            assert!(
+                !batched_result.rows[0][1].disabled,
+                "the well itself must not be flagged disabled just because A1_03 is"
+            );
+        }
+        // Sanity on the actual numbers (A1_03's 30 excluded from every
+        // aggregate since it's disabled), not just internal agreement.
+        assert_eq!(float_cell(&multi[0].rows[0][1]), 2.5); //A1 
+        assert_eq!(float_cell(&multi[1].rows[0][1]), 2.0); //A1 
+        assert_eq!(float_cell(&multi[2].rows[0][1]), 3.0); //A1 
+        assert_eq!(float_cell(&multi[3].rows[0][1]), 5.0); //A1 
+
+        assert_eq!(float_cell(&multi[0].rows[1][1]), 2.0); //B1 
+        assert_eq!(float_cell(&multi[1].rows[1][1]), 2.0); //B1 
+        assert_eq!(float_cell(&multi[2].rows[1][1]), 2.0); //B1 
+        assert_eq!(float_cell(&multi[3].rows[1][1]), 4.0); //B1 
     }
 
     #[test]
