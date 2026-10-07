@@ -104,14 +104,7 @@ impl PipelineContext {
 
         // Perform the O(1) pointer swap
         std::mem::swap(&mut self.image, &mut self.scratch_pad);
-        // The image swapped out is often still shared - after a pipeline's
-        // first filter it is the cache's input image. Kept as the scratch
-        // pad, the next step writing into it would copy all of it through
-        // `Arc::make_mut` just to overwrite it; a fresh (zeroed, so not yet
-        // touched) buffer is cheaper.
-        if Arc::get_mut(&mut self.scratch_pad).is_none() {
-            self.scratch_pad = Arc::new(self.scratch_pad.clone_empty());
-        }
+
         Ok(())
     }
 

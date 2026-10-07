@@ -30,7 +30,7 @@ duckdb = { workspace = true, features = ["appender-arrow"] }
 tch = {   workspace = true,  optional = true }
 smartcore = {  workspace = true, features = ["serde"], optional = true }
 burn = { workspace = true , optional = true }
-serde_json = { workspace = true, optional = true }
+serde_json = { workspace = true }
 petname =  { workspace = true }
 chrono = { workspace = true }
 sysinfo =  { workspace = true }
@@ -41,7 +41,7 @@ clru = { workspace = true }
 
 
 [features]
-ai = ["dep:tch", "dep:smartcore", "dep:burn", "dep:serde_json"]
+ai = ["dep:tch", "dep:smartcore", "dep:burn"]
 bioformats-gpl = ["bioformats/gpl"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
