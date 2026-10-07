@@ -1088,90 +1088,138 @@ impl ResultsGenerator {
         Ok((row_names, rows, row_locations))
     }
 
-    // First step: return the grouped/aggregated rows as a plain flat table
-    // (group key + aggregated value), same `DatabaseResult` shape as
-    // `get_list`. Turning that into the plate grid's actual rows/cols of
-    // wells (`MatrixCell`s, row/col letters, etc.) is a separate step in the
-    // GUI once this data is available.
+    /// Per-well statistics over the *per-image object counts* - what
+    /// `Column::Count` means in the plate view: "Avg" is the average number
+    /// of objects per image of the well, "Min" the smallest count of any
+    /// image, "Sum" the total, ...
+    ///
+    /// Counted are the enabled, successfully analysed images that were
+    /// analysed on the plane (see `measured_on_plane_sql`), *including* those
+    /// without objects (count 0) - leaving those out would inflate every
+    /// average. A well without such an image has no row (-> empty).
+    ///
+    /// `values`: (output column name, SQL aggregate fn) pairs, one per
+    /// statistic. `regex_sql` must already be quote-escaped.
+    fn plate_count_sql(
+        &self,
+        regex_sql: &str,
+        plane: &PlaneFilter,
+        object_class: ObjectClass,
+        values: &[(String, &'static str)],
+    ) -> Result<String, InternalErrors> {
+        let mut conditions = vec![
+            format!("z_stack = {}", plane.z_stack),
+            format!("t_stack = {}", plane.t_stack),
+        ];
+        if let ObjectClass::Valid(id) = object_class {
+            conditions.push(class_filter_sql("object_class_id", &[id]));
+        }
+        let object_where = conditions.join(" AND ");
+        let measured = self.measured_on_plane_sql("i", plane)?;
+        let aggregates = values
+            .iter()
+            .map(|(name, agg_fn)| format!("{agg_fn}(CAST(n AS DOUBLE)) AS {name}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(format!(
+            "SELECT group_prefix, row, col, {aggregates}\n\
+             FROM (\n\
+                 SELECT\n\
+                     regexp_extract(i.image_name, '{regex_sql}', 1) AS group_prefix,\n\
+                     regexp_extract(i.image_name, '{regex_sql}', 2) AS row,\n\
+                     regexp_extract(i.image_name, '{regex_sql}', 3) AS col,\n\
+                     COALESCE(c.n, 0) AS n\n\
+                 FROM images i\n\
+                 LEFT JOIN (\n\
+                     SELECT image_rel_path, COUNT(*) AS n\n\
+                     FROM objects\n\
+                     WHERE {object_where}\n\
+                     GROUP BY image_rel_path\n\
+                 ) c ON c.image_rel_path = i.image_rel_path\n\
+                 WHERE NOT i.disabled AND i.successful AND {measured}\n\
+             )\n\
+             GROUP BY group_prefix, row, col"
+        ))
+    }
+
     pub fn get_group_by_plate(
         &self,
         filter: &PlateFilter,
         view: &View,
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        // `column_aggregate_expr` below rejects `Column::ColocCount(_)`
-        // (can't be aggregated for this view), so `filter.column.as_key()`
-        // further down can never actually need to resolve a class name in
-        // practice — fetched anyway (cached, cheap) so that stays true by
-        // construction rather than by relying on that ordering.
         let classes = self.get_object_classes()?;
-        let (agg_fn, value_expr) = aggregate_sql(&filter.column, &filter.aggregation)?;
 
-        // Same default as the example query this is modeled on: everything
-        // before the first `_` in `image_name` (e.g. "A1_field1.tif" -> "A1")
-        // — used whenever the GUI's regex box (`filter.grouping_regex`) is
-        // still empty.
         let regex = if filter.grouping_regex.trim().is_empty() {
             DEFAULT_GROUPING_REGEX
         } else {
             filter.grouping_regex.as_str()
         };
-
-        let mut object_conditions = vec![
-            format!("o.z_stack = {}", filter.plane.z_stack),
-            format!("o.t_stack = {}", filter.plane.t_stack),
-        ];
-        if let ObjectClass::Valid(id) = filter.object_class {
-            object_conditions.push(class_filter_sql("o.object_class_id", &[id]));
-        }
-        let object_where = object_conditions.join(" AND ");
-        // `column_aggregate_expr`'s column names are unambiguous next to
-        // `images i` (see its doc comment) - prefixing the whole expression
-        // with `o.` broke every expression that isn't a bare column (e.g.
-        // `o.COALESCE(...)` for a colocalization count).
-        let value_expr_sql = value_expr;
-
-        // Two nested queries rather than one flat `images LEFT JOIN
-        // objects`: a flat join would put the z/t-stack + class filter in
-        // the `ON` clause (it has to, to keep an image with zero matching
-        // objects instead of dropping its row), which forces DuckDB to
-        // build the join over every one of `objects`' rows before it can
-        // apply that filter. Benchmarked on a real ~1.8k-image/5.6M-object
-        // database, that flat join took ~165ms/call; filtering+aggregating
-        // `objects` down to (at most) one row per group *first*, in its own
-        // subquery, then `LEFT JOIN`ing that tiny result onto the group list
-        // from `images`, took ~40ms - see `examples/bench_group_by_plate.rs`.
-        //
-        // A disabled image's objects are always excluded from `value` (the
-        // aggregate), and so are a failed image's (`NOT successful`: its
-        // analysis stopped with an error, so its objects are incomplete and
-        // would undercount the well), but the image itself is never
-        // dropped: every well
-        // still appears (even one made up only of disabled images, via
-        // `img` never filtering on `disabled`), and `any_disabled` -
-        // `bool_or(disabled)` per well - tells the caller whether at least
-        // one of that well's images was excluded from `value`, so the UI can
-        // mark the well without hiding it.
-        //
-        // `any_measured`: at least one enabled image of the well was
-        // analysed on this plane, so a well without objects has a real
-        // Count/Sum of 0 (`fill_zero_sql`); a well made up only of
-        // disabled, failed or not-analysed images stays empty.
-        let value = fill_zero_sql(
-            "agg.value",
-            &filter.column,
-            &filter.aggregation,
-            "agg.n_objects IS NULL",
-            "img.any_measured",
-        );
+        let regex_sql = regex.replace('\'', "''");
         let measured = self.measured_on_plane_sql("images", &filter.plane)?;
+
+        // `value`: the SELECT expression for the well's value, `agg_sql`: the
+        // subquery producing it (aliased `agg`, keyed by well).
+        //
+        // `Column::Count` is aggregated over the per-image counts of a well
+        // (see `plate_count_sql`); every other column over the objects of the
+        // well directly, filtered+aggregated before the join with `images`
+        // (see the benchmark note in the old version of this function: a flat
+        // join was ~4x slower).
+        let (value, agg_sql) = if matches!(filter.column, Column::Count) {
+            let agg_sql = self.plate_count_sql(
+                &regex_sql,
+                &filter.plane,
+                filter.object_class,
+                &[("value".to_string(), aggregation_sql_fn(&filter.aggregation))],
+            )?;
+            ("agg.value".to_string(), agg_sql)
+        } else {
+            let (agg_fn, value_expr) = aggregate_sql(&filter.column, &filter.aggregation)?;
+            let mut object_conditions = vec![
+                format!("o.z_stack = {}", filter.plane.z_stack),
+                format!("o.t_stack = {}", filter.plane.t_stack),
+            ];
+            if let ObjectClass::Valid(id) = filter.object_class {
+                object_conditions.push(class_filter_sql("o.object_class_id", &[id]));
+            }
+            let object_where = object_conditions.join(" AND ");
+            let value = fill_zero_sql(
+                "agg.value",
+                &filter.column,
+                &filter.aggregation,
+                "agg.n_objects IS NULL",
+                "img.any_measured",
+            );
+            let agg_sql = format!(
+                "SELECT\n\
+                     regexp_extract(o.image_name, '{regex_sql}', 1) AS group_prefix,\n\
+                     regexp_extract(o.image_name, '{regex_sql}', 2) AS row,\n\
+                     regexp_extract(o.image_name, '{regex_sql}', 3) AS col,\n\
+                     COUNT(*) AS n_objects,\n\
+                     {agg_fn}({value_expr}) AS value\n\
+                 FROM objects o\n\
+                 JOIN images i ON i.image_rel_path = o.image_rel_path\n\
+                 WHERE NOT i.disabled AND i.successful AND {object_where}\n\
+                 GROUP BY group_prefix, row, col"
+            );
+            (value, agg_sql)
+        };
+
+        // A disabled image's objects are excluded from `value`, and so are a
+        // failed image's (`NOT successful`), but the image itself is never
+        // dropped: every well still appears, `any_disabled`/`any_failed` tell
+        // the caller that at least one of its images was excluded.
+        // `any_measured`: at least one enabled image of the well was analysed
+        // on this plane, so a well without objects has a real Sum of 0
+        // (`fill_zero_sql`).
         let sql = format!(
             "SELECT img.group_prefix, img.row, img.col, {value}, img.any_disabled, img.any_failed\n\
              FROM (\n\
                  SELECT\n\
-                     regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
-                     regexp_extract(image_name, '{regex}', 2) AS row,\n\
-                     regexp_extract(image_name, '{regex}', 3) AS col,\n\
+                     regexp_extract(image_name, '{regex_sql}', 1) AS group_prefix,\n\
+                     regexp_extract(image_name, '{regex_sql}', 2) AS row,\n\
+                     regexp_extract(image_name, '{regex_sql}', 3) AS col,\n\
                      bool_or(disabled) AS any_disabled,\n\
                      bool_or(NOT successful) AS any_failed,\n\
                      bool_or(NOT disabled AND {measured}) AS any_measured\n\
@@ -1179,19 +1227,9 @@ impl ResultsGenerator {
                  GROUP BY group_prefix, row, col\n\
              ) img\n\
              LEFT JOIN (\n\
-                 SELECT\n\
-                     regexp_extract(o.image_name, '{regex}', 1) AS group_prefix,\n\
-                     regexp_extract(o.image_name, '{regex}', 2) AS row,\n\
-                     regexp_extract(o.image_name, '{regex}', 3) AS col,\n\
-                     COUNT(*) AS n_objects,\n\
-                     {agg_fn}({value_expr_sql}) AS value\n\
-                 FROM objects o\n\
-                 JOIN images i ON i.image_rel_path = o.image_rel_path\n\
-                 WHERE NOT i.disabled AND i.successful AND {object_where}\n\
-                 GROUP BY group_prefix, row, col\n\
+                 {agg_sql}\n\
              ) agg USING (group_prefix, row, col)\n\
-             ORDER BY img.group_prefix",
-            regex = regex.replace('\'', "''"),
+             ORDER BY img.group_prefix"
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
@@ -1224,20 +1262,13 @@ impl ResultsGenerator {
     }
 
     // Batched form of `get_group_by_plate` across every requested column,
-    // aggregation *and* object class at once. The WHERE/GROUP BY is
-    // identical across every `column` x `aggregation` combination for a
-    // given class - only the aggregate expression itself differs - so all
-    // of them are computed in one SELECT per class, same reasoning as
-    // `get_wells_for_plate_multi_agg` batching every aggregation. Each
-    // class in `filter.object_class` still needs its own query (its own
-    // `list_has_any`/no-filter WHERE clause), so this is
-    // `object_class.len()` scans total rather than
-    // `object_class.len() * column.len() * aggregation.len()`.
+    // aggregation *and* object class at once: one SELECT per class.
+    // `Column::Count` combos are aggregated over per-image counts (see
+    // `plate_count_sql`) in their own subquery (`cnt`), joined next to the
+    // regular per-object one (`agg`) that all other combos share.
     //
     // Returns one `DatabaseResult` per (class, column, aggregation) combo,
-    // flattened in that nesting order - i.e. `filter.object_class[0]`'s
-    // results (each of its columns, each of that column's aggregations)
-    // come first, then `filter.object_class[1]`'s, etc.
+    // flattened in that nesting order.
     pub fn get_group_by_plate_multi(
         &self,
         filter: &PlateFilterMulti,
@@ -1246,28 +1277,35 @@ impl ResultsGenerator {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = self.get_object_classes()?;
 
-        let mut value_exprs = Vec::with_capacity(filter.column.len() * filter.aggregation.len());
-        let mut agg_value_cols = Vec::with_capacity(value_exprs.capacity());
+        // Per combo (in column x aggregation order): its output expression,
+        // plus the aggregate definitions for the `agg` (per-object) and `cnt`
+        // (per-image count) subqueries. `k` is the combo index and names
+        // `value_{k}` in both.
+        let mut value_cols: Vec<String> = Vec::new();
+        let mut object_value_exprs: Vec<String> = Vec::new();
+        let mut count_values: Vec<(String, &'static str)> = Vec::new();
         for column in &filter.column {
             for aggregation in &filter.aggregation {
-                agg_value_cols.push(fill_zero_sql(
-                    &format!("agg.value_{}", agg_value_cols.len()),
-                    column,
-                    aggregation,
-                    "agg.n_objects IS NULL",
-                    "img.any_measured",
-                ));
-                let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
-                // Unqualified - see `get_group_by_plate`.
-                let value_expr_sql = value_expr;
-                value_exprs.push(format!(
-                    "{agg_fn}({value_expr_sql}) AS value_{}",
-                    value_exprs.len()
-                ));
+                let k = value_cols.len();
+                if matches!(column, Column::Count) {
+                    value_cols.push(format!("cnt.value_{k}"));
+                    count_values.push((format!("value_{k}"), aggregation_sql_fn(aggregation)));
+                } else {
+                    value_cols.push(fill_zero_sql(
+                        &format!("agg.value_{k}"),
+                        column,
+                        aggregation,
+                        "agg.n_objects IS NULL",
+                        "img.any_measured",
+                    ));
+                    let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
+                    object_value_exprs.push(format!("{agg_fn}({value_expr}) AS value_{k}"));
+                }
             }
         }
-        let n = value_exprs.len();
-        let value_exprs_sql = value_exprs.join(",\n                    ");
+        let n = value_cols.len();
+        let value_cols_sql = value_cols.join(", ");
+        let object_values_sql = object_value_exprs.join(",\n                    ");
 
         let regex = if filter.grouping_regex.trim().is_empty() {
             DEFAULT_GROUPING_REGEX
@@ -1279,48 +1317,63 @@ impl ResultsGenerator {
         let measured = self.measured_on_plane_sql("images", &filter.plane)?;
         let mut results = Vec::with_capacity(filter.object_class.len() * n);
         for object_class in &filter.object_class {
-            let mut object_conditions = vec![
-                format!("o.z_stack = {}", filter.plane.z_stack),
-                format!("o.t_stack = {}", filter.plane.t_stack),
-            ];
-            if let ObjectClass::Valid(id) = object_class {
-                object_conditions.push(class_filter_sql("o.object_class_id", &[*id]));
-            }
-            let object_where = object_conditions.join(" AND ");
-            let agg_value_cols = agg_value_cols.join(", ");
+            // Per-object statistics (everything but Count).
+            let agg_join = if object_value_exprs.is_empty() {
+                String::new()
+            } else {
+                let mut object_conditions = vec![
+                    format!("o.z_stack = {}", filter.plane.z_stack),
+                    format!("o.t_stack = {}", filter.plane.t_stack),
+                ];
+                if let ObjectClass::Valid(id) = object_class {
+                    object_conditions.push(class_filter_sql("o.object_class_id", &[*id]));
+                }
+                let object_where = object_conditions.join(" AND ");
+                format!(
+                    "LEFT JOIN (\n\
+                         SELECT\n\
+                             regexp_extract(o.image_name, '{regex}', 1) AS group_prefix,\n\
+                             regexp_extract(o.image_name, '{regex}', 2) AS row,\n\
+                             regexp_extract(o.image_name, '{regex}', 3) AS col,\n\
+                             COUNT(*) AS n_objects,\n\
+                             {object_values_sql}\n\
+                         FROM objects o\n\
+                         JOIN images i ON i.image_rel_path = o.image_rel_path\n\
+                         WHERE NOT i.disabled AND i.successful AND {object_where}\n\
+                         GROUP BY group_prefix, row, col\n\
+                     ) agg USING (group_prefix, row, col)\n"
+                )
+            };
+            // Per-image count statistics (Count).
+            let cnt_join = if count_values.is_empty() {
+                String::new()
+            } else {
+                let cnt_sql =
+                    self.plate_count_sql(&regex, &filter.plane, *object_class, &count_values)?;
+                format!(
+                    "LEFT JOIN (\n{cnt_sql}\n) cnt\n\
+                         ON cnt.group_prefix = img.group_prefix\n\
+                         AND cnt.row = img.row AND cnt.col = img.col\n"
+                )
+            };
 
-            // Same "filter+aggregate `objects` before joining" shape as
-            // `get_group_by_plate` - see its comment for why (benchmarked
-            // ~4x faster than a flat `images LEFT JOIN objects` on a real
-            // multi-million-object database) and for `any_disabled`/
-            // `any_measured`.
             let sql = format!(
-                "SELECT img.group_prefix, img.row, img.col, {agg_value_cols}, img.any_disabled,\n\
+                "SELECT img.group_prefix, img.row, img.col, {value_cols_sql}, img.any_disabled,\n\
                  img.any_failed\n\
-             FROM (\n\
-                 SELECT\n\
-                     regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
-                     regexp_extract(image_name, '{regex}', 2) AS row,\n\
-                     regexp_extract(image_name, '{regex}', 3) AS col,\n\
-                     bool_or(disabled) AS any_disabled,\n\
-                     bool_or(NOT successful) AS any_failed,\n\
-                     bool_or(NOT disabled AND {measured}) AS any_measured\n\
-                 FROM images\n\
-                 GROUP BY group_prefix, row, col\n\
-             ) img\n\
-             LEFT JOIN (\n\
+                 FROM (\n\
                      SELECT\n\
-                         regexp_extract(o.image_name, '{regex}', 1) AS group_prefix,\n\
-                         regexp_extract(o.image_name, '{regex}', 2) AS row,\n\
-                         regexp_extract(o.image_name, '{regex}', 3) AS col,\n\
-                         COUNT(*) AS n_objects,\n\
-                         {value_exprs_sql}\n\
-                     FROM objects o\n\
-                     JOIN images i ON i.image_rel_path = o.image_rel_path\n\
-                     WHERE NOT i.disabled AND i.successful AND {object_where}\n\
+                         regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
+                         regexp_extract(image_name, '{regex}', 2) AS row,\n\
+                         regexp_extract(image_name, '{regex}', 3) AS col,\n\
+                         bool_or(disabled) AS any_disabled,\n\
+                         bool_or(NOT successful) AS any_failed,\n\
+                         bool_or(NOT disabled AND {measured}) AS any_measured\n\
+                     FROM images\n\
                      GROUP BY group_prefix, row, col\n\
-             ) agg USING (group_prefix, row, col)\n\
-             ORDER BY img.group_prefix"
+                 ) img\n\
+                 {agg_join}\
+                 {cnt_join}\
+                 ORDER BY img.group_prefix"
             );
 
             let mut stmt = self.database.prepare(&sql).map_err(err)?;
@@ -1368,7 +1421,6 @@ impl ResultsGenerator {
 
         Ok(results)
     }
-
     // Second drill level: the fields (individual images) inside one well
     // (`filter.group_name`, e.g. "A1"). Mirrors `get_group_by_plate` in
     // shape and view handling, just one level deeper — group key here is
@@ -5209,7 +5261,7 @@ mod tests {
             grouping_regex: String::new(),
             aggregation: aggregations.clone(),
             object_class: vec![ObjectClass::Unset],
-            column: vec![Column::Count],
+            column: vec![Column::Count, Column::AreaSizePx],
             color_schema: ColorSchema::default(),
             color_scale: ColorScale::default(),
             matrix_dimension: None,
@@ -5217,7 +5269,7 @@ mod tests {
         let multi = generator
             .get_group_by_plate_multi(&multi_filter, &View::List)
             .unwrap();
-        assert_eq!(multi.len(), 4);
+        assert_eq!(multi.len(), 8);
 
         for (aggregation, batched_result) in aggregations.iter().zip(&multi) {
             let mut filter = plate_filter(Column::Count);
@@ -5237,17 +5289,33 @@ mod tests {
                 "the well itself must not be flagged disabled just because A1_03 is"
             );
         }
-        // Sanity on the actual numbers (A1_03's 30 excluded from every
-        // aggregate since it's disabled), not just internal agreement.
+
+        // Count
         assert_eq!(float_cell(&multi[0].rows[0][1]), 2.5); //A1 
         assert_eq!(float_cell(&multi[1].rows[0][1]), 2.0); //A1 
         assert_eq!(float_cell(&multi[2].rows[0][1]), 3.0); //A1 
         assert_eq!(float_cell(&multi[3].rows[0][1]), 5.0); //A1 
 
+        // Area size
+        assert_eq!(
+            (float_cell(&multi[4].rows[0][1]) * 100.0).round() / 100.0,
+            15.2
+        ); //A1 avg(10, 20)
+        assert_eq!(float_cell(&multi[5].rows[0][1]), 10.0); //A1 min(10, 20)
+        assert_eq!(float_cell(&multi[6].rows[0][1]), 22.0); //A1 max(10, 20)
+        assert_eq!(float_cell(&multi[7].rows[0][1]), 76.0); //A1 sum(10, 20)
+
+        // Count
         assert_eq!(float_cell(&multi[0].rows[1][1]), 2.0); //B1 
         assert_eq!(float_cell(&multi[1].rows[1][1]), 2.0); //B1 
         assert_eq!(float_cell(&multi[2].rows[1][1]), 2.0); //B1 
         assert_eq!(float_cell(&multi[3].rows[1][1]), 4.0); //B1 
+
+        // Area size
+        assert_eq!(float_cell(&multi[4].rows[1][1]), 41.5); //B1 avg(10, 20)
+        assert_eq!(float_cell(&multi[5].rows[1][1]), 40.0); //B1 min(10, 20)
+        assert_eq!(float_cell(&multi[6].rows[1][1]), 43.0); //B1 max(10, 20)
+        assert_eq!(float_cell(&multi[7].rows[1][1]), 166.0); //B1 sum(10, 20)
     }
 
     #[test]

@@ -242,6 +242,7 @@ impl ResultsStateController {
                     };
                     state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
                     state.set_matrix_level(MatrixLevel::Plate);
+                    manager.apply_matrix_aggregate_enabled(&ui_ready, MatrixLevel::Plate);
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
@@ -280,6 +281,7 @@ impl ResultsStateController {
                         },
                     ]))));
                     state.set_matrix_level(MatrixLevel::Plate);
+                    manager.apply_matrix_aggregate_enabled(&ui_ready, MatrixLevel::Plate);
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
@@ -294,6 +296,7 @@ impl ResultsStateController {
                 state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
                 if keep <= 2 {
                     state.set_matrix_level(MatrixLevel::Plate);
+                    manager.apply_matrix_aggregate_enabled(&ui_ready, MatrixLevel::Plate);
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
@@ -303,6 +306,7 @@ impl ResultsStateController {
                     manager.update_matrix_view();
                 } else if keep == 3 {
                     state.set_matrix_level(MatrixLevel::Well);
+                    manager.apply_matrix_aggregate_enabled(&ui_ready, MatrixLevel::Well);
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
@@ -539,16 +543,9 @@ impl ResultsStateController {
                         return;
                     };
                     drop(classes);
-                    // Count is a row tally, not a per-object measurement —
-                    // averaging/summing/etc. it doesn't mean anything beyond
-                    // the count itself, so the Aggregate picker is disabled
-                    // while it's selected (see `aggregate_sql` in
-                    // results_generator.rs, which ignores `Aggregation`
-                    // entirely for `Column::Count` and always uses COUNT(*)).
-                    ui_ready
-                        .global::<ResultsState>()
-                        .set_matrix_aggregate_enabled(!matches!(column, Column::Count));
                     manager.update_matrix_filter(|filter| filter.column = column);
+                    let level = ui_ready.global::<ResultsState>().get_matrix_level();
+                    manager.apply_matrix_aggregate_enabled(&ui_ready, level);
                     manager.refresh_active_matrix_view();
                 });
 
@@ -814,6 +811,7 @@ impl ResultsStateController {
                         });
                         state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
                         state.set_active_image_name(image_name);
+                        manager.apply_matrix_aggregate_enabled(&ui_ready, MatrixLevel::Object);
                     } else {
                         warn!("Failed to upgrade UI handle in on_well_field_clicked");
                     }
@@ -1308,6 +1306,23 @@ impl ResultsStateController {
         }
     }
 
+    /// The Aggregate picker means nothing for `Column::Count` below the
+    /// Plate level: a field (Well level) is a single image and a heatmap
+    /// tile (Object level) is a region of a single image, so the count is
+    /// just the count. At the Plate level Count is aggregated over the
+    /// per-image counts of a well, so the picker stays enabled there.
+    fn apply_matrix_aggregate_enabled(&self, ui: &ResultsWindow, level: MatrixLevel) {
+        let is_count = self
+            .matrix_filter
+            .lock()
+            .expect("Poisned")
+            .as_ref()
+            .is_some_and(|filter| matches!(filter.column, Column::Count));
+        let below_plate = matches!(level, MatrixLevel::Well | MatrixLevel::Object);
+        ui.global::<ResultsState>()
+            .set_matrix_aggregate_enabled(!(is_count && below_plate));
+    }
+
     pub fn open_database(&self, path: PathBuf) {
         info!("Opening database {:?}", path);
         let db = self._app_state.backend().open_results(&path);
@@ -1460,14 +1475,7 @@ impl ResultsStateController {
                             matrix_column_items_vec,
                         ))));
                         state.set_matrix_column_summary(default_matrix_column_label.into());
-                        // Same "Count can't be aggregated" rule
-                        // `on_matrix_value_clicked` applies on every later
-                        // column change — applied here too so the very
-                        // first render is consistent with it.
-                        state.set_matrix_aggregate_enabled(!matches!(
-                            default_matrix_column,
-                            Column::Count
-                        ));
+                        state.set_matrix_aggregate_enabled(true);
 
                         state.set_chart_kind(ResultsChartKind2::Histogram);
                         state.set_chart_column_items(ModelRc::from(Rc::new(VecModel::from(
@@ -4574,6 +4582,10 @@ mod tests {
     fn breadcrumb_nav_back_to_plate_refreshes_stale_plate_cells() {
         let (_ui, results_ui, controller) = controller_with_open_database();
         let state = results_ui.global::<ResultsState>();
+
+        // Count/Avg is the same (1.0) with or without A1_01 (one object per
+        // image), so use Sum: 2 before disabling A1_01, 1 after.
+        state.invoke_matrix_aggregate_selected("Sum".into());
 
         state.invoke_plate_cell_clicked("A1".into());
         let cells = controller.matrix_cells.lock().unwrap();
