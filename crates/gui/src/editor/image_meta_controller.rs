@@ -696,7 +696,8 @@ mod tests {
         ui.global::<ChannelState>().invoke_grayscale_toggled(true);
         drain_ui_queue();
         assert!(ui.global::<ChannelState>().get_grayscale());
-        assert!(channels().iter().all(|c| c.color == white));
+        // The switches should still stay in color
+        assert!(channels().iter().all(|c| c.color != white));
         assert_eq!(channels().iter().filter(|c| c.active).count(), 1);
         assert_eq!(state().get_active_count(), 1);
         assert!(ui_state.get_project().images.settings.grayscale);

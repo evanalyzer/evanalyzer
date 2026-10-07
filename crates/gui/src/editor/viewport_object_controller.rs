@@ -488,7 +488,9 @@ mod tests {
     use evanalyzer_app::images::ImageChannel;
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
+    use evanalyzer_app::prelude::classification_ext::ClassificationExt;
     use evanalyzer_cfg::core_types::ObjectId;
+    use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
     use kornia_image::Image;
 
@@ -647,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn add_object_from_rect_creates_an_object_spanning_the_two_corner_points() {
+    fn add_object_from_rect_with_no_selected_class() {
         let (ui_state, controller, viewport_cache) = make_controller();
         seed_image_cache(&viewport_cache);
 
@@ -657,7 +659,40 @@ mod tests {
         let objects = project
             .get_objects()
             .expect("current series must have objects");
+        // No class was selected, we do not allow object creation without class
+        assert_eq!(objects.len(), 0);
+    }
+
+    #[test]
+    fn add_object_from_rect_creates_an_object_spanning_the_two_corner_points() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        let new_class = controller
+            .app_state
+            .get_project_write()
+            .classification
+            .add_class(Class {
+                id: ObjectClass::Valid(1),
+                color: 0xff0000,
+                name: "cl1".into(),
+                notes: "note".into(),
+            });
+
+        controller
+            .app_state
+            .get_project_write()
+            .set_selected_object_class(new_class);
+
+        controller.add_object_from_rect(&points(&[(2.0, 2.0), (5.0, 5.0)]));
+
+        let project = ui_state.get_project();
+        let objects = project
+            .get_objects()
+            .expect("current series must have objects");
         assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].object_class.contains(&new_class), true);
+        assert_eq!(objects[0].object_class.len(), 1);
         assert_eq!(objects[0].bbox, [2, 2, 5, 5]);
         // A rectangle mask fills every pixel in its bbox.
         assert_eq!(objects[0].area, 4 * 4);
@@ -766,7 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn add_polygon_from_rect_creates_an_object_covering_the_triangle_bbox() {
+    fn add_polygon_without_object_class_must_fail() {
         let (ui_state, controller, viewport_cache) = make_controller();
         seed_image_cache(&viewport_cache);
 
@@ -776,8 +811,40 @@ mod tests {
         let objects = project
             .get_objects()
             .expect("current series must have objects");
+        assert_eq!(objects.len(), 0);
+    }
+
+    #[test]
+    fn add_polygon_from_rect_creates_an_object_covering_the_triangle_bbox() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        let new_class = controller
+            .app_state
+            .get_project_write()
+            .classification
+            .add_class(Class {
+                id: ObjectClass::Valid(1),
+                color: 0xff0000,
+                name: "cl1".into(),
+                notes: "note".into(),
+            });
+
+        controller
+            .app_state
+            .get_project_write()
+            .set_selected_object_class(new_class);
+
+        controller.add_polygon_from_rect(&points(&[(2.0, 2.0), (10.0, 2.0), (6.0, 10.0)]), 3);
+
+        let project = ui_state.get_project();
+        let objects = project
+            .get_objects()
+            .expect("current series must have objects");
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].bbox, [2, 2, 10, 10]);
+        assert_eq!(objects[0].object_class.contains(&new_class), true);
+        assert_eq!(objects[0].object_class.len(), 1);
         assert!(objects[0].area > 0, "the triangle interior must be filled");
     }
 }

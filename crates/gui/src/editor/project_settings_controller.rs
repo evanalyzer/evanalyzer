@@ -137,6 +137,8 @@ impl ProjectSettingsController {
     /// 3. Plate Geometry: Updating well dimensions and the flat-mapped image sequence order.
     pub fn update_project_settings_in_project(&self, project_settings: &ProjectSettingsSlint) {
         {
+            let mut project = self.app_state.get_project_write();
+
             // Meta settings
             {
                 self.app_state.update_app_settings(|settings| {
@@ -145,9 +147,9 @@ impl ProjectSettingsController {
                         organization: project_settings.organization_name.clone().into(),
                     });
                 });
-            }
 
-            let mut project = self.app_state.get_project_write();
+                project.meta.name = project_settings.project_name.clone().into();
+            }
 
             // Plate settings
             {
@@ -544,9 +546,17 @@ mod tests {
 
         controller.update_project_settings_in_project(&sample_settings());
 
+        let user_settings = &*ui_state.app_settings.lock().expect("Poisned");
+        assert_eq!(
+            user_settings.author.clone().unwrap().full_name,
+            "Ada Lovelace"
+        );
+        assert_eq!(
+            user_settings.author.clone().unwrap().organization,
+            "Analytical Engines"
+        );
+
         let project = ui_state.get_project();
-        assert_eq!(project.meta.authors[0].full_name, "Ada Lovelace");
-        assert_eq!(project.meta.authors[0].organization, "Analytical Engines");
         assert_eq!(project.meta.name, "Test Project");
         assert_eq!(project.plate.well_rows, 2);
         assert_eq!(project.plate.well_cols, 3);

@@ -13,6 +13,9 @@ pub enum InternalErrors {
     #[error("XML error: {0}")]
     Xml(String),
 
+    #[error("JSON error: {0}")]
+    JsonParsingError(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -73,6 +76,12 @@ impl From<quick_xml::Error> for InternalErrors {
 impl From<&str> for InternalErrors {
     fn from(err: &str) -> Self {
         InternalErrors::Internal(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for InternalErrors {
+    fn from(err: serde_json::Error) -> Self {
+        InternalErrors::JsonParsingError(err.to_string())
     }
 }
 

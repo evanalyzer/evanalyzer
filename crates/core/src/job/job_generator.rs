@@ -108,8 +108,10 @@ pub fn generate_analyze_job_from_project_settings(
         return Err(InternalErrors::Io(format!("{e}")));
     }
 
+    config.meta.app_version = env!("CARGO_PKG_VERSION").to_string();
+
     let db_out_name = output_path.join(format!("{job_name}.{RESULTS_FILE_EXTENSION}"));
-    let database_storage = match DuckDbExporter::new(&db_out_name, class_names) {
+    let database_storage = match DuckDbExporter::new(&db_out_name, class_names, &config.meta) {
         Ok(exp) => Arc::new(exp),
         Err(e) => {
             error!(
@@ -120,7 +122,6 @@ pub fn generate_analyze_job_from_project_settings(
         }
     };
 
-    config.meta.app_version = env!("CARGO_PKG_VERSION").to_string();
     write_project_snapshot(&config, &output_path, &job_name);
 
     generate_job_from_project_settings_intenal(config, project_path, output_path, database_storage)

@@ -15,6 +15,7 @@
 
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
+use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_core::PipelineResultExporter;
 use evanalyzer_core::{DuckDbExporter, GlobalPipelineCache, Intensity, Object, ObjectInit};
 use indexmap::IndexMap;
@@ -105,7 +106,21 @@ fn main() {
     let class_names: HashMap<ObjectClass, (String, u32)> = (1..=22)
         .map(|c| (ObjectClass::Valid(c), (format!("Class {c}"), 0)))
         .collect();
-    let exporter = DuckDbExporter::new(&out, class_names).expect("create exporter");
+    let exporter = DuckDbExporter::new(
+        &out,
+        class_names,
+        &MetaData {
+            name: "Experiment name".into(),
+            short_description: "Short description".into(),
+            description: "Long description".into(),
+            authors: vec![],
+            creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+            category: "Test category".into(),
+            tags: vec![],
+            app_version: "v1.0.0".into(),
+        },
+    )
+    .expect("create exporter");
 
     // Objects are built outside the timed section; only writing is timed.
     let mut write_time = std::time::Duration::ZERO;

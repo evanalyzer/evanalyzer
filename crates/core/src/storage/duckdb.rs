@@ -6,8 +6,10 @@ use duckdb::arrow::array::{
     StringBuilder, UInt8Builder, UInt32Builder, UInt64Builder,
 };
 use duckdb::arrow::record_batch::RecordBatch;
+use duckdb::types::Value;
 use duckdb::{Connection, params};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId};
+use evanalyzer_cfg::settings::meta_data::MetaData;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -104,6 +106,7 @@ impl DuckDbExporter {
     pub fn new(
         output_path: impl Into<PathBuf>,
         class_names: HashMap<ObjectClass, (String, u32)>,
+        project_meta: &MetaData,
     ) -> Result<Self, InternalErrors> {
         let path: PathBuf = output_path.into();
         // These two log lines bracket the DuckDB DDL.  On the Windows (MinGW /
@@ -138,8 +141,34 @@ impl DuckDbExporter {
             }
         }
 
-        conn.execute("INSERT INTO run (status) VALUES ('running')", [])
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        let author_names: Value = Value::Text(
+            serde_json::to_string(
+                &project_meta.authors.iter().map(|a| &a.full_name).collect::<Vec<_>>()
+            ).map_err(|e| InternalErrors::Io(e.to_string()))?
+        );
+
+        let author_orgs: Value = Value::Text(
+            serde_json::to_string(
+                &project_meta.authors.iter().map(|a| &a.organization).collect::<Vec<_>>()
+            ).map_err(|e| InternalErrors::Io(e.to_string()))?
+        );
+
+        conn.execute(
+            "INSERT INTO run (
+                status, title, short_description, description, app_version, author_full_name, author_organization
+            ) VALUES (
+                'running', ?, ?, ?, ?, ?::VARCHAR[], ?::VARCHAR[]
+            )",
+            params![
+                project_meta.name, 
+                project_meta.short_description,
+                project_meta.description,
+                project_meta.app_version,
+                author_names, 
+                author_orgs,
+            ],
+        )
+        .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
         // Tuning for sustained tile-by-tile appends:
         //
@@ -588,10 +617,16 @@ CREATE TABLE IF NOT EXISTS classes (
 -- 'running' afterwards means it was interrupted (crash, killed process).
 -- One row. Files from before this table existed have none.
 CREATE TABLE IF NOT EXISTS run (
-    status       VARCHAR NOT NULL,
-    message      VARCHAR,
-    started_at   TIMESTAMP NOT NULL DEFAULT current_timestamp,
-    finished_at  TIMESTAMP
+    status              VARCHAR NOT NULL,
+    title               VARCHAR,
+    short_description   VARCHAR,
+    description         VARCHAR,
+    app_version         VARCHAR,
+    author_full_name    VARCHAR[],
+    author_organization VARCHAR[],
+    message             VARCHAR,
+    started_at          TIMESTAMP NOT NULL DEFAULT current_timestamp,
+    finished_at         TIMESTAMP
 );
 ";
 
@@ -910,7 +945,21 @@ mod tests {
             ),
         ] {
             let path = dir.path().join(format!("{status}.evadb"));
-            let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+            let exporter = DuckDbExporter::new(
+                &path,
+                HashMap::new(),
+                &MetaData {
+                    name: "Experiment name".into(),
+                    short_description: "Short description".into(),
+                    description: "Long description".into(),
+                    authors: vec![],
+                    creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                    category: "Test category".into(),
+                    tags: vec![],
+                    app_version: "v1.0.0".into(),
+                },
+            )
+            .unwrap();
             assert_eq!(run_row(&exporter), ("running".into(), None, false));
 
             exporter.finish_run(&outcome).unwrap();
@@ -928,7 +977,21 @@ mod tests {
     fn export_writes_object_classes_as_an_integer_list() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("results.evadb");
-        let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+        let exporter = DuckDbExporter::new(
+            &path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name 02".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap();
         let mut cache = GlobalPipelineCache::default();
         cache.image_rel_path = PathBuf::from("a.tif");
         cache.image_meta.nr_of_bits = 8;
@@ -992,7 +1055,21 @@ mod tests {
         // under it - none may be lost or written twice at the seam.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("results.evadb");
-        let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+        let exporter = DuckDbExporter::new(
+            &path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap();
         let count = ARROW_BATCH_ROWS as u128 * 2 + 1;
 
         exporter
@@ -1013,7 +1090,21 @@ mod tests {
     fn concurrent_exports_of_several_images_write_every_object() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("results.evadb");
-        let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+        let exporter = DuckDbExporter::new(
+            &path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap();
         let caches: Vec<_> = (0..8)
             .map(|i| cache_with_objects(&format!("{i}.tif"), 500))
             .collect();
@@ -1034,7 +1125,21 @@ mod tests {
         // holds the connection must not fail the export of all others.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("results.evadb");
-        let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+        let exporter = DuckDbExporter::new(
+            &path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap();
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _conn = exporter.conn.lock().unwrap();
             panic!("simulated export panic while holding the connection");
@@ -1054,7 +1159,21 @@ mod tests {
     fn export_writes_intensities_per_channel_and_coloc_partners_as_a_map() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("results.evadb");
-        let exporter = DuckDbExporter::new(&path, HashMap::new()).unwrap();
+        let exporter = DuckDbExporter::new(
+            &path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap();
         let mut cache = GlobalPipelineCache::default();
         cache.image_rel_path = PathBuf::from("a.tif");
         cache.image_meta.nr_of_bits = 8; // gray value = normalized * 255
