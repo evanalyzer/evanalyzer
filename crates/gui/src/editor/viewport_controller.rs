@@ -545,17 +545,7 @@ impl ViewportController {
             Vec::with_capacity(objects.len() + auto_objects.len());
 
         for object in objects.iter().chain(auto_objects.iter()) {
-            if hide_unclassified && object.object_class.is_empty() {
-                continue;
-            }
-
-            // Skip ROIs whose every assigned class is hidden.
-            let all_hidden = !object.object_class.is_empty()
-                && object
-                    .object_class
-                    .iter()
-                    .all(|c| !project.is_class_visible(c));
-            if all_hidden {
+            if !is_object_drawn(&*project, hide_unclassified, &object.object_class) {
                 continue;
             }
 
@@ -805,7 +795,8 @@ fn blend_pixel_over(dst: &mut slint::Rgba8Pixel, src: slint::Rgba8Pixel) {
 /// Cost scales with visible, larger-than-a-pixel objects:
 /// - off-screen bboxes are culled before touching their mask,
 /// - bboxes within one screen pixel collapse to a single stamped pixel,
-/// - only the visible sub-rectangle of each mask is walked.
+/// - only the visible sub-rectangle of each mask is walked,
+/// - zoomed out, mask columns sharing a screen column are checked as one run.
 fn composite_object_instances(
     instances: &[ObjectDrawInstance],
     buf_w: u32,
@@ -813,6 +804,20 @@ fn composite_object_instances(
     zoom: f32,
     off_x: f32,
     off_y: f32,
+) -> Vec<slint::Rgba8Pixel> {
+    composite_object_instances_with(instances, buf_w, buf_h, zoom, off_x, off_y, zoom < 1.0)
+}
+
+/// [`composite_object_instances`], with the column runs (`use_runs`) chosen
+/// by the caller - the tests check both ways produce the same pixels.
+fn composite_object_instances_with(
+    instances: &[ObjectDrawInstance],
+    buf_w: u32,
+    buf_h: u32,
+    zoom: f32,
+    off_x: f32,
+    off_y: f32,
+    use_runs: bool,
 ) -> Vec<slint::Rgba8Pixel> {
     let bw = buf_w as i32;
     let bh = buf_h as i32;
@@ -833,6 +838,9 @@ fn composite_object_instances(
     // Scratch buffers reused across instances (no per-instance allocation).
     let mut coverage: Vec<u8> = Vec::new();
     let mut x_edges: Vec<(i32, i32)> = Vec::new();
+    // (first mask column, end mask column, first screen column, end screen
+    // column) of each run of mask columns sharing their screen columns.
+    let mut x_runs: Vec<(usize, usize, i32, i32)> = Vec::new();
     // Outline pixels of all instances, plus (end offset, colour) per instance.
     let mut outline_idx: Vec<u32> = Vec::new();
     let mut outline_runs: Vec<(usize, slint::Rgba8Pixel)> = Vec::with_capacity(instances.len());
@@ -902,6 +910,27 @@ fn composite_object_instances(
             (a.max(rx0), b.min(rx1))
         }));
 
+        // Zoomed out, several neighbouring mask columns land on the same
+        // screen column(s): group them into runs (mask columns rs..re ->
+        // screen columns x0..x1), so each row checks a run with one
+        // word-level `any()` instead of visiting every set bit. Exactly the
+        // same coverage; zoomed in, every run would be a single column, so
+        // walking the set bits stays cheaper there.
+        if use_runs {
+            x_runs.clear();
+            for (rel, &(x0, x1)) in x_edges.iter().enumerate() {
+                if x0 >= x1 {
+                    continue;
+                }
+                match x_runs.last_mut() {
+                    Some((_, re, rx0_, rx1_)) if *re == rel && (*rx0_, *rx1_) == (x0, x1) => {
+                        *re = rel + 1
+                    }
+                    _ => x_runs.push((rel, rel + 1, x0, x1)),
+                }
+            }
+        }
+
         for ly in ly0..ly1 {
             let ay = (bbox[1] as usize + ly) as f32;
             let y0f = (ay * zoom + off_y).floor() as i32;
@@ -914,6 +943,21 @@ fn composite_object_instances(
             let Some(row_bits) = inst.mask.get(row_start + lx0..row_start + lx1) else {
                 continue;
             };
+            if use_runs {
+                for py in y0..y1 {
+                    let row = (py - ry0) as usize * rw;
+                    for &(rs, re, x0, x1) in &x_runs {
+                        let cells = row + (x0 - rx0) as usize..row + (x1 - rx0) as usize;
+                        if coverage[cells.clone()].iter().all(|&c| c != 0) {
+                            continue;
+                        }
+                        if row_bits[rs..re].any() {
+                            coverage[cells].fill(1);
+                        }
+                    }
+                }
+                continue;
+            }
             for rel in row_bits.iter_ones() {
                 let (x0, x1) = x_edges[rel];
                 if x0 >= x1 {
@@ -972,6 +1016,21 @@ fn composite_object_instances(
     }
 
     pixels
+}
+
+/// Whether an object with `classes` is drawn at all: not when it's
+/// unclassified while unclassified objects are hidden, nor when every one of
+/// its classes is hidden. Shared by the redraw and by click picking, so an
+/// object that isn't drawn can never be picked either.
+pub(crate) fn is_object_drawn<P: ProjectExt + ?Sized>(
+    project: &P,
+    hide_unclassified: bool,
+    classes: &HashSet<ObjectClass>,
+) -> bool {
+    if classes.is_empty() {
+        return !hide_unclassified;
+    }
+    classes.iter().any(|c| project.is_class_visible(c))
 }
 
 /// Draw-order key; instances are painted in ascending key order (bigger = on top).
@@ -1201,10 +1260,85 @@ mod composite_object_instances_tests {
 
         let pixels = composite_object_instances(&instances, 3, 3, 1.0, 0.0, 0.0);
 
+        // A single pixel is all outline: outlines are painted opaque in
+        // z-order after every fill, so the top object's outline wins.
+        assert_eq!(pixels[0], rgba(0, 0, 255, 255));
+    }
+
+    /// The zoomed-out column runs are only a shortcut: for any zoom and
+    /// offset they must give exactly the pixels of walking every set bit.
+    #[test]
+    fn column_runs_produce_the_same_pixels_as_walking_every_bit() {
+        let mut seed = 42u64;
+        let mut rnd = |m: u32| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as u32) % m
+        };
+        let mut masks = Vec::new();
+        let mut bboxes = Vec::new();
+        for _ in 0..60 {
+            let (w, h) = (1 + rnd(40), 1 + rnd(40));
+            let (x, y) = (rnd(300), rnd(300));
+            bboxes.push([x, y, x + w - 1, y + h - 1]);
+            // Random fill, including empty and single-pixel masks.
+            let density = rnd(4);
+            let mask: BitVec<u64, Lsb0> = (0..w * h).map(|_| rnd(4) < density).collect();
+            masks.push(mask);
+        }
+        let instances: Vec<ObjectDrawInstance> = bboxes
+            .iter()
+            .zip(&masks)
+            .enumerate()
+            .map(|(i, (bbox, mask))| ObjectDrawInstance {
+                bbox: *bbox,
+                mask,
+                color: rgba((i * 37) as u8, (i * 91) as u8, 200, 100 + (i % 100) as u8),
+            })
+            .collect();
+
+        for &zoom in &[0.07f32, 0.23, 0.5, 0.77, 0.999, 1.0, 1.5, 3.3] {
+            for &(off_x, off_y) in &[(0.0f32, 0.0f32), (-17.3, 5.6), (11.9, -40.2)] {
+                let bits = composite_object_instances_with(
+                    &instances, 160, 120, zoom, off_x, off_y, false,
+                );
+                let runs =
+                    composite_object_instances_with(&instances, 160, 120, zoom, off_x, off_y, true);
+                assert!(
+                    bits == runs,
+                    "zoom {zoom}, offset ({off_x}, {off_y}): runs differ from bits"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overlapping_interiors_blend_with_porter_duff_over_and_the_top_outline_wins() {
+        let bbox = [1u32, 1, 3, 3]; // 3x3 -> the centre (2,2) is interior
+        let mask = full_mask(bbox);
+        let bottom = rgba(255, 0, 0, 128);
+        let top = rgba(0, 0, 255, 128);
+        let instances = [
+            ObjectDrawInstance {
+                bbox,
+                mask: &mask,
+                color: bottom,
+            },
+            ObjectDrawInstance {
+                bbox,
+                mask: &mask,
+                color: top,
+            },
+        ];
+
+        let pixels = composite_object_instances(&instances, 5, 5, 1.0, 0.0, 0.0);
+
         let mut expected = bottom;
         blend_pixel_over(&mut expected, top);
-        expected.a = 255; // isolated pixel -> border pass forces full opacity
-        assert_eq!(pixels[0], expected);
+        assert_eq!(pixels[2 * 5 + 2], expected, "interior: both fills blended");
+        assert_eq!(pixels[5 + 1], rgba(0, 0, 255, 255), "outline: top, opaque");
+        assert_eq!(pixels[0].a, 0, "background stays empty");
     }
 }
 

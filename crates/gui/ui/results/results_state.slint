@@ -101,6 +101,12 @@ export global ResultsState {
     // Set when the analysis that wrote the open database didn't finish
     // (cancelled, failed, interrupted) - the results are incomplete.
     in-out property <string> run-warning: "";
+    // Database work (opening a results file, toggling an image) is running
+    // in the background - the window stays usable meanwhile. Shown as
+    // "Busy" in the status bar.
+    in-out property <bool> loading: false;
+    // File name of the open results database, for the status bar.
+    in-out property <string> database-name: "";
 
     // -------- Navigation --------
     in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;

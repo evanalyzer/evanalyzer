@@ -4024,6 +4024,79 @@ mod tests {
         assert_eq!(result.column_names[2], "Area [px] (AVG)");
     }
 
+    #[test]
+    fn get_grouped_by_image_aggregates_intensity_columns() {
+        use super::super::test_support::CH0_INTENSITIES_JSON;
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10).with_intensities(CH0_INTENSITIES_JSON),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 20).with_intensities(CH0_INTENSITIES_JSON),
+        ]);
+        let result = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![
+                    Column::IntensityAvg(0),
+                    Column::IntensitySum(0),
+                    Column::IntensityMin(0),
+                    Column::IntensityMax(0),
+                ],
+                aggregation: vec![Aggregation::Avg, Aggregation::Sum],
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        // Columns are sorted (Avg, Sum, Min, Max), each x (Avg, Sum).
+        assert_eq!(result.column_names[2], "Avg Intensity (Ch 0) (AVG)");
+        let values: Vec<Option<f64>> = result.rows[0][2..].iter().map(cell_value).collect();
+        assert_eq!(
+            values,
+            vec![
+                Some(127.0),
+                Some(254.0),
+                Some(255.0),
+                Some(510.0),
+                Some(0.0),
+                Some(0.0),
+                Some(255.0),
+                Some(510.0),
+            ]
+        );
+    }
+
+    /// `Column::is_aggregable` (what the GUI's Images mode and the export
+    /// filter the selected columns with) must accept exactly the columns
+    /// the aggregating queries can handle - intensities were once dropped
+    /// there although `column_aggregate_expr` already supported them.
+    #[test]
+    fn column_is_aggregable_matches_what_the_aggregating_queries_accept() {
+        let every_column = [
+            Column::ObjectId,
+            Column::ImageName,
+            Column::ObjectClass,
+            Column::Count,
+            Column::AreaSizePx,
+            Column::AreaSizeNm,
+            Column::PerimeterPx,
+            Column::PerimeterNm,
+            Column::Circularity,
+            Column::Solidity,
+            Column::Eccentricity,
+            Column::ColocCount(ObjectClass::Valid(1)),
+            Column::IntensityAvg(0),
+            Column::IntensitySum(1),
+            Column::IntensityMin(2),
+            Column::IntensityMax(3),
+        ];
+        for column in &every_column {
+            let accepted = aggregate_sql(column, &Aggregation::Avg).is_ok();
+            assert_eq!(column.is_aggregable(), accepted, "{column:?}");
+        }
+    }
+
     // -- transposed (classes side by side) -------------------------------
 
     fn grouped_transposed(

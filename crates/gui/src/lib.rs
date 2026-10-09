@@ -525,7 +525,12 @@ fn run(
     }
     // Kept alive until the window closes.
     let app = ui_state.app.clone();
-    let _connection_watch = show_connection(&ui, move || app.backend(), editor.on_reconnected());
+    let _connection_watch = show_connection(
+        &ui,
+        Some(results_ui_handle.clone()),
+        move || app.backend(),
+        editor.on_reconnected(),
+    );
 
     ui.run()
 }
@@ -647,8 +652,10 @@ pub fn connection_label(backend: &dyn Backend) -> String {
 /// connection is reconnected in the background (see [`Reconnector`]);
 /// `on_reconnected` runs once it's back. Returns the timer, which must stay
 /// alive as long as the window.
+/// `results_ui`: the results window's status bar shows the same connection.
 fn show_connection(
     ui: &AppWindow,
+    results_ui: Option<slint::Weak<ResultsWindow>>,
     current: impl Fn() -> Arc<dyn Backend> + 'static,
     on_reconnected: impl Fn() + Send + Sync + 'static,
 ) -> slint::Timer {
@@ -696,6 +703,9 @@ fn show_connection(
             if state.get_connected() != connected {
                 state.set_connected(connected);
             }
+            if let Some(results_ui) = results_ui.as_ref().and_then(|r| r.upgrade()) {
+                copy_connection_state(&state, &results_ui.global::<ConnectionState>());
+            }
             if !connected && let Some(reconnector) = reconnector.lock().unwrap().as_ref() {
                 reconnector.start();
             }
@@ -705,6 +715,16 @@ fn show_connection(
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), update);
     timer
+}
+
+/// Mirrors what the main window's connection badge shows into another
+/// window's `ConnectionState` (globals are per window).
+fn copy_connection_state(from: &ConnectionState<'_>, to: &ConnectionState<'_>) {
+    to.set_remote(from.get_remote());
+    to.set_label(from.get_label());
+    to.set_connected(from.get_connected());
+    to.set_encrypted(from.get_encrypted());
+    to.set_verified(from.get_verified());
 }
 
 /// `ConnectionState` for `backend`, as long as nothing changes.
@@ -779,7 +799,7 @@ mod ui_state_tests {
 
         let ui = AppWindow::new().unwrap();
         let shown = Arc::clone(&backend);
-        let _timer = show_connection(&ui, move || Arc::clone(&shown), || {});
+        let _timer = show_connection(&ui, None, move || Arc::clone(&shown), || {});
         let state = ui.global::<ConnectionState>();
         assert!(!state.get_remote());
         assert!(state.get_connected());
@@ -808,21 +828,35 @@ mod ui_state_tests {
         let current = Arc::new(Mutex::new(Arc::clone(&local)));
 
         let ui = AppWindow::new().unwrap();
+        let results_ui = ResultsWindow::new().unwrap();
         let shown = Arc::clone(&current);
-        let _timer = show_connection(&ui, move || Arc::clone(&shown.lock().unwrap()), || {});
+        let _timer = show_connection(
+            &ui,
+            Some(results_ui.as_weak()),
+            move || Arc::clone(&shown.lock().unwrap()),
+            || {},
+        );
         let state = ui.global::<ConnectionState>();
+        // The results window's status bar shows the same connection.
+        let results_state = results_ui.global::<ConnectionState>();
         assert!(!state.get_remote());
+        assert_eq!(results_state.get_label(), "This computer");
 
         *current.lock().unwrap() = Arc::clone(&remote);
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1100));
         assert!(state.get_remote());
         assert_eq!(state.get_label(), addr.to_string());
         assert!(!state.get_encrypted(), "ws://");
+        assert!(results_state.get_remote());
+        assert_eq!(results_state.get_label(), addr.to_string());
+        assert!(!results_state.get_encrypted());
 
         *current.lock().unwrap() = local;
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1100));
         assert!(!state.get_remote());
         assert_eq!(state.get_label(), "This computer");
+        assert!(!results_state.get_remote());
+        assert_eq!(results_state.get_label(), "This computer");
     }
 
     #[test]

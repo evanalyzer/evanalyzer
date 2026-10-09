@@ -7,6 +7,7 @@ import { Theme } from "../style.slint";
 import { ResultsState } from "results_state.slint";
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
 import { AppButton } from "../components/app_button.slint";
+import { VerticalDivider } from "../components/divider.slint";
 
 export component ResultsListView inherits Rectangle {
     background: Theme.bg;
@@ -62,9 +63,7 @@ export component ResultsListView inherits Rectangle {
                     select-none => { ResultsState.list-columns-select-none(); }
                 }
 
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
+                VerticalDivider { }
 
                 if ResultsState.list-group-by-summary == "Objects": MultiSelectDropdown {
                     label: "COLOC DETAILS";
@@ -118,12 +117,39 @@ export component ResultsListView inherits Rectangle {
                     }
                 }
 
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                // -- Pagination --
+                // Next/previous rather than infinite scroll: each page is a
+                // fresh, bounded query (see LIST_PAGE_SIZE in
+                // results_state_controller.rs), so paging never has to
+                // accumulate rows or track scroll position. Next to the row
+                // count rather than in a footer of its own, to leave the
+                // table the height.
+                AppButton {
+                    text: "‹ Prev";
+                    height: 28px;
+                    min-width: 60px;
+                    enabled: ResultsState.list-page-number > 1;
+                    clicked => { ResultsState.list-prev-page(); }
+                }
+
                 Text {
-                    text: ResultsState.list-row-count + " objects";
+                    text: "Page " + ResultsState.list-page-number;
                     font-size: 11.5px;
                     font-family: Theme.font-mono;
                     color: Theme.text-mute;
                     vertical-alignment: center;
+                }
+
+                AppButton {
+                    text: "Next ›";
+                    height: 28px;
+                    min-width: 60px;
+                    enabled: ResultsState.list-has-next-page;
+                    clicked => { ResultsState.list-next-page(); }
                 }
             }
 
@@ -272,55 +298,6 @@ export component ResultsListView inherits Rectangle {
                     color: Theme.text-mute;
                     horizontal-alignment: center;
                     vertical-alignment: center;
-                }
-            }
-        }
-
-        // -- Pagination footer --
-        // Next/previous rather than infinite scroll: each page is a fresh,
-        // bounded query (see LIST_PAGE_SIZE in results_state_controller.rs),
-        // so paging never has to accumulate rows or track scroll position.
-        Rectangle {
-            height: 44px;
-            background: Theme.bg;
-
-            Rectangle {
-                x: 0;
-                y: 0;
-                width: parent.width;
-                height: 1px;
-                background: Theme.border-soft;
-            }
-
-            HorizontalLayout {
-                padding-left: 16px;
-                padding-right: 16px;
-                spacing: 10px;
-                alignment: end;
-                cross-axis-alignment: center;
-
-                AppButton {
-                    text: "‹ Prev";
-                    height: 28px;
-                    min-width: 72px;
-                    enabled: ResultsState.list-page-number > 1;
-                    clicked => { ResultsState.list-prev-page(); }
-                }
-
-                Text {
-                    text: "Page " + ResultsState.list-page-number;
-                    font-size: 11.5px;
-                    font-family: Theme.font-mono;
-                    color: Theme.text-mute;
-                    vertical-alignment: center;
-                }
-
-                AppButton {
-                    text: "Next ›";
-                    height: 28px;
-                    min-width: 72px;
-                    enabled: ResultsState.list-has-next-page;
-                    clicked => { ResultsState.list-next-page(); }
                 }
             }
         }

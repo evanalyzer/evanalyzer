@@ -32,10 +32,73 @@ use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 const LIST_PAGE_SIZE: i32 = 500;
+
+type DbJob = Box<dyn FnOnce() + Send>;
+
+/// Runs database work off the UI thread, one job at a time and in the order
+/// it was queued, so a slow disk never freezes the window - every UI update
+/// a job makes already goes through `invoke_from_event_loop`. A runner
+/// thread is started when work arrives and ends once the queue is empty.
+///
+/// Tests run the jobs inline (`inline`), so they can check the outcome right
+/// after triggering one.
+struct DbWorker {
+    /// Queued jobs, and whether a runner thread is draining them.
+    queue: Mutex<(std::collections::VecDeque<DbJob>, bool)>,
+    inline: AtomicBool,
+    /// Jobs queued or running - drives `ResultsState.loading`.
+    pending: AtomicUsize,
+}
+
+impl DbWorker {
+    fn new() -> Self {
+        Self {
+            queue: Mutex::new((std::collections::VecDeque::new(), false)),
+            inline: AtomicBool::new(cfg!(test)),
+            pending: AtomicUsize::new(0),
+        }
+    }
+
+    fn submit(self: &Arc<Self>, job: DbJob) {
+        if self.inline.load(Ordering::SeqCst) {
+            job();
+            return;
+        }
+        let mut queue = self.queue.lock().expect("Poisoned");
+        queue.0.push_back(job);
+        if queue.1 {
+            return;
+        }
+        queue.1 = true;
+        drop(queue);
+        let worker = self.clone();
+        crate::helper::ui_thread::spawn(move || worker.run_queued());
+    }
+
+    fn run_queued(&self) {
+        loop {
+            let job = {
+                let mut queue = self.queue.lock().expect("Poisoned");
+                match queue.0.pop_front() {
+                    Some(job) => job,
+                    None => {
+                        queue.1 = false;
+                        return;
+                    }
+                }
+            };
+            // A failing job must not take the jobs queued after it down.
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_err() {
+                error!("A results database job panicked");
+            }
+        }
+    }
+}
+
 const CHART_HISTOGRAM_BINS: usize = 24;
 const CHART_SCATTER_MAX_POINTS: usize = 2000;
 
@@ -166,6 +229,15 @@ pub struct ResultsStateController {
     // (successfully, with an error, or cancelled) — mirrors
     // `PipelinesController::pipeline_cancel_flag`'s pattern.
     export_cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
+    // Opening a database and toggling an image run here, off the UI thread.
+    db_worker: Arc<DbWorker>,
+    // The tab on screen (`ResultsState.rail-mode`), readable off the UI
+    // thread. Only the visible tab queries the database: a hidden List or
+    // Charts view is just marked stale (`list_stale`/`charts_stale`) and
+    // refreshed when it's shown; Matrix always refreshes when it's shown.
+    rail_mode: Mutex<ResultsRailMode>,
+    list_stale: AtomicBool,
+    charts_stale: AtomicBool,
 }
 
 impl ResultsStateController {
@@ -196,6 +268,81 @@ impl ResultsStateController {
             image_list_controller,
             export_populated: Mutex::new(false),
             export_cancel_flag: Mutex::new(None),
+            db_worker: Arc::new(DbWorker::new()),
+            rail_mode: Mutex::new(ResultsRailMode::List),
+            list_stale: AtomicBool::new(false),
+            charts_stale: AtomicBool::new(false),
+        }
+    }
+
+    /// Runs `job` on the database thread (see [`DbWorker`]), with
+    /// `ResultsState.loading` set while any job is queued or running.
+    fn run_db_job(self: &Arc<Self>, job: impl FnOnce(&Arc<Self>) + Send + 'static) {
+        /// Counts the job as done even if it panics.
+        struct Done(Arc<ResultsStateController>);
+        impl Drop for Done {
+            fn drop(&mut self) {
+                if self.0.db_worker.pending.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    self.0.set_loading_in_slint(false);
+                }
+            }
+        }
+        if self.db_worker.pending.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.set_loading_in_slint(true);
+        }
+        let done = Done(self.clone());
+        self.db_worker.submit(Box::new(move || {
+            job(&done.0);
+            drop(done);
+        }));
+    }
+
+    fn set_database_name_in_slint(&self, name: String) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_database_name(name.into());
+            }
+        })
+        .ok();
+    }
+
+    fn set_loading_in_slint(&self, loading: bool) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_loading(loading);
+            }
+        })
+        .ok();
+    }
+
+    /// Whether `mode` is the tab on screen. If not, its view is only marked
+    /// `stale` - refreshed once the tab is shown - so a hidden view never
+    /// queries the database.
+    fn is_view_shown(&self, mode: ResultsRailMode, stale: &AtomicBool) -> bool {
+        let shown = *self.rail_mode.lock().expect("Poisoned") == mode;
+        if !shown {
+            stale.store(true, Ordering::SeqCst);
+        }
+        shown
+    }
+
+    /// `mode` became the tab on screen: catch up on what changed while it
+    /// was hidden.
+    fn show_view(self: &Arc<Self>, mode: ResultsRailMode) {
+        *self.rail_mode.lock().expect("Poisoned") = mode;
+        let stale = match mode {
+            ResultsRailMode::List => &self.list_stale,
+            ResultsRailMode::Charts => &self.charts_stale,
+            // Always refreshed when shown (`on_rail_mode_selected`).
+            _ => return,
+        };
+        if stale.swap(false, Ordering::SeqCst) {
+            self.run_db_job(move |manager| match mode {
+                ResultsRailMode::List => manager.update_list_view(),
+                _ => manager.refresh_charts(),
+            });
         }
     }
 
@@ -249,6 +396,7 @@ impl ResultsStateController {
                     state.set_active_well_disabled(false);
                     *manager.current_well.lock().expect("Poisned") = None;
                     *manager.current_image.lock().expect("Poisned") = None;
+                    manager.show_view(mode);
                     if mode == ResultsRailMode::Matrix {
                         manager.update_matrix_view();
                     }
@@ -275,6 +423,7 @@ impl ResultsStateController {
                 // of just truncating within Matrix.
                 if index == 0 {
                     state.set_rail_mode(ResultsRailMode::List);
+                    manager.show_view(ResultsRailMode::List);
                     state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(vec![
                         BreadcrumbItem {
                             label: "All results".into(),
@@ -860,38 +1009,52 @@ impl ResultsStateController {
                         return;
                     };
                     let disable = !state.get_active_well_disabled();
-                    {
-                        let guard = manager.result_generator.lock().expect("Poisned");
-                        let Some(db) = guard.as_ref() else {
-                            warn!("No database opened!");
-                            return;
-                        };
-                        if let Err(err) = db.enable_image(&rel_path, disable) {
-                            error!("Could not toggle image {rel_path}: {err}");
-                            return;
-                        }
-                    }
+                    // Shown right away; the write and the refresh run on the
+                    // database thread.
                     state.set_active_well_disabled(disable);
-                    manager.refresh_active_matrix_view();
-
-                    let manager = manager.clone();
-                    crate::helper::ui_thread::invoke_from_event_loop(move || {
-                        let Some(ui_ready) = manager.ui.upgrade() else {
-                            warn!(
-                                "Failed to upgrade UI handle re-selecting field after toggling disabled"
-                            );
-                            return;
+                    let level = state.get_matrix_level();
+                    manager.run_db_job(move |manager| {
+                        let toggled = {
+                            let guard = manager.result_generator.lock().expect("Poisned");
+                            match guard.as_ref() {
+                                None => Err("No database opened!".to_string()),
+                                Some(db) => db
+                                    .enable_image(&rel_path, disable)
+                                    .map_err(|err| format!("Could not toggle image {rel_path}: {err}")),
+                            }
                         };
-                        let state = ui_ready.global::<ResultsState>();
-                        let cells = manager.well_cells.lock().expect("Poisned");
-                        if let Some(cell) = cells.get(image_name.as_str()) {
-                            state.set_active_well(image_name.clone());
-                            state.set_active_well_has_value(cell.exists);
-                            state.set_active_well_value(cell.label.clone());
-                            state.set_active_well_disabled(cell.disabled);
+                        if let Err(err) = toggled {
+                            error!("{err}");
+                            let ui_weak = manager.ui.clone();
+                            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                                if let Some(ui) = ui_weak.upgrade() {
+                                    ui.global::<ResultsState>().set_active_well_disabled(!disable);
+                                }
+                            })
+                            .ok();
+                            return;
                         }
-                    })
-                    .ok();
+                        manager.refresh_matrix_view_at(level);
+
+                        let manager = manager.clone();
+                        crate::helper::ui_thread::invoke_from_event_loop(move || {
+                            let Some(ui_ready) = manager.ui.upgrade() else {
+                                warn!(
+                                    "Failed to upgrade UI handle re-selecting field after toggling disabled"
+                                );
+                                return;
+                            };
+                            let state = ui_ready.global::<ResultsState>();
+                            let cells = manager.well_cells.lock().expect("Poisned");
+                            if let Some(cell) = cells.get(image_name.as_str()) {
+                                state.set_active_well(image_name.clone());
+                                state.set_active_well_has_value(cell.exists);
+                                state.set_active_well_value(cell.label.clone());
+                                state.set_active_well_disabled(cell.disabled);
+                            }
+                        })
+                        .ok();
+                    });
                 });
 
             let manager = self.clone();
@@ -1323,7 +1486,13 @@ impl ResultsStateController {
             .set_matrix_aggregate_enabled(!(is_count && below_plate));
     }
 
-    pub fn open_database(&self, path: PathBuf) {
+    /// Opens the results database at `path` on the database thread (see
+    /// [`DbWorker`]); the window stays responsive meanwhile.
+    pub fn open_database(self: &Arc<Self>, path: PathBuf) {
+        self.run_db_job(move |manager| manager.open_database_now(path));
+    }
+
+    fn open_database_now(&self, path: PathBuf) {
         info!("Opening database {:?}", path);
         let db = self._app_state.backend().open_results(&path);
         match db {
@@ -1340,6 +1509,11 @@ impl ResultsStateController {
                     warn!("{}: {run_warning}", path.display());
                 }
                 self.set_run_warning_in_slint(run_warning);
+                self.set_database_name_in_slint(
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                );
                 let mut default_object_classes = Vec::new();
                 match results.get_object_classes() {
                     Ok(classes) => {
@@ -1498,6 +1672,8 @@ impl ResultsStateController {
 
                 self.show_results_window();
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
+                // Only the tab on screen queries the database; the others
+                // catch up when they're shown.
                 self.refresh_list();
                 self.update_matrix_view();
                 self.refresh_charts();
@@ -1537,6 +1713,9 @@ impl ResultsStateController {
     /// on changes (chart kind, column(s), class filter, z/t plane, or a
     /// fresh database).
     fn refresh_charts(&self) {
+        if !self.is_view_shown(ResultsRailMode::Charts, &self.charts_stale) {
+            return;
+        }
         let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
             return;
         };
@@ -1780,6 +1959,9 @@ impl ResultsStateController {
     }
 
     pub fn update_list_view(&self) {
+        if !self.is_view_shown(ResultsRailMode::List, &self.list_stale) {
+            return;
+        }
         let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
             warn!("No database opened!");
             return;
@@ -1841,11 +2023,11 @@ impl ResultsStateController {
             // Non-aggregable columns (Object ID/Image/Class) don't mean
             // anything once rows are grouped by image — silently dropped
             // here, same as the export side's own grid views (see
-            // `is_aggregable` in results_exporter.rs). `aggregations` comes
+            // `Column::is_aggregable`). `aggregations` comes
             // from the AGGREGATE dropdown (results_list.slint), one output
             // column per (selected column x selected aggregation) combo.
             ListGroupBy::Images => {
-                let columns = columns.into_iter().filter(is_aggregable_column).collect();
+                let columns = columns.into_iter().filter(Column::is_aggregable).collect();
                 db.get_grouped_by_image(&GroupedByImageFilter {
                     plane,
                     images,
@@ -1960,6 +2142,10 @@ impl ResultsStateController {
     }
 
     pub fn update_matrix_view(&self) {
+        // Hidden: refreshed anyway whenever the Matrix tab is shown.
+        if *self.rail_mode.lock().expect("Poisoned") != ResultsRailMode::Matrix {
+            return;
+        }
         let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
             warn!("No database opened!");
             return;
@@ -2043,6 +2229,12 @@ impl ResultsStateController {
             return;
         };
         let level = ui_ready.global::<ResultsState>().get_matrix_level();
+        self.refresh_matrix_view_at(level);
+    }
+
+    /// `refresh_active_matrix_view` for a known `level` - callable off the
+    /// UI thread.
+    fn refresh_matrix_view_at(&self, level: MatrixLevel) {
         if level == MatrixLevel::Object {
             if let Some(image_rel_path) = self.current_image.lock().expect("Poisned").clone() {
                 self.update_image_heatmap_view(&image_rel_path);
@@ -3299,27 +3491,10 @@ fn column_items(
         .collect()
 }
 
-/// Whether `column` can be aggregated across an image's objects at all —
-/// mirrors `is_aggregable` in results_exporter.rs (kept in sync with it by
-/// inspecting the same variants), needed here because Images-mode reuses the
-/// List view's own COLUMNS selection rather than a dedicated picker.
-fn is_aggregable_column(column: &Column) -> bool {
-    !matches!(
-        column,
-        Column::ObjectId
-            | Column::ImageName
-            | Column::ObjectClass
-            | Column::IntensityAvg(_)
-            | Column::IntensitySum(_)
-            | Column::IntensityMin(_)
-            | Column::IntensityMax(_)
-    )
-}
-
 /// Whether `column` is something `chart_value_expr`/`column_aggregate_expr`
 /// (results_generator.rs) can resolve to a single per-object SQL
 /// expression — the exact same set that function accepts, kept in sync by
-/// inspecting the same variants. Unlike `is_aggregable_column`, `Count` is
+/// inspecting the same variants. Unlike `Column::is_aggregable`, `Count` is
 /// also excluded here: it's a row tally (1 per object), not a per-object
 /// measurement, so charting it doesn't mean anything the way it does for
 /// Images-mode's own per-image counts.
@@ -4197,10 +4372,14 @@ mod tests {
         assert!(controller.result_generator.lock().unwrap().is_some());
         assert!(!*controller.export_populated.lock().unwrap());
 
-        // `refresh_list`/`update_matrix_view` both ran as part of opening -
-        // every object's location is cached, and both seeded wells got a
-        // plate cell.
+        // The List tab is on screen, so the list was queried as part of
+        // opening - every object's location is cached. The hidden Matrix
+        // tab wasn't, until it's shown: then both seeded wells get a cell.
         assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
+        assert!(controller.matrix_cells.lock().unwrap().is_empty());
+        _results_ui
+            .global::<ResultsState>()
+            .invoke_rail_mode_selected(ResultsRailMode::Matrix);
         let matrix_cells = controller.matrix_cells.lock().unwrap();
         assert!(matrix_cells.contains_key("A1"));
         assert!(matrix_cells.contains_key("A2"));
@@ -4583,6 +4762,7 @@ mod tests {
         let (_ui, results_ui, controller) = controller_with_open_database();
         let state = results_ui.global::<ResultsState>();
 
+        state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
         // Count/Avg is the same (1.0) with or without A1_01 (one object per
         // image), so use Sum: 2 before disabling A1_01, 1 after.
         state.invoke_matrix_aggregate_selected("Sum".into());
@@ -4618,6 +4798,52 @@ mod tests {
             after.value, value_before,
             "A1's cached plate cell must reflect the image just disabled, not stale pre-drill-down data"
         );
+    }
+
+    /// Times opening a real results file and toggling one of its images
+    /// through the controller, including building the Slint models.
+    /// `EVADB=<copy.evadb> cargo test --release -p evanalyzer_gui --lib
+    /// bench_real_database -- --ignored --nocapture` (toggles an image, so
+    /// use a copy).
+    #[test]
+    #[ignore]
+    fn bench_real_database() {
+        use std::time::Instant;
+        let Ok(path) = std::env::var("EVADB") else {
+            return;
+        };
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        let state = results_ui.global::<ResultsState>();
+        for i in 0..3 {
+            let start = Instant::now();
+            controller.open_database(PathBuf::from(&path));
+            let opened = start.elapsed();
+            drain_ui_queue();
+            println!(
+                "open #{i}: open_database {opened:.2?}, + UI queue {:.2?}, list rows {}",
+                start.elapsed(),
+                state.get_list_rows().row_count()
+            );
+        }
+        let image_name = controller.images.lock().unwrap()[0].name.clone();
+        let well = image_name.split('_').next().unwrap().to_string();
+        state.invoke_plate_cell_clicked(well.clone().into());
+        state.invoke_open_well_clicked(well.into());
+        drain_ui_queue();
+        for i in 0..4 {
+            state.invoke_well_cell_clicked(image_name.clone().into());
+            let start = Instant::now();
+            state.invoke_toggle_active_well_disabled();
+            let toggled = start.elapsed();
+            drain_ui_queue();
+            println!(
+                "toggle #{i}: {toggled:.2?}, + UI queue {:.2?}",
+                start.elapsed()
+            );
+        }
     }
 
     #[test]
@@ -4820,10 +5046,88 @@ mod tests {
         assert!(s.get_matrix_color_schema_items().row_count() > 0);
         assert!(s.get_matrix_plate_size_items().row_count() > 0);
         assert!(s.get_matrix_square_size_items().row_count() > 0);
-        assert!(s.get_plate_cells().row_count() > 0);
         assert!(s.get_chart_column_items().row_count() > 0);
-        assert!(s.get_chart_histogram_bins().row_count() > 0);
         assert_eq!(s.get_chart_error(), "");
+
+        // The hidden tabs' data is only queried once they're shown.
+        assert_eq!(s.get_plate_cells().row_count(), 0);
+        assert_eq!(s.get_chart_histogram_bins().row_count(), 0);
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        drain_ui_queue();
+        assert!(s.get_plate_cells().row_count() > 0);
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        drain_ui_queue();
+        assert!(s.get_chart_histogram_bins().row_count() > 0);
+    }
+
+    /// A filter changed while its tab is hidden takes effect when the tab
+    /// is shown again - without querying while hidden.
+    #[test]
+    fn a_hidden_list_catches_up_on_filter_changes_when_shown() {
+        let o = opened();
+        let s = o.state();
+        assert_eq!(o.controller.list_row_locations.lock().unwrap().len(), 3);
+
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.invoke_list_image_selected("A1_01.tif".into(), true);
+        drain_ui_queue();
+        assert_eq!(
+            o.controller.list_row_locations.lock().unwrap().len(),
+            3,
+            "not queried while hidden"
+        );
+
+        s.invoke_rail_mode_selected(ResultsRailMode::List);
+        drain_ui_queue();
+        assert_eq!(o.controller.list_row_locations.lock().unwrap().len(), 1);
+    }
+
+    /// Outside tests, database work runs on a background thread: opening a
+    /// database and toggling an image must still fill/refresh the window,
+    /// and `loading` must be cleared once it's done.
+    #[test]
+    fn opening_and_toggling_run_on_the_database_thread() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state);
+        controller.db_worker.inline.store(false, Ordering::SeqCst);
+        controller.attach_callbacks();
+        let s = results_ui.global::<ResultsState>();
+
+        controller.open_database(path);
+        drain_ui_queue();
+        assert!(controller.result_generator.lock().unwrap().is_some());
+        assert_eq!(s.get_list_rows().row_count(), 3);
+        assert!(!s.get_loading(), "the status bar is back to Ready");
+        assert_eq!(s.get_database_name(), "results.evadb");
+
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        s.invoke_plate_cell_clicked("A1".into());
+        s.invoke_open_well_clicked("A1".into());
+        // Switched by the Slint UI itself.
+        s.set_matrix_level(MatrixLevel::Well);
+        // The well's grid lands (and resets the active field) first.
+        drain_ui_queue();
+        s.invoke_well_cell_clicked("A1_01.tif".into());
+        s.invoke_toggle_active_well_disabled();
+        assert!(s.get_active_well_disabled(), "shown right away");
+        drain_ui_queue();
+        let images = controller
+            .result_generator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .get_images()
+            .unwrap();
+        let image = images.iter().find(|i| i.name == "A1_01.tif").unwrap();
+        assert!(image.disabled, "written by the database thread");
+        assert!(controller.well_cells.lock().unwrap()["A1_01.tif"].disabled);
+        assert!(!s.get_loading());
+        drop(dir);
     }
 
     #[test]
@@ -4855,6 +5159,7 @@ mod tests {
     fn every_chart_kind_draws_into_the_window() {
         let o = opened();
         let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
         s.invoke_chart_kind_selected(ResultsChartKind2::Scatter);
         s.invoke_chart_y_column_selected("area_px".into());
         drain_ui_queue();
@@ -4899,6 +5204,28 @@ mod tests {
         s.invoke_list_image_selected("A1_01.tif".into(), true);
         drain_ui_queue();
         assert!(s.get_list_image_summary().starts_with("1 of"));
+    }
+
+    #[test]
+    fn grouped_by_image_keeps_a_selected_intensity_column() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::List);
+        s.invoke_list_columns_item_selected("intensity_mean_gray_ch0".into(), true);
+        drain_ui_queue();
+        let has_intensity_header = |s: &ResultsState| {
+            s.get_list_column_headers()
+                .iter()
+                .any(|h| h.contains("Avg Intensity (Ch 0)"))
+        };
+        assert!(has_intensity_header(&s), "object view shows the column");
+
+        s.invoke_list_group_by_selected("images".into());
+        drain_ui_queue();
+        assert!(
+            has_intensity_header(&s),
+            "grouped by image keeps the column"
+        );
     }
 
     fn start_export(o: &Opened, folder: &std::path::Path) {

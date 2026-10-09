@@ -9,7 +9,7 @@ use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_cache::ViewportCache;
 use crate::editor::viewport_controller::ViewportController;
-use crate::editor::viewport_controller::ZOrder;
+use crate::editor::viewport_controller::{ZOrder, is_object_drawn};
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
 use evanalyzer_app::images::ImageContainer;
@@ -255,20 +255,22 @@ impl ViewPortObjectController {
             let (x1, y1) = (fx as u32, fy as u32);
             let project = self.app_state.get_project();
             let z = ZOrder::new(&*project);
-            let selected_id = project.get_selected_object_id();
+            let hide_unclassified = project.hide_unclassified_objects();
 
             // Highest z-key wins; on equal keys the later object wins, because
-            // later objects are painted on top.
+            // later objects are painted on top. Objects that aren't drawn
+            // (hidden class, hidden unclassified) can't be picked.
             let mut best: Option<(u32, _)> = None;
             if let Some(objects) = project.get_objects() {
                 for object in objects.iter().chain(project.get_preview_objects()) {
-                    if !object.is_part_of(x1, y1) {
+                    if !object.is_part_of(x1, y1)
+                        || !is_object_drawn(&*project, hide_unclassified, &object.object_class)
+                    {
                         continue;
                     }
                     // Selected-object boost is deliberately NOT applied for picking,
                     // otherwise an already selected object could never be clicked
                     // away from in favour of the one underneath.
-                    let _ = &selected_id;
                     let key = z.key(&object.object_class, false);
                     if best.as_ref().is_none_or(|(k, _)| key >= *k) {
                         best = Some((key, object.id.clone()));
@@ -592,6 +594,8 @@ mod tests {
         let (ui_state, controller, _) = make_controller();
         {
             let mut project = ui_state.get_project_write();
+            // Unclassified objects are hidden (and so not pickable) by default.
+            project.toggle_hide_unclassified_objects();
             project.add_object(&object_with_bbox(1, [10, 10, 15, 15]));
         }
         // Default viewport state: zoom=1.0, offset=(0,0) - click coordinates
@@ -617,6 +621,99 @@ mod tests {
         controller.find_object_from_clicked_coordinates(0.0, 0.0);
 
         assert_eq!(ui_state.get_project().get_selected_object_id(), None);
+    }
+
+    /// Two registered classes - the first in the list is drawn (and picked)
+    /// on top - and two objects of them overlapping at (12, 12): `1` of the
+    /// top class `a`, `2` of class `b`, added after it.
+    fn two_overlapping_classified_objects(ui_state: &Arc<UiState>) -> (ObjectClass, ObjectClass) {
+        let mut project = ui_state.get_project_write();
+        let mut class = |name: &str| {
+            project.classification.add_class(Class {
+                id: ObjectClass::Valid(0),
+                color: 0xff0000,
+                name: name.into(),
+                notes: String::new(),
+            })
+        };
+        let (a, b) = (class("a"), class("b"));
+        let mut top = object_with_bbox(1, [10, 10, 15, 15]);
+        top.object_class.insert(a);
+        let mut below = object_with_bbox(2, [11, 11, 16, 16]);
+        below.object_class.insert(b);
+        project.add_object(&top);
+        project.add_object(&below);
+        (a, b)
+    }
+
+    #[test]
+    fn clicking_overlapping_objects_selects_the_one_drawn_on_top() {
+        let (ui_state, controller, _) = make_controller();
+        two_overlapping_classified_objects(&ui_state);
+
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(1)),
+            "the first class in the list is on top, although its object came first"
+        );
+    }
+
+    #[test]
+    fn clicking_overlapping_objects_prefers_the_selected_class() {
+        let (ui_state, controller, _) = make_controller();
+        let (_, b) = two_overlapping_classified_objects(&ui_state);
+        ui_state.get_project_write().set_selected_object_class(b);
+
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(2))
+        );
+    }
+
+    /// An object that isn't drawn must not take the click from the visible
+    /// one underneath.
+    #[test]
+    fn clicking_never_selects_an_object_of_a_hidden_class() {
+        let (ui_state, controller, _) = make_controller();
+        let (a, _) = two_overlapping_classified_objects(&ui_state);
+        ui_state.get_project_write().toggle_class_visibility(a);
+
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(2)),
+            "the visible object underneath is selected"
+        );
+
+        // Only the hidden object at (10, 10): nothing to select.
+        controller.find_object_from_clicked_coordinates(10.0, 10.0);
+        assert_eq!(ui_state.get_project().get_selected_object_id(), None);
+    }
+
+    #[test]
+    fn clicking_never_selects_a_hidden_unclassified_object() {
+        let (ui_state, controller, _) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            assert!(project.hide_unclassified_objects(), "the default");
+            project.add_object(&object_with_bbox(1, [10, 10, 15, 15]));
+        }
+
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+        assert_eq!(ui_state.get_project().get_selected_object_id(), None);
+
+        ui_state
+            .get_project_write()
+            .toggle_hide_unclassified_objects();
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(1))
+        );
     }
 
     // -- add_object_from_rect ------------------------------------------------------

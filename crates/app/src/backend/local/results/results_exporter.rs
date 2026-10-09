@@ -294,7 +294,7 @@ impl ResultExport {
         let columns: Vec<Column> = self
             .columns
             .iter()
-            .filter(|column| is_aggregable(column))
+            .filter(|column| column.is_aggregable())
             .cloned()
             .collect();
 
@@ -380,7 +380,7 @@ impl ResultExport {
         let aggregable_columns: Vec<&Column> = self
             .columns
             .iter()
-            .filter(|column| is_aggregable(column))
+            .filter(|column| column.is_aggregable())
             .collect();
         let no_combos = target_classes.is_empty()
             || aggregable_columns.is_empty()
@@ -571,7 +571,7 @@ impl ResultExport {
         let aggregable_columns: Vec<&Column> = self
             .columns
             .iter()
-            .filter(|column| is_aggregable(column))
+            .filter(|column| column.is_aggregable())
             .collect();
         let combo_count = target_classes.len() * aggregable_columns.len() * self.aggregations.len();
         let no_combos = combo_count == 0;
@@ -825,7 +825,7 @@ impl ResultExport {
                     .map_err(xlsx_err)?;
 
                 let mut row = 0u32;
-                for column in self.columns.iter().filter(|column| is_aggregable(column)) {
+                for column in self.columns.iter().filter(|column| column.is_aggregable()) {
                     let column_label = column_display_name(column, &available_columns);
                     for aggregation in &self.aggregations {
                         let caption =
@@ -1501,26 +1501,6 @@ fn write_cell(
         }
     }
     Ok(())
-}
-
-/// Whether `column` can drive a plate/well/heatmap grid at all — the
-/// inverse of `column_aggregate_expr`'s (in results_generator.rs) "cannot be
-/// aggregated for the plate view yet" arm, kept in sync with it by
-/// inspecting the exact same variants. `self.columns` is shared with the
-/// List export, where every column is valid (one row per object, nothing to
-/// aggregate), so a grid export must filter it down to this subset itself
-/// rather than assume every selected column applies.
-fn is_aggregable(column: &Column) -> bool {
-    !matches!(
-        column,
-        Column::ObjectId
-            | Column::ImageName
-            | Column::ObjectClass
-            | Column::IntensityAvg(_)
-            | Column::IntensitySum(_)
-            | Column::IntensityMin(_)
-            | Column::IntensityMax(_)
-    )
 }
 
 /// `Column`'s human-readable label, matching `get_available_columns()`'s
@@ -2367,16 +2347,6 @@ mod tests {
     }
 
     #[test]
-    fn is_aggregable_excludes_identity_and_intensity_columns() {
-        assert!(!is_aggregable(&Column::ObjectId));
-        assert!(!is_aggregable(&Column::ImageName));
-        assert!(!is_aggregable(&Column::ObjectClass));
-        assert!(!is_aggregable(&Column::IntensityAvg(0)));
-        assert!(is_aggregable(&Column::AreaSizePx));
-        assert!(is_aggregable(&Column::Circularity));
-    }
-
-    #[test]
     fn image_stub_strips_directory_and_extension() {
         assert_eq!(image_stub("folder/img1.tif"), "img1");
         assert_eq!(image_stub("img2.ome.tif"), "img2.ome");
@@ -2707,6 +2677,84 @@ mod tests {
         // sorted by (well, field-as-number) - see `export_plate_and_well_as_flat_list`.
         assert_eq!(data_f64(well_range.get_value((1, 3))), 10.0);
         assert_eq!(data_f64(well_range.get_value((2, 3))), 20.0);
+    }
+
+    /// Intensity columns are aggregable like every other measurement - they
+    /// were once silently dropped from every grouped/grid document.
+    #[test]
+    fn start_export_includes_intensity_columns_in_grouped_and_plate_documents() {
+        use super::super::test_support::CH0_INTENSITIES_JSON;
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10).with_intensities(CH0_INTENSITIES_JSON),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20).with_intensities(CH0_INTENSITIES_JSON),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx, Column::IntensityAvg(0)],
+            aggregations: vec![Aggregation::Sum],
+            with_grouped_by_image_list: true,
+            with_plate_view_list: true,
+            with_plate_view_heatmap: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("export");
+
+        // Plate list: one value column per column x aggregation.
+        let mut plate_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate_list.xlsx")).expect("open plate_list.xlsx");
+        let plate_range = plate_wb.worksheet_range("Plate").expect("Plate sheet");
+        let header: Vec<String> = (0..plate_range.width() as u32)
+            .filter_map(|c| match plate_range.get_value((0, c)) {
+                Some(calamine::Data::String(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        let intensity_col = header
+            .iter()
+            .position(|h| h.contains("Avg Intensity (Ch 0)"))
+            .unwrap_or_else(|| panic!("no intensity column in the plate list: {header:?}"));
+        assert_eq!(
+            data_f64(plate_range.get_value((1, intensity_col as u32))),
+            254.0,
+            "A1: sum of both objects' mean intensity"
+        );
+
+        // Grouped by image: the intensity column per image.
+        let mut grouped_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("grouped_by_image.xlsx"))
+                .expect("open grouped_by_image.xlsx");
+        let sheet = grouped_wb.sheet_names()[0].clone();
+        let grouped_range = grouped_wb.worksheet_range(&sheet).expect("grouped sheet");
+        let header: Vec<String> = (0..grouped_range.width() as u32)
+            .filter_map(|c| match grouped_range.get_value((0, c)) {
+                Some(calamine::Data::String(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        let intensity_col = header
+            .iter()
+            .position(|h| h.contains("Avg Intensity (Ch 0)"))
+            .unwrap_or_else(|| panic!("no intensity column grouped by image: {header:?}"));
+        assert_eq!(
+            data_f64(grouped_range.get_value((1, intensity_col as u32))),
+            127.0
+        );
+
+        // Plate heatmap: a grid per column, the intensity one included.
+        let mut heatmap_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate.xlsx")).expect("open plate.xlsx");
+        let sheet = heatmap_wb.sheet_names()[0].clone();
+        let heatmap_range = heatmap_wb.worksheet_range(&sheet).expect("heatmap sheet");
+        let has_intensity_caption = heatmap_range.cells().any(|(_, _, value)| {
+            matches!(value, calamine::Data::String(s) if s.contains("Avg Intensity (Ch 0)"))
+        });
+        assert!(
+            has_intensity_caption,
+            "no intensity grid in the plate heatmap"
+        );
     }
 
     /// A well with an image but zero matching objects must still get a row

@@ -101,6 +101,19 @@ impl Column {
         }
     }
 
+    /// Whether this column can be aggregated over a group of objects (per
+    /// image, well, plate or heatmap tile): everything but an object's
+    /// identity (id, image, class). The one list the GUI's Images mode and
+    /// the export's grouped/grid documents filter their columns with -
+    /// must match what `column_aggregate_expr` (results_generator.rs)
+    /// accepts, plus `Count` (aggregated as `COUNT(*)`).
+    pub fn is_aggregable(&self) -> bool {
+        !matches!(
+            self,
+            Column::ObjectId | Column::ImageName | Column::ObjectClass
+        )
+    }
+
     /// Inverse of [`Column::as_key`] — needs the same `classes` list to
     /// resolve a `"n_colocalized_class_{name}"` key back to the class's id;
     /// `None` if `name` isn't (or no longer is) a registered class.
