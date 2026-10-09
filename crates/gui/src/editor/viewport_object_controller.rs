@@ -9,6 +9,7 @@ use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_cache::ViewportCache;
 use crate::editor::viewport_controller::ViewportController;
+use crate::editor::viewport_controller::ZOrder;
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
 use evanalyzer_app::images::ImageContainer;
@@ -237,30 +238,44 @@ impl ViewPortObjectController {
     }
 
     pub fn find_object_from_clicked_coordinates(&self, click_x: f32, click_y: f32) {
-        let view_port_state = self
+        let vp = self
             .viewport_controller
             .viewport_state
             .read()
             .expect("Poisoned")
             .clone();
-        let x1 = ((click_x - view_port_state.offset_x) / (view_port_state.zoom)) as u32;
-        let y1 = ((click_y - view_port_state.offset_y) / (view_port_state.zoom)) as u32;
+        let fx = (click_x - vp.offset_x) / vp.zoom;
+        let fy = (click_y - vp.offset_y) / vp.zoom;
 
-        let clicked_object_id = {
+        // `as u32` saturates negatives to 0, which would pick objects at the image
+        // origin when clicking outside the image on the left/top.
+        let clicked_object_id = if fx < 0.0 || fy < 0.0 {
+            None
+        } else {
+            let (x1, y1) = (fx as u32, fy as u32);
             let project = self.app_state.get_project();
-            let objects = project.get_objects();
-            let preview_objects = project.get_preview_objects();
+            let z = ZOrder::new(&*project);
+            let selected_id = project.get_selected_object_id();
 
-            let mut found_id = None;
-            if let Some(objects_some) = objects {
-                for object in objects_some.iter().chain(preview_objects) {
-                    if object.is_part_of(x1, y1) {
-                        found_id = Some(object.id.clone());
-                        break;
+            // Highest z-key wins; on equal keys the later object wins, because
+            // later objects are painted on top.
+            let mut best: Option<(u32, _)> = None;
+            if let Some(objects) = project.get_objects() {
+                for object in objects.iter().chain(project.get_preview_objects()) {
+                    if !object.is_part_of(x1, y1) {
+                        continue;
+                    }
+                    // Selected-object boost is deliberately NOT applied for picking,
+                    // otherwise an already selected object could never be clicked
+                    // away from in favour of the one underneath.
+                    let _ = &selected_id;
+                    let key = z.key(&object.object_class, false);
+                    if best.as_ref().is_none_or(|(k, _)| key >= *k) {
+                        best = Some((key, object.id.clone()));
                     }
                 }
             }
-            found_id
+            best.map(|(_, id)| id)
         };
 
         let mut project = self.app_state.get_project_write();

@@ -156,6 +156,7 @@ pub trait ProjectExt {
     fn set_selected_object_class(&mut self, object_class: ObjectClass);
     fn get_selected_object_class(&self) -> ObjectClass;
     fn delete_all_classes(&mut self);
+    fn get_object_classes(&self) -> &Vec<Class>;
     fn get_image_absolute_path_from_relative(&self, path: &Path) -> Option<PathBuf>;
 
     fn change_images_root(&mut self, new_root: &PathBuf);
@@ -942,6 +943,10 @@ impl ProjectExt for ProjectWithRuntime {
 
     fn get_selected_object_class(&self) -> ObjectClass {
         self.tmp_settings.selected_object_class.clone()
+    }
+
+    fn get_object_classes(&self) -> &Vec<Class> {
+        self.classification.classes()
     }
 
     fn delete_all_classes(&mut self) {

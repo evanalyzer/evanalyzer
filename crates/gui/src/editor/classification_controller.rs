@@ -153,6 +153,8 @@ impl ClassificationController {
                     };
                     let mut project = manager.app_state.get_project_write();
                     project.set_selected_object_class(obj_class);
+                    // Redraw the objects because class selection changes the z-order visibility
+                    manager.viewport_controller.trigger_image_redraw_objects();
                 });
 
             // Add / Update class
