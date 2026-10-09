@@ -702,6 +702,24 @@ impl ResultsStateController {
                 });
 
             let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ResultsState>()
+                .on_well_image_moved(move |from, to| {
+                    let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to)) else {
+                        return;
+                    };
+                    let Some(ui) = ui_weak.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<ResultsState>();
+                    let shown = (
+                        state.get_well_rows().max(1) as u32,
+                        state.get_well_cols().max(1) as u32,
+                    );
+                    manager.move_well_image(from, to, shown);
+                });
+
+            let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_matrix_regex_changed(move |regex| {
                     manager.edit_plate_settings(|plate| {
@@ -1525,6 +1543,27 @@ impl ResultsStateController {
         }
         self.push_plate_settings_in_slint();
         self.refresh_active_matrix_view();
+    }
+
+    /// Drag and drop in the well view: the images at grid positions `from`
+    /// and `to` (row by row) swap places in the well's image order. A well
+    /// fitted automatically becomes a fixed grid of the size `shown`, in
+    /// number order - what Auto showed - first.
+    fn move_well_image(&self, from: usize, to: usize, shown: (u32, u32)) {
+        if from == to {
+            return;
+        }
+        self.edit_plate_settings(|plate| {
+            if plate.well_layout == WellLayout::Auto {
+                let (rows, cols) = shown;
+                plate.well_image_order = PlateSettings::default_image_order(rows, cols);
+                plate.set_well_layout(WellLayout::Fixed { rows, cols });
+            }
+            let order = &mut plate.well_image_order;
+            if from < order.len() && to < order.len() {
+                order.swap(from, to);
+            }
+        });
     }
 
     /// The project's plate settings changed elsewhere (project settings
@@ -5333,6 +5372,184 @@ mod tests {
             "^(x)"
         );
         assert_eq!(s.get_matrix_group_regex_in_use(), "^(x)");
+    }
+
+    /// What a double click on a tile (and the detail card's "Open" button)
+    /// does: plate -> the well, well -> the image.
+    #[test]
+    fn open_cell_goes_one_level_deeper() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        drain_ui_queue();
+
+        s.invoke_open_cell("A1".into());
+        drain_ui_queue();
+        assert_eq!(s.get_matrix_level(), MatrixLevel::Well);
+        assert_eq!(
+            o.controller.current_well.lock().unwrap().as_deref(),
+            Some("A1")
+        );
+        assert!(s.get_well_fields().row_count() >= 2);
+
+        s.invoke_open_cell("A1_01.tif".into());
+        drain_ui_queue();
+        assert_eq!(s.get_matrix_level(), MatrixLevel::Object);
+        assert!(o.controller.current_image.lock().unwrap().is_some());
+        assert!(s.get_image_heatmap_cells().row_count() > 0);
+
+        // Nothing deeper than the image heatmap.
+        s.invoke_open_cell("R0C0".into());
+        drain_ui_queue();
+        assert_eq!(s.get_matrix_level(), MatrixLevel::Object);
+    }
+
+    /// The image keys of the well grid, row by row ("" = no image there).
+    fn well_grid_keys(s: &ResultsState) -> Vec<String> {
+        s.get_well_fields()
+            .iter()
+            .map(|cell| {
+                if cell.exists {
+                    cell.key.to_string()
+                } else {
+                    String::new()
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dropping_an_image_on_another_position_swaps_them_in_the_project() {
+        let (o, _project_settings) = opened_with_plate(PlateSettings::default());
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        s.invoke_open_cell("A1".into());
+        drain_ui_queue();
+        assert_eq!(
+            well_grid_keys(&s),
+            vec!["A1_01.tif", "A1_02.tif"],
+            "Auto: 1 x 2"
+        );
+
+        s.invoke_well_image_moved(0, 1);
+        drain_ui_queue();
+        let plate = o.controller._app_state.get_project().plate.clone();
+        assert_eq!(
+            plate.well_layout,
+            WellLayout::Fixed { rows: 1, cols: 2 },
+            "Auto becomes the grid that was shown"
+        );
+        assert_eq!(plate.well_image_order, vec![2, 1]);
+        assert!(o.controller._app_state.is_dirty());
+        assert_eq!(well_grid_keys(&s), vec!["A1_02.tif", "A1_01.tif"]);
+        assert_eq!(s.get_matrix_well_layout_summary(), "Custom");
+
+        // Back again; dropping on itself changes nothing.
+        s.invoke_well_image_moved(1, 0);
+        s.invoke_well_image_moved(1, 1);
+        drain_ui_queue();
+        assert_eq!(
+            o.controller._app_state.get_project().plate.well_image_order,
+            vec![1, 2]
+        );
+        assert_eq!(well_grid_keys(&s), vec!["A1_01.tif", "A1_02.tif"]);
+    }
+
+    /// The real gestures in the (headless) window: a double click on a plate
+    /// tile opens the well, a plain click on a well tile selects it, and
+    /// pressing on the first tile, moving to the second and releasing swaps
+    /// them.
+    #[test]
+    fn dragging_and_double_clicking_tiles_in_the_window() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::LogicalPosition;
+        use slint::platform::{PointerEventButton, WindowEvent};
+
+        let (o, _project_settings) = opened_with_plate(PlateSettings::default());
+        let s = o.state();
+        let window = o.results_ui.window();
+        window.set_size(slint::LogicalSize::new(1500.0, 900.0));
+        s.set_rail_mode(ResultsRailMode::Matrix);
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        drain_ui_queue();
+
+        let tiles = || -> Vec<(String, LogicalPosition)> {
+            ElementHandle::find_by_element_type_name(&o.results_ui, "MatrixCellView")
+                .filter(|tile| tile.size().width > 0.0)
+                .map(|tile| {
+                    let p = tile.absolute_position();
+                    let size = tile.size();
+                    (
+                        tile.accessible_label().unwrap_or_default().to_string(),
+                        LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0),
+                    )
+                })
+                .collect()
+        };
+        let press = |at: LogicalPosition| {
+            window.dispatch_event(WindowEvent::PointerMoved { position: at });
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position: at,
+                button: PointerEventButton::Left,
+            });
+        };
+        let release = |at: LogicalPosition| {
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position: at,
+                button: PointerEventButton::Left,
+            });
+        };
+
+        // Double click on the plate's first tile (A1).
+        let plate_tiles = tiles();
+        assert!(!plate_tiles.is_empty(), "plate tiles found in the window");
+        let a1 = plate_tiles[0].1;
+        press(a1);
+        release(a1);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
+        press(a1);
+        release(a1);
+        drain_ui_queue();
+        assert_eq!(
+            s.get_matrix_level(),
+            MatrixLevel::Well,
+            "double click opened the well"
+        );
+        assert_eq!(
+            o.controller.current_well.lock().unwrap().as_deref(),
+            Some("A1")
+        );
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+
+        // A plain click on the second image selects it.
+        let well_tiles = tiles();
+        assert_eq!(well_tiles.len(), 2, "A1 has two images (Auto: 1 x 2)");
+        let (first, second) = (well_tiles[0].1, well_tiles[1].1);
+        press(second);
+        release(second);
+        drain_ui_queue();
+        assert_eq!(s.get_active_well(), "A1_02.tif");
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+
+        // Drag the first image onto the second.
+        press(first);
+        for step in 1..=10 {
+            let t = step as f32 / 10.0;
+            window.dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(
+                    first.x + (second.x - first.x) * t,
+                    first.y + (second.y - first.y) * t,
+                ),
+            });
+        }
+        release(second);
+        drain_ui_queue();
+        assert_eq!(
+            o.controller._app_state.get_project().plate.well_image_order,
+            vec![2, 1],
+            "dropped: swapped"
+        );
+        assert_eq!(well_grid_keys(&s), vec!["A1_02.tif", "A1_01.tif"]);
     }
 
     #[test]

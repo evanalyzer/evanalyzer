@@ -20,7 +20,15 @@ component MatrixCellView inherits Rectangle {
     in property <float> range-min;
     in property <float> range-max;
     in property <bool> selected: false;
+    // Clicks are handled by the grid itself (the well grid, for drag and
+    // drop) instead of the tile.
+    in property <bool> interactive: true;
+    // Drag and drop (well grid): the tile being dragged, and the one it
+    // would be dropped on.
+    in property <bool> dragged: false;
+    in property <bool> drop-target: false;
     callback clicked;
+    callback double-clicked;
 
     border-radius: Theme.radius-sm;
     // A disabled cell (at least one image behind it excluded from the
@@ -32,15 +40,17 @@ component MatrixCellView inherits Rectangle {
     // "click here, it's just empty" tile doesn't look identical to one
     // that's genuinely outside the plate's real wells.
     background: root.cell.disabled ? Theme.text-faint : (root.cell.has-value ? root.cell.color : (root.cell.exists ? Theme.border-soft.with-alpha(0.6) : Theme.border-soft.with-alpha(0.3)));
-    border-width: root.selected ? 2px : 1px;
-    border-color: root.selected ? Theme.text : #00000040;
+    border-width: root.drop-target || root.selected ? 2px : 1px;
+    border-color: root.drop-target ? Theme.accent : (root.selected ? Theme.text : #00000040);
+    opacity: root.dragged ? 0.4 : 1.0;
     drop-shadow-color: root.selected ? Theme.shadow : transparent;
     drop-shadow-blur: root.selected ? 10px : 0px;
     drop-shadow-offset-y: root.selected ? 3px : 0px;
 
-    if root.cell.exists: ta := TouchArea {
+    if root.cell.exists && root.interactive: ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
+        double-clicked => { root.double-clicked(); }
     }
 
     if root.cell.exists: VerticalLayout {
@@ -217,6 +227,7 @@ component PlateGrid inherits Rectangle {
             range-max: ResultsState.plate-max;
             selected: self.cell.exists && self.cell.key == ResultsState.active-well;
             clicked => { ResultsState.plate-cell-clicked(self.cell.key); }
+            double-clicked => { ResultsState.open-cell(self.cell.key); }
         }
     }
 }
@@ -241,6 +252,35 @@ component WellGrid inherits Rectangle {
     property <length> origin-x: (root.width - root.grid-width) / 2;
     property <length> origin-y: (root.height - root.grid-height) / 2;
 
+    // Drag and drop: one gesture area over the whole grid (the tiles
+    // themselves don't take clicks here), so a drag can end on any tile. A
+    // press that moves more than a few pixels is a drag; dropping an image
+    // on another position swaps the two in the well's image order.
+    property <int> drag-from: -1;
+    property <int> drag-over: -1;
+    // A drag ended: the release must not also select the tile.
+    property <bool> drag-ended: false;
+
+    // The grid position (row by row) under (`x`, `y`), or -1.
+    pure function position-at(x: length, y: length) -> int {
+        if (x < root.origin-x || y < root.origin-y) {
+            return -1;
+        }
+        let c = floor((x - root.origin-x) / (root.cell-size + root.gap));
+        let r = floor((y - root.origin-y) / (root.cell-size + root.gap));
+        if (c >= root.cols || r >= root.rows) {
+            return -1;
+        }
+        return r * root.cols + c;
+    }
+
+    pure function key-at(position: int) -> string {
+        if (position < 0 || !ResultsState.well-fields[position].exists) {
+            return "";
+        }
+        return ResultsState.well-fields[position].key;
+    }
+
     for r in ResultsState.well-rows: Rectangle {
         for c in ResultsState.well-cols: MatrixCellView {
             x: root.origin-x + c * (root.cell-size + root.gap);
@@ -251,7 +291,61 @@ component WellGrid inherits Rectangle {
             range-min: ResultsState.well-min;
             range-max: ResultsState.well-max;
             selected: self.cell.exists && self.cell.key == ResultsState.active-well;
-            clicked => { ResultsState.well-cell-clicked(self.cell.key); }
+            interactive: false;
+            dragged: root.drag-from == r * ResultsState.well-cols + c;
+            drop-target: root.drag-from >= 0 && root.drag-over == r * ResultsState.well-cols + c
+                && root.drag-over != root.drag-from;
+        }
+    }
+
+    gesture := TouchArea {
+        mouse-cursor: root.drag-from >= 0 ? MouseCursor.grabbing
+            : (root.key-at(root.position-at(self.mouse-x, self.mouse-y)) != "" ? MouseCursor.pointer : MouseCursor.default);
+        pointer-event(event) => {
+            if (event.button != PointerEventButton.left) {
+                return;
+            }
+            if (event.kind == PointerEventKind.down) {
+                root.drag-ended = false;
+            } else if (event.kind == PointerEventKind.up && root.drag-from >= 0) {
+                if (root.drag-over >= 0 && root.drag-over != root.drag-from) {
+                    ResultsState.well-image-moved(root.drag-from, root.drag-over);
+                }
+                root.drag-from = -1;
+                root.drag-over = -1;
+                root.drag-ended = true;
+            }
+        }
+        moved => {
+            if (!self.pressed) {
+                return;
+            }
+            if (root.drag-from < 0) {
+                let start = root.position-at(self.pressed-x, self.pressed-y);
+                if (root.key-at(start) != ""
+                    && (abs(self.mouse-x - self.pressed-x) > 4px || abs(self.mouse-y - self.pressed-y) > 4px)) {
+                    root.drag-from = start;
+                }
+            }
+            if (root.drag-from >= 0) {
+                root.drag-over = root.position-at(self.mouse-x, self.mouse-y);
+            }
+        }
+        clicked => {
+            if (root.drag-ended) {
+                root.drag-ended = false;
+                return;
+            }
+            let key = root.key-at(root.position-at(self.mouse-x, self.mouse-y));
+            if (key != "") {
+                ResultsState.well-cell-clicked(key);
+            }
+        }
+        double-clicked => {
+            let key = root.key-at(root.position-at(self.mouse-x, self.mouse-y));
+            if (key != "") {
+                ResultsState.open-cell(key);
+            }
         }
     }
 }
@@ -640,13 +734,7 @@ export component ResultsMatrixView inherits Rectangle {
                                 height: 30px;
                                 enabled: ResultsState.active-well-has-value;
                                 clicked => {
-                                    if (ResultsState.matrix-level == MatrixLevel.plate) {
-                                        ResultsState.matrix-level = MatrixLevel.well;
-                                        ResultsState.open-well-clicked(ResultsState.active-well);
-                                    } else {
-                                        ResultsState.matrix-level = MatrixLevel.object;
-                                        ResultsState.well-field-clicked(ResultsState.active-well);
-                                    }
+                                    ResultsState.open-cell(ResultsState.active-well);
                                 }
                             }
 

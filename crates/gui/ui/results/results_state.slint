@@ -339,7 +339,24 @@ export global ResultsState {
     // then refreshes the well grid so its heatmap reflects the change.
     callback toggle-active-well-disabled();
     callback image-heatmap-cell-clicked(string);
+    // Well level, drag and drop: the image at grid position `from` (row by
+    // row) was dropped on position `to` - the two swap places in the well's
+    // image order (the project's plate settings).
+    callback well-image-moved(int, int);
     callback object-marker-clicked(int);
+
+    // One level deeper from the well/field `key`: plate -> its well, well ->
+    // the image. The detail card's "Open" button and a double click on a
+    // tile both use it; the image heatmap has no deeper level.
+    public function open-cell(key: string) {
+        if (root.matrix-level == MatrixLevel.plate) {
+            root.matrix-level = MatrixLevel.well;
+            root.open-well-clicked(key);
+        } else if (root.matrix-level == MatrixLevel.well) {
+            root.matrix-level = MatrixLevel.object;
+            root.well-field-clicked(key);
+        }
+    }
     callback matrix-back-to-plate();
     callback matrix-back-to-well();
 
