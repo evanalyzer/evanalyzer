@@ -170,11 +170,11 @@ impl DuckDbExporter {
                 'running', ?, ?, ?, ?, ?::VARCHAR[], ?::VARCHAR[]
             )",
             params![
-                project_meta.name, 
+                project_meta.name,
                 project_meta.short_description,
                 project_meta.description,
                 project_meta.app_version,
-                author_names, 
+                author_names,
                 author_orgs,
             ],
         )
