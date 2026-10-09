@@ -201,6 +201,15 @@ export component Toolbar inherits Rectangle {
             horizontal-stretch: 1;
         }
 
+        Rectangle {
+            Text {
+                text: "Opacity:";
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                font-size: 14px;
+            }
+        }
+
         Slider {
             width: 150px;
             minimum: 0.0;
@@ -212,10 +221,25 @@ export component Toolbar inherits Rectangle {
             }
         }
 
-        Text {
-            text: "Zoom: \{round(ViewportState.zoom_factor * 100)}%";
-            vertical-alignment: center;
-            font-size: 14px;
+        Rectangle {
+            Text {
+                text: "\{round(ViewportObjectState.object_transparency * 100)}%";
+                vertical-alignment: center;
+                horizontal-alignment: left;
+                font-size: 14px;
+            }
+        }
+
+        VerticalDivider { }
+
+        Rectangle {
+            width: 100px;
+            Text {
+                text: "Zoom: \{round(ViewportState.zoom_factor * 100)}%";
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                font-size: 14px;
+            }
         }
 
         VerticalDivider { }
