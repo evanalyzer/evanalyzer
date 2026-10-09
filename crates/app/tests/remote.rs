@@ -790,13 +790,13 @@ fn remote_grouped_matrix_and_chart_queries_match_local_ones() {
 
     let plate = PlateFilter {
         plane: plane.clone(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: Aggregation::Avg,
         object_class: class,
         column: Column::AreaSizePx,
         color_schema: ColorSchema::default(),
         color_scale: ColorScale::Auto,
-        matrix_dimension: None,
+        plate_size: PlateSize::Auto,
     };
     for view in [View::List, View::Heatmap] {
         same(
@@ -808,7 +808,7 @@ fn remote_grouped_matrix_and_chart_queries_match_local_ones() {
     let well = WellFilter {
         plane: plane.clone(),
         group_name: String::new(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: Aggregation::Avg,
         object_class: class,
         column: Column::AreaSizePx,
@@ -822,6 +822,13 @@ fn remote_grouped_matrix_and_chart_queries_match_local_ones() {
         json(&remote_db.get_group_by_well(&well, &View::Heatmap).unwrap()),
         json(&local_db.get_group_by_well(&well, &View::Heatmap).unwrap()),
     );
+    for grouping in [Grouping::Auto, Grouping::Folder] {
+        assert_eq!(
+            remote_db.grouping_regex(&grouping).unwrap(),
+            local_db.grouping_regex(&grouping).unwrap(),
+            "grouping regex"
+        );
+    }
     let heatmap = ImageHeatmapFilter {
         plane: plane.clone(),
         image_rel_path: image.to_string_lossy().into_owned(),

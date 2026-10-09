@@ -405,13 +405,13 @@ impl ResultExport {
                         z_stack: z,
                         t_stack: t,
                     },
-                    grouping_regex: self.grouping_regex.clone(),
+                    grouping: self.grouping.clone(),
                     aggregation: self.aggregations.clone(),
                     object_class: target_classes.clone(),
                     column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
                     color_schema: self.color_schema.clone(),
                     color_scale: self.color_scale.clone(),
-                    matrix_dimension: self.plate_dimension,
+                    plate_size: self.plate_size,
                 };
                 database
                     .get_group_by_plate_multi(&plate_filter, &View::Heatmap)?
@@ -467,7 +467,7 @@ impl ResultExport {
                         z_stack: z,
                         t_stack: t,
                     },
-                    grouping_regex: self.grouping_regex.clone(),
+                    grouping: self.grouping.clone(),
                     aggregation: self.aggregations.clone(),
                     object_class: target_classes.clone(),
                     column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
@@ -612,13 +612,13 @@ impl ResultExport {
                         z_stack: z,
                         t_stack: t,
                     },
-                    grouping_regex: self.grouping_regex.clone(),
+                    grouping: self.grouping.clone(),
                     aggregation: self.aggregations.clone(),
                     object_class: target_classes.clone(),
                     column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
                     color_schema: self.color_schema.clone(),
                     color_scale: self.color_scale.clone(),
-                    matrix_dimension: self.plate_dimension,
+                    plate_size: self.plate_size,
                 };
                 database
                     .get_group_by_plate_multi(&plate_filter, &View::List)?
@@ -696,7 +696,7 @@ impl ResultExport {
                         z_stack: z,
                         t_stack: t,
                     },
-                    grouping_regex: self.grouping_regex.clone(),
+                    grouping: self.grouping.clone(),
                     aggregation: self.aggregations.clone(),
                     object_class: target_classes.clone(),
                     column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
@@ -1606,6 +1606,7 @@ mod tests {
     use super::super::test_support::{ObjectSpec, seed_db};
     use super::*;
     use crate::api::{ColorScale, ColorSchema};
+    use crate::api::{Grouping, PlateSize};
     use crate::api::{PlateFilter, WellsBatchFilter};
     use calamine::Reader as _;
     use std::path::PathBuf;
@@ -2512,13 +2513,13 @@ mod tests {
                         z_stack: 0,
                         t_stack: 0,
                     },
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Valid(1),
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::Heatmap,
             )
@@ -2560,7 +2561,7 @@ mod tests {
                         z_stack: 0,
                         t_stack: 0,
                     },
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Valid(1),
                     column: Column::AreaSizePx,

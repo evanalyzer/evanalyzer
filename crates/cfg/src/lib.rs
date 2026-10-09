@@ -25,7 +25,7 @@ pub const LEGACY_PROJECT_FILE_EXTENSION: &str = &"icproj";
 /// of `.evaproj` files written by an older version of the app - e.g. a
 /// renamed field/enum variant that isn't just an additive
 /// `#[serde(default)]` field.
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 3;
 
 /// Current on-disk format version for
 /// [`settings::ai_learning_settings::AiLearningSettings`] - both the

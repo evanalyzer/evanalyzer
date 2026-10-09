@@ -32,6 +32,7 @@ use evanalyzer_app::results::View;
 use evanalyzer_app::results::WellFilter;
 use evanalyzer_app::results::WellsBatchFilter;
 use evanalyzer_app::results::WellsBatchFilterMulti;
+use evanalyzer_app::results::{Grouping, PlateSize};
 use evanalyzer_cfg::core_types::ObjectClass;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -113,13 +114,13 @@ fn main() {
 
     let plate = |column: Column, aggregation: Aggregation| PlateFilter {
         plane: plane.clone(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation,
         object_class: ObjectClass::Unset,
         column,
         color_schema: ColorSchema::default(),
         color_scale: ColorScale::default(),
-        matrix_dimension: None,
+        plate_size: PlateSize::Auto,
     };
     if wanted("plate Count") {
         report(
@@ -148,13 +149,13 @@ fn main() {
 
     let plate_multi = PlateFilterMulti {
         plane: plane.clone(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: vec![Aggregation::Avg, Aggregation::Sum],
         object_class: vec![ObjectClass::Unset],
         column: vec![Column::Count, Column::AreaSizePx],
         color_schema: ColorSchema::default(),
         color_scale: ColorScale::default(),
-        matrix_dimension: None,
+        plate_size: PlateSize::Auto,
     };
     if wanted("plate_multi Count+area x Avg+Sum") {
         report(
@@ -178,7 +179,7 @@ fn main() {
     let well = WellFilter {
         plane: plane.clone(),
         group_name: first_well,
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: Aggregation::Sum,
         object_class: ObjectClass::Unset,
         column: Column::Count,
@@ -202,7 +203,7 @@ fn main() {
 
     let wells = WellsBatchFilter {
         plane: plane.clone(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: Aggregation::Sum,
         object_class: ObjectClass::Unset,
         column: Column::AreaSizePx,
@@ -225,7 +226,7 @@ fn main() {
 
     let wells_multi = WellsBatchFilterMulti {
         plane: plane.clone(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: vec![Aggregation::Avg, Aggregation::Sum],
         object_class: vec![ObjectClass::Unset],
         column: vec![Column::Count, Column::AreaSizePx],

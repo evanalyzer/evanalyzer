@@ -143,14 +143,24 @@ impl DuckDbExporter {
 
         let author_names: Value = Value::Text(
             serde_json::to_string(
-                &project_meta.authors.iter().map(|a| &a.full_name).collect::<Vec<_>>()
-            ).map_err(|e| InternalErrors::Io(e.to_string()))?
+                &project_meta
+                    .authors
+                    .iter()
+                    .map(|a| &a.full_name)
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?,
         );
 
         let author_orgs: Value = Value::Text(
             serde_json::to_string(
-                &project_meta.authors.iter().map(|a| &a.organization).collect::<Vec<_>>()
-            ).map_err(|e| InternalErrors::Io(e.to_string()))?
+                &project_meta
+                    .authors
+                    .iter()
+                    .map(|a| &a.organization)
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?,
         );
 
         conn.execute(

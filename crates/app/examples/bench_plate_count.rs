@@ -8,6 +8,7 @@ use evanalyzer_app::results::{
     Aggregation, ColorScale, ColorSchema, Column, LocalResultsGenerator, PlaneFilter, PlateFilter,
     PlateFilterMulti, View,
 };
+use evanalyzer_app::results::{Grouping, PlateSize};
 use evanalyzer_cfg::core_types::ObjectClass;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -64,13 +65,13 @@ fn main() {
         for (name, column) in &columns {
             let filter = PlateFilter {
                 plane: plane.clone(),
-                grouping_regex: String::new(),
+                grouping: Grouping::Auto,
                 aggregation: Aggregation::Avg,
                 object_class: class,
                 column: column.clone(),
                 color_schema: ColorSchema::default(),
                 color_scale: ColorScale::default(),
-                matrix_dimension: None,
+                plate_size: PlateSize::Auto,
             };
             let (median, min, result) = time(iters, || {
                 generator
@@ -94,13 +95,13 @@ fn main() {
     ] {
         let filter = PlateFilterMulti {
             plane: plane.clone(),
-            grouping_regex: String::new(),
+            grouping: Grouping::Auto,
             aggregation: aggregations.clone(),
             object_class: vec![ObjectClass::Unset],
             column: cols,
             color_schema: ColorSchema::default(),
             color_scale: ColorScale::default(),
-            matrix_dimension: None,
+            plate_size: PlateSize::Auto,
         };
         let (median, min, result) = time(iters, || {
             generator

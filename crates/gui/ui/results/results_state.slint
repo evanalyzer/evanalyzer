@@ -246,7 +246,15 @@ export global ResultsState {
     in-out property <bool> matrix-aggregate-enabled: true;
     in-out property <[MultiSelectItem]> matrix-class-items: [];
     in-out property <string> matrix-class-summary: "No Class";
+    // Grouping (the project's plate settings): Auto / Custom regex / Folder.
+    in-out property <[MultiSelectItem]> matrix-grouping-items: [];
+    in-out property <string> matrix-grouping-summary: "Auto";
+    callback matrix-grouping-selected(string, bool);
+    // The custom regex (editable when `matrix-group-regex-custom`), and the
+    // regex actually in use (for Auto the detected one) - shown otherwise.
     in-out property <string> matrix-group-regex: "";
+    in-out property <bool> matrix-group-regex-custom: false;
+    in-out property <string> matrix-group-regex-in-use: "";
     in-out property <string> matrix-color-scale-summary: "Excel";
     in-out property <[MultiSelectItem]> matrix-color-schema-items: [];
     // Sampled from the selected schema in Rust (`color_scale_gradient` in
@@ -307,6 +315,10 @@ export global ResultsState {
     in-out property <string> matrix-well-cols: "4";
     callback matrix-well-rows-changed(string);
     callback matrix-well-cols-changed(string);
+    // Well size: Auto (fitted to the images) or Custom (ROWS/COLS above).
+    in-out property <[MultiSelectItem]> matrix-well-layout-items: [];
+    in-out property <string> matrix-well-layout-summary: "Auto";
+    callback matrix-well-layout-selected(string, bool);
     // Object (image heatmap): tile size in pixels
     // (`ImageHeatmapFilter::square_size`).
     in-out property <[MultiSelectItem]> matrix-square-size-items: [];

@@ -822,11 +822,23 @@
       }
     },
     "GroupingMode": {
-      "type": "string",
-      "enum": [
-        "NO_GROUPING",
-        "FOLDER_NAME",
-        "FILE_NAME"
+      "description": "How images are grouped into wells.",
+      "oneOf": [
+        {
+          "description": "The well-name pattern is detected from the image names (e.g.\n`A01_01.tif`, `Exp_B3_s2.tif`).",
+          "type": "string",
+          "const": "AUTO"
+        },
+        {
+          "description": "`PlateSettings::grouping_regex` on the image name.",
+          "type": "string",
+          "const": "CUSTOM"
+        },
+        {
+          "description": "One well per image folder - placed on the plate when the folder is\nnamed like a well (`B03/`).",
+          "type": "string",
+          "const": "FOLDER"
+        }
       ]
     },
     "HessianSettings": {
@@ -2268,40 +2280,51 @@
           "$ref": "#/$defs/GroupingMode"
         },
         "groupingRegex": {
+          "description": "The regex for `GroupingMode::Custom`, kept while another mode is\nselected. Its groups: 1 the well (`B03`), 2 the plate row (`B`), 3\nthe plate column (`03`), 4 the image number in the well (`01`).",
           "type": "string"
         },
-        "plateCols": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "plateRows": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "wellCols": {
-          "type": "integer",
-          "format": "int32"
+        "plateSize": {
+          "$ref": "#/$defs/PlateSize"
         },
         "wellImageOrder": {
+          "description": "For `WellLayout::Fixed`: the image number shown at each grid\nposition, row by row (`[1, 2, 3, 4]` = in number order). Positions\nwithout an entry stay empty.",
           "type": "array",
           "items": {
             "type": "integer",
-            "format": "int32"
+            "format": "uint32",
+            "minimum": 0
           }
         },
-        "wellRows": {
-          "type": "integer",
-          "format": "int32"
+        "wellLayout": {
+          "$ref": "#/$defs/WellLayout"
         }
       },
       "required": [
         "groupingMode",
         "groupingRegex",
-        "plateCols",
-        "plateRows",
-        "wellCols",
-        "wellRows",
+        "plateSize",
+        "wellLayout",
         "wellImageOrder"
+      ]
+    },
+    "PlateSize": {
+      "description": "The plate format: detected from the wells found (`Auto`) or a fixed\nsize. One list for the project settings and the results window.",
+      "type": "string",
+      "enum": [
+        "AUTO",
+        "PLATE1X1",
+        "PLATE2X3",
+        "PLATE2X4",
+        "PLATE2X6",
+        "PLATE3X4",
+        "PLATE3X5",
+        "PLATE3X6",
+        "PLATE4X6",
+        "PLATE6X8",
+        "PLATE8X12",
+        "PLATE16X24",
+        "PLATE32X48",
+        "PLATE48X72"
       ]
     },
     "RankFilterSettings": {
@@ -3056,6 +3079,45 @@
       "required": [
         "kernelSize",
         "sigma"
+      ]
+    },
+    "WellLayout": {
+      "description": "The grid of images (fields) inside a well.",
+      "oneOf": [
+        {
+          "description": "The smallest square-ish grid that holds the highest image number of\nthe well, images placed in number order.",
+          "type": "string",
+          "const": "AUTO"
+        },
+        {
+          "description": "A fixed grid; `PlateSettings::well_image_order` says which image goes\nwhere.",
+          "type": "object",
+          "properties": {
+            "FIXED": {
+              "type": "object",
+              "properties": {
+                "cols": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "rows": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rows",
+                "cols"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "FIXED"
+          ]
+        }
       ]
     },
     "YoloClassMappingSettings": {

@@ -192,6 +192,13 @@ impl ResultsSource for RemoteResults {
         }
     }
 
+    fn grouping_regex(&self, grouping: &crate::api::Grouping) -> Result<String, InternalErrors> {
+        match self.query(ResultsQuery::GroupingRegex(grouping.clone()))? {
+            ResultsAnswer::Text(regex) => Ok(regex),
+            _ => Err(unexpected_reply()),
+        }
+    }
+
     fn boxplot(&self, filter: &BoxplotFilter) -> Result<BoxplotResult, InternalErrors> {
         match self.query(ResultsQuery::Boxplot(filter.clone()))? {
             ResultsAnswer::Boxplot(result) => Ok(result),

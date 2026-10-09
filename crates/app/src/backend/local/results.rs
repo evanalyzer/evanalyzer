@@ -104,6 +104,10 @@ impl ResultsSource for LocalResults {
         self.with(|db| db.run_status())
     }
 
+    fn grouping_regex(&self, grouping: &crate::api::Grouping) -> Result<String, InternalErrors> {
+        self.with(|db| db.grouping_regex(grouping))
+    }
+
     fn boxplot(&self, filter: &BoxplotFilter) -> Result<BoxplotResult, InternalErrors> {
         self.with(|db| ResultCharts {}.paint_boxplot(db, filter))
     }

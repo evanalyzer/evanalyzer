@@ -7,7 +7,7 @@
 // is include!()-d into this separate build-script crate root, so it needs its
 // own copy of anything from `crate::` that it references.
 #[allow(dead_code)]
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 3;
 
 mod utils {
     pub mod hex_colors {
@@ -90,6 +90,8 @@ mod modules {
             "/src/modules/pipeline_settings.rs"
         ));
     }
+    // Only the types are needed for the schema, not their helpers.
+    #[allow(dead_code)]
     pub mod plate_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

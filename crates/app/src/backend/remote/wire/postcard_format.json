@@ -1,5 +1,5 @@
 {
-  "protocol_version": 7,
+  "protocol_version": 8,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -425,6 +425,21 @@
         }
       ]
     },
+    "Grouping": {
+      "ENUM": {
+        "0": {
+          "Auto": "UNIT"
+        },
+        "1": {
+          "Regex": {
+            "NEWTYPE": "STR"
+          }
+        },
+        "2": {
+          "Folder": "UNIT"
+        }
+      }
+    },
     "HistogramFilter": {
       "STRUCT": [
         {
@@ -610,31 +625,6 @@
         }
       ]
     },
-    "PlateDimensions": {
-      "ENUM": {
-        "0": {
-          "PLate2x3": "UNIT"
-        },
-        "1": {
-          "Plate3x4": "UNIT"
-        },
-        "2": {
-          "Plate4x6": "UNIT"
-        },
-        "3": {
-          "Plate6x8": "UNIT"
-        },
-        "4": {
-          "Plate8x12": "UNIT"
-        },
-        "5": {
-          "Plate16x24": "UNIT"
-        },
-        "6": {
-          "Plate32x48": "UNIT"
-        }
-      }
-    },
     "PlateFilter": {
       "STRUCT": [
         {
@@ -643,7 +633,9 @@
           }
         },
         {
-          "grouping_regex": "STR"
+          "grouping": {
+            "TYPENAME": "Grouping"
+          }
         },
         {
           "aggregation": {
@@ -671,13 +663,57 @@
           }
         },
         {
-          "matrix_dimension": {
-            "OPTION": {
-              "TYPENAME": "PlateDimensions"
-            }
+          "plate_size": {
+            "TYPENAME": "PlateSize"
           }
         }
       ]
+    },
+    "PlateSize": {
+      "ENUM": {
+        "0": {
+          "AUTO": "UNIT"
+        },
+        "1": {
+          "PLATE1X1": "UNIT"
+        },
+        "2": {
+          "PLATE2X3": "UNIT"
+        },
+        "3": {
+          "PLATE2X4": "UNIT"
+        },
+        "4": {
+          "PLATE2X6": "UNIT"
+        },
+        "5": {
+          "PLATE3X4": "UNIT"
+        },
+        "6": {
+          "PLATE3X5": "UNIT"
+        },
+        "7": {
+          "PLATE3X6": "UNIT"
+        },
+        "8": {
+          "PLATE4X6": "UNIT"
+        },
+        "9": {
+          "PLATE6X8": "UNIT"
+        },
+        "10": {
+          "PLATE8X12": "UNIT"
+        },
+        "11": {
+          "PLATE16X24": "UNIT"
+        },
+        "12": {
+          "PLATE32X48": "UNIT"
+        },
+        "13": {
+          "PLATE48X72": "UNIT"
+        }
+      }
     },
     "ResultExport": {
       "STRUCT": [
@@ -733,7 +769,9 @@
           }
         },
         {
-          "grouping_regex": "STR"
+          "grouping": {
+            "TYPENAME": "Grouping"
+          }
         },
         {
           "object_classes": {
@@ -750,10 +788,8 @@
           }
         },
         {
-          "plate_dimension": {
-            "OPTION": {
-              "TYPENAME": "PlateDimensions"
-            }
+          "plate_size": {
+            "TYPENAME": "PlateSize"
           }
         },
         {
@@ -878,6 +914,11 @@
         },
         "9": {
           "Done": "UNIT"
+        },
+        "10": {
+          "Text": {
+            "NEWTYPE": "STR"
+          }
         }
       }
     },
@@ -981,6 +1022,13 @@
           "Scatter": {
             "NEWTYPE": {
               "TYPENAME": "ScatterFilter"
+            }
+          }
+        },
+        "15": {
+          "GroupingRegex": {
+            "NEWTYPE": {
+              "TYPENAME": "Grouping"
             }
           }
         }
@@ -1104,7 +1152,9 @@
           "group_name": "STR"
         },
         {
-          "grouping_regex": "STR"
+          "grouping": {
+            "TYPENAME": "Grouping"
+          }
         },
         {
           "aggregation": {

@@ -191,6 +191,9 @@ pub trait ResultsSource: Send + Sync {
     fn get_nr_of_t_stacks(&self) -> u32;
     /// How the analysis that wrote the database ended.
     fn run_status(&self) -> Result<RunStatus, InternalErrors>;
+    /// The regex `grouping` uses on this database's images - for
+    /// `Grouping::Auto` the pattern it detected.
+    fn grouping_regex(&self, grouping: &crate::api::Grouping) -> Result<String, InternalErrors>;
     fn boxplot(&self, filter: &BoxplotFilter) -> Result<BoxplotResult, InternalErrors>;
     fn histogram(&self, filter: &HistogramFilter) -> Result<HistogramResult, InternalErrors>;
     fn scatter(&self, filter: &ScatterFilter) -> Result<ScatterResult, InternalErrors>;

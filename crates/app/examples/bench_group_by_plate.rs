@@ -38,6 +38,7 @@ use evanalyzer_app::results::PlaneFilter;
 use evanalyzer_app::results::PlateFilter;
 use evanalyzer_app::results::PlateFilterMulti;
 use evanalyzer_app::results::View;
+use evanalyzer_app::results::{Grouping, PlateSize};
 use evanalyzer_cfg::core_types::ObjectClass;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -159,13 +160,13 @@ fn main() {
             z_stack: 0,
             t_stack: 0,
         },
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: Aggregation::Avg,
         object_class: ObjectClass::Unset,
         column: Column::AreaSizePx,
         color_schema: ColorSchema::default(),
         color_scale: ColorScale::default(),
-        matrix_dimension: None,
+        plate_size: PlateSize::Auto,
     };
 
     let generator = LocalResultsGenerator::open_database(PathBuf::from(&path)).expect("open db");
@@ -220,13 +221,13 @@ fn main() {
     // bucketing, so there's no separate "naive" baseline worth reconstructing.
     let multi_filter = PlateFilterMulti {
         plane: filter.plane.clone(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: vec![Aggregation::Avg, Aggregation::Sum],
         object_class: vec![ObjectClass::Unset],
         column: vec![Column::AreaSizePx, Column::PerimeterPx],
         color_schema: ColorSchema::default(),
         color_scale: ColorScale::default(),
-        matrix_dimension: None,
+        plate_size: PlateSize::Auto,
     };
     let start = Instant::now();
     for _ in 0..iters {
@@ -242,7 +243,7 @@ fn main() {
     let well_filter = evanalyzer_app::results::WellFilter {
         plane: filter.plane.clone(),
         group_name: "A2".to_string(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: Aggregation::Avg,
         object_class: ObjectClass::Unset,
         column: Column::AreaSizePx,
@@ -264,7 +265,7 @@ fn main() {
 
     let wells_filter = evanalyzer_app::results::WellsBatchFilter {
         plane: filter.plane.clone(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: Aggregation::Avg,
         object_class: ObjectClass::Unset,
         column: Column::AreaSizePx,
@@ -324,7 +325,7 @@ fn main() {
 
     let wells_multi_filter = evanalyzer_app::results::WellsBatchFilterMulti {
         plane: filter.plane.clone(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: vec![Aggregation::Avg, Aggregation::Sum],
         object_class: vec![ObjectClass::Unset],
         column: vec![Column::AreaSizePx, Column::PerimeterPx],

@@ -15,7 +15,6 @@ use evanalyzer_app::results::GroupedByImageFilter;
 use evanalyzer_app::results::HistogramFilter;
 use evanalyzer_app::results::ImageEntry;
 use evanalyzer_app::results::ImageHeatmapFilter;
-use evanalyzer_app::results::PlateDimensions;
 use evanalyzer_app::results::ResultExport;
 use evanalyzer_app::results::ResultsSource;
 use evanalyzer_app::results::ScatterFilter;
@@ -24,8 +23,10 @@ use evanalyzer_app::results::WellSize;
 use evanalyzer_app::results::{Aggregation, HistogramResult};
 use evanalyzer_app::results::{BoxplotBox, Cell};
 use evanalyzer_app::results::{BoxplotFilter, ScatterResult};
+use evanalyzer_app::results::{Grouping, PlateSize};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
+use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings, WellLayout};
 use evanalyzer_gui_slint::ResultsWindow;
 use log::{error, info, warn};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
@@ -160,14 +161,13 @@ struct MatrixFilter {
     pub object_classe: ObjectClass,
     pub column: Column,
     pub aggregation: Aggregation,
-    pub group_by_regex: String,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
-    // Per-level grid-size overrides, one of which applies depending on
-    // `matrix-level` — `None` keeps each level's own default (see
-    // `update_matrix_view`/`update_well_view`/`update_image_heatmap_view`).
-    pub plate_dimension: Option<PlateDimensions>,
-    pub well_size: Option<WellSize>,
+    // Grouping, plate size and well layout: the project's plate settings,
+    // kept in sync both ways (see `edit_plate_settings`/
+    // `apply_project_plate_settings`).
+    pub plate: PlateSettings,
+    // The image heatmap's tile size - `None` keeps its default.
     pub square_size: Option<usize>,
 }
 
@@ -238,6 +238,9 @@ pub struct ResultsStateController {
     rail_mode: Mutex<ResultsRailMode>,
     list_stale: AtomicBool,
     charts_stale: AtomicBool,
+    // Called after the results window changed the project's plate settings,
+    // so the project settings dialog shows them too (wired in editor.rs).
+    plate_settings_written: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl ResultsStateController {
@@ -272,77 +275,7 @@ impl ResultsStateController {
             rail_mode: Mutex::new(ResultsRailMode::List),
             list_stale: AtomicBool::new(false),
             charts_stale: AtomicBool::new(false),
-        }
-    }
-
-    /// Runs `job` on the database thread (see [`DbWorker`]), with
-    /// `ResultsState.loading` set while any job is queued or running.
-    fn run_db_job(self: &Arc<Self>, job: impl FnOnce(&Arc<Self>) + Send + 'static) {
-        /// Counts the job as done even if it panics.
-        struct Done(Arc<ResultsStateController>);
-        impl Drop for Done {
-            fn drop(&mut self) {
-                if self.0.db_worker.pending.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    self.0.set_loading_in_slint(false);
-                }
-            }
-        }
-        if self.db_worker.pending.fetch_add(1, Ordering::SeqCst) == 0 {
-            self.set_loading_in_slint(true);
-        }
-        let done = Done(self.clone());
-        self.db_worker.submit(Box::new(move || {
-            job(&done.0);
-            drop(done);
-        }));
-    }
-
-    fn set_database_name_in_slint(&self, name: String) {
-        let ui_weak = self.ui.clone();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<ResultsState>().set_database_name(name.into());
-            }
-        })
-        .ok();
-    }
-
-    fn set_loading_in_slint(&self, loading: bool) {
-        let ui_weak = self.ui.clone();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<ResultsState>().set_loading(loading);
-            }
-        })
-        .ok();
-    }
-
-    /// Whether `mode` is the tab on screen. If not, its view is only marked
-    /// `stale` - refreshed once the tab is shown - so a hidden view never
-    /// queries the database.
-    fn is_view_shown(&self, mode: ResultsRailMode, stale: &AtomicBool) -> bool {
-        let shown = *self.rail_mode.lock().expect("Poisoned") == mode;
-        if !shown {
-            stale.store(true, Ordering::SeqCst);
-        }
-        shown
-    }
-
-    /// `mode` became the tab on screen: catch up on what changed while it
-    /// was hidden.
-    fn show_view(self: &Arc<Self>, mode: ResultsRailMode) {
-        *self.rail_mode.lock().expect("Poisoned") = mode;
-        let stale = match mode {
-            ResultsRailMode::List => &self.list_stale,
-            ResultsRailMode::Charts => &self.charts_stale,
-            // Always refreshed when shown (`on_rail_mode_selected`).
-            _ => return,
-        };
-        if stale.swap(false, Ordering::SeqCst) {
-            self.run_db_job(move |manager| match mode {
-                ResultsRailMode::List => manager.update_list_view(),
-                _ => manager.refresh_charts(),
-            });
+            plate_settings_written: Mutex::new(None),
         }
     }
 
@@ -743,12 +676,38 @@ impl ResultsStateController {
                     manager.refresh_active_matrix_view();
                 });
 
+            // Grouping, plate size and well size are the project's plate
+            // settings: every change goes back to the project
+            // (`edit_plate_settings`).
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_matrix_grouping_selected(move |key, selected| {
+                    if !selected {
+                        return;
+                    }
+                    let Some((_, mode)) = GROUPING_MODES.iter().find(|(name, _)| key == *name)
+                    else {
+                        warn!("Unknown grouping selected: {key}");
+                        return;
+                    };
+                    // Switching to a custom regex starts from the pattern
+                    // in use, rather than from nothing.
+                    let in_use = manager.effective_grouping_regex();
+                    manager.edit_plate_settings(|plate| {
+                        if *mode == GroupingMode::Custom && plate.grouping_regex.trim().is_empty() {
+                            plate.grouping_regex = in_use.unwrap_or_default();
+                        }
+                        plate.grouping_mode = *mode;
+                    });
+                });
+
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_matrix_regex_changed(move |regex| {
-                    manager
-                        .update_matrix_filter(|filter| filter.group_by_regex = regex.to_string());
-                    manager.refresh_active_matrix_view();
+                    manager.edit_plate_settings(|plate| {
+                        plate.grouping_mode = GroupingMode::Custom;
+                        plate.grouping_regex = regex.to_string();
+                    });
                 });
 
             let manager = self.clone();
@@ -800,42 +759,80 @@ impl ResultsStateController {
                     if !selected {
                         return;
                     }
-                    let Some(dimension) = plate_dimension_from_key(key.as_str()) else {
+                    let Some(size) = plate_size_from_key(key.as_str()) else {
                         warn!("Unknown plate size selected: {key}");
                         return;
                     };
-                    manager.update_matrix_filter(|filter| filter.plate_dimension = dimension);
-                    manager.refresh_active_matrix_view();
+                    manager.edit_plate_settings(|plate| plate.plate_size = size);
+                });
+
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ResultsState>()
+                .on_matrix_well_layout_selected(move |key, selected| {
+                    if !selected {
+                        return;
+                    }
+                    let layout = if key == WELL_LAYOUT_AUTO {
+                        WellLayout::Auto
+                    } else {
+                        // Custom: the grid now shown, as a start.
+                        let shown = ui_weak.upgrade().map(|ui| {
+                            let state = ui.global::<ResultsState>();
+                            (state.get_well_rows(), state.get_well_cols())
+                        });
+                        let (rows, cols) = shown.unwrap_or((4, 4));
+                        WellLayout::Fixed {
+                            rows: rows.max(1) as u32,
+                            cols: cols.max(1) as u32,
+                        }
+                    };
+                    manager.edit_plate_settings(|plate| {
+                        if !matches!(
+                            (plate.well_layout, layout),
+                            (WellLayout::Fixed { .. }, WellLayout::Fixed { .. })
+                        ) {
+                            plate.set_well_layout(layout);
+                        }
+                    });
                 });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_matrix_well_rows_changed(move |value| {
-                    let Ok(rows) = value.trim().parse::<usize>() else {
+                    let Ok(rows) = value.trim().parse::<u32>() else {
                         warn!("Invalid well rows value: {value}");
                         return;
                     };
-                    manager.update_matrix_filter(|filter| {
-                        let mut size = filter.well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
-                        size.rows = rows.max(1);
-                        filter.well_size = Some(size);
+                    manager.edit_plate_settings(|plate| {
+                        let cols = match plate.well_layout {
+                            WellLayout::Fixed { cols, .. } => cols,
+                            WellLayout::Auto => 4,
+                        };
+                        plate.set_well_layout(WellLayout::Fixed {
+                            rows: rows.max(1),
+                            cols,
+                        });
                     });
-                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_matrix_well_cols_changed(move |value| {
-                    let Ok(cols) = value.trim().parse::<usize>() else {
+                    let Ok(cols) = value.trim().parse::<u32>() else {
                         warn!("Invalid well cols value: {value}");
                         return;
                     };
-                    manager.update_matrix_filter(|filter| {
-                        let mut size = filter.well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
-                        size.cols = cols.max(1);
-                        filter.well_size = Some(size);
+                    manager.edit_plate_settings(|plate| {
+                        let rows = match plate.well_layout {
+                            WellLayout::Fixed { rows, .. } => rows,
+                            WellLayout::Auto => 4,
+                        };
+                        plate.set_well_layout(WellLayout::Fixed {
+                            rows,
+                            cols: cols.max(1),
+                        });
                     });
-                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
@@ -1469,6 +1466,197 @@ impl ResultsStateController {
         }
     }
 
+    /// `f` runs whenever the results window changed the project's plate
+    /// settings.
+    pub fn on_plate_settings_written(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.plate_settings_written.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    /// The plate settings the Matrix view uses: the project's, as last
+    /// synced.
+    fn current_plate_settings(&self) -> PlateSettings {
+        match self.matrix_filter.lock().expect("Poisoned").as_ref() {
+            Some(filter) => filter.plate.clone(),
+            None => self._app_state.get_project().plate.clone(),
+        }
+    }
+
+    /// The regex the current grouping uses on the open database - for Auto
+    /// the pattern detected.
+    fn effective_grouping_regex(&self) -> Option<String> {
+        let grouping = grouping_of(&self.current_plate_settings());
+        let guard = self.result_generator.lock().expect("Poisoned");
+        let db = guard.as_ref()?;
+        db.grouping_regex(&grouping)
+            .inspect_err(|err| warn!("Could not resolve the grouping: {err}"))
+            .ok()
+    }
+
+    /// Changes the plate settings from the results window: in the Matrix
+    /// view, in the project (marked unsaved, and shown in the project
+    /// settings) and on screen.
+    fn edit_plate_settings(&self, edit: impl FnOnce(&mut PlateSettings)) {
+        let plate = {
+            let mut guard = self.matrix_filter.lock().expect("Poisoned");
+            let filter = guard.get_or_insert_with(MatrixFilter::default);
+            let before = filter.plate.clone();
+            edit(&mut filter.plate);
+            if filter.plate == before {
+                return;
+            }
+            filter.plate.clone()
+        };
+        let changed_project = {
+            let mut project = self._app_state.get_project_write();
+            let changed = project.plate != plate;
+            project.plate = plate;
+            changed
+        };
+        if changed_project {
+            self._app_state.mark_dirty();
+            if let Some(written) = self
+                .plate_settings_written
+                .lock()
+                .expect("Poisoned")
+                .as_ref()
+            {
+                written();
+            }
+        }
+        self.push_plate_settings_in_slint();
+        self.refresh_active_matrix_view();
+    }
+
+    /// The project's plate settings changed elsewhere (project settings
+    /// dialog, undo, another project): show and use them.
+    pub fn apply_project_plate_settings(&self) {
+        let plate = self._app_state.get_project().plate.clone();
+        let changed = match self.matrix_filter.lock().expect("Poisoned").as_mut() {
+            Some(filter) if filter.plate != plate => {
+                filter.plate = plate;
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.push_plate_settings_in_slint();
+            self.refresh_active_matrix_view();
+        }
+    }
+
+    /// Shows the current plate settings in the Matrix toolbar: grouping
+    /// (with the regex in use), plate size and well size.
+    fn push_plate_settings_in_slint(&self) {
+        let plate = self.current_plate_settings();
+        let in_use = self.effective_grouping_regex().unwrap_or_default();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ResultsState>();
+            let summary = |items: &[MultiSelectItem]| {
+                items
+                    .iter()
+                    .find(|item| item.selected)
+                    .map(|item| item.value.clone())
+                    .unwrap_or_default()
+            };
+            let grouping = grouping_items(plate.grouping_mode);
+            state.set_matrix_grouping_summary(summary(&grouping));
+            state.set_matrix_grouping_items(ModelRc::from(Rc::new(VecModel::from(grouping))));
+            state.set_matrix_group_regex_custom(plate.grouping_mode == GroupingMode::Custom);
+            if state.get_matrix_group_regex() != plate.grouping_regex.as_str() {
+                state.set_matrix_group_regex(plate.grouping_regex.as_str().into());
+            }
+            state.set_matrix_group_regex_in_use(in_use.into());
+
+            let sizes = plate_size_items(plate.plate_size);
+            state.set_matrix_plate_size_summary(summary(&sizes));
+            state.set_matrix_plate_size_items(ModelRc::from(Rc::new(VecModel::from(sizes))));
+
+            let layouts = well_layout_items(plate.well_layout);
+            state.set_matrix_well_layout_summary(summary(&layouts));
+            state.set_matrix_well_layout_items(ModelRc::from(Rc::new(VecModel::from(layouts))));
+            if let WellLayout::Fixed { rows, cols } = plate.well_layout {
+                state.set_matrix_well_rows(rows.to_string().into());
+                state.set_matrix_well_cols(cols.to_string().into());
+            }
+        })
+        .ok();
+    }
+
+    /// Runs `job` on the database thread (see [`DbWorker`]), with
+    /// `ResultsState.loading` set while any job is queued or running.
+    fn run_db_job(self: &Arc<Self>, job: impl FnOnce(&Arc<Self>) + Send + 'static) {
+        /// Counts the job as done even if it panics.
+        struct Done(Arc<ResultsStateController>);
+        impl Drop for Done {
+            fn drop(&mut self) {
+                if self.0.db_worker.pending.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    self.0.set_loading_in_slint(false);
+                }
+            }
+        }
+        if self.db_worker.pending.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.set_loading_in_slint(true);
+        }
+        let done = Done(self.clone());
+        self.db_worker.submit(Box::new(move || {
+            job(&done.0);
+            drop(done);
+        }));
+    }
+
+    fn set_database_name_in_slint(&self, name: String) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_database_name(name.into());
+            }
+        })
+        .ok();
+    }
+
+    fn set_loading_in_slint(&self, loading: bool) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_loading(loading);
+            }
+        })
+        .ok();
+    }
+
+    /// Whether `mode` is the tab on screen. If not, its view is only marked
+    /// `stale` - refreshed once the tab is shown - so a hidden view never
+    /// queries the database.
+    fn is_view_shown(&self, mode: ResultsRailMode, stale: &AtomicBool) -> bool {
+        let shown = *self.rail_mode.lock().expect("Poisoned") == mode;
+        if !shown {
+            stale.store(true, Ordering::SeqCst);
+        }
+        shown
+    }
+
+    /// `mode` became the tab on screen: catch up on what changed while it
+    /// was hidden.
+    fn show_view(self: &Arc<Self>, mode: ResultsRailMode) {
+        *self.rail_mode.lock().expect("Poisoned") = mode;
+        let stale = match mode {
+            ResultsRailMode::List => &self.list_stale,
+            ResultsRailMode::Charts => &self.charts_stale,
+            // Always refreshed when shown (`on_rail_mode_selected`).
+            _ => return,
+        };
+        if stale.swap(false, Ordering::SeqCst) {
+            self.run_db_job(move |manager| match mode {
+                ResultsRailMode::List => manager.update_list_view(),
+                _ => manager.refresh_charts(),
+            });
+        }
+    }
+
     /// The Aggregate picker means nothing for `Column::Count` below the
     /// Plate level: a field (Well level) is a single image and a heatmap
     /// tile (Object level) is a region of a single image, so the count is
@@ -1610,8 +1798,11 @@ impl ResultsStateController {
                     .map(|entry| entry.key.clone())
                     .find(is_matrix_column)
                     .unwrap_or_default();
+                // Grouping, plate size and well layout start from the
+                // project's plate settings.
                 *self.matrix_filter.lock().expect("Poisned") = Some(MatrixFilter {
                     column: default_matrix_column.clone(),
+                    plate: self._app_state.get_project().plate.clone(),
                     ..MatrixFilter::default()
                 });
                 let matrix_eligible_columns: Vec<ColumnEntry> = available_columns
@@ -1672,6 +1863,7 @@ impl ResultsStateController {
 
                 self.show_results_window();
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
+                self.push_plate_settings_in_slint();
                 // Only the tab on screen queries the database; the others
                 // catch up when they're shown.
                 self.refresh_list();
@@ -2170,7 +2362,7 @@ impl ResultsStateController {
 
         let group_filter = evanalyzer_app::results::PlateFilter {
             plane,
-            grouping_regex: matrix_filter.group_by_regex.clone(),
+            grouping: grouping_of(&matrix_filter.plate),
             aggregation: matrix_filter.aggregation.clone(),
             object_class: matrix_filter.object_classe,
             column: matrix_filter.column.clone(),
@@ -2179,7 +2371,7 @@ impl ResultsStateController {
             // `None` (the "Auto" dropdown option) has `get_group_by_plate`
             // auto-select the smallest standard dimensions that fit the
             // data; otherwise the user's explicit PLATE SIZE choice.
-            matrix_dimension: matrix_filter.plate_dimension,
+            plate_size: matrix_filter.plate.plate_size,
         };
         drop(matrix_filter_guard);
 
@@ -2276,7 +2468,7 @@ impl ResultsStateController {
         let well_filter = WellFilter {
             plane,
             group_name: well_id.to_string(),
-            grouping_regex: matrix_filter.group_by_regex.clone(),
+            grouping: grouping_of(&matrix_filter.plate),
             aggregation: matrix_filter.aggregation.clone(),
             object_class: matrix_filter.object_classe,
             column: matrix_filter.column.clone(),
@@ -2284,8 +2476,8 @@ impl ResultsStateController {
             color_scale: matrix_filter.color_scale.clone(),
             // `None` has `get_group_by_well` assume the common 4x4 field
             // grid; otherwise the user's explicit ROWS/COLS choice.
-            well_size: matrix_filter.well_size,
-            well_order: None,
+            well_size: well_size_of(&matrix_filter.plate),
+            well_order: well_order_of(&matrix_filter.plate),
         };
         drop(matrix_filter_guard);
 
@@ -2646,12 +2838,6 @@ impl ResultsStateController {
     // once at `open_database`, mirroring `set_color_schemas_in_slint`.
     pub fn set_grid_size_options_in_slint(&self) {
         let ui_weak = self.ui.clone();
-        let plate_items = plate_size_items(None);
-        let plate_summary = plate_items
-            .iter()
-            .find(|item| item.selected)
-            .map(|item| item.value.clone())
-            .unwrap_or_default();
         let square_items = square_size_items(DEFAULT_SQUARE_SIZE);
         let square_summary = square_items
             .iter()
@@ -2661,16 +2847,10 @@ impl ResultsStateController {
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
-                state.set_matrix_plate_size_items(ModelRc::from(Rc::new(VecModel::from(
-                    plate_items,
-                ))));
-                state.set_matrix_plate_size_summary(plate_summary);
                 state.set_matrix_square_size_items(ModelRc::from(Rc::new(VecModel::from(
                     square_items,
                 ))));
                 state.set_matrix_square_size_summary(square_summary);
-                state.set_matrix_well_rows("4".into());
-                state.set_matrix_well_cols("4".into());
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_grid_size_options_in_slint, cannot update grid size options!"
@@ -3001,26 +3181,14 @@ impl ResultsStateController {
         // Export always uses `ColorScale::Auto` (see `read_export_settings`)
         // - the dialog exposes no manual min/max override, so the current
         // Matrix view's own scale (which may be pinned) isn't mirrored here.
-        let (aggregations, color_schema, grouping_regex, plate_dimension, well_size, square_size) =
-            match matrix_filter_guard.as_ref() {
-                Some(filter) => (
-                    vec![filter.aggregation.clone()],
-                    filter.color_schema.clone(),
-                    filter.group_by_regex.clone(),
-                    filter.plate_dimension,
-                    filter.well_size,
-                    filter.square_size,
-                ),
-                None => (
-                    vec![Aggregation::default()],
-                    ColorSchema::default(),
-                    String::new(),
-                    None,
-                    None,
-                    None,
-                ),
-            };
-        let well_size = well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
+        let (aggregations, color_schema, square_size) = match matrix_filter_guard.as_ref() {
+            Some(filter) => (
+                vec![filter.aggregation.clone()],
+                filter.color_schema.clone(),
+                filter.square_size,
+            ),
+            None => (vec![Aggregation::default()], ColorSchema::default(), None),
+        };
         let square_size = square_size.unwrap_or(DEFAULT_SQUARE_SIZE);
 
         // Seeds the export dialog's own image selection from whatever the
@@ -3122,7 +3290,6 @@ impl ResultsStateController {
         state.set_column_groups(ModelRc::from(Rc::new(VecModel::from(column_groups_vec))));
         state.set_column_summary(column_summary);
 
-        state.set_grouping_regex(grouping_regex.into());
         state.set_aggregation_items(ModelRc::from(Rc::new(VecModel::from(
             aggregation_items_vec,
         ))));
@@ -3136,19 +3303,6 @@ impl ResultsStateController {
                 .unwrap_or("Viridis")
                 .into(),
         );
-        state.set_plate_size_items(ModelRc::from(Rc::new(VecModel::from(plate_size_items(
-            plate_dimension,
-        )))));
-        state.set_plate_size_summary(
-            plate_dimensions()
-                .into_iter()
-                .find(|(_, dimension)| *dimension == plate_dimension)
-                .map(|(name, _)| name)
-                .unwrap_or("Auto")
-                .into(),
-        );
-        state.set_well_rows(well_size.rows.to_string().into());
-        state.set_well_cols(well_size.cols.to_string().into());
         state.set_square_size_items(ModelRc::from(Rc::new(VecModel::from(square_size_items(
             square_size,
         )))));
@@ -3208,8 +3362,6 @@ impl ResultsStateController {
         let z_end = parse_u32("Z end", state.get_z_end())?;
         let t_start = parse_u32("T start", state.get_t_start())?;
         let t_end = parse_u32("T end", state.get_t_end())?;
-        let well_rows = parse_u32("well row count", state.get_well_rows())?.max(1) as usize;
-        let well_cols = parse_u32("well column count", state.get_well_cols())?.max(1) as usize;
 
         let selected_keys = |items: ModelRc<MultiSelectItem>| -> Vec<slint::SharedString> {
             items
@@ -3265,15 +3417,9 @@ impl ResultsStateController {
             return Err(format!("Unknown color schema \"{color_schema_key}\"."));
         };
 
-        let plate_size_key = state
-            .get_plate_size_items()
-            .iter()
-            .find(|item| item.selected)
-            .map(|item| item.key)
-            .unwrap_or_else(|| "Auto".into());
-        let Some(plate_dimension) = plate_dimension_from_key(plate_size_key.as_str()) else {
-            return Err(format!("Unknown plate size \"{plate_size_key}\"."));
-        };
+        // Grouping, plate size and well layout: the project's plate
+        // settings, the same the Matrix view shows.
+        let plate = self.current_plate_settings();
 
         let square_size_key = state
             .get_square_size_items()
@@ -3311,15 +3457,12 @@ impl ResultsStateController {
             columns,
             color_schema,
             color_scale: ColorScale::Auto,
-            grouping_regex: state.get_grouping_regex().to_string(),
+            grouping: grouping_of(&plate),
             object_classes,
             aggregations,
-            plate_dimension,
-            well_size: Some(WellSize {
-                rows: well_rows,
-                cols: well_cols,
-            }),
-            well_order: None,
+            plate_size: plate.plate_size,
+            well_size: well_size_of(&plate),
+            well_order: well_order_of(&plate),
             square_size: Some(square_size),
             with_list_view: state.get_with_list_view(),
             with_list_coloc_details: state.get_with_list_coloc_details(),
@@ -3713,45 +3856,91 @@ fn color_schema_from_key(key: &str) -> Option<ColorSchema> {
         .map(|(_, schema)| schema)
 }
 
-// PLATE SIZE dropdown vocabulary: "Auto" (`None`, `get_group_by_plate`
-// auto-selects the smallest standard format that fits the data — see
-// `best_matching_dimensions`) followed by every standard microplate well
-// count `PlateDimensions` supports, smallest first.
-fn plate_dimensions() -> [(&'static str, Option<PlateDimensions>); 8] {
-    [
-        ("Auto", None),
-        ("6-well (2x3)", Some(PlateDimensions::PLate2x3)),
-        ("12-well (3x4)", Some(PlateDimensions::Plate3x4)),
-        ("24-well (4x6)", Some(PlateDimensions::Plate4x6)),
-        ("48-well (6x8)", Some(PlateDimensions::Plate6x8)),
-        ("96-well (8x12)", Some(PlateDimensions::Plate8x12)),
-        ("384-well (16x24)", Some(PlateDimensions::Plate16x24)),
-        ("1536-well (32x48)", Some(PlateDimensions::Plate32x48)),
-    ]
+/// How the results queries group images for `plate`.
+fn grouping_of(plate: &PlateSettings) -> Grouping {
+    match plate.grouping_mode {
+        GroupingMode::Auto => Grouping::Auto,
+        GroupingMode::Custom => Grouping::Regex(plate.grouping_regex.clone()),
+        GroupingMode::Folder => Grouping::Folder,
+    }
 }
 
-fn plate_size_items(selected: Option<PlateDimensions>) -> Vec<MultiSelectItem> {
-    plate_dimensions()
+/// The well grid for `plate` - `None` lets the query fit it (Auto).
+fn well_size_of(plate: &PlateSettings) -> Option<WellSize> {
+    match plate.well_layout {
+        WellLayout::Auto => None,
+        WellLayout::Fixed { rows, cols } => Some(WellSize {
+            rows: rows.max(1) as usize,
+            cols: cols.max(1) as usize,
+        }),
+    }
+}
+
+/// Which image goes where in a fixed well grid - `None` (number order) for
+/// Auto or without an order.
+fn well_order_of(plate: &PlateSettings) -> Option<Vec<u32>> {
+    match plate.well_layout {
+        WellLayout::Fixed { .. } if !plate.well_image_order.is_empty() => {
+            Some(plate.well_image_order.clone())
+        }
+        _ => None,
+    }
+}
+
+// GROUP BY dropdown vocabulary.
+const GROUPING_MODES: [(&str, GroupingMode); 3] = [
+    ("Auto", GroupingMode::Auto),
+    ("Custom regex", GroupingMode::Custom),
+    ("Folder", GroupingMode::Folder),
+];
+
+fn single_select_items<T: PartialEq>(
+    choices: impl IntoIterator<Item = (String, T)>,
+    selected: &T,
+) -> Vec<MultiSelectItem> {
+    choices
         .into_iter()
-        .map(|(name, dimension)| MultiSelectItem {
-            key: name.into(),
+        .map(|(name, value)| MultiSelectItem {
+            key: name.clone().into(),
             value: name.into(),
             color: Color::default(),
             group: "".into(),
-            selected: dimension == selected,
+            selected: value == *selected,
         })
         .collect()
 }
 
-// Returns `Some(dimension)` for a recognized key — note this is
-// `Option<Option<PlateDimensions>>`: the outer `Option` is "was `key`
-// recognized at all", the inner one is the dropdown item's own meaning
-// ("Auto" -> `None`, an explicit size -> `Some(_)`).
-fn plate_dimension_from_key(key: &str) -> Option<Option<PlateDimensions>> {
-    plate_dimensions()
-        .into_iter()
-        .find(|(name, _)| *name == key)
-        .map(|(_, dimension)| dimension)
+fn grouping_items(selected: GroupingMode) -> Vec<MultiSelectItem> {
+    single_select_items(
+        GROUPING_MODES.map(|(name, mode)| (name.to_string(), mode)),
+        &selected,
+    )
+}
+
+// PLATE SIZE dropdown vocabulary: the same list as the project settings
+// (`PlateSize::ALL`, keyed by its label).
+fn plate_size_items(selected: PlateSize) -> Vec<MultiSelectItem> {
+    single_select_items(PlateSize::ALL.map(|size| (size.label(), size)), &selected)
+}
+
+fn plate_size_from_key(key: &str) -> Option<PlateSize> {
+    PlateSize::ALL.into_iter().find(|size| size.label() == key)
+}
+
+// WELL SIZE dropdown vocabulary: fitted to the images (Auto) or the ROWS/COLS
+// fields (Custom).
+const WELL_LAYOUT_AUTO: &str = "Auto";
+const WELL_LAYOUT_CUSTOM: &str = "Custom";
+
+fn well_layout_items(layout: WellLayout) -> Vec<MultiSelectItem> {
+    let auto = matches!(layout, WellLayout::Auto);
+    single_select_items(
+        [
+            (WELL_LAYOUT_AUTO.to_string(), true),
+            (WELL_LAYOUT_CUSTOM.to_string(), false),
+        ],
+        &auto,
+    )
 }
 
 // SQUARE SIZE dropdown vocabulary for the image heatmap — matches
@@ -4676,19 +4865,19 @@ mod tests {
             ColorScale::Auto
         ));
 
-        state.invoke_matrix_plate_size_selected("96-well (8x12)".into(), true);
+        state.invoke_matrix_plate_size_selected("96 Well (8 x 12)".into(), true);
         state.invoke_matrix_well_rows_changed("6".into());
         state.invoke_matrix_well_cols_changed("6".into());
-        assert_eq!(
-            controller
-                .matrix_filter
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .well_size,
-            Some(WellSize { rows: 6, cols: 6 })
-        );
+        let plate = controller
+            .matrix_filter
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .plate
+            .clone();
+        assert_eq!(plate.plate_size, PlateSize::Plate8x12);
+        assert_eq!(plate.well_layout, WellLayout::Fixed { rows: 6, cols: 6 });
         state.invoke_matrix_square_size_selected("128".into(), true);
         assert_eq!(
             controller
@@ -4986,6 +5175,188 @@ mod tests {
     use crate::editor::test_support::{choose_file, ui_state_with_windows};
     use crate::helper::ui_thread::drain_ui_queue;
 
+    // -- plate settings: shared with the project ------------------------------
+
+    /// A database opened with `plate` as the project's plate settings, and
+    /// the project settings dialog linked like in the app.
+    fn opened_with_plate(
+        plate: PlateSettings,
+    ) -> (
+        Opened,
+        Arc<crate::editor::project_settings_controller::ProjectSettingsController>,
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        ui_state.get_project_write().plate = plate;
+        let controller =
+            make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state.clone());
+        let project_settings = Arc::new(
+            crate::editor::project_settings_controller::ProjectSettingsController::new(
+                ui.as_weak(),
+                results_ui.as_weak(),
+                ui_state,
+            ),
+        );
+        crate::editor::link_plate_settings(&project_settings, &controller);
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        (
+            Opened {
+                _ui: ui,
+                results_ui,
+                controller,
+                _dir: dir,
+            },
+            project_settings,
+        )
+    }
+
+    fn matrix_plate(o: &Opened) -> PlateSettings {
+        o.controller
+            .matrix_filter
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .plate
+            .clone()
+    }
+
+    #[test]
+    fn opening_results_uses_the_projects_plate_settings() {
+        let plate = PlateSettings {
+            grouping_mode: GroupingMode::Folder,
+            plate_size: PlateSize::Plate8x12,
+            well_layout: WellLayout::Fixed { rows: 3, cols: 3 },
+            well_image_order: (1..=9).rev().collect(),
+            ..PlateSettings::default()
+        };
+        let (o, _project_settings) = opened_with_plate(plate.clone());
+        let s = o.state();
+
+        assert_eq!(matrix_plate(&o), plate);
+        assert_eq!(s.get_matrix_grouping_summary(), "Folder");
+        assert!(!s.get_matrix_group_regex_custom());
+        assert_eq!(s.get_matrix_plate_size_summary(), "96 Well (8 x 12)");
+        assert_eq!(s.get_matrix_well_layout_summary(), "Custom");
+        assert_eq!(s.get_matrix_well_rows(), "3");
+
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        drain_ui_queue();
+        assert_eq!(s.get_plate_rows(), 8, "the project's plate size");
+        assert_eq!(s.get_plate_cols(), 12);
+    }
+
+    #[test]
+    fn changes_in_the_results_window_go_to_the_project_and_its_settings_dialog() {
+        // Kept alive, like the app's editor does.
+        let (o, _project_settings) = opened_with_plate(PlateSettings::default());
+        let s = o.state();
+        let ui_state = o.controller._app_state.clone();
+        assert!(!ui_state.is_dirty());
+
+        s.invoke_matrix_plate_size_selected("384 Well (16 x 24)".into(), true);
+        s.invoke_matrix_well_layout_selected("Custom".into(), true);
+        s.invoke_matrix_well_cols_changed("3".into());
+        drain_ui_queue();
+
+        let project_plate = ui_state.get_project().plate.clone();
+        assert_eq!(project_plate.plate_size, PlateSize::Plate16x24);
+        assert!(matches!(
+            project_plate.well_layout,
+            WellLayout::Fixed { cols: 3, .. }
+        ));
+        assert_eq!(project_plate, matrix_plate(&o));
+        assert!(ui_state.is_dirty(), "an unsaved change of the project");
+
+        // The project settings dialog shows it too.
+        let dialog = o._ui.global::<crate::ProjectSettingsState>().get_settings();
+        assert_eq!(
+            dialog.plate_size_index,
+            PlateSize::ALL
+                .iter()
+                .position(|p| *p == PlateSize::Plate16x24)
+                .unwrap() as i32
+        );
+        assert!(!dialog.well_auto);
+        assert_eq!(dialog.well_columns, 3);
+    }
+
+    #[test]
+    fn changes_in_the_project_settings_reach_the_results_window() {
+        let (o, project_settings) = opened_with_plate(PlateSettings::default());
+        let s = o.state();
+        let ui_state = o.controller._app_state.clone();
+
+        // As the project settings dialog's Apply does.
+        ui_state.get_project_write().plate = PlateSettings {
+            grouping_mode: GroupingMode::Custom,
+            grouping_regex: r"^(([A-H])([0-9]+))_([0-9]+)".into(),
+            plate_size: PlateSize::Plate4x6,
+            ..PlateSettings::default()
+        };
+        project_settings.sync_project_settings_to_slint();
+        drain_ui_queue();
+
+        let plate = matrix_plate(&o);
+        assert_eq!(plate.plate_size, PlateSize::Plate4x6);
+        assert_eq!(s.get_matrix_grouping_summary(), "Custom regex");
+        assert!(s.get_matrix_group_regex_custom());
+        assert_eq!(s.get_matrix_group_regex(), r"^(([A-H])([0-9]+))_([0-9]+)");
+        assert_eq!(s.get_matrix_plate_size_summary(), "24 Well (4 x 6)");
+    }
+
+    #[test]
+    fn auto_grouping_shows_the_detected_regex_and_custom_starts_from_it() {
+        let (o, _project_settings) = opened_with_plate(PlateSettings::default());
+        let s = o.state();
+        let detected = s.get_matrix_group_regex_in_use();
+        assert!(!detected.is_empty(), "the detected pattern is shown");
+        assert!(!s.get_matrix_group_regex_custom());
+
+        s.invoke_matrix_grouping_selected("Custom regex".into(), true);
+        drain_ui_queue();
+        assert!(s.get_matrix_group_regex_custom());
+        assert_eq!(s.get_matrix_group_regex(), detected);
+        let project = o.controller._app_state.get_project().plate.clone();
+        assert_eq!(project.grouping_mode, GroupingMode::Custom);
+        assert_eq!(project.grouping_regex, detected.as_str());
+
+        s.invoke_matrix_regex_changed("^(x)".into());
+        drain_ui_queue();
+        assert_eq!(
+            o.controller._app_state.get_project().plate.grouping_regex,
+            "^(x)"
+        );
+        assert_eq!(s.get_matrix_group_regex_in_use(), "^(x)");
+    }
+
+    #[test]
+    fn the_export_uses_the_shared_plate_settings() {
+        let plate = PlateSettings {
+            grouping_mode: GroupingMode::Folder,
+            plate_size: PlateSize::Plate6x8,
+            well_layout: WellLayout::Fixed { rows: 2, cols: 2 },
+            well_image_order: vec![2, 1, 3, 4],
+            ..PlateSettings::default()
+        };
+        let (o, _project_settings) = opened_with_plate(plate);
+        o.state().invoke_export_dialog_open();
+        drain_ui_queue();
+        o.results_ui
+            .global::<ExportDialogState>()
+            .set_output_dir("/tmp".into());
+        let export = o.controller.read_export_settings(&o.results_ui).unwrap();
+        assert_eq!(export.grouping, Grouping::Folder);
+        assert_eq!(export.plate_size, PlateSize::Plate6x8);
+        assert_eq!(export.well_size, Some(WellSize { rows: 2, cols: 2 }));
+        assert_eq!(export.well_order, Some(vec![2, 1, 3, 4]));
+    }
+
     struct Opened {
         _ui: AppWindow,
         results_ui: ResultsWindow,
@@ -5269,14 +5640,7 @@ mod tests {
         let export = o.export();
         o.state().invoke_export_dialog_open();
         export.set_output_dir("/tmp".into());
-        let fields = [
-            "Z start",
-            "Z end",
-            "T start",
-            "T end",
-            "well row count",
-            "well column count",
-        ];
+        let fields = ["Z start", "Z end", "T start", "T end"];
         for (broken, label) in fields.iter().enumerate() {
             o.state().invoke_export_dialog_open();
             let value = |i: usize| -> slint::SharedString {
@@ -5286,8 +5650,6 @@ mod tests {
             export.set_z_end(value(1));
             export.set_t_start(value(2));
             export.set_t_end(value(3));
-            export.set_well_rows(value(4));
-            export.set_well_cols(value(5));
             export.invoke_start_clicked();
             assert!(export.get_has_error());
             assert!(

@@ -764,6 +764,9 @@ fn answer_query(
         ResultsQuery::Boxplot(filter) => ResultsAnswer::Boxplot(source.boxplot(&filter)?),
         ResultsQuery::Histogram(filter) => ResultsAnswer::Histogram(source.histogram(&filter)?),
         ResultsQuery::Scatter(filter) => ResultsAnswer::Scatter(source.scatter(&filter)?),
+        ResultsQuery::GroupingRegex(grouping) => {
+            ResultsAnswer::Text(source.grouping_regex(&grouping)?)
+        }
     })
 }
 

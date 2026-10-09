@@ -10,12 +10,41 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-const DEFAULT_GROUPING_REGEX: &str = r"^(([A-H])([0-9]{1,2}))_([0-9]+)\.([a-zA-Z0-9]+)$";
+/// The well-name patterns `Grouping::Auto` chooses from, in order of
+/// preference (the first wins a tie). Each captures 1 the well (`B03`), 2 its
+/// row (`B`), 3 its column (`03`) and 4 the image number in the well (`01`,
+/// empty for one image per well).
+const AUTO_GROUPING_PATTERNS: [&str; 4] = [
+    // A01_01.tif, B3-s2.tif, C12 f003.ome.tif
+    r"^(([A-Za-z]{1,2})([0-9]{1,3}))[_\- ]+[A-Za-z]*([0-9]+)\.[A-Za-z0-9.]+$",
+    // Exp1_B03_01.tif, plate 2 - Well A1 - field 3.tif
+    r"^.*[_\- ](([A-Za-z]{1,2})([0-9]{1,3}))[_\- ]+[A-Za-z]*([0-9]+)\.[A-Za-z0-9.]+$",
+    // A01.tif (one image per well)
+    r"^(([A-Za-z]{1,2})([0-9]{1,3}))()\.[A-Za-z0-9.]+$",
+    // Exp1_B03.tif (one image per well)
+    r"^.*[_\- ](([A-Za-z]{1,2})([0-9]{1,3}))()\.[A-Za-z0-9.]+$",
+];
+
+/// `Grouping::Folder`, on `image_rel_path` (`/` or `\` separated): the
+/// folder an image is in is its well, with a row and column when the folder
+/// is named like a well (`B03`); the image number is the last number in the
+/// file name.
+const FOLDER_GROUPING_REGEX: &str = r"^(?:.*[/\\])?(([A-Za-z]{1,2})([0-9]{1,3})|[^/\\]+)[/\\](?:[^/\\]*?([0-9]+))?[^/\\0-9]*\.[^/\\.]+$";
+
+/// How a query extracts the well of an image (see [`Grouping`]): a regex
+/// (already quote-escaped for a SQL string literal) on `column` of the
+/// `objects`/`images` row.
+struct GroupingSql {
+    column: &'static str,
+    regex: String,
+}
 
 pub struct ResultsGenerator {
     database: Connection,
     classes_cache: RefCell<Option<Vec<Class>>>,
     coloc_classes_cache: RefCell<Option<Vec<ObjectClass>>>,
+    /// The pattern `Grouping::Auto` picked for this database's images.
+    auto_grouping_cache: RefCell<Option<String>>,
 }
 
 impl ResultsGenerator {
@@ -25,7 +54,65 @@ impl ResultsGenerator {
             database,
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
+            auto_grouping_cache: RefCell::new(None),
         })
+    }
+
+    /// The regex `grouping` uses on this database's images - for
+    /// `Grouping::Auto` the pattern detected (see
+    /// [`AUTO_GROUPING_PATTERNS`]).
+    pub fn grouping_regex(&self, grouping: &Grouping) -> Result<String, InternalErrors> {
+        Ok(match grouping {
+            Grouping::Regex(regex) if !regex.trim().is_empty() => regex.clone(),
+            Grouping::Regex(_) | Grouping::Auto => self.detect_grouping_regex()?,
+            Grouping::Folder => FOLDER_GROUPING_REGEX.to_string(),
+        })
+    }
+
+    fn grouping_sql(&self, grouping: &Grouping) -> Result<GroupingSql, InternalErrors> {
+        Ok(GroupingSql {
+            column: match grouping {
+                Grouping::Folder => "image_rel_path",
+                _ => "image_name",
+            },
+            regex: self.grouping_regex(grouping)?.replace('\'', "''"),
+        })
+    }
+
+    /// The first of [`AUTO_GROUPING_PATTERNS`] that matches the most image
+    /// names (the first one if none matches any). Cached: the images of a
+    /// results database don't change.
+    fn detect_grouping_regex(&self) -> Result<String, InternalErrors> {
+        if let Some(cached) = self.auto_grouping_cache.borrow().as_ref() {
+            return Ok(cached.clone());
+        }
+        let counts = AUTO_GROUPING_PATTERNS
+            .iter()
+            .map(|pattern| {
+                format!(
+                    "count(*) FILTER (WHERE regexp_matches(image_name, '{}'))",
+                    pattern.replace('\'', "''")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let matches: Vec<i64> = self
+            .database
+            .query_row(&format!("SELECT {counts} FROM images"), [], |row| {
+                (0..AUTO_GROUPING_PATTERNS.len())
+                    .map(|i| row.get::<_, i64>(i))
+                    .collect()
+            })
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        let mut best = 0;
+        for (i, count) in matches.iter().enumerate() {
+            if *count > matches[best] {
+                best = i;
+            }
+        }
+        let regex = AUTO_GROUPING_PATTERNS[best].to_string();
+        *self.auto_grouping_cache.borrow_mut() = Some(regex.clone());
+        Ok(regex)
     }
 
     /// SQL condition that the `images` row `alias` was analysed
@@ -89,6 +176,7 @@ impl ResultsGenerator {
             database: self.database.try_clone().map_err(to_io_err)?,
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
+            auto_grouping_cache: RefCell::new(None),
         })
     }
 
@@ -1102,7 +1190,7 @@ impl ResultsGenerator {
     /// statistic. `regex_sql` must already be quote-escaped.
     fn plate_count_sql(
         &self,
-        regex_sql: &str,
+        grouping: &GroupingSql,
         plane: &PlaneFilter,
         object_class: ObjectClass,
         values: &[(String, &'static str)],
@@ -1116,6 +1204,7 @@ impl ResultsGenerator {
         }
         let object_where = conditions.join(" AND ");
         let measured = self.measured_on_plane_sql("i", plane)?;
+        let (group_col, regex_sql) = (grouping.column, grouping.regex.as_str());
         let aggregates = values
             .iter()
             .map(|(name, agg_fn)| format!("{agg_fn}(CAST(n AS DOUBLE)) AS {name}"))
@@ -1125,9 +1214,9 @@ impl ResultsGenerator {
             "SELECT group_prefix, row, col, {aggregates}\n\
              FROM (\n\
                  SELECT\n\
-                     regexp_extract(i.image_name, '{regex_sql}', 1) AS group_prefix,\n\
-                     regexp_extract(i.image_name, '{regex_sql}', 2) AS row,\n\
-                     regexp_extract(i.image_name, '{regex_sql}', 3) AS col,\n\
+                     regexp_extract(i.{group_col}, '{regex_sql}', 1) AS group_prefix,\n\
+                     regexp_extract(i.{group_col}, '{regex_sql}', 2) AS row,\n\
+                     regexp_extract(i.{group_col}, '{regex_sql}', 3) AS col,\n\
                      COALESCE(c.n, 0) AS n\n\
                  FROM images i\n\
                  LEFT JOIN (\n\
@@ -1150,12 +1239,8 @@ impl ResultsGenerator {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = self.get_object_classes()?;
 
-        let regex = if filter.grouping_regex.trim().is_empty() {
-            DEFAULT_GROUPING_REGEX
-        } else {
-            filter.grouping_regex.as_str()
-        };
-        let regex_sql = regex.replace('\'', "''");
+        let grouping = self.grouping_sql(&filter.grouping)?;
+        let (group_col, regex_sql) = (grouping.column, grouping.regex.as_str());
         let measured = self.measured_on_plane_sql("images", &filter.plane)?;
 
         // `value`: the SELECT expression for the well's value, `agg_sql`: the
@@ -1168,7 +1253,7 @@ impl ResultsGenerator {
         // join was ~4x slower).
         let (value, agg_sql) = if matches!(filter.column, Column::Count) {
             let agg_sql = self.plate_count_sql(
-                &regex_sql,
+                &grouping,
                 &filter.plane,
                 filter.object_class,
                 &[("value".to_string(), aggregation_sql_fn(&filter.aggregation))],
@@ -1193,9 +1278,9 @@ impl ResultsGenerator {
             );
             let agg_sql = format!(
                 "SELECT\n\
-                     regexp_extract(o.image_name, '{regex_sql}', 1) AS group_prefix,\n\
-                     regexp_extract(o.image_name, '{regex_sql}', 2) AS row,\n\
-                     regexp_extract(o.image_name, '{regex_sql}', 3) AS col,\n\
+                     regexp_extract(o.{group_col}, '{regex_sql}', 1) AS group_prefix,\n\
+                     regexp_extract(o.{group_col}, '{regex_sql}', 2) AS row,\n\
+                     regexp_extract(o.{group_col}, '{regex_sql}', 3) AS col,\n\
                      COUNT(*) AS n_objects,\n\
                      {agg_fn}({value_expr}) AS value\n\
                  FROM objects o\n\
@@ -1217,9 +1302,9 @@ impl ResultsGenerator {
             "SELECT img.group_prefix, img.row, img.col, {value}, img.any_disabled, img.any_failed\n\
              FROM (\n\
                  SELECT\n\
-                     regexp_extract(image_name, '{regex_sql}', 1) AS group_prefix,\n\
-                     regexp_extract(image_name, '{regex_sql}', 2) AS row,\n\
-                     regexp_extract(image_name, '{regex_sql}', 3) AS col,\n\
+                     regexp_extract({group_col}, '{regex_sql}', 1) AS group_prefix,\n\
+                     regexp_extract({group_col}, '{regex_sql}', 2) AS row,\n\
+                     regexp_extract({group_col}, '{regex_sql}', 3) AS col,\n\
                      bool_or(disabled) AS any_disabled,\n\
                      bool_or(NOT successful) AS any_failed,\n\
                      bool_or(NOT disabled AND {measured}) AS any_measured\n\
@@ -1254,7 +1339,7 @@ impl ResultsGenerator {
             groups,
             &filter.column,
             &classes,
-            filter.matrix_dimension,
+            filter.plate_size,
             &filter.color_schema,
             &filter.color_scale,
             view,
@@ -1307,12 +1392,8 @@ impl ResultsGenerator {
         let value_cols_sql = value_cols.join(", ");
         let object_values_sql = object_value_exprs.join(",\n                    ");
 
-        let regex = if filter.grouping_regex.trim().is_empty() {
-            DEFAULT_GROUPING_REGEX
-        } else {
-            filter.grouping_regex.as_str()
-        };
-        let regex = regex.replace('\'', "''");
+        let grouping = self.grouping_sql(&filter.grouping)?;
+        let (group_col, regex) = (grouping.column, grouping.regex.as_str());
 
         let measured = self.measured_on_plane_sql("images", &filter.plane)?;
         let mut results = Vec::with_capacity(filter.object_class.len() * n);
@@ -1332,9 +1413,9 @@ impl ResultsGenerator {
                 format!(
                     "LEFT JOIN (\n\
                          SELECT\n\
-                             regexp_extract(o.image_name, '{regex}', 1) AS group_prefix,\n\
-                             regexp_extract(o.image_name, '{regex}', 2) AS row,\n\
-                             regexp_extract(o.image_name, '{regex}', 3) AS col,\n\
+                             regexp_extract(o.{group_col}, '{regex}', 1) AS group_prefix,\n\
+                             regexp_extract(o.{group_col}, '{regex}', 2) AS row,\n\
+                             regexp_extract(o.{group_col}, '{regex}', 3) AS col,\n\
                              COUNT(*) AS n_objects,\n\
                              {object_values_sql}\n\
                          FROM objects o\n\
@@ -1349,7 +1430,7 @@ impl ResultsGenerator {
                 String::new()
             } else {
                 let cnt_sql =
-                    self.plate_count_sql(&regex, &filter.plane, *object_class, &count_values)?;
+                    self.plate_count_sql(&grouping, &filter.plane, *object_class, &count_values)?;
                 format!(
                     "LEFT JOIN (\n{cnt_sql}\n) cnt\n\
                          ON cnt.group_prefix = img.group_prefix\n\
@@ -1362,9 +1443,9 @@ impl ResultsGenerator {
                  img.any_failed\n\
                  FROM (\n\
                      SELECT\n\
-                         regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
-                         regexp_extract(image_name, '{regex}', 2) AS row,\n\
-                         regexp_extract(image_name, '{regex}', 3) AS col,\n\
+                         regexp_extract({group_col}, '{regex}', 1) AS group_prefix,\n\
+                         regexp_extract({group_col}, '{regex}', 2) AS row,\n\
+                         regexp_extract({group_col}, '{regex}', 3) AS col,\n\
                          bool_or(disabled) AS any_disabled,\n\
                          bool_or(NOT successful) AS any_failed,\n\
                          bool_or(NOT disabled AND {measured}) AS any_measured\n\
@@ -1409,7 +1490,7 @@ impl ResultsGenerator {
                         groups,
                         column,
                         &classes,
-                        filter.matrix_dimension,
+                        filter.plate_size,
                         &filter.color_schema,
                         &filter.color_scale,
                         view,
@@ -1443,12 +1524,8 @@ impl ResultsGenerator {
         let classes = self.get_object_classes()?;
         let (agg_fn, value_expr) = aggregate_sql(&filter.column, &filter.aggregation)?;
 
-        let regex = if filter.grouping_regex.trim().is_empty() {
-            DEFAULT_GROUPING_REGEX
-        } else {
-            filter.grouping_regex.as_str()
-        };
-        let regex = regex.replace('\'', "''");
+        let grouping = self.grouping_sql(&filter.grouping)?;
+        let (group_col, regex) = (grouping.column, grouping.regex.as_str());
 
         let mut object_conditions = vec![
             format!("z_stack = {}", filter.plane.z_stack),
@@ -1483,7 +1560,7 @@ impl ResultsGenerator {
         );
         let sql = format!(
             "SELECT\n\
-                regexp_extract(i.image_name, '{regex}', 4) AS idx,\n\
+                regexp_extract(i.{group_col}, '{regex}', 4) AS idx,\n\
                 i.image_rel_path,\n\
                 i.image_name,\n\
                 {value},\n\
@@ -1496,7 +1573,7 @@ impl ResultsGenerator {
                  WHERE {object_where}\n\
                  GROUP BY image_rel_path\n\
              ) agg ON agg.image_rel_path = i.image_rel_path\n\
-             WHERE regexp_extract(i.image_name, '{regex}', 1) = '{group_name}'\n\
+             WHERE regexp_extract(i.{group_col}, '{regex}', 1) = '{group_name}'\n\
              ORDER BY idx",
             group_name = filter.group_name.replace('\'', "''"),
         );
@@ -1556,12 +1633,8 @@ impl ResultsGenerator {
         let classes = self.get_object_classes()?;
         let (agg_fn, value_expr) = aggregate_sql(&filter.column, &filter.aggregation)?;
 
-        let regex = if filter.grouping_regex.trim().is_empty() {
-            DEFAULT_GROUPING_REGEX
-        } else {
-            filter.grouping_regex.as_str()
-        };
-        let regex = regex.replace('\'', "''");
+        let grouping = self.grouping_sql(&filter.grouping)?;
+        let (group_col, regex) = (grouping.column, grouping.regex.as_str());
 
         let mut object_conditions = vec![
             format!("z_stack = {}", filter.plane.z_stack),
@@ -1585,8 +1658,8 @@ impl ResultsGenerator {
         );
         let sql = format!(
             "SELECT\n\
-                regexp_extract(i.image_name, '{regex}', 1) AS group_prefix,\n\
-                regexp_extract(i.image_name, '{regex}', 4) AS idx,\n\
+                regexp_extract(i.{group_col}, '{regex}', 1) AS group_prefix,\n\
+                regexp_extract(i.{group_col}, '{regex}', 4) AS idx,\n\
                 i.image_rel_path,\n\
                 i.image_name,\n\
                 {value},\n\
@@ -1696,12 +1769,8 @@ impl ResultsGenerator {
         let value_exprs_sql = value_exprs.join(",\n                ");
         let agg_value_cols = agg_value_cols.join(", ");
 
-        let regex = if filter.grouping_regex.trim().is_empty() {
-            DEFAULT_GROUPING_REGEX
-        } else {
-            filter.grouping_regex.as_str()
-        };
-        let regex = regex.replace('\'', "''");
+        let grouping = self.grouping_sql(&filter.grouping)?;
+        let (group_col, regex) = (grouping.column, grouping.regex.as_str());
 
         let mut results = Vec::with_capacity(filter.object_class.len() * n);
         for object_class in &filter.object_class {
@@ -1721,8 +1790,8 @@ impl ResultsGenerator {
             // `get_group_by_plate_multi`.
             let sql = format!(
                 "SELECT\n\
-                    regexp_extract(i.image_name, '{regex}', 1) AS group_prefix,\n\
-                    regexp_extract(i.image_name, '{regex}', 4) AS idx,\n\
+                    regexp_extract(i.{group_col}, '{regex}', 1) AS group_prefix,\n\
+                    regexp_extract(i.{group_col}, '{regex}', 4) AS idx,\n\
                     i.image_rel_path,\n\
                     i.image_name,\n\
                     {agg_value_cols},\n\
@@ -2987,33 +3056,45 @@ fn fill_zero_sql(
     }
 }
 
-/// Every standard plate size, smallest first — `best_matching_dimensions`
-/// relies on this order to find the smallest one that fits.
-const ALL_PLATE_DIMENSIONS: [PlateDimensions; 7] = [
-    PlateDimensions::PLate2x3,
-    PlateDimensions::Plate3x4,
-    PlateDimensions::Plate4x6,
-    PlateDimensions::Plate6x8,
-    PlateDimensions::Plate8x12,
-    PlateDimensions::Plate16x24,
-    PlateDimensions::Plate32x48,
+/// The plate sizes `PlateSize::Auto` chooses from (the standard formats),
+/// smallest first - `best_matching_dimensions` relies on this order to find
+/// the smallest one that fits.
+const AUTO_PLATE_SIZES: [PlateSize; 8] = [
+    PlateSize::Plate2x3,
+    PlateSize::Plate3x4,
+    PlateSize::Plate4x6,
+    PlateSize::Plate6x8,
+    PlateSize::Plate8x12,
+    PlateSize::Plate16x24,
+    PlateSize::Plate32x48,
+    PlateSize::Plate48x72,
 ];
 
 /// The smallest standard plate size whose row/column count covers every well
-/// this query actually found (`max_row`/`max_col`, both 0-based). Falls back
-/// to the largest known size if even that doesn't fit (a plate bigger than
-/// any standard format, or a `grouping_regex` extracting something that
-/// isn't really a well id).
-fn best_matching_dimensions(max_row: Option<usize>, max_col: Option<usize>) -> PlateDimensions {
+/// this query actually found (`max_row`/`max_col`, both 0-based), as
+/// `(rows, cols)`. Falls back to the largest known size if even that doesn't
+/// fit (a plate bigger than any standard format, or a grouping extracting
+/// something that isn't really a well id).
+fn best_matching_dimensions(max_row: Option<usize>, max_col: Option<usize>) -> (usize, usize) {
     let needed_rows = max_row.map_or(1, |row| row + 1);
     let needed_cols = max_col.map_or(1, |col| col + 1);
-    ALL_PLATE_DIMENSIONS
+    AUTO_PLATE_SIZES
         .into_iter()
-        .find(|dimensions| {
-            let (rows, cols) = dimensions.dimensions();
-            rows >= needed_rows && cols >= needed_cols
-        })
-        .unwrap_or(PlateDimensions::Plate32x48)
+        .filter_map(PlateSize::dimensions)
+        .find(|(rows, cols)| *rows >= needed_rows && *cols >= needed_cols)
+        .unwrap_or((48, 72))
+}
+
+/// The `(rows, cols)` grid for a well whose highest image number is
+/// `max_idx`, for `WellSize` Auto: the smallest square-ish grid (as many or
+/// one more columns than rows) holding that many images.
+fn auto_well_size(max_idx: u32) -> WellSize {
+    let n = max_idx.max(1) as usize;
+    let cols = (n as f64).sqrt().ceil() as usize;
+    WellSize {
+        rows: n.div_ceil(cols),
+        cols,
+    }
 }
 
 /// Parses a well's row letters ("A", "B", ..., "Z", "AA", "AB", ...) into a
@@ -3075,7 +3156,7 @@ fn plate_groups_to_result(
     groups: Vec<(String, String, String, Option<f64>, ImageFlags)>,
     column: &Column,
     classes: &[Class],
-    matrix_dimension: Option<PlateDimensions>,
+    plate_size: PlateSize,
     color_schema: &ColorSchema,
     color_scale: &ColorScale,
     view: &View,
@@ -3176,9 +3257,9 @@ fn plate_groups_to_result(
             // objects in a handful of wells. Not given: the smallest
             // standard plate size that still fits every well this query
             // actually found.
-            let dimensions =
-                matrix_dimension.unwrap_or_else(|| best_matching_dimensions(max_row, max_col));
-            let (rows, cols) = dimensions.dimensions();
+            let (rows, cols) = plate_size
+                .dimensions()
+                .unwrap_or_else(|| best_matching_dimensions(max_row, max_col));
 
             let (range_min, range_max) = match color_scale {
                 ColorScale::Manual(min, max) => (*min as f64, *max as f64),
@@ -3340,7 +3421,24 @@ fn well_fields_to_result(
             // which field idx sits at that (row-major) grid position,
             // letting a well be laid out in a non-trivial (e.g. snake)
             // acquisition pattern.
-            let well_size = well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
+            // An empty image number (a pattern for one image per well) is
+            // image 1.
+            let field_idx = |idx: &str| {
+                if idx.is_empty() {
+                    Some(1)
+                } else {
+                    idx.parse::<u32>().ok()
+                }
+            };
+            let well_size = well_size.unwrap_or_else(|| {
+                auto_well_size(
+                    fields
+                        .iter()
+                        .filter_map(|(idx, ..)| field_idx(idx))
+                        .max()
+                        .unwrap_or(1),
+                )
+            });
             let (rows, cols) = (well_size.rows, well_size.cols);
 
             // Every field gets a grid position regardless of whether it has
@@ -3351,7 +3449,7 @@ fn well_fields_to_result(
             let mut values: HashMap<usize, (Option<f64>, String, String, ImageFlags)> =
                 HashMap::new();
             for (idx_str, image_rel_path, image_name, value, disabled) in &fields {
-                let Ok(idx) = idx_str.parse::<u32>() else {
+                let Some(idx) = field_idx(idx_str) else {
                     continue;
                 };
                 let position = match well_order {
@@ -3669,6 +3767,7 @@ mod tests {
             database,
             classes_cache: RefCell::new(None),
             coloc_classes_cache: RefCell::new(None),
+            auto_grouping_cache: RefCell::new(None),
         }
     }
 
@@ -4391,13 +4490,13 @@ mod tests {
             .get_group_by_plate(
                 &PlateFilter {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Unset,
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::List,
             )
@@ -4438,13 +4537,13 @@ mod tests {
             .get_group_by_plate(
                 &PlateFilter {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Unset,
                     column: Column::Count,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::List,
             )
@@ -4485,13 +4584,13 @@ mod tests {
             .get_group_by_plate(
                 &PlateFilter {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Sum,
                     object_class: ObjectClass::Unset,
                     column: Column::Count,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::List,
             )
@@ -4538,13 +4637,13 @@ mod tests {
             .get_group_by_plate(
                 &PlateFilter {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Unset,
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::List,
             )
@@ -4567,13 +4666,13 @@ mod tests {
             .get_group_by_plate(
                 &PlateFilter {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Unset,
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::Heatmap,
             )
@@ -4612,13 +4711,13 @@ mod tests {
             .get_group_by_plate(
                 &PlateFilter {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Unset,
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::List,
             )
@@ -4661,13 +4760,13 @@ mod tests {
             .get_group_by_plate(
                 &PlateFilter {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Unset,
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::List,
             )
@@ -4691,13 +4790,13 @@ mod tests {
             .get_group_by_plate(
                 &PlateFilter {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Unset,
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::Heatmap,
             )
@@ -4970,13 +5069,13 @@ mod tests {
     fn plate_filter(column: Column) -> PlateFilter {
         PlateFilter {
             plane: plane(),
-            grouping_regex: String::new(),
+            grouping: Grouping::Auto,
             aggregation: Aggregation::Avg,
             object_class: ObjectClass::Unset,
             column,
             color_schema: ColorSchema::default(),
             color_scale: ColorScale::default(),
-            matrix_dimension: None,
+            plate_size: PlateSize::Auto,
         }
     }
 
@@ -4984,7 +5083,7 @@ mod tests {
         WellFilter {
             plane: plane(),
             group_name: group_name.to_string(),
-            grouping_regex: String::new(),
+            grouping: Grouping::Auto,
             aggregation: Aggregation::Avg,
             object_class: ObjectClass::Unset,
             column,
@@ -4998,7 +5097,7 @@ mod tests {
     fn wells_batch_filter(column: Column) -> WellsBatchFilter {
         WellsBatchFilter {
             plane: plane(),
-            grouping_regex: String::new(),
+            grouping: Grouping::Auto,
             aggregation: Aggregation::Avg,
             object_class: ObjectClass::Unset,
             column,
@@ -5070,13 +5169,16 @@ mod tests {
     #[test]
     fn well_list_and_well_heatmap_report_the_same_values_at_matching_positions() {
         // Field "01" -> position 0 -> heatmap (row 0, col 0); field "02" ->
-        // position 1 -> heatmap (row 0, col 1) (default well_size 4x4, no
+        // position 1 -> heatmap (row 0, col 1) (a 4x4 well, no
         // well_order: idx-1 read row-major).
         let generator = open(&[
             ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
             ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
         ]);
-        let filter = well_filter("A1", Column::AreaSizePx);
+        let filter = WellFilter {
+            well_size: Some(WellSize { rows: 4, cols: 4 }),
+            ..well_filter("A1", Column::AreaSizePx)
+        };
 
         let list = generator.get_group_by_well(&filter, &View::List).unwrap();
         let heatmap = generator
@@ -5090,6 +5192,200 @@ mod tests {
         assert_eq!(float_cell(&heatmap.rows[0][0]), 10.0);
         assert_eq!(float_cell(&heatmap.rows[0][1]), 20.0);
         assert!(matches!(heatmap.rows[1][0].value, CellValue::Empty));
+    }
+
+    // -- grouping / plate size / well layout -------------------------------
+
+    /// The heatmap value at each grid cell (`None` = empty or no field).
+    fn heatmap_values(result: &DatabaseResult) -> Vec<Vec<Option<f64>>> {
+        result
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| match cell.value {
+                        CellValue::Float(v) => Some(v as f64),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn auto_grouping_detects_a_prefixed_well_pattern_with_field_letters() {
+        let generator = open(&[
+            ObjectSpec::new("Exp1_B03_s1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("Exp1_B03_s2.tif", "ClassA", 1, 20),
+            ObjectSpec::new("Exp1_C11_s1.tif", "ClassA", 1, 30),
+        ]);
+        assert_eq!(
+            generator.grouping_regex(&Grouping::Auto).unwrap(),
+            AUTO_GROUPING_PATTERNS[1]
+        );
+
+        let plate = generator
+            .get_group_by_plate(
+                &PlateFilter {
+                    plate_size: PlateSize::Plate8x12,
+                    ..plate_filter(Column::AreaSizePx)
+                },
+                &View::Heatmap,
+            )
+            .unwrap();
+        let values = heatmap_values(&plate);
+        assert_eq!(values.len(), 8);
+        assert_eq!(values[1][2], Some(15.0), "B03: average of both fields");
+        assert_eq!(values[2][10], Some(30.0), "C11");
+
+        let well = generator
+            .get_group_by_well(&well_filter("B03", Column::AreaSizePx), &View::Heatmap)
+            .unwrap();
+        assert_eq!(heatmap_values(&well), vec![vec![Some(10.0), Some(20.0)]]);
+    }
+
+    #[test]
+    fn auto_grouping_falls_back_to_the_first_pattern_when_nothing_matches() {
+        let generator = open(&[ObjectSpec::new("image.tif", "ClassA", 1, 10)]);
+        assert_eq!(
+            generator.grouping_regex(&Grouping::Auto).unwrap(),
+            AUTO_GROUPING_PATTERNS[0]
+        );
+        // An empty custom regex means Auto too.
+        assert_eq!(
+            generator
+                .grouping_regex(&Grouping::Regex(" ".into()))
+                .unwrap(),
+            AUTO_GROUPING_PATTERNS[0]
+        );
+    }
+
+    #[test]
+    fn one_image_per_well_is_image_one_of_its_well() {
+        let generator = open(&[
+            ObjectSpec::new("A01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("B02.tif", "ClassA", 1, 20),
+        ]);
+        assert_eq!(
+            generator.grouping_regex(&Grouping::Auto).unwrap(),
+            AUTO_GROUPING_PATTERNS[2]
+        );
+        let well = generator
+            .get_group_by_well(&well_filter("B02", Column::AreaSizePx), &View::Heatmap)
+            .unwrap();
+        assert_eq!(heatmap_values(&well), vec![vec![Some(20.0)]]);
+    }
+
+    #[test]
+    fn folder_grouping_takes_the_well_from_the_folder_with_either_separator() {
+        let generator = open(&[
+            ObjectSpec::new("run/B03/img_1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("run/B03/img_2.ome.tif", "ClassA", 1, 20),
+            ObjectSpec::new("run\\C04\\field 1.tif", "ClassA", 1, 30),
+            ObjectSpec::new("control/x_1.tif", "ClassA", 1, 40),
+        ]);
+        let filter = PlateFilter {
+            grouping: Grouping::Folder,
+            ..plate_filter(Column::AreaSizePx)
+        };
+        let list = generator.get_group_by_plate(&filter, &View::List).unwrap();
+        let mut wells = list.row_names.clone();
+        wells.sort();
+        assert_eq!(wells, vec!["B03", "C04", "control"]);
+
+        let heatmap = generator
+            .get_group_by_plate(&filter, &View::Heatmap)
+            .unwrap();
+        let values = heatmap_values(&heatmap);
+        assert_eq!(values[1][2], Some(15.0), "B03 on the plate");
+        assert_eq!(values[2][3], Some(30.0), "C04 on the plate");
+
+        let well = generator
+            .get_group_by_well(
+                &WellFilter {
+                    grouping: Grouping::Folder,
+                    ..well_filter("B03", Column::AreaSizePx)
+                },
+                &View::Heatmap,
+            )
+            .unwrap();
+        assert_eq!(heatmap_values(&well), vec![vec![Some(10.0), Some(20.0)]]);
+    }
+
+    #[test]
+    fn a_custom_regex_is_used_as_given() {
+        let generator = open(&[ObjectSpec::new("p1-w-A-2-f-3.tif", "ClassA", 1, 10)]);
+        let regex = r"^p1-w-(([A-Z])-([0-9]+))-f-([0-9]+)\.tif$";
+        let filter = PlateFilter {
+            grouping: Grouping::Regex(regex.into()),
+            ..plate_filter(Column::AreaSizePx)
+        };
+        let list = generator.get_group_by_plate(&filter, &View::List).unwrap();
+        assert_eq!(list.row_names, vec!["A-2"]);
+        assert_eq!(generator.grouping_regex(&filter.grouping).unwrap(), regex);
+    }
+
+    #[test]
+    fn auto_well_layout_fits_the_highest_image_number_and_keeps_gaps() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_05.tif", "ClassA", 1, 50),
+        ]);
+        let well = generator
+            .get_group_by_well(&well_filter("A1", Column::AreaSizePx), &View::Heatmap)
+            .unwrap();
+        // Highest image 5 -> a 2 x 3 grid; 2 to 4 are missing.
+        assert_eq!(
+            heatmap_values(&well),
+            vec![vec![Some(10.0), None, None], vec![None, Some(50.0), None],]
+        );
+    }
+
+    #[test]
+    fn a_fixed_well_layout_places_the_images_in_the_given_order() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("A1_03.tif", "ClassA", 1, 30),
+            ObjectSpec::new("A1_04.tif", "ClassA", 1, 40),
+        ]);
+        // Snake order: 1 2 / 4 3.
+        let well = generator
+            .get_group_by_well(
+                &WellFilter {
+                    well_size: Some(WellSize { rows: 2, cols: 2 }),
+                    well_order: Some(vec![1, 2, 4, 3]),
+                    ..well_filter("A1", Column::AreaSizePx)
+                },
+                &View::Heatmap,
+            )
+            .unwrap();
+        assert_eq!(
+            heatmap_values(&well),
+            vec![vec![Some(10.0), Some(20.0)], vec![Some(40.0), Some(30.0)]]
+        );
+    }
+
+    #[test]
+    fn a_fixed_plate_size_is_used_even_when_smaller_wells_would_fit() {
+        let generator = open(&[ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)]);
+        for (size, rows, cols) in [
+            (PlateSize::Auto, 2, 3),
+            (PlateSize::Plate1x1, 1, 1),
+            (PlateSize::Plate48x72, 48, 72),
+        ] {
+            let plate = generator
+                .get_group_by_plate(
+                    &PlateFilter {
+                        plate_size: size,
+                        ..plate_filter(Column::AreaSizePx)
+                    },
+                    &View::Heatmap,
+                )
+                .unwrap();
+            assert_eq!(plate.rows.len(), rows, "{size:?}");
+            assert_eq!(plate.rows[0].len(), cols, "{size:?}");
+        }
     }
 
     #[test]
@@ -5147,10 +5443,16 @@ mod tests {
         // field 02's grid position - not skip it as if no field were
         // there at all (that's reserved for a position no field occupies).
         let heatmap = generator
-            .get_group_by_well(&well_filter("A1", Column::AreaSizePx), &View::Heatmap)
+            .get_group_by_well(
+                &WellFilter {
+                    well_size: Some(WellSize { rows: 4, cols: 4 }),
+                    ..well_filter("A1", Column::AreaSizePx)
+                },
+                &View::Heatmap,
+            )
             .unwrap();
-        // Default 4x4 well, no `well_order`: idx 1 -> position 0 (row 0,
-        // col 0), idx 2 -> position 1 (row 0, col 1).
+        // A 4x4 well, no `well_order`: idx 1 -> position 0 (row 0, col 0),
+        // idx 2 -> position 1 (row 0, col 1).
         assert!(
             matches!(heatmap.rows[0][1].value, CellValue::Empty),
             "field 02 has no objects, so no number to show"
@@ -5259,13 +5561,13 @@ mod tests {
         ];
         let multi_filter = PlateFilterMulti {
             plane: plane(),
-            grouping_regex: String::new(),
+            grouping: Grouping::Auto,
             aggregation: aggregations.clone(),
             object_class: vec![ObjectClass::Unset],
             column: vec![Column::AreaSizePx],
             color_schema: ColorSchema::default(),
             color_scale: ColorScale::default(),
-            matrix_dimension: None,
+            plate_size: PlateSize::Auto,
         };
         let multi = generator
             .get_group_by_plate_multi(&multi_filter, &View::List)
@@ -5331,13 +5633,13 @@ mod tests {
         ];
         let multi_filter = PlateFilterMulti {
             plane: plane(),
-            grouping_regex: String::new(),
+            grouping: Grouping::Auto,
             aggregation: aggregations.clone(),
             object_class: vec![ObjectClass::Unset],
             column: vec![Column::Count, Column::AreaSizePx],
             color_schema: ColorSchema::default(),
             color_scale: ColorScale::default(),
-            matrix_dimension: None,
+            plate_size: PlateSize::Auto,
         };
         let multi = generator
             .get_group_by_plate_multi(&multi_filter, &View::List)
@@ -5401,7 +5703,7 @@ mod tests {
         let aggregations = vec![Aggregation::Avg, Aggregation::Sum];
         let multi_filter = WellsBatchFilterMulti {
             plane: plane(),
-            grouping_regex: String::new(),
+            grouping: Grouping::Auto,
             aggregation: aggregations.clone(),
             object_class: vec![ObjectClass::Unset],
             column: vec![Column::AreaSizePx],
@@ -5543,25 +5845,26 @@ mod tests {
         // Needs 8 rows (max_row index 7) x 10 cols (max_col index 9) - the
         // smallest standard size with at least 8 rows and 10 cols is 8x12
         // (6x8 falls short on rows: 6 < 8).
-        assert_eq!(
-            best_matching_dimensions(Some(7), Some(9)),
-            PlateDimensions::Plate8x12
-        );
-        assert_eq!(
-            best_matching_dimensions(None, None),
-            PlateDimensions::PLate2x3
-        );
+        assert_eq!(best_matching_dimensions(Some(7), Some(9)), (8, 12));
+        assert_eq!(best_matching_dimensions(None, None), (2, 3));
+        // Bigger than every standard size: the largest.
+        assert_eq!(best_matching_dimensions(Some(60), Some(80)), (48, 72));
     }
 
     #[test]
-    fn plate_dimensions_reports_correct_row_col_counts_for_every_size() {
-        assert_eq!(PlateDimensions::PLate2x3.dimensions(), (2, 3));
-        assert_eq!(PlateDimensions::Plate3x4.dimensions(), (3, 4));
-        assert_eq!(PlateDimensions::Plate4x6.dimensions(), (4, 6));
-        assert_eq!(PlateDimensions::Plate6x8.dimensions(), (6, 8));
-        assert_eq!(PlateDimensions::Plate8x12.dimensions(), (8, 12));
-        assert_eq!(PlateDimensions::Plate16x24.dimensions(), (16, 24));
-        assert_eq!(PlateDimensions::Plate32x48.dimensions(), (32, 48));
+    fn auto_well_size_is_the_smallest_square_ish_grid_for_the_highest_image() {
+        let size = |n| {
+            let s = auto_well_size(n);
+            (s.rows, s.cols)
+        };
+        assert_eq!(size(0), (1, 1));
+        assert_eq!(size(1), (1, 1));
+        assert_eq!(size(2), (1, 2));
+        assert_eq!(size(4), (2, 2));
+        assert_eq!(size(6), (2, 3));
+        assert_eq!(size(9), (3, 3));
+        assert_eq!(size(10), (3, 4));
+        assert_eq!(size(16), (4, 4));
     }
 
     #[test]
@@ -5828,13 +6131,13 @@ mod tests {
             .get_group_by_plate(
                 &PlateFilter {
                     plane: plane(),
-                    grouping_regex: r"^(plateX)-(well)(\d+)\.".to_string(),
+                    grouping: Grouping::Regex(r"^(plateX)-(well)(\d+)\.".to_string()),
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Unset,
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::List,
             )
@@ -6053,13 +6356,13 @@ mod tests {
             .get_group_by_plate_multi(
                 &PlateFilterMulti {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: vec![Aggregation::Avg, Aggregation::Sum],
                     object_class: vec![ObjectClass::Unset],
                     column: vec![Column::Count, Column::AreaSizePx],
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::List,
             )
@@ -6117,7 +6420,7 @@ mod tests {
             .get_wells_for_plate_multi(
                 &WellsBatchFilterMulti {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: vec![Aggregation::Avg],
                     object_class: vec![ObjectClass::Unset],
                     column: vec![Column::Count, Column::AreaSizePx],
@@ -6441,13 +6744,13 @@ mod tests {
             .get_group_by_plate_multi(
                 &PlateFilterMulti {
                     plane: plane(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: vec![Aggregation::Avg],
                     object_class: vec![ObjectClass::Unset],
                     column: vec![Column::AreaSizePx],
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
-                    matrix_dimension: None,
+                    plate_size: PlateSize::Auto,
                 },
                 &View::Heatmap,
             )

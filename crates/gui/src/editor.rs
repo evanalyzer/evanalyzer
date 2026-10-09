@@ -204,6 +204,8 @@ impl Editor {
             viewport_controller.clone(),
         ));
 
+        link_plate_settings(&project_settings_controller, &results_state_controller);
+
         let connection_controller = Arc::new(connection_controller::ConnectionController::new(
             ui.clone(),
             app_state.clone(),
@@ -268,6 +270,32 @@ impl Editor {
         let pipelines = Arc::clone(&self.pipelines_controller);
         move || pipelines.follow_server_analyses()
     }
+}
+
+/// Keeps the project settings dialog and the results window on the same
+/// plate settings (grouping, plate size, well layout): a change in either
+/// is stored in the project and shown in the other.
+pub(crate) fn link_plate_settings(
+    project_settings: &Arc<ProjectSettingsController>,
+    results: &Arc<ResultsStateController>,
+) {
+    let results_weak = Arc::downgrade(results);
+    project_settings.on_plate_settings_changed(move || {
+        let results_weak = results_weak.clone();
+        // The results window refreshes its grids on the UI thread.
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(results) = results_weak.upgrade() {
+                results.apply_project_plate_settings();
+            }
+        })
+        .ok();
+    });
+    let project_settings_weak = Arc::downgrade(project_settings);
+    results.on_plate_settings_written(move || {
+        if let Some(project_settings) = project_settings_weak.upgrade() {
+            project_settings.sync_project_settings_to_slint();
+        }
+    });
 }
 
 #[cfg(test)]

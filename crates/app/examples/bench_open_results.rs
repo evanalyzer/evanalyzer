@@ -15,6 +15,7 @@ use evanalyzer_app::results::{
     Aggregation, ColorScale, ColorSchema, Column, HistogramFilter, ListFilter, Pagination,
     PlaneFilter, PlateFilter, ResultsSource, View, WellFilter,
 };
+use evanalyzer_app::results::{Grouping, PlateSize};
 use evanalyzer_cfg::core_types::ObjectClass;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -152,13 +153,13 @@ fn open_sequence(backend: &LocalBackend, path: &PathBuf) -> (Arc<dyn ResultsSour
 fn plate_filter(column: Column) -> PlateFilter {
     PlateFilter {
         plane: plane(),
-        grouping_regex: String::new(),
+        grouping: Grouping::Auto,
         aggregation: Aggregation::Avg,
         object_class: ObjectClass::Unset,
         column,
         color_schema: ColorSchema::default(),
         color_scale: ColorScale::default(),
-        matrix_dimension: None,
+        plate_size: PlateSize::Auto,
     }
 }
 
@@ -197,7 +198,7 @@ fn main() {
                 &WellFilter {
                     plane: plane(),
                     group_name: well.clone(),
-                    grouping_regex: String::new(),
+                    grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
                     object_class: ObjectClass::Unset,
                     column: column.clone(),

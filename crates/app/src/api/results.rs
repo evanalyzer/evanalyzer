@@ -54,30 +54,26 @@ pub enum View {
     Heatmap,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PlateDimensions {
-    PLate2x3,
-    Plate3x4,
-    Plate4x6,
-    Plate6x8,
-    Plate8x12,
-    Plate16x24,
-    Plate32x48,
-}
+/// The plate format - `Auto` or a fixed size. The same type the project's
+/// plate settings store.
+pub use evanalyzer_cfg::settings::plate_settings::PlateSize;
 
-impl PlateDimensions {
-    /// Returns the matrix dimensions as a `(rows, columns)` tuple.
-    pub const fn dimensions(&self) -> (usize, usize) {
-        match self {
-            Self::PLate2x3 => (2, 3),
-            Self::Plate3x4 => (3, 4),
-            Self::Plate4x6 => (4, 6),
-            Self::Plate6x8 => (6, 8),
-            Self::Plate8x12 => (8, 12),
-            Self::Plate16x24 => (16, 24),
-            Self::Plate32x48 => (32, 48),
-        }
-    }
+/// How images are grouped into wells. Every grouping yields, per image: the
+/// well (`B03`), its plate row (`B`) and column (`03`), and the image's
+/// number inside the well (`01`) - a regex's capture groups 1 to 4.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Grouping {
+    /// The well-name pattern is detected from the image names: the first of
+    /// a list of common patterns (`A01_01.tif`, `Exp_B3_s2.tif`, ...) that
+    /// matches the most images.
+    #[default]
+    Auto,
+    /// A regex on the image name, with the capture groups described above.
+    Regex(String),
+    /// The image's folder is the well: placed on the plate when it is named
+    /// like a well (`B03/`), the image number is the last number in the file
+    /// name.
+    Folder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,23 +133,18 @@ pub struct Pagination {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PlateFilter {
     pub plane: PlaneFilter,
-    // Grouping regex, requires follwoing regex output (e.g. A1_01.vsi)
-    // - Group1: the match of the group (e.g. A1)
-    // - Group2: the match of the plate row (e.g. A)
-    // - Group3: the match of the plate col (e.g. 1)
-    // - Group4: the match of the image index (e.g. 01)
-    pub grouping_regex: String,
+    pub grouping: Grouping,
     pub aggregation: Aggregation,
     pub object_class: ObjectClass,
     pub column: Column,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
-    pub matrix_dimension: Option<PlateDimensions>,
+    pub plate_size: PlateSize,
 }
 
 // No `Pagination` field here (unlike `ListFilter`/`GroupedByImageFilter`):
 // a plate-grouped result's row count is bounded by well count (at most
-// `PlateDimensions::Plate32x48` = 1536), not by object count, so it stays
+// `PlateSize::Plate48x72` = 3456), not by object count, so it stays
 // tiny (well under a MB) even multiplied out over every `column` x
 // `aggregation` x `object_class` combination requested at once — the RAM
 // risk pagination guards against elsewhere (millions of raw objects, see
@@ -162,18 +153,13 @@ pub struct PlateFilter {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PlateFilterMulti {
     pub plane: PlaneFilter,
-    // Grouping regex, requires follwoing regex output (e.g. A1_01.vsi)
-    // - Group1: the match of the group (e.g. A1)
-    // - Group2: the match of the plate row (e.g. A)
-    // - Group3: the match of the plate col (e.g. 1)
-    // - Group4: the match of the image index (e.g. 01)
-    pub grouping_regex: String,
+    pub grouping: Grouping,
     pub aggregation: Vec<Aggregation>,
     pub object_class: Vec<ObjectClass>,
     pub column: Vec<Column>,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
-    pub matrix_dimension: Option<PlateDimensions>,
+    pub plate_size: PlateSize,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -181,22 +167,15 @@ pub struct WellFilter {
     pub plane: PlaneFilter,
     // Name of the group to display
     pub group_name: String,
-    // Grouping regex, requires follwoing regex output (e.g. A1_01.vsi)
-    // - Group1: the match of the group (e.g. A1)
-    // - Group2: the match of the plate row (e.g. A)
-    // - Group3: the match of the plate col (e.g. 1)
-    // - Group4: the match of the image index (e.g. 01)
-    pub grouping_regex: String,
+    pub grouping: Grouping,
     pub aggregation: Aggregation,
     pub object_class: ObjectClass,
     pub column: Column,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
-    /// Grid dimensions to lay the well's fields out in. `None` assumes a
-    /// 4x4 well (the common case for a plate imager's per-well field
-    /// count) rather than fitting to whatever fields were actually found,
-    /// so a well missing a field still shows a gap at that field's real
-    /// position instead of the grid silently shrinking.
+    /// Grid dimensions to lay the well's fields out in. `None` (Auto) fits
+    /// the smallest square-ish grid that holds the highest image number
+    /// found in the well, so a missing image still leaves its gap.
     pub well_size: Option<WellSize>,
     /// Maps grid position -> field index for non-trivial (e.g. snake)
     /// acquisition patterns: `well_order[position]` is the field `idx`
@@ -211,7 +190,7 @@ pub struct WellFilter {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WellsBatchFilter {
     pub plane: PlaneFilter,
-    pub grouping_regex: String,
+    pub grouping: Grouping,
     pub aggregation: Aggregation,
     pub object_class: ObjectClass,
     pub column: Column,
@@ -226,7 +205,7 @@ pub struct WellsBatchFilter {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WellsBatchFilterMulti {
     pub plane: PlaneFilter,
-    pub grouping_regex: String,
+    pub grouping: Grouping,
     pub aggregation: Vec<Aggregation>,
     pub object_class: Vec<ObjectClass>,
     pub column: Vec<Column>,
@@ -471,14 +450,14 @@ pub struct ResultExport {
     pub columns: Vec<Column>,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
-    pub grouping_regex: String,
+    pub grouping: Grouping,
     /// `[]` means every object class registered in the database (see
     /// `export_plate_and_well`/`export_heatmap`).
     pub object_classes: Vec<ObjectClass>,
 
     // Matrix view options
     pub aggregations: Vec<Aggregation>,
-    pub plate_dimension: Option<PlateDimensions>,
+    pub plate_size: PlateSize,
     pub well_size: Option<WellSize>,
     pub well_order: Option<Vec<u32>>,
     pub square_size: Option<usize>,

@@ -34,6 +34,7 @@ pub mod results {
     pub use crate::api::DatabaseResult;
     pub use crate::api::ExportFormat;
     pub use crate::api::GroupedByImageFilter;
+    pub use crate::api::Grouping;
     pub use crate::api::HistogramFilter;
     pub use crate::api::HistogramResult;
     pub use crate::api::ImageEntry;
@@ -41,9 +42,9 @@ pub mod results {
     pub use crate::api::ListFilter;
     pub use crate::api::Pagination;
     pub use crate::api::PlaneFilter;
-    pub use crate::api::PlateDimensions;
     pub use crate::api::PlateFilter;
     pub use crate::api::PlateFilterMulti;
+    pub use crate::api::PlateSize;
     pub use crate::api::ResultExport;
     pub use crate::api::ResultsSource;
     pub use crate::api::RunStatus;
