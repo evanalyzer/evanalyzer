@@ -2534,6 +2534,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "SCRIPT"
+            }
+          },
+          "$ref": "#/$defs/ScriptSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "STARDIST"
             }
           },
@@ -2893,6 +2906,10 @@
         "name",
         "source"
       ]
+    },
+    "ScriptSettings": {
+      "description": "Runs a user-written Rhai script as a pipeline step.",
+      "type": "object"
     },
     "SegmentationClass": {
       "type": "integer",

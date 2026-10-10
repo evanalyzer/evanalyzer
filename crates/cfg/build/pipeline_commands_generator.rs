@@ -326,6 +326,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                             range_parts.join(", ")
                         ));
                     }
+                    out.push_str(&serde_field_rename_attr(&field.meta, "        "));
                     let field_type = map_to_settings_type(&field.ty, enums, commands);
                     out.push_str(&format!("        {}: {},\n", field.name, field_type));
                 }
@@ -457,6 +458,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                         out.push_str(&format!("    #[serde(default = \"{}\")]\n", fn_name));
                     }
 
+                    out.push_str(&serde_field_rename_attr(meta, "    "));
                     let field_type = map_to_settings_type(&field.ty, enums, commands);
                     out.push_str(&format!("    pub {}: {},\n", field.name, field_type));
                 }
@@ -685,7 +687,9 @@ struct FieldMetadata {
     default: Option<f64>,
     default_expr: Option<String>,
     step: Option<f32>,
-    custom_name: Option<String>,
+    /// Stable serialized name from #[cmdsmeta(key = "...")] (snake_case), so
+    /// the Rust field can be renamed without breaking saved projects/scripts.
+    key: Option<String>,
     unit: Option<String>,
     regex: Option<String>,
     display_name: Option<String>,
@@ -740,7 +744,7 @@ impl Default for FieldMetadata {
             default: None,
             default_expr: None,
             step: None,
-            custom_name: None,
+            key: None,
             unit: None,
             regex: None,
             display_name: None,
@@ -766,6 +770,10 @@ struct StructMetadata {
     /// StarDist/Cellpose live in `segment` for grouping but flow straight to
     /// `measure`, while U-Net (also `segment`) flows to `object`.
     next: Option<Vec<String>>,
+    /// Stable serialized/script name from #[cmdsmeta(key = "...")] (snake_case).
+    /// `None` keeps deriving it from the struct name; set it before renaming a
+    /// struct so saved projects and scripts keep working.
+    key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1021,6 +1029,9 @@ fn parse_struct_meta(attrs: &[syn::Attribute]) -> StructMetadata {
                 } else if m.path.is_ident("display_name") {
                     let value: syn::LitStr = m.value()?.parse()?;
                     meta.display_name = Some(value.value());
+                } else if m.path.is_ident("key") {
+                    let value: syn::LitStr = m.value()?.parse()?;
+                    meta.key = Some(validated_key(&value.value()));
                 } else if m.path.is_ident("next") {
                     let value: syn::LitStr = m.value()?.parse()?;
                     meta.next = Some(
@@ -1253,10 +1264,9 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                     } else {
                         stream.parse::<syn::LitInt>()?.base10_parse::<f32>()?
                     });
-                } else if meta.path.is_ident("rename") {
+                } else if meta.path.is_ident("key") {
                     let value: syn::LitStr = meta.value()?.parse()?;
-                    let raw_name = value.value();
-                    metadata.custom_name = Some(to_camel_case(&raw_name));
+                    metadata.key = Some(validated_key(&value.value()));
                 } else if meta.path.is_ident("unit") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     metadata.unit = Some(value.value());
@@ -1426,6 +1436,58 @@ fn serde_variant_alias_attr(variant_name: &str) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("    #[serde({attrs})]\n")
+}
+
+/// Validates a `#[cmdsmeta(key = "...")]` value: non-empty snake_case
+/// (`[a-z0-9_]`, starting with a letter). Panics (= build error) otherwise.
+fn validated_key(key: &str) -> String {
+    let valid = key.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if !valid {
+        panic!("cmdsmeta: key `{key}` must be snake_case, e.g. `gaussian_blur`");
+    }
+    key.to_string()
+}
+
+/// Stable snake_case name of a command - its serialized `type` tag (upper-cased)
+/// and its name in scripts: the explicit `key`, else derived from the struct name.
+fn command_key(cmd: &CommandInfo) -> String {
+    match &cmd.struct_meta.key {
+        Some(key) => key.clone(),
+        None => pascal_to_snake_case(&cmd.struct_name),
+    }
+}
+
+/// [`command_key`] in PascalCase, the form [`serde_variant_alias_attr`] expects.
+fn command_pascal_name(cmd: &CommandInfo) -> String {
+    match &cmd.struct_meta.key {
+        Some(key) => to_pascal_case(key),
+        None => cmd.struct_name.clone(),
+    }
+}
+
+/// Panics (= build error) if two commands would share a serialized tag.
+fn check_unique_command_keys(cmds: &[&CommandInfo]) {
+    let mut seen: HashMap<String, &str> = HashMap::new();
+    for cmd in cmds {
+        let tag = command_key(cmd).to_ascii_uppercase();
+        if let Some(other) = seen.insert(tag.clone(), &cmd.struct_name) {
+            panic!(
+                "cmdsmeta: `{}` and `{other}` both serialize as `{tag}` - give one an explicit `key`",
+                cmd.struct_name
+            );
+        }
+    }
+}
+
+/// `#[serde(rename = "...")]` for a field with an explicit `key`, else `""`.
+fn serde_field_rename_attr(meta: &FieldMetadata, indent: &str) -> String {
+    match &meta.key {
+        Some(key) => format!("{indent}#[serde(rename = \"{}\")]\n", to_camel_case(key)),
+        None => String::new(),
+    }
 }
 
 fn is_user_enum(ty: &str, all_enums: &[EnumInfo]) -> bool {
@@ -2743,9 +2805,16 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]\n");
     out.push_str("#[serde(tag = \"type\", rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
     out.push_str("pub enum PipelineCommand {\n");
+    check_unique_command_keys(&algo_commands);
     for cmd in &algo_commands {
         let settings_name = format!("{}Settings", cmd.struct_name);
-        out.push_str(&serde_variant_alias_attr(&cmd.struct_name));
+        if cmd.struct_meta.key.is_some() {
+            out.push_str(&format!(
+                "    #[serde(rename = \"{}\")]\n",
+                command_key(cmd).to_ascii_uppercase()
+            ));
+        }
+        out.push_str(&serde_variant_alias_attr(&command_pascal_name(cmd)));
         out.push_str(&format!("    {}({}),\n", cmd.struct_name, settings_name));
     }
     out.push_str("}\n\n");

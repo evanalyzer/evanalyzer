@@ -1354,6 +1354,11 @@ pub struct SaveImageSettings {
     pub source: MathSaveImageImageSourceSettings,
 }
 
+/// Runs a user-written Rhai script as a pipeline step.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptSettings {}
+
 /// Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.
 ///
 /// This algorithm summarizes the predominant directions of the image gradient within a local

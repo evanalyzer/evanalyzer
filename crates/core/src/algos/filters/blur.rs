@@ -32,7 +32,6 @@ pub struct Blur {
         default = 3,
         min = 3,
         max = 27,
-        rename = "kernel_size",
         display_name = "Kernel size",
         summary = true,
         step = 2

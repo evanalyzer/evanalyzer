@@ -104,6 +104,8 @@ impl PipelineCommand {
             | PipelineCommand::RankFilter(_)
             | PipelineCommand::RollingBall(_)
             | PipelineCommand::SaveImage(_)
+            // TODO: report the script's declared output classes once it has settings.
+            | PipelineCommand::Script(_)
             | PipelineCommand::StructureTensor(_)
             | PipelineCommand::Watershed(_)
             | PipelineCommand::WeightedDeviation(_) => {}

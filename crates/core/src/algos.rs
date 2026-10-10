@@ -7,6 +7,7 @@ mod filters;
 mod math;
 mod morphology;
 mod object;
+mod script;
 mod segmentation;
 mod spartial_transform;
 
@@ -83,6 +84,7 @@ pub(crate) use self::object::tile_merge::{Connectivity, TileMerge, touches_tile_
 pub use self::object::transform_objects::TransformFunction;
 pub use self::object::transform_objects::TransformObjects;
 pub use self::object::voronoi::Voronoi;
+pub use self::script::script_executor::Script;
 pub use self::segmentation::connected_components::ConnectedComponents;
 pub use self::segmentation::threshold::Averaging;
 pub use self::segmentation::threshold::OtsuClasses;

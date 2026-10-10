@@ -772,6 +772,12 @@ impl From<SaveImageSettings> for SaveImage {
     }
 }
 
+impl From<ScriptSettings> for Script {
+    fn from(_s: ScriptSettings) -> Self {
+        Script {}
+    }
+}
+
 #[cfg(feature = "ai")]
 impl From<SegmentationMappingSettings> for SegmentationMapping {
     fn from(_s: SegmentationMappingSettings) -> Self {
@@ -1025,6 +1031,7 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::SaveImage(settings) => {
             Ok(Box::new(crate::algos::SaveImage::from(settings)))
         }
+        PipelineCommand::Script(settings) => Ok(Box::new(crate::algos::Script::from(settings))),
         #[cfg(feature = "ai")]
         PipelineCommand::Stardist(settings) => Ok(Box::new(crate::algos::Stardist::from(settings))),
         #[cfg(not(feature = "ai"))]

@@ -355,7 +355,7 @@ fn command_category_suggested_next_advances_and_terminates_at_object() {
 #[test]
 fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
-    let expected: [(&str, &[CommandCategory]); 38] = [
+    let expected: [(&str, &[CommandCategory]); 39] = [
         ("AI Object Classifier", &[Object]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Measure]),
@@ -392,6 +392,11 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("RankFilter", &[Segment, Preprocess]),
         ("Rolling Ball", &[Segment, Preprocess]),
         ("SaveImage", &[Segment, Preprocess]),
+        // A script can sit at any stage, so every stage may follow it.
+        (
+            "Script",
+            &[Preprocess, Segment, InstanceSegmentation, Measure, Object],
+        ),
         ("AI Stardist Segmentation", &[Measure]),
         ("StructureTensor", &[Segment, Preprocess]),
         // Pinned to `[InstanceSegmentation]` (same as the default for

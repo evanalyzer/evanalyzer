@@ -26,7 +26,8 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     // Keys allowed on struct-level #[cmdsmeta(...)]
-    let struct_allowed_keys = ["category", "display_name", "next"];
+    // `key`: stable serialized/script name, snake_case (defaults to the struct name).
+    let struct_allowed_keys = ["category", "display_name", "next", "key"];
 
     // Keys allowed on field-level #[cmdsmeta(...)]
     let field_allowed_keys = [
@@ -34,7 +35,9 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         "min",
         "max",
         "step",
-        "rename",
+        // Stable serialized/script name of the field, snake_case (defaults to
+        // the field name).
+        "key",
         "unit",
         "regex",
         "display_name",
