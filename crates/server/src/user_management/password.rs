@@ -36,6 +36,25 @@ pub fn hash_password(password: &str) -> std::io::Result<String> {
         .map_err(|e| std::io::Error::other(format!("Could not hash the password: {e}")))
 }
 
+/// A random password for a session of the server: 16 characters from
+/// letters and digits without the easily confused ones (`0 O 1 l I`) - about
+/// 92 bits. Unbiased: bytes that would favour some characters are skipped.
+pub(crate) fn random_password() -> std::io::Result<String> {
+    const ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let limit = 256 - 256 % ALPHABET.len();
+    let mut password = String::with_capacity(16);
+    while password.len() < 16 {
+        let mut bytes = [0u8; 32];
+        getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(e.to_string()))?;
+        for byte in bytes {
+            if (byte as usize) < limit && password.len() < 16 {
+                password.push(ALPHABET[byte as usize % ALPHABET.len()] as char);
+            }
+        }
+    }
+    Ok(password)
+}
+
 /// Checks `password` against a stored password in one of the formats in the
 /// module docs.
 ///
@@ -91,6 +110,24 @@ fn starts_with_any(stored: &str, prefixes: &[&str]) -> bool {
 /// much of a guess was right.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0, |diff, (x, y)| diff | (x ^ y)) == 0
+}
+
+#[cfg(test)]
+mod random_password_tests {
+    use super::random_password;
+
+    #[test]
+    fn random_passwords_are_16_unambiguous_characters_and_differ() {
+        let a = random_password().unwrap();
+        let b = random_password().unwrap();
+        assert_eq!(a.len(), 16);
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_alphanumeric() && !"0O1lI".contains(c)),
+            "{a}"
+        );
+        assert_ne!(a, b);
+    }
 }
 
 #[cfg(test)]

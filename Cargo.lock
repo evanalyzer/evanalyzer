@@ -3044,6 +3044,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha-crypt",
+ "sysinfo",
  "tempfile",
  "toml",
  "tungstenite",

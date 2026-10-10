@@ -39,12 +39,15 @@ default_allowed_dirs = ["{home}"]
 # Login name. Can be changed at any time: the account's internal id is fixed.
 username = "admin"
 # The password, hashed: create one with `evanalyzer hash-password`. Other
-# formats: see "Passwords" in docs/server.md. This default is the hash of
-# 1234: change it, the server warns while it is in use.
-password = "$6$evadflt1$DreijyFMj134bmHDBJmfoHJ4XvqKCHiDcZ1n2.wW6Y0empPJcQNMXTirlHXd7PWi01YI0OWRMgRm/pZzB.P6B1"
+# formats: see "Passwords" in docs/server.md. Default: none - the server
+# makes up a random password at every start and prints it to the console.
+# password = "$argon2id$v=19$m=19456,t=2,p=1$..."
 # Home folder: the worker's working directory, where it keeps the user's
-# settings and templates. Absolute path. Default: the home folder of the
-# account the server runs as.
+# settings and templates. Absolute path. Default: a folder of its own,
+# created on start - /var/lib/evanalyzer/single-user for a system service,
+# otherwise evanalyzer/single-user in the server account's data folder
+# (~/.local/share on Linux, %LOCALAPPDATA% on Windows). With the default
+# allowed_dirs it is all the worker may read and write.
 # home = "/srv/evanalyzer/admin"
 # Default: users.default_allowed_dirs.
 # allowed_dirs = ["{home}", "/data/microscopy"]

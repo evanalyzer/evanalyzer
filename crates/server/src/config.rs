@@ -13,8 +13,10 @@ use crate::user_management::{
     UserManagement,
     file_users::FileUsers,
     linux_users::LinuxUsers,
-    password::{SUPPORTED_FORMATS, is_plain_text, is_supported_format},
-    single_user::SingleUser,
+    password::{
+        SUPPORTED_FORMATS, hash_password, is_plain_text, is_supported_format, random_password,
+    },
+    single_user::{self, SingleUser},
 };
 use serde::Deserialize;
 use std::{
@@ -23,10 +25,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-
-/// sha512-crypt hash of `1234` - the built-in single user's password until
-/// a config sets `users.single.password` (the server warns about it).
-pub(crate) const DEFAULT_SINGLE_USER_PASSWORD_HASH: &str = "$6$evadflt1$DreijyFMj134bmHDBJmfoHJ4XvqKCHiDcZ1n2.wW6Y0empPJcQNMXTirlHXd7PWi01YI0OWRMgRm/pZzB.P6B1";
 
 /// The whole server configuration.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -186,12 +184,15 @@ pub struct SingleUserConfig {
     /// The password: an Argon2 (`$argon2id$...`), bcrypt (`$2b$...`),
     /// yescrypt (`$y$...`) or sha-crypt (`$6$...`, `$5$...`) hash, or
     /// `plain:<password>` for testing (the server warns about it). Create
-    /// one with `evanalyzer hash-password`. Default: the hash of `1234`, which the server
-    /// warns about.
-    pub password: String,
+    /// one with `evanalyzer hash-password`. Default: none - the server
+    /// makes up a random password at every start and prints it to the
+    /// console.
+    pub password: Option<String>,
     /// Home folder of the account: the worker's working directory and where
     /// it keeps the user's EVAnalyzer folder (settings, templates). Default:
-    /// the home folder of the account the server runs as.
+    /// a folder of its own, created for it (`/var/lib/evanalyzer/single-user`
+    /// for a system service, otherwise `evanalyzer/single-user` in the
+    /// server account's data folder) - by default all the worker may access.
     pub home: Option<PathBuf>,
     /// Folders the worker may read and write (`{home}` = `home`). Default:
     /// `users.default_allowed_dirs`.
@@ -202,7 +203,7 @@ impl Default for SingleUserConfig {
     fn default() -> Self {
         Self {
             username: "admin".into(),
-            password: DEFAULT_SINGLE_USER_PASSWORD_HASH.into(),
+            password: None,
             home: None,
             allowed_dirs: None,
         }
@@ -300,7 +301,11 @@ impl ServerConfig {
             ));
         }
         let single = &self.users.single;
-        if !is_supported_format(&single.password) {
+        if single
+            .password
+            .as_ref()
+            .is_some_and(|password| !is_supported_format(password))
+        {
             return invalid(format!("users.single.password must be {SUPPORTED_FORMATS}"));
         }
         if let Some(home) = &single.home {
@@ -341,22 +346,43 @@ impl ServerConfig {
         Ok(match users.source {
             UserSource::Single => {
                 let single = &users.single;
-                if single.password == DEFAULT_SINGLE_USER_PASSWORD_HASH {
-                    log::warn!(
-                        "Single user '{}' has the built-in password 1234 - set \
-                         users.single.password in a --config file (`evanalyzer hash-password`)",
-                        single.username
-                    );
-                } else if is_plain_text(&single.password) {
-                    log::warn!(
-                        "Single user '{}' has a plain-text password - store a hash instead",
-                        single.username
-                    );
-                }
+                let password = match &single.password {
+                    Some(password) => {
+                        if is_plain_text(password) {
+                            log::warn!(
+                                "Single user '{}' has a plain-text password - store a hash instead",
+                                single.username
+                            );
+                        }
+                        password.clone()
+                    }
+                    None => {
+                        let password = random_password()?;
+                        announce_generated_password(&single.username, &password);
+                        hash_password(&password)?
+                    }
+                };
+                let home = match &single.home {
+                    Some(home) => home.clone(),
+                    None => {
+                        let home = single_user::default_home();
+                        crate::session_management::create_private_dir(&home).map_err(|err| {
+                            io::Error::new(
+                                err.kind(),
+                                format!(
+                                    "Cannot create the single user's home {}: {err} - set \
+                                     users.single.home",
+                                    home.display()
+                                ),
+                            )
+                        })?;
+                        home
+                    }
+                };
                 Arc::new(SingleUser::new(
                     single.username.clone(),
-                    single.password.clone(),
-                    single.home.clone(),
+                    password,
+                    home,
                     single
                         .allowed_dirs
                         .clone()
@@ -386,6 +412,20 @@ impl ServerConfig {
             }
         })
     }
+}
+
+/// Shows the password made up for the single user on the console - the
+/// only place it is ever shown. The log only says that one was made up.
+fn announce_generated_password(username: &str, password: &str) {
+    log::info!(
+        "No users.single.password configured: made up a random password for '{username}', \
+         valid until the server stops (printed to the console)"
+    );
+    println!(
+        "\n  Log in as '{username}' with password: {password}\n  \
+         (made up for this run - set users.single.password in a --config file to keep one; \
+         create it with `evanalyzer hash-password`)\n"
+    );
 }
 
 /// Password hashes shouldn't be readable by other accounts - they can be
@@ -443,6 +483,46 @@ mod tests {
                 "the documented password of {name}"
             );
         }
+    }
+
+    #[test]
+    fn without_a_configured_password_the_single_user_gets_a_random_one() {
+        use crate::user_management::AuthenticationStatus;
+        let home = tempfile::tempdir().unwrap();
+        let config = parse(&format!(
+            "[users.single]\nhome = '{}'",
+            home.path().display()
+        ))
+        .unwrap();
+        assert_eq!(config.users.single.password, None);
+
+        let users = config.user_management().unwrap();
+        assert!(
+            matches!(
+                users.login("admin".into(), "1234".into()),
+                AuthenticationStatus::PasswordWrong
+            ),
+            "no built-in password any more"
+        );
+    }
+
+    #[test]
+    fn a_configured_password_is_used() {
+        use crate::user_management::AuthenticationStatus;
+        let home = tempfile::tempdir().unwrap();
+        let config = parse(&format!(
+            "[users.single]\npassword = 'plain:secret'\nhome = '{}'",
+            home.path().display()
+        ))
+        .unwrap();
+        let users = config.user_management().unwrap();
+        let AuthenticationStatus::Authenticated(user) =
+            users.login("admin".into(), "secret".into())
+        else {
+            panic!("expected a login");
+        };
+        assert_eq!(user.home, home.path());
+        assert_eq!(user.allowed_dirs, [home.path().to_path_buf()]);
     }
 
     #[test]

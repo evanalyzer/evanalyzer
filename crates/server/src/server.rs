@@ -10,7 +10,7 @@ use rustls::{ServerConnection, StreamOwned};
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
-    net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -165,7 +165,9 @@ impl Server {
     pub fn serve(&self, listen: &str) -> std::io::Result<()> {
         let listener = TcpListener::bind(listen)?;
         let scheme = if self.tls.is_some() { "wss" } else { "ws" };
-        info!("Starting server on {scheme}://{}", listener.local_addr()?);
+        let local = listener.local_addr()?;
+        info!("Starting server on {scheme}://{local}");
+        log_connect_addresses(scheme, local);
         for stream in listener.incoming().flatten() {
             let Ok(peer) = stream.peer_addr() else {
                 continue;
@@ -413,6 +415,66 @@ fn forward_to_worker(client: WebSocket<ClientStream>, port: u16, hello: Message)
     }
 }
 
+/// Logs the addresses clients can connect to: `0.0.0.0` (every network) is
+/// none, so for it this machine's host name and IP addresses are listed.
+fn log_connect_addresses(scheme: &str, local: SocketAddr) {
+    let ips = sysinfo::Networks::new_with_refreshed_list()
+        .iter()
+        .flat_map(|(_, network)| network.ip_networks().iter().map(|net| net.addr))
+        .collect();
+    let urls = connect_urls(scheme, local, sysinfo::System::host_name(), ips);
+    if local.ip().is_loopback() {
+        info!(
+            "Only clients on this machine can connect, with {}",
+            urls.join(", ")
+        );
+    } else {
+        info!("Clients connect with {}", urls.join(", "));
+    }
+}
+
+/// The URLs clients can reach a server listening on `local` with. Listening
+/// on a single address: that one. Listening on every address (`0.0.0.0`,
+/// or `[::]` for IPv6 too): the host name, then every IP address of this
+/// machine (`ips`) - without loopback and IPv6 link-local addresses, which
+/// other machines can't use as is.
+fn connect_urls(
+    scheme: &str,
+    local: SocketAddr,
+    host_name: Option<String>,
+    ips: Vec<IpAddr>,
+) -> Vec<String> {
+    let port = local.port();
+    let url = |ip: IpAddr| match ip {
+        IpAddr::V4(ip) => format!("{scheme}://{ip}:{port}"),
+        IpAddr::V6(ip) => format!("{scheme}://[{ip}]:{port}"),
+    };
+    if !local.ip().is_unspecified() {
+        return vec![url(local.ip())];
+    }
+    let mut addrs: Vec<IpAddr> = ips
+        .into_iter()
+        .filter(|ip| {
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && (local.is_ipv6() || ip.is_ipv4())
+                && !matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local())
+        })
+        .collect();
+    addrs.sort_by_key(|ip| (ip.is_ipv6(), *ip));
+    addrs.dedup();
+    let mut urls: Vec<String> = host_name
+        .filter(|name| !name.trim().is_empty())
+        .map(|name| format!("{scheme}://{name}:{port}"))
+        .into_iter()
+        .collect();
+    urls.extend(addrs.into_iter().map(url));
+    if urls.is_empty() {
+        urls.push(url(local.ip()));
+    }
+    urls
+}
+
 /// Is `listen` an address only this machine can reach?
 fn is_loopback(listen: &str) -> bool {
     listen
@@ -589,6 +651,75 @@ impl Drop for Connection {
             sessions.remove(&self.session_id);
         }
         info!("Session {} closed", self.session_id);
+    }
+}
+
+#[cfg(test)]
+mod connect_url_tests {
+    use super::connect_urls;
+    use std::net::{IpAddr, SocketAddr};
+
+    fn ips(list: &[&str]) -> Vec<IpAddr> {
+        list.iter().map(|ip| ip.parse().unwrap()).collect()
+    }
+
+    fn addr(text: &str) -> SocketAddr {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn listening_everywhere_lists_the_host_name_and_every_usable_ipv4_address() {
+        let urls = connect_urls(
+            "wss",
+            addr("0.0.0.0:7400"),
+            Some("labserver".into()),
+            ips(&[
+                "127.0.0.1",
+                "192.168.1.20",
+                "10.0.0.5",
+                "::1",
+                "fe80::1",
+                "2001:db8::7",
+            ]),
+        );
+        assert_eq!(
+            urls,
+            [
+                "wss://labserver:7400",
+                "wss://10.0.0.5:7400",
+                "wss://192.168.1.20:7400",
+            ],
+            "no loopback; IPv6 isn't reachable on 0.0.0.0"
+        );
+    }
+
+    #[test]
+    fn listening_on_every_ipv6_address_includes_ipv6_but_not_link_local() {
+        let urls = connect_urls(
+            "ws",
+            addr("[::]:7400"),
+            None,
+            ips(&["192.168.1.20", "fe80::1", "2001:db8::7"]),
+        );
+        assert_eq!(urls, ["ws://192.168.1.20:7400", "ws://[2001:db8::7]:7400"]);
+    }
+
+    #[test]
+    fn listening_on_one_address_names_just_that_one() {
+        for (listen, expected) in [
+            ("127.0.0.1:7400", "ws://127.0.0.1:7400"),
+            ("192.168.1.20:7400", "ws://192.168.1.20:7400"),
+            ("[::1]:7400", "ws://[::1]:7400"),
+        ] {
+            let urls = connect_urls("ws", addr(listen), Some("host".into()), ips(&["10.0.0.5"]));
+            assert_eq!(urls, [expected]);
+        }
+    }
+
+    #[test]
+    fn without_any_known_address_the_listen_address_is_named() {
+        let urls = connect_urls("ws", addr("0.0.0.0:7400"), Some(" ".into()), vec![]);
+        assert_eq!(urls, ["ws://0.0.0.0:7400"]);
     }
 }
 
@@ -830,7 +961,7 @@ mod tests {
             let server = Server {
                 tls: tls.map(|tls| Arc::clone(&tls.config)),
                 max_connections,
-                user_management: Arc::new(SingleUser::default()),
+                user_management: Arc::new(SingleUser::for_tests()),
                 session_management: Arc::new(
                     SessionManagement::with_store(dir.join("sessions.json"), fake_worker(dir))
                         .unwrap(),

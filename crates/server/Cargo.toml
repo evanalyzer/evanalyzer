@@ -20,6 +20,7 @@ argon2 = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 getrandom = { workspace = true }
+sysinfo = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]

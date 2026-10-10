@@ -42,7 +42,7 @@ examples always match the code.
 
 | `source` | Accounts | Home folder | Worker runs as |
 |---|---|---|---|
-| `single` (default) | One account in `[users.single]`: `admin` / `1234` until you change it (the server warns until you do) | `users.single.home`, default: the server account's home | the server's account |
+| `single` (default) | One account in `[users.single]`: `admin`, with a random password made up at every start and printed to the console unless `users.single.password` is set | `users.single.home`, default: a folder of its own (`/var/lib/evanalyzer/single-user` as a system service, otherwise `evanalyzer/single-user` in the server account's data folder) | the server's account |
 | `linux` | This machine's system users, checked against `/etc/shadow`. The server needs root or membership in the `shadow` group. | from `/etc/passwd` | the user's own account, if the server runs as root |
 | `file` | The `[[user]]` entries of a separate users file, `[users.file] path`. No system accounts needed. | `home` of each entry | the server's account |
 
