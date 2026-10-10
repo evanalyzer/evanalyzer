@@ -477,7 +477,7 @@ fn merge_intensities(objects: &[&Object], merged_area: usize) -> IndexMap<i32, I
     }
     let n = merged_area.max(1) as f64;
     for intensity in merged.values_mut() {
-        intensity.avg_intensity = (intensity.sum_intensity / n);
+        intensity.avg_intensity = intensity.sum_intensity / n;
     }
     merged
 }

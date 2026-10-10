@@ -13,7 +13,7 @@ use macros::CommandsMeta;
 use tch::{CModule, Device, IValue, Kind, Tensor};
 
 use crate::{
-    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::torch_session},
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -112,21 +112,6 @@ impl ImageAlgorithm for Cellpose {
         ctx: &mut PipelineContext,
         _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        let device = Device::cuda_if_available();
-        let model = load_cached_model(&self.model_path, || {
-            CModule::load_on_device(&self.model_path, device)
-        })
-        .map_err(|e| {
-            InternalErrors::Generic(format!(
-                "Failed to load Cellpose model from {}: {e}. The model must be a \
-                 TorchScript export (torch.jit.script/trace), not a raw weights file. \
-                 A bioimage.io `pytorch_state_dict` (.pth) holds only weights and no \
-                 graph — load it into the Cellpose architecture in Python and re-save \
-                 it with torch.jit before using it here.",
-                self.model_path.display()
-            ))
-        })?;
-
         let scale = self.resize_factor(ctx.full_image_size());
         let (input_image, segmentation_map, instance_map) =
             ctx.get_f32_gray_segmentation_and_instances_mut()?;
@@ -136,46 +121,70 @@ impl ImageAlgorithm for Cellpose {
         let net_width = ((width as f64 * scale).round() as usize).max(1);
         let net_height = ((height as f64 * scale).round() as usize).max(1);
         let resized = (net_width, net_height) != (width, height);
-
-        let image = Tensor::from_slice(input_image.as_slice())
-            .to_device(device)
-            .to_kind(Kind::Float)
-            .reshape([1, 1, height as i64, width as i64]);
-
-        // The image is the first channel; standard Cellpose models expect a
-        // second (nucleus) channel, and custom models may want more. Zero-fill
-        // (or replicate the image into) any extra channels so the tensor
-        // matches the model's input width.
-        let in_channels = self.input_channels.max(1) as i64;
-        let input = if in_channels <= 1 {
-            image
-        } else if self.replicate_gray_channel {
-            image.repeat([1, in_channels, 1, 1])
-        } else {
-            let extra = Tensor::zeros(
-                [1, in_channels - 1, height as i64, width as i64],
-                (Kind::Float, device),
-            );
-            Tensor::cat(&[image, extra], 1)
-        };
-        let input = if resized {
-            input.upsample_bilinear2d([net_height as i64, net_width as i64], false, None, None)
-        } else {
-            input
-        };
-
-        // Cellpose-SAM can only run on exactly 256x256 tiles (see the struct
-        // doc comment) - `run_model_tiled` hides that behind the same
-        // `[1, C, H, W]` contract `run_model` used to expose directly.
-        let output = Self::run_model_tiled(&model, &input, device)?;
-
-        // `run_model_tiled` always returns a `[1, C, height, width]` tensor,
-        // so the channel dimension is fixed at index 1.
-        const CHANNEL_DIM: i64 = 1;
         let (w, h) = (net_width, net_height);
-        let flow_y = Self::channel_to_vec(&output.narrow(CHANNEL_DIM, 0, 1), w, h)?;
-        let flow_x = Self::channel_to_vec(&output.narrow(CHANNEL_DIM, 1, 1), w, h)?;
-        let cell_prob = Self::channel_to_vec(&output.narrow(CHANNEL_DIM, 2, 1).sigmoid(), w, h)?;
+
+        // All tensor work happens inside one Torch session (see
+        // `torch_session`); the tensors are dropped with it, before the
+        // CPU-only mask building below.
+        let (flow_y, flow_x, cell_prob) = {
+            let mut torch = torch_session();
+            let device = Device::cuda_if_available();
+            let model = torch
+                .model(&self.model_path, device, || {
+                    CModule::load_on_device(&self.model_path, device)
+                })
+                .map_err(|e| {
+                    InternalErrors::Generic(format!(
+                        "Failed to load Cellpose model from {}: {e}. The model must be a \
+                     TorchScript export (torch.jit.script/trace), not a raw weights file. \
+                     A bioimage.io `pytorch_state_dict` (.pth) holds only weights and no \
+                     graph — load it into the Cellpose architecture in Python and re-save \
+                     it with torch.jit before using it here.",
+                        self.model_path.display()
+                    ))
+                })?;
+
+            let image = Tensor::from_slice(input_image.as_slice())
+                .to_device(device)
+                .to_kind(Kind::Float)
+                .reshape([1, 1, height as i64, width as i64]);
+
+            // The image is the first channel; standard Cellpose models expect a
+            // second (nucleus) channel, and custom models may want more. Zero-fill
+            // (or replicate the image into) any extra channels so the tensor
+            // matches the model's input width.
+            let in_channels = self.input_channels.max(1) as i64;
+            let input = if in_channels <= 1 {
+                image
+            } else if self.replicate_gray_channel {
+                image.repeat([1, in_channels, 1, 1])
+            } else {
+                let extra = Tensor::zeros(
+                    [1, in_channels - 1, height as i64, width as i64],
+                    (Kind::Float, device),
+                );
+                Tensor::cat(&[image, extra], 1)
+            };
+            let input = if resized {
+                input.upsample_bilinear2d([net_height as i64, net_width as i64], false, None, None)
+            } else {
+                input
+            };
+
+            // Cellpose-SAM can only run on exactly 256x256 tiles (see the struct
+            // doc comment) - `run_model_tiled` hides that behind the same
+            // `[1, C, H, W]` contract `run_model` used to expose directly.
+            let output = Self::run_model_tiled(&model, &input, device)?;
+
+            // `run_model_tiled` always returns a `[1, C, height, width]` tensor,
+            // so the channel dimension is fixed at index 1.
+            const CHANNEL_DIM: i64 = 1;
+            (
+                Self::channel_to_vec(&output.narrow(CHANNEL_DIM, 0, 1), w, h)?,
+                Self::channel_to_vec(&output.narrow(CHANNEL_DIM, 1, 1), w, h)?,
+                Self::channel_to_vec(&output.narrow(CHANNEL_DIM, 2, 1).sigmoid(), w, h)?,
+            )
+        };
 
         let mut labels = self.masks_from_flows(&flow_y, &flow_x, &cell_prob, w, h);
         if resized {

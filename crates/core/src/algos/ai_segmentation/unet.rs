@@ -13,7 +13,7 @@ use macros::CommandsMeta;
 use tch::{CModule, Device, Kind, Tensor};
 
 use crate::{
-    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::torch_session},
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -110,84 +110,94 @@ impl ImageAlgorithm for UNet {
         ctx: &mut PipelineContext,
         _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        let device = Device::cuda_if_available();
-        let model = load_cached_model(&self.model_path, || {
-            CModule::load_on_device(&self.model_path, device)
-        })
-        .map_err(|e| {
-            InternalErrors::Generic(format!(
-                "Failed to load U-Net model from {}: {e}",
-                self.model_path.display()
-            ))
-        })?;
-
         let (input_image, segmentation_map) = ctx.get_f32_gray_and_segmentation_mask_mut()?;
         let size = input_image.size();
         let (width, height) = (size.width, size.height);
 
-        let input = Tensor::from_slice(input_image.as_slice())
-            .to_device(device)
-            .to_kind(Kind::Float)
-            .reshape([1, 1, height as i64, width as i64]);
-        let (top, bottom) = Self::padding(height as i64);
-        let (left, right) = Self::padding(width as i64);
-        // Mirroring needs every pad to be smaller than the side it mirrors;
-        // a tiny tile repeats its edge pixels instead.
-        let mode = if top < height as i64
-            && bottom < height as i64
-            && left < width as i64
-            && right < width as i64
-        {
-            "reflect"
-        } else {
-            "replicate"
-        };
-        let padded = input.pad([left, right, top, bottom], mode, None);
+        // All tensor work happens inside one Torch session (see
+        // `torch_session`); the tensors are dropped with it, before the
+        // CPU-only pixel classification below.
+        let (probabilities, boundary) = {
+            let mut torch = torch_session();
+            let device = Device::cuda_if_available();
+            let model = torch
+                .model(&self.model_path, device, || {
+                    CModule::load_on_device(&self.model_path, device)
+                })
+                .map_err(|e| {
+                    InternalErrors::Generic(format!(
+                        "Failed to load U-Net model from {}: {e}",
+                        self.model_path.display()
+                    ))
+                })?;
 
-        // Without `no_grad`, the model's own weights (loaded with
-        // `requires_grad = true`, the default for `nn.Parameter`) make this
-        // forward pass record a full autograd graph even though `.eval()`
-        // was called - wasting memory that's never needed for inference.
-        let output = tch::no_grad(|| model.forward_ts(&[padded]))
-            .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))?;
-        let out_size = output.size();
-        if out_size.len() != 4
-            || out_size[2] < top + height as i64
-            || out_size[3] < left + width as i64
-        {
-            return Err(InternalErrors::Generic(format!(
-                "U-Net output has shape {out_size:?}; expected [1, C, H, W] the size of the \
+            let input = Tensor::from_slice(input_image.as_slice())
+                .to_device(device)
+                .to_kind(Kind::Float)
+                .reshape([1, 1, height as i64, width as i64]);
+            let (top, bottom) = Self::padding(height as i64);
+            let (left, right) = Self::padding(width as i64);
+            // Mirroring needs every pad to be smaller than the side it mirrors;
+            // a tiny tile repeats its edge pixels instead.
+            let mode = if top < height as i64
+                && bottom < height as i64
+                && left < width as i64
+                && right < width as i64
+            {
+                "reflect"
+            } else {
+                "replicate"
+            };
+            let padded = input.pad([left, right, top, bottom], mode, None);
+
+            // Without `no_grad`, the model's own weights (loaded with
+            // `requires_grad = true`, the default for `nn.Parameter`) make this
+            // forward pass record a full autograd graph even though `.eval()`
+            // was called - wasting memory that's never needed for inference.
+            let output = tch::no_grad(|| model.forward_ts(&[padded]))
+                .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))?;
+            let out_size = output.size();
+            if out_size.len() != 4
+                || out_size[2] < top + height as i64
+                || out_size[3] < left + width as i64
+            {
+                return Err(InternalErrors::Generic(format!(
+                    "U-Net output has shape {out_size:?}; expected [1, C, H, W] the size of the \
                  (padded) input"
-            )));
-        }
-        let output = output
-            .narrow(2, top, height as i64)
-            .narrow(3, left, width as i64);
-
-        let channels = *output.size().get(1).unwrap_or(&1);
-        let foreground = if channels > 1 {
-            let idx = (self.foreground_channel as i64).clamp(0, channels - 1);
-            match self.output_mode {
-                UNetOutputMode::SoftmaxClasses => output.softmax(1, Kind::Float).narrow(1, idx, 1),
-                UNetOutputMode::IndependentChannels => output.narrow(1, idx, 1),
+                )));
             }
-        } else {
-            output.shallow_clone()
-        };
+            let output = output
+                .narrow(2, top, height as i64)
+                .narrow(3, left, width as i64);
 
-        let probabilities = Self::channel_to_vec(&foreground, width, height)?;
+            let channels = *output.size().get(1).unwrap_or(&1);
+            let foreground = if channels > 1 {
+                let idx = (self.foreground_channel as i64).clamp(0, channels - 1);
+                match self.output_mode {
+                    UNetOutputMode::SoftmaxClasses => {
+                        output.softmax(1, Kind::Float).narrow(1, idx, 1)
+                    }
+                    UNetOutputMode::IndependentChannels => output.narrow(1, idx, 1),
+                }
+            } else {
+                output.shallow_clone()
+            };
 
-        // Optional boundary channel: boundary-aware models (e.g. affable-shark)
-        // predict an independent boundary map. Subtracting it from the foreground
-        // opens thin gaps between touching objects so they separate downstream.
-        let boundary: Option<Vec<f32>> = if self.boundary_channel >= 0
-            && channels > 1
-            && (self.boundary_channel as i64) < channels
-        {
-            let b = output.narrow(1, self.boundary_channel as i64, 1);
-            Some(Self::channel_to_vec(&b, width, height)?)
-        } else {
-            None
+            let probabilities = Self::channel_to_vec(&foreground, width, height)?;
+
+            // Optional boundary channel: boundary-aware models (e.g. affable-shark)
+            // predict an independent boundary map. Subtracting it from the foreground
+            // opens thin gaps between touching objects so they separate downstream.
+            let boundary: Option<Vec<f32>> = if self.boundary_channel >= 0
+                && channels > 1
+                && (self.boundary_channel as i64) < channels
+            {
+                let b = output.narrow(1, self.boundary_channel as i64, 1);
+                Some(Self::channel_to_vec(&b, width, height)?)
+            } else {
+                None
+            };
+            (probabilities, boundary)
         };
 
         let foreground_class = self.object_class_id.as_u32();

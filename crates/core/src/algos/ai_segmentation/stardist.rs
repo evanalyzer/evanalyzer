@@ -13,7 +13,7 @@ use macros::CommandsMeta;
 use tch::{CModule, Device, IValue, Kind, Tensor};
 
 use crate::{
-    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::torch_session},
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -81,52 +81,62 @@ impl ImageAlgorithm for Stardist {
         ctx: &mut PipelineContext,
         _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        let device = Device::cuda_if_available();
-        let model = load_cached_model(&self.model_path, || {
-            CModule::load_on_device(&self.model_path, device)
-        })
-        .map_err(|e| {
-            InternalErrors::Generic(format!(
-                "Failed to load StarDist model from {}: {e}",
-                self.model_path.display()
-            ))
-        })?;
-
         let (input_image, segmentation_map, instance_map) =
             ctx.get_f32_gray_segmentation_and_instances_mut()?;
         let size = input_image.size();
         let (width, height) = (size.width, size.height);
 
-        let input = Tensor::from_slice(input_image.as_slice())
-            .to_device(device)
-            .to_kind(Kind::Float)
-            .reshape([1, 1, height as i64, width as i64]);
+        // All tensor work happens inside one Torch session (see
+        // `torch_session`); the tensors are dropped with it, before the
+        // CPU-only candidate building below.
+        let (prob_flat, dist_flat, grid_h, grid_w, n_rays) = {
+            let mut torch = torch_session();
+            let device = Device::cuda_if_available();
+            let model = torch
+                .model(&self.model_path, device, || {
+                    CModule::load_on_device(&self.model_path, device)
+                })
+                .map_err(|e| {
+                    InternalErrors::Generic(format!(
+                        "Failed to load StarDist model from {}: {e}",
+                        self.model_path.display()
+                    ))
+                })?;
 
-        let (prob_tensor, dist_tensor) = Self::split_outputs(&model, input)?;
+            let input = Tensor::from_slice(input_image.as_slice())
+                .to_device(device)
+                .to_kind(Kind::Float)
+                .reshape([1, 1, height as i64, width as i64]);
 
-        let prob_sizes = prob_tensor.size();
-        let dist_sizes = dist_tensor.size();
-        let grid_h = prob_sizes[prob_sizes.len() - 2] as usize;
-        let grid_w = prob_sizes[prob_sizes.len() - 1] as usize;
-        let n_rays = dist_sizes[dist_sizes.len() - 3] as usize;
+            let (prob_tensor, dist_tensor) = Self::split_outputs(&model, input)?;
 
-        let prob_flat: Vec<f32> = prob_tensor
-            .f_to_device(Device::Cpu)
-            .and_then(|t| t.f_reshape([(grid_h * grid_w) as i64]))
-            .map_err(|e| InternalErrors::Generic(format!("StarDist inference failed: {e}")))
-            .and_then(|t| {
-                Vec::try_from(&t)
-                    .map_err(|e| InternalErrors::Generic(format!("StarDist inference failed: {e}")))
-            })?;
+            let prob_sizes = prob_tensor.size();
+            let dist_sizes = dist_tensor.size();
+            let grid_h = prob_sizes[prob_sizes.len() - 2] as usize;
+            let grid_w = prob_sizes[prob_sizes.len() - 1] as usize;
+            let n_rays = dist_sizes[dist_sizes.len() - 3] as usize;
 
-        let dist_flat: Vec<f32> = dist_tensor
-            .f_to_device(Device::Cpu)
-            .and_then(|t| t.f_reshape([(n_rays * grid_h * grid_w) as i64]))
-            .map_err(|e| InternalErrors::Generic(format!("StarDist inference failed: {e}")))
-            .and_then(|t| {
-                Vec::try_from(&t)
-                    .map_err(|e| InternalErrors::Generic(format!("StarDist inference failed: {e}")))
-            })?;
+            let prob_flat: Vec<f32> = prob_tensor
+                .f_to_device(Device::Cpu)
+                .and_then(|t| t.f_reshape([(grid_h * grid_w) as i64]))
+                .map_err(|e| InternalErrors::Generic(format!("StarDist inference failed: {e}")))
+                .and_then(|t| {
+                    Vec::try_from(&t).map_err(|e| {
+                        InternalErrors::Generic(format!("StarDist inference failed: {e}"))
+                    })
+                })?;
+
+            let dist_flat: Vec<f32> = dist_tensor
+                .f_to_device(Device::Cpu)
+                .and_then(|t| t.f_reshape([(n_rays * grid_h * grid_w) as i64]))
+                .map_err(|e| InternalErrors::Generic(format!("StarDist inference failed: {e}")))
+                .and_then(|t| {
+                    Vec::try_from(&t).map_err(|e| {
+                        InternalErrors::Generic(format!("StarDist inference failed: {e}"))
+                    })
+                })?;
+            (prob_flat, dist_flat, grid_h, grid_w, n_rays)
+        };
 
         let candidates = self.build_candidates(
             &prob_flat, &dist_flat, grid_h, grid_w, n_rays, width, height,
