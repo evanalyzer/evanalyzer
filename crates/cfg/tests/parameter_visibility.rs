@@ -107,7 +107,8 @@ fn classify_objects_shows_its_basic_settings() {
             "max_area",
             "min_circularity",
             "max_circularity",
-            "allow_edge_touching"
+            "allow_edge_touching",
+            "intensity_filters"
         ]
     );
     assert!(advanced.contains(&"origin_segmentation".to_string()));

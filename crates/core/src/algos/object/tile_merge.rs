@@ -465,8 +465,8 @@ fn merge_intensities(objects: &[&Object], merged_area: usize) -> IndexMap<i32, I
         for (&channel, intensity) in &o.intensities {
             let acc = merged.entry(channel).or_insert_with(|| Intensity {
                 sum_intensity: 0.0,
-                min_intensity: f32::MAX,
-                max_intensity: f32::MIN,
+                min_intensity: f64::MAX,
+                max_intensity: f64::MIN,
                 avg_intensity: 0.0,
                 pixel_values: Vec::new(),
             });
@@ -477,7 +477,7 @@ fn merge_intensities(objects: &[&Object], merged_area: usize) -> IndexMap<i32, I
     }
     let n = merged_area.max(1) as f64;
     for intensity in merged.values_mut() {
-        intensity.avg_intensity = (intensity.sum_intensity / n) as f32;
+        intensity.avg_intensity = (intensity.sum_intensity / n);
     }
     merged
 }

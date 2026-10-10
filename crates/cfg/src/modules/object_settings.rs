@@ -24,12 +24,12 @@ pub struct IntensitySettings {
     /// Sum of all pixel intensities in the object
     pub sum_intensity: f64,
     /// Minimum pixel intensity in the object
-    pub min_intensity: f32,
+    pub min_intensity: f64,
     /// Maximum pixel intensity in the object
-    pub max_intensity: f32,
+    pub max_intensity: f64,
     /// Average pixel intensity in the object
     #[serde(default)]
-    pub avg_intensity: f32,
+    pub avg_intensity: f64,
     /// Unused scratch buffer kept for layout compatibility; never serialized.
     #[serde(skip)]
     pub pixel_values: Vec<f32>,

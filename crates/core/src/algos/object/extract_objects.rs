@@ -145,8 +145,8 @@ impl ImageAlgorithm for ExtractObjects {
         // Only sum / min / max are kept; mean (avg) is derived as sum / area in pass 2.
         // No per-pixel value storage — that (for median/stddev) was the bottleneck.
         let mut i_sum = vec![0f64; n_obj * n_ch];
-        let mut i_min = vec![f32::MAX; n_obj * n_ch];
-        let mut i_max = vec![f32::MIN; n_obj * n_ch];
+        let mut i_min = vec![f64::MAX; n_obj * n_ch];
+        let mut i_max = vec![f64::MIN; n_obj * n_ch];
 
         // --- Pass 1: accumulate per-object area, moments, intensities and bbox ---
         let edge_x = full_image_size.width.saturating_sub(1);
@@ -168,7 +168,7 @@ impl ImageAlgorithm for ExtractObjects {
                 let sample = row + x;
                 let base = id * n_ch;
                 for (ci, (is_rgb, slice)) in channel_slices.iter().enumerate() {
-                    let val = sample_channel_pixel(*is_rgb, slice, sample);
+                    let val = sample_channel_pixel(*is_rgb, slice, sample) as f64;
                     let k = base + ci;
                     i_sum[k] += val as f64;
                     if val < i_min[k] {
@@ -235,7 +235,7 @@ impl ImageAlgorithm for ExtractObjects {
                             sum_intensity: i_sum[k],
                             min_intensity: i_min[k],
                             max_intensity: i_max[k],
-                            avg_intensity: (i_sum[k] / n) as f32,
+                            avg_intensity: (i_sum[k] / n),
                             pixel_values: Vec::new(),
                         },
                     );
@@ -360,7 +360,7 @@ impl Object {
             match image.as_ref() {
                 crate::ImageContainer::F32Gray(image) => {
                     let intensity_slice = image.as_slice();
-                    let val = intensity_slice[y_rel * origin_image.size().width + x_rel];
+                    let val = intensity_slice[y_rel * origin_image.size().width + x_rel] as f64;
                     let channel_intensity = self
                         .intensities
                         .entry(*index)
@@ -379,11 +379,11 @@ impl Object {
 
                     // Biological Best Practice: Perceptual Luminance (BT.709)
                     // This provides a consistent brightness metric regardless of dye color.
-                    let raw_val = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                    let raw_val = (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
 
                     // Background Correction: Subtracting background noise (CTCF)
                     // Ensure you have a 'background_level' derived from a non-sample area of the image.
-                    let background_level: f32 = 0.0;
+                    let background_level: f64 = 0.0;
                     let corrected_val = (raw_val - background_level).max(0.0);
 
                     let channel_intensity = self
@@ -421,7 +421,7 @@ impl Object {
     pub fn finalize_intensity_statistics(&mut self) {
         let n = self.area.max(1) as f64;
         for (_channel_id, intensity) in self.intensities.iter_mut() {
-            intensity.avg_intensity = (intensity.sum_intensity / n) as f32;
+            intensity.avg_intensity = (intensity.sum_intensity / n);
         }
     }
 }
@@ -430,8 +430,8 @@ impl Object {
 /// the opposite sentinels so the first real pixel always replaces them.
 fn new_intensity_acc() -> Intensity {
     Intensity {
-        min_intensity: f32::MAX,
-        max_intensity: f32::MIN,
+        min_intensity: f64::MAX,
+        max_intensity: f64::MIN,
         ..Intensity::default()
     }
 }

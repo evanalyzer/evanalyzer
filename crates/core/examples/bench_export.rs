@@ -61,9 +61,9 @@ fn object(id: u128) -> Object {
                 channel,
                 Intensity {
                     sum_intensity: 1.348531 * v,
-                    min_intensity: (0.004471 * v) as f32,
-                    max_intensity: (0.025757 * v) as f32,
-                    avg_intensity: (0.008481 * v) as f32,
+                    min_intensity: (0.004471 * v),
+                    max_intensity: (0.025757 * v),
+                    avg_intensity: (0.008481 * v),
                     pixel_values: Vec::new(),
                 },
             )

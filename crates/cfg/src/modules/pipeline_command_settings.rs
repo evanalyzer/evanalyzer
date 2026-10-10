@@ -1,6 +1,6 @@
 // @generated - do not edit by hand
 use crate::{
-    core_types::{ImageAddress, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel},
+    core_types::{ImageAddress, ImageChannelIdx, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel},
     types::classes::{ObjectClass, SegmentationClass},
 };
 use schemars::JsonSchema;
@@ -246,6 +246,43 @@ pub enum MathSaveImageImageSourceSettings {
         alias = "segmentation_mask"
     )]
     SegmentationMask,
+}
+
+/// How an [`IntensityFilter`] compares the object's metric with its threshold.
+/// Both comparisons are strict: an object exactly at the threshold matches
+/// neither.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectClassifyObjectsIntensityComparisonSettings {
+    /// The metric must be greater than the threshold.
+    #[default]
+    #[serde(alias = "above")]
+    Above,
+    /// The metric must be less than the threshold.
+    #[serde(alias = "below")]
+    Below,
+}
+
+/// Which per-channel intensity statistic of an object an [`IntensityFilter`]
+/// compares. All are measured on the raw image channel when the objects are
+/// extracted (see `Object::intensities`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectClassifyObjectsIntensityMetricSettings {
+    /// Mean pixel intensity inside the object.
+    #[default]
+    #[serde(alias = "avg")]
+    Avg,
+    /// Sum of all pixel intensities inside the object (integrated density) -
+    /// grows with the object's size, unlike the other metrics.
+    #[serde(alias = "sum")]
+    Sum,
+    /// Darkest pixel inside the object.
+    #[serde(alias = "min")]
+    Min,
+    /// Brightest pixel inside the object.
+    #[serde(alias = "max")]
+    Max,
 }
 
 /// Specifies how intensity adjustments are calculated.
@@ -2069,6 +2106,9 @@ pub struct ClassificationMappingSettings {
     pub output_class: ObjectClass,
 }
 
+fn _serde_default_classifyobjects_intensity_filters() -> Vec<IntensityFilterSettings> {
+    vec![]
+}
 /// Classifies ROIs based on morphological and intensity features.
 ///
 /// This command applies rule-based classification logic to assign object classes
@@ -2213,6 +2253,14 @@ pub struct ClassifyObjectsSettings {
     pub max_feret: f32,
     /// Whether object can touch image edge
     pub allow_edge_touching: bool,
+    /// Intensity criteria, e.g. "average in channel 1 brighter than 1200"
+    ///
+    /// All filters must match (logical AND), like every other criterion of
+    /// this command. Combine an `Above` and a `Below` filter on the same
+    /// channel and metric to select an intensity range. Empty: no intensity
+    /// criterion.
+    #[serde(default = "_serde_default_classifyobjects_intensity_filters")]
+    pub intensity_filters: Vec<IntensityFilterSettings>,
 }
 
 impl Default for ClassifyObjectsSettings {
@@ -2239,6 +2287,7 @@ impl Default for ClassifyObjectsSettings {
             min_feret: 0.0f32,
             max_feret: 2147483648.0f32,
             allow_edge_touching: true,
+            intensity_filters: vec![],
         }
     }
 }
@@ -2295,6 +2344,48 @@ impl Default for ColocalizationSettings {
             size_unit: SizeUnitsRel::Pixels,
             min_coloc_area: 0.0f32,
             exclude_classes: vec![],
+        }
+    }
+}
+
+/// One intensity criterion of [`ClassifyObjects`], e.g. "average intensity
+/// in channel 1 brighter than 1200".
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct IntensityFilterSettings {
+    /// Image channel whose intensity is compared (0-based)
+    ///
+    /// An object without a measurement for this channel (the image has no
+    /// such channel) never matches.
+    #[schemars(range(min = 0, max = 10))]
+    pub channel: ImageChannelIdx,
+    /// Intensity statistic of the object to compare
+    pub metric: ObjectClassifyObjectsIntensityMetricSettings,
+    /// Whether the object must be brighter or darker than the threshold
+    pub comparison: ObjectClassifyObjectsIntensityComparisonSettings,
+    /// Intensity threshold, in `unit`
+    ///
+    /// For `Sum` this is the summed intensity of all object pixels, so it
+    /// scales with the object's area.
+    #[schemars(range(min = 0, max = 2147483600))]
+    pub threshold: f32,
+    /// Unit of `threshold`
+    ///
+    /// bit: gray value, 0 - 255/65535 (as in ImageJ/Fiji)
+    /// %: 0 - 100.0
+    /// rel: 0 - 1.0
+    pub unit: PixelUnits,
+}
+
+impl Default for IntensityFilterSettings {
+    fn default() -> Self {
+        Self {
+            channel: ImageChannelIdx(0),
+            metric: ObjectClassifyObjectsIntensityMetricSettings::Avg,
+            comparison: ObjectClassifyObjectsIntensityComparisonSettings::Above,
+            threshold: 0.0f32,
+            unit: PixelUnits::Bit,
         }
     }
 }

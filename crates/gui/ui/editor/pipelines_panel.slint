@@ -12,6 +12,7 @@ import {
     Palette,
 } from "std-widgets.slint";
 import { Theme } from "../style.slint";
+import { ImageAddressPicker, ChannelPicker } from "../components/channel_picker.slint";
 import { ClassificationState, ClassItemData } from "classification_panel.slint";
 import { PipelineFocusState, FocusModeButton } from "pipeline_focus.slint";
 
@@ -35,7 +36,9 @@ export enum ParamType {
     pixel-units,
     size-units,
     label,
-    file-path }
+    file-path,
+    image-address,
+    image-channel }
 
 export struct LeafParam {
         name: string,
@@ -251,8 +254,10 @@ component DotPx inherits Rectangle {
 // ----------------------------------------------------------
 // Pipeline tab row
 
-// "Advanced settings (n) · m changed" row of a step card: expands/collapses
-// the step's advanced settings; "Always show" expands them in every step.
+// "Advanced (n) · m changed" row of a step card: expands/collapses the
+// step's advanced settings; "Always" expands them in every step. Labels are
+// short and elide, so this row never widens the card (and with it the list,
+// which would then show a horizontal scrollbar).
 component AdvancedRow inherits Rectangle {
         in property <int> count;
         in property <int> changed-count;
@@ -283,17 +288,19 @@ component AdvancedRow inherits Rectangle {
                         }
                     }
                     Text {
-                        text: "Advanced settings (\{root.count})";
+                        text: "Advanced (\{root.count})";
                         font-size: 11px;
                         font-weight: 600;
                         color: row-ta.has-hover ? Theme.text : Theme.text-dim;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
                     if root.changed-count > 0: Text {
                         text: "· \{root.changed-count} changed";
                         font-size: 11px;
                         color: Theme.warn;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
             }
@@ -311,10 +318,11 @@ component AdvancedRow inherits Rectangle {
                     }
                 }
                 Text {
-                    text: "Always show";
+                    text: "Always";
                     font-size: 10px;
                     color: Theme.text-mute;
                     vertical-alignment: center;
+                    overflow: elide;
                 }
             }
         }
@@ -1351,6 +1359,25 @@ component LeafParamRow inherits VerticalLayout {
                 root.changed(v);
             }
         }
+
+        if p.param-type == ParamType.image-address:
+    ImageAddressPicker {
+            kind: p.options[0];
+            number: p.options[1].to-float();
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.image-channel:
+    ChannelPicker {
+            height: 24px;
+            font-size: 11px;
+            value: p.value.to-float();
+            changed(v) => {
+                root.changed(v);
+            }
+        }
     }
 
 // ----------------------------------------------------------
@@ -1612,6 +1639,25 @@ component ParamRow inherits VerticalLayout {
             model: p.options;
             current-value: p.value;
             selected(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.image-address:
+    ImageAddressPicker {
+            kind: p.options[0];
+            number: p.options[1].to-float();
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.image-channel:
+    ChannelPicker {
+            height: 24px;
+            font-size: 11px;
+            value: p.value.to-float();
+            changed(v) => {
                 root.changed(v);
             }
         }

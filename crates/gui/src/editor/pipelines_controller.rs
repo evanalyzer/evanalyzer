@@ -2486,6 +2486,8 @@ fn map_cfg_param_type(t: CfgParamType) -> ParamType {
         CfgParamType::SizeUnits => ParamType::SizeUnits,
         CfgParamType::Label => ParamType::Label,
         CfgParamType::FilePath => ParamType::FilePath,
+        CfgParamType::ImageAddress => ParamType::ImageAddress,
+        CfgParamType::ImageChannel => ParamType::ImageChannel,
     }
 }
 
@@ -3070,6 +3072,8 @@ mod tests {
             (CfgParamType::SizeUnits, ParamType::SizeUnits),
             (CfgParamType::Label, ParamType::Label),
             (CfgParamType::FilePath, ParamType::FilePath),
+            (CfgParamType::ImageAddress, ParamType::ImageAddress),
+            (CfgParamType::ImageChannel, ParamType::ImageChannel),
         ];
         for (input, expected) in cases {
             let label = format!("{input:?}");

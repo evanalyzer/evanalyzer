@@ -125,7 +125,7 @@ mod tests {
         height: 10,
     };
     const CHANNEL: i32 = 0;
-    const VALUE: f32 = 7.0;
+    const VALUE: f64 = 7.0;
     const NUCLEUS: ObjectClass = ObjectClass::Valid(1);
     const CELL: ObjectClass = ObjectClass::Valid(2);
     const LOADED: ObjectClass = ObjectClass::Valid(50);
@@ -192,7 +192,7 @@ mod tests {
 
     fn cache_with(annotations: Vec<ObjectMetricSettings>) -> GlobalPipelineCache {
         let mut cache = GlobalPipelineCache::default();
-        cache.add_to_channel_cache(Arc::new(image(VALUE)), CHANNEL, tile());
+        cache.add_to_channel_cache(Arc::new(image(VALUE as f32)), CHANNEL, tile());
         cache.annotated_objects = Arc::new(annotations);
         cache
     }

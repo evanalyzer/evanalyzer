@@ -19,11 +19,11 @@ pub struct Intensity {
     /// Sum of all pixel intensities in the object
     pub sum_intensity: f64,
     /// Minimum pixel intensity in the object
-    pub min_intensity: f32,
+    pub min_intensity: f64,
     /// Maximum pixel intensity in the object
-    pub max_intensity: f32,
+    pub max_intensity: f64,
     /// Average pixel intensity in the object
-    pub avg_intensity: f32,
+    pub avg_intensity: f64,
     /// All pixel values (used for computing median and std_dev)
     pub pixel_values: Vec<f32>,
 }
@@ -907,9 +907,9 @@ impl Object {
                     channel_id,
                     Intensity {
                         sum_intensity: sum,
-                        min_intensity: if has_data { min } else { 0.0 },
-                        max_intensity: if has_data { max } else { 0.0 },
-                        avg_intensity: (sum / n.max(1) as f64) as f32,
+                        min_intensity: if has_data { min as f64 } else { 0.0 },
+                        max_intensity: if has_data { max as f64 } else { 0.0 },
+                        avg_intensity: (sum / n.max(1) as f64),
                         pixel_values: Vec::new(),
                     },
                 )

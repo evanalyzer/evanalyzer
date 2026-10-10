@@ -31,6 +31,7 @@ mod types {
 mod core_types {
     pub use super::types::classes::{ObjectClass, SegmentationClass};
     pub use super::types::ids::ImageAddress;
+    pub use super::types::ids::ImageChannelIdx;
     pub use super::types::ids::MemoryId;
     pub use super::types::units::{PixelUnits, SizeUnits, SizeUnitsRel};
 }

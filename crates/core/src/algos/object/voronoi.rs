@@ -682,7 +682,7 @@ mod tests {
         // that normally samples pixel data), so without their own measurement pass
         // they'd be left with empty intensities.
         const CHANNEL: i32 = 0;
-        const VALUE: f32 = 5.0;
+        const VALUE: f64 = 5.0;
         let mut ctx = make_ctx(10, 10);
         let mut cache = GlobalPipelineCache::default();
 
@@ -691,7 +691,7 @@ mod tests {
                 width: 10,
                 height: 10,
             },
-            vec![VALUE; 100],
+            vec![VALUE as f32; 100],
         )
         .unwrap();
         cache.add_to_channel_cache(

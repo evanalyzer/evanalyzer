@@ -28,6 +28,14 @@ pub enum ParamType {
     /// means any file); the dialog's initial directory is derived from the
     /// field's current value.
     FilePath,
+    /// `ImageAddress` displayed as a source picker (channel / memory slot /
+    /// scratchpad). `value` is `ImageAddress::to_param_value`'s string
+    /// (e.g. "channel:2"); `options` holds the same pre-split as
+    /// `[kind, number]`, since Slint can't split strings.
+    ImageAddress,
+    /// `ImageChannelIdx` displayed as the channel picker (channel name +
+    /// color of the open image). `value` is the channel index.
+    ImageChannel,
 }
 
 #[allow(dead_code)]

@@ -138,6 +138,26 @@ impl From<MathSaveImageImageSourceSettings> for ImageSource {
     }
 }
 
+impl From<ObjectClassifyObjectsIntensityComparisonSettings> for IntensityComparison {
+    fn from(_s: ObjectClassifyObjectsIntensityComparisonSettings) -> Self {
+        match _s {
+            ObjectClassifyObjectsIntensityComparisonSettings::Above => IntensityComparison::Above,
+            ObjectClassifyObjectsIntensityComparisonSettings::Below => IntensityComparison::Below,
+        }
+    }
+}
+
+impl From<ObjectClassifyObjectsIntensityMetricSettings> for IntensityMetric {
+    fn from(_s: ObjectClassifyObjectsIntensityMetricSettings) -> Self {
+        match _s {
+            ObjectClassifyObjectsIntensityMetricSettings::Avg => IntensityMetric::Avg,
+            ObjectClassifyObjectsIntensityMetricSettings::Sum => IntensityMetric::Sum,
+            ObjectClassifyObjectsIntensityMetricSettings::Min => IntensityMetric::Min,
+            ObjectClassifyObjectsIntensityMetricSettings::Max => IntensityMetric::Max,
+        }
+    }
+}
+
 impl From<FiltersIntensityTransformIntensityTransformModeSettings> for IntensityTransformMode {
     fn from(_s: FiltersIntensityTransformIntensityTransformModeSettings) -> Self {
         match _s {
@@ -481,6 +501,7 @@ impl From<ClassifyObjectsSettings> for ClassifyObjects {
             min_feret: _s.min_feret.clamp(0.0, 2147483600.0),
             max_feret: _s.max_feret.clamp(0.0, 2147483600.0),
             allow_edge_touching: _s.allow_edge_touching,
+            intensity_filters: _s.intensity_filters.into_iter().map(|v| v.into()).collect(),
         }
     }
 }
@@ -629,6 +650,18 @@ impl From<ImageMathSettings> for ImageMath {
             operand: Operand::from(_s.operand),
             second_image_address: _s.second_image_address,
             swap_operands: _s.swap_operands,
+        }
+    }
+}
+
+impl From<IntensityFilterSettings> for IntensityFilter {
+    fn from(_s: IntensityFilterSettings) -> Self {
+        IntensityFilter {
+            channel: _s.channel,
+            metric: IntensityMetric::from(_s.metric),
+            comparison: IntensityComparison::from(_s.comparison),
+            threshold: _s.threshold.clamp(0.0, 2147483600.0),
+            unit: _s.unit,
         }
     }
 }

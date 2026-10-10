@@ -265,7 +265,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     // Header - only config/serde imports, no core
     out.push_str("// @generated - do not edit by hand\n");
     // out.push_str("use indexmap::IndexMap;\n");
-    out.push_str("use crate::{core_types::{ImageAddress,MemoryId,PixelUnits, SizeUnits, SizeUnitsRel}, types::classes::{ObjectClass, SegmentationClass}};\n");
+    out.push_str("use crate::{core_types::{ImageAddress,ImageChannelIdx,MemoryId,PixelUnits, SizeUnits, SizeUnitsRel}, types::classes::{ObjectClass, SegmentationClass}};\n");
     out.push_str("use std::path::PathBuf;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
@@ -1527,8 +1527,8 @@ fn concat_param_vecs(parts: &[String]) -> String {
 ///
 /// `access` is the Rust expression that reads the field's current value — `"_s.kernel_size"`
 /// for an ordinary struct field, or just the bound identifier (e.g. `"factor"`) when called for
-/// a field bound out of a rich enum variant's pattern. Returns `None` for unrecognized types
-/// (e.g. `ImageAddress`), which are silently skipped, same as today.
+/// a field bound out of a rich enum variant's pattern. Returns `None` for unrecognized types,
+/// which are silently skipped.
 ///
 /// `default_access` is the field's default value expression: rendered like the value
 /// itself, it becomes `default_value` (the UI tells changed settings by it); `None`
@@ -1726,6 +1726,22 @@ fn leaf_parts(
             0.0_f32,
             0.0_f32,
         ),
+        "ImageChannelIdx" => (
+            "ParamType::ImageChannel",
+            format!("{access}.to_string()"),
+            "vec![]".to_string(),
+            0.0_f32,
+            0.0_f32,
+        ),
+        "ImageAddress" => (
+            "ParamType::ImageAddress",
+            format!("{access}.to_param_value()"),
+            format!(
+                "{{ let (kind, nr) = {access}.param_parts(); vec![kind.to_string(), nr.to_string()] }}"
+            ),
+            0.0_f32,
+            0.0_f32,
+        ),
         "PixelUnits" => (
             "ParamType::PixelUnits",
             format!(
@@ -1822,7 +1838,7 @@ fn leaf_parts(
                     0.0_f32,
                 ));
             } else {
-                // Unknown type (ImageAddress, etc.) - skip
+                // Unknown type - skip
                 return None;
             }
         }
@@ -2382,6 +2398,12 @@ fn leaf_apply_change_branch(
         "SegmentationClass" => {
             format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = SegmentationClass(v); }}")
         }
+        "ImageAddress" => {
+            format!("if let Some(v) = ImageAddress::from_param_value(value) {{ {assign} = v; }}")
+        }
+        "ImageChannelIdx" => {
+            format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = ImageChannelIdx(v); }}")
+        }
         "PixelUnits" => format!(
             "{assign} = match value {{ \"bit\" => PixelUnits::Bit, \"%\" => PixelUnits::Percent, _ => PixelUnits::Relative }};"
         ),
@@ -2659,7 +2681,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("use crate::modules::pipeline_command_settings::*;\n");
     out.push_str("use crate::modules::parameter_def::{ParamType, ParameterDef};\n");
     out.push_str("use crate::types::classes::{ObjectClass, SegmentationClass};\n");
-    out.push_str("use crate::core_types::{MemoryId, PixelUnits, SizeUnits, SizeUnitsRel};\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::core_types::{ImageAddress, ImageChannelIdx, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel};\n");
     // Default values of `PathBuf` settings (`ParameterDef::default_value`).
     out.push_str("#[allow(unused_imports)]\nuse std::path::PathBuf;\n");
     out.push_str("use schemars::JsonSchema;\n");

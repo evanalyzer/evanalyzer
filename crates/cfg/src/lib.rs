@@ -66,6 +66,7 @@ pub mod core_types {
     pub use crate::types::events::TrainingProgressEvent;
     pub use crate::types::events::TrainingStats;
     pub use crate::types::ids::ImageAddress;
+    pub use crate::types::ids::ImageChannelIdx;
     pub use crate::types::ids::MemoryId;
     pub use crate::types::ids::MemorySlot;
     pub use crate::types::ids::ObjectId;
@@ -77,6 +78,7 @@ pub mod core_types {
     pub use crate::types::units::PixelUnits;
     pub use crate::types::units::SizeUnits;
     pub use crate::types::units::SizeUnitsRel;
+    pub use crate::types::units::max_gray_value;
 }
 
 #[cfg(test)]

@@ -222,6 +222,14 @@
             "$ref": "#/$defs/ObjectClass"
           }
         },
+        "intensityFilters": {
+          "description": "Intensity criteria, e.g. \"average in channel 1 brighter than 1200\"\n\nAll filters must match (logical AND), like every other criterion of\nthis command. Combine an `Above` and a `Below` filter on the same\nchannel and metric to select an intensity range. Empty: no intensity\ncriterion.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntensityFilterSettings"
+          }
+        },
         "matchHandling": {
           "description": "What to do with object class labels after criteria evaluation\n\nControls whether the output class is added or existing classes are removed,\nand whether the action is triggered on a criteria **match** or a **non-match**:\n\n- **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n- **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n- **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n- **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n- **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.",
           "$ref": "#/$defs/ObjectClassifyObjectsClassifyMatchHandlingSettings",
@@ -930,6 +938,12 @@
         "address"
       ]
     },
+    "ImageChannelIdx": {
+      "description": "0-based index of an image channel, as a command setting. Shown in the\npipeline UI as the channel picker (channel name + color of the open\nimage). Serializes as a plain number, so it can replace an existing\ninteger channel field without breaking saved projects.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
     "ImageMathSettings": {
       "description": "A filter that performs pixel-wise mathematical operations between the current\npipeline image and a secondary image stored in the cache.\n\nThis command allows for complex image blending, masking, and comparison.\n\n# Examples\n\n```\nuse imagec::backend::algos::{ImageMath, Operand};\nlet subtract_bg = ImageMath {\noperand: Operand::Subtract,\nsecond_image_address: ImageAddress::from(\"background\"),\nswap_operands: false,\n};\n```",
       "type": "object",
@@ -952,6 +966,40 @@
         "secondImageAddress",
         "swapOperands"
       ]
+    },
+    "IntensityFilterSettings": {
+      "description": "One intensity criterion of [`ClassifyObjects`], e.g. \"average intensity\nin channel 1 brighter than 1200\".",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "Image channel whose intensity is compared (0-based)\n\nAn object without a measurement for this channel (the image has no\nsuch channel) never matches.",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "comparison": {
+          "description": "Whether the object must be brighter or darker than the threshold",
+          "$ref": "#/$defs/ObjectClassifyObjectsIntensityComparisonSettings",
+          "default": "ABOVE"
+        },
+        "metric": {
+          "description": "Intensity statistic of the object to compare",
+          "$ref": "#/$defs/ObjectClassifyObjectsIntensityMetricSettings",
+          "default": "AVG"
+        },
+        "threshold": {
+          "description": "Intensity threshold, in `unit`\n\nFor `Sum` this is the summed intensity of all object pixels, so it\nscales with the object's area.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 2147483600,
+          "minimum": 0
+        },
+        "unit": {
+          "description": "Unit of `threshold`\n\nbit: gray value, 0 - 255/65535 (as in ImageJ/Fiji)\n%: 0 - 100.0\nrel: 0 - 1.0",
+          "$ref": "#/$defs/PixelUnits",
+          "default": "BIT"
+        }
+      }
     },
     "IntensityTransformationSettings": {
       "description": "Configuration for adjusting image contrast and brightness.\n\nThis transformation applies a linear mapping to pixel values.\nIn [`Mode::Manual`], the output is typically calculated as:\n`output = input * contrast + brightness`.",
@@ -1330,6 +1378,46 @@
         "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
         "RECLASSIFY_IF_MATCH",
         "RECLASSIFY_IF_NOT_MATCH"
+      ]
+    },
+    "ObjectClassifyObjectsIntensityComparisonSettings": {
+      "description": "How an [`IntensityFilter`] compares the object's metric with its threshold.\nBoth comparisons are strict: an object exactly at the threshold matches\nneither.",
+      "oneOf": [
+        {
+          "description": "The metric must be greater than the threshold.",
+          "type": "string",
+          "const": "ABOVE"
+        },
+        {
+          "description": "The metric must be less than the threshold.",
+          "type": "string",
+          "const": "BELOW"
+        }
+      ]
+    },
+    "ObjectClassifyObjectsIntensityMetricSettings": {
+      "description": "Which per-channel intensity statistic of an object an [`IntensityFilter`]\ncompares. All are measured on the raw image channel when the objects are\nextracted (see `Object::intensities`).",
+      "oneOf": [
+        {
+          "description": "Mean pixel intensity inside the object.",
+          "type": "string",
+          "const": "AVG"
+        },
+        {
+          "description": "Sum of all pixel intensities inside the object (integrated density) -\ngrows with the object's size, unlike the other metrics.",
+          "type": "string",
+          "const": "SUM"
+        },
+        {
+          "description": "Darkest pixel inside the object.",
+          "type": "string",
+          "const": "MIN"
+        },
+        {
+          "description": "Brightest pixel inside the object.",
+          "type": "string",
+          "const": "MAX"
+        }
       ]
     },
     "ObjectColocObjectsColocMultiplicitySettings": {

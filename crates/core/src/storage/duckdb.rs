@@ -8,7 +8,7 @@ use duckdb::arrow::array::{
 use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::types::Value;
 use duckdb::{Connection, params};
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId};
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, max_gray_value};
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -681,17 +681,13 @@ impl DuckDbExporter {
         // Same implausible-bit-depth guard as image_reader.rs's read path -
         // `nr_of_bits` should already have been rejected there before a
         // cache carrying it could exist, but this shouldn't trust that
-        // blindly: unguarded, `1u64 << nr_of_bits` for nr_of_bits > 63 is a
-        // shift-by-too-large, silently producing a wrong (not NaN/Inf, since
-        // this is only ever used as a multiplier below) scale factor instead
-        // of an error.
-        if !(1..=32).contains(&nr_of_bits) {
+        // blindly (see `max_gray_value`).
+        let Some(bit_max) = max_gray_value(nr_of_bits) else {
             return Err(InternalErrors::Generic(format!(
                 "cannot export {}: implausible bit depth {nr_of_bits} (expected 1-32)",
                 cache.image_rel_path.display()
             )));
-        }
-        let bit_max = ((1u64 << nr_of_bits) - 1) as f64;
+        };
         let px_len = (px.px_size_x * px.px_size_y).sqrt() as f64;
         let pxx = px.px_size_x as f64;
         let pxy = px.px_size_y as f64;
@@ -1194,9 +1190,9 @@ mod tests {
                 channel,
                 Intensity {
                     sum_intensity: value * 4.0,
-                    min_intensity: value as f32 / 2.0,
-                    max_intensity: value as f32 * 2.0,
-                    avg_intensity: value as f32,
+                    min_intensity: value / 2.0,
+                    max_intensity: value * 2.0,
+                    avg_intensity: value,
                     pixel_values: Vec::new(),
                 },
             );

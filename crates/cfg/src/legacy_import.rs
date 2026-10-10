@@ -951,7 +951,7 @@ fn convert_classifier(
         for filter in &model_class.filters {
             if filter.intensity.min_intensity >= 0.0 || filter.intensity.max_intensity >= 0.0 {
                 warnings.push(format!(
-                    "{context}: '$classify' intensity filter has no equivalent in ClassifyObjects - dropped"
+                    "{context}: '$classify' intensity filter dropped - it names no channel or intensity metric, so add it again as a ClassifyObjects intensity filter"
                 ));
             }
             let output_class = resolve_class(
@@ -989,6 +989,7 @@ fn convert_classifier(
                 min_feret: 0.0,
                 max_feret: 2_147_483_600.0,
                 allow_edge_touching: !filter.metrics.exclude_objects_at_the_edge,
+                intensity_filters: vec![],
             }));
         }
     }

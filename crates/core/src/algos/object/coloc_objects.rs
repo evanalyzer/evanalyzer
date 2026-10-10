@@ -1192,7 +1192,7 @@ mod tests {
         // Regression test: `Object::overlaps()` cannot sample pixel data (it only sees the two
         // parent masks), so the intersection object needs its own intensity measurement pass.
         const CHANNEL: i32 = 0;
-        const VALUE: f32 = 5.0;
+        const VALUE: f64 = 5.0;
         let size = ImageSize {
             width: 10,
             height: 10,
@@ -1229,7 +1229,7 @@ mod tests {
 
         let mut cache = GlobalPipelineCache::default();
         // Constant-value channel so the expected sum/avg/min/max are trivial to compute.
-        let channel_img = Image::<f32, 1>::new(size, vec![VALUE; 100]).unwrap();
+        let channel_img = Image::<f32, 1>::new(size, vec![VALUE as f32; 100]).unwrap();
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: channel_img,

@@ -47,23 +47,23 @@ pub fn compute_object_features(
             ObjectMetric::IntensitySum(channel) => object
                 .intensities
                 .get(channel)
-                .map(|i| i.sum_intensity as f32)
-                .unwrap_or(0.0),
+                .map(|i| i.sum_intensity)
+                .unwrap_or(0.0) as f32,
             ObjectMetric::IntensityMin(channel) => object
                 .intensities
                 .get(channel)
                 .map(|i| i.min_intensity)
-                .unwrap_or(0.0),
+                .unwrap_or(0.0) as f32,
             ObjectMetric::IntensityMax(channel) => object
                 .intensities
                 .get(channel)
                 .map(|i| i.max_intensity)
-                .unwrap_or(0.0),
+                .unwrap_or(0.0) as f32,
             ObjectMetric::IntensityAvg(channel) => object
                 .intensities
                 .get(channel)
                 .map(|i| i.avg_intensity)
-                .unwrap_or(0.0),
+                .unwrap_or(0.0) as f32,
         })
         .collect()
 }

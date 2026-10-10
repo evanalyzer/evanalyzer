@@ -1,6 +1,6 @@
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, max_gray_value};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
@@ -213,18 +213,15 @@ impl PipelineResultExporter for CsvExporter {
         // --- Phase 4: Data Row Serialization ---
         let px_len = (px.px_size_x * px.px_size_y).sqrt();
         let nr_of_bits = cache.image_meta.nr_of_bits;
-        // Same implausible-bit-depth guard as image_reader.rs's read path -
-        // unguarded, `1u64 << nr_of_bits` for nr_of_bits > 63 is a
-        // shift-by-too-large, silently producing a wrong scale factor
-        // instead of an error.
-        if !(1..=32).contains(&nr_of_bits) {
+        // Same implausible-bit-depth guard as image_reader.rs's read path
+        // (see `max_gray_value`). Max pixel value for the bit depth (e.g.
+        // 65535 for 16-bit).
+        let Some(bit_max) = max_gray_value(nr_of_bits) else {
             return Err(InternalErrors::Generic(format!(
                 "cannot export {}: implausible bit depth {nr_of_bits} (expected 1-32)",
                 cache.image_rel_path.display()
             )));
-        }
-        // Max pixel value for the bit depth (e.g. 65535 for 16-bit)
-        let bit_max = ((1u64 << nr_of_bits) - 1) as f64;
+        };
 
         for object in cache.object_cache.values() {
             let perimeter = object.get_perimeter();
