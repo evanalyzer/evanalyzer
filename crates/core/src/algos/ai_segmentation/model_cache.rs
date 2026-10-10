@@ -7,9 +7,14 @@
 //! Licensed under the **AGPL-3.0**.
 
 use std::{
-    cell::RefCell, collections::HashMap, path::Path, path::PathBuf, sync::Arc, time::SystemTime,
+    cell::RefCell,
+    collections::HashMap,
+    path::Path,
+    path::PathBuf,
+    sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError},
+    time::SystemTime,
 };
-use tch::CModule;
+use tch::{CModule, Device};
 
 use crate::ai_learning::model::SavedClassifier;
 
@@ -41,49 +46,74 @@ fn get_or_insert<V, E>(
     Ok(value)
 }
 
-thread_local! {
-    // Rayon reuses a fixed pool of worker threads across tasks, so a
-    // thread-local cache persists across every tile/image a given worker
-    // processes for the lifetime of the process — not just for one
-    // PipelineCache/pipeline run. CModule is loaded and only ever touched by
-    // the thread that loaded it, so no Send/Sync bound on CModule is needed.
-    static MODEL_CACHE: RefCell<HashMap<PathBuf, (Option<SystemTime>, Arc<CModule>)>> =
-        RefCell::new(HashMap::new());
-}
+/// TorchScript models loaded in this process, per device and file.
+type ModelCache = HashMap<Device, HashMap<PathBuf, (Option<SystemTime>, Arc<CModule>)>>;
 
-/// Returns the `CModule` loaded from `path`, reusing a previously loaded
-/// instance on this thread instead of re-reading and re-parsing the
-/// TorchScript file. `load` is only invoked on a cache miss.
+/// All Torch work in the process goes through this lock (see
+/// [`torch_session`]); it also owns the loaded models.
 ///
-/// `load_cached_model` is a thin delegation to [`get_or_insert`], whose
-/// hit/miss/error semantics are covered directly below; no TorchScript
-/// fixture is available in this environment to exercise a real `CModule`
-/// load in a unit test.
-pub fn load_cached_model<E>(
-    path: &Path,
-    load: impl FnOnce() -> Result<CModule, E>,
-) -> Result<Arc<CModule>, E> {
-    // Some traced graphs (e.g. Cellpose-SAM's ViT encoder, whose relative-
-    // position-embedding math is a long chain of elementwise adds/unsqueezes)
-    // contain op sequences PyTorch's JIT fuser tries to compile into a single
-    // CUDA kernel via NVRTC on first run. That requires the CUDA *toolkit*'s
-    // `libnvrtc-builtins` to be installed system-wide - most end-user
-    // machines that only have a GPU driver installed don't have it, and the
-    // failure only surfaces the first time that particular fused op pattern
-    // runs. Disabling both JIT fusers trades that (unfused, marginally
-    // slower) elementwise math for never depending on NVRTC being present.
-    // Cheap enough to set unconditionally on every call - whether this flag
-    // is process-global or per-thread isn't documented, and redoing it on a
-    // cache hit costs nothing.
-    tch::jit::set_tensor_expr_fuser_enabled(false);
-    tch::jit::fuser_cuda_set_enabled(false);
+/// Why one lock instead of letting every pipeline worker run its model:
+/// - Each worker used to load its own copy of the model. With ~20 workers
+///   that is ~20 copies on the GPU (a Cellpose-SAM model is ~1.2 GB),
+///   which overflows GPU memory - on Windows the driver then silently pages
+///   into system RAM and inference all but stops.
+/// - Torch runs every CPU op on its own thread pool sized to all cores. ~20
+///   workers doing that at once start hundreds of busy threads fighting
+///   over the cores (100% CPU, little progress).
+///
+/// A GPU runs one model at a time anyway, so serializing inference costs
+/// little; the lock-free parts of the AI steps (mask building, rasterizing)
+/// and all other steps still run in parallel.
+static TORCH: LazyLock<Mutex<ModelCache>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    MODEL_CACHE.with(|cache| get_or_insert(&mut cache.borrow_mut(), path, load))
+/// Exclusive access to Torch for one AI step. Hold it for all tensor work -
+/// loading, inference and copying results back to plain Rust data - and drop
+/// it (with the tensors) before the remaining CPU-only work.
+pub(crate) struct TorchSession {
+    models: MutexGuard<'static, ModelCache>,
+}
+
+/// Waits for and returns exclusive access to Torch, see [`TORCH`].
+pub(crate) fn torch_session() -> TorchSession {
+    // A panic inside an earlier session (e.g. a failing model) must not
+    // block every later AI step; the model map stays consistent either way.
+    let models = TORCH.lock().unwrap_or_else(PoisonError::into_inner);
+    TorchSession { models }
+}
+
+impl TorchSession {
+    /// The model loaded from `path` onto `device`, shared by every worker:
+    /// loaded once per process instead of re-read and re-parsed, and only
+    /// one copy kept on the device. `load` only runs on a cache miss (or
+    /// when the file changed, see [`get_or_insert`]).
+    pub fn model<E>(
+        &mut self,
+        path: &Path,
+        device: Device,
+        load: impl FnOnce() -> Result<CModule, E>,
+    ) -> Result<Arc<CModule>, E> {
+        // Some traced graphs (e.g. Cellpose-SAM's ViT encoder, whose relative-
+        // position-embedding math is a long chain of elementwise adds/unsqueezes)
+        // contain op sequences PyTorch's JIT fuser tries to compile into a single
+        // CUDA kernel via NVRTC on first run. That requires the CUDA *toolkit*'s
+        // `libnvrtc-builtins` to be installed system-wide - most end-user
+        // machines that only have a GPU driver installed don't have it, and the
+        // failure only surfaces the first time that particular fused op pattern
+        // runs. Disabling both JIT fusers trades that (unfused, marginally
+        // slower) elementwise math for never depending on NVRTC being present.
+        // Cheap enough to set unconditionally on every call - whether this flag
+        // is process-global or per-thread isn't documented, and redoing it on a
+        // cache hit costs nothing.
+        tch::jit::set_tensor_expr_fuser_enabled(false);
+        tch::jit::fuser_cuda_set_enabled(false);
+
+        get_or_insert(self.models.entry(device).or_default(), path, load)
+    }
 }
 
 thread_local! {
-    // Same reasoning as `MODEL_CACHE` above - persists per worker thread for
-    // the process lifetime, not just one pipeline run, so a whole-slide
+    // Rayon reuses a fixed pool of worker threads, so this persists per
+    // worker thread for the process lifetime, not just one pipeline run, so a whole-slide
     // image's many tiles don't each pay the JSON-deserialize + smartcore/burn
     // reconstruction cost of loading the same `.evamodel` file again.
     static CLASSIFIER_CACHE: RefCell<HashMap<PathBuf, (Option<SystemTime>, Arc<SavedClassifier>)>> =
@@ -106,6 +136,43 @@ mod tests {
     use evanalyzer_cfg::core_types::InternalErrors;
     use std::cell::Cell;
     use std::time::Duration;
+
+    #[test]
+    fn workers_share_one_loaded_model() {
+        // The point of the shared session: many pipeline workers asking for
+        // the same model get one copy, loaded once - not one per thread.
+        use crate::algos::ai_segmentation::test_support::trace_and_save_model;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (_dir, path) = trace_and_save_model(1, 1, 2, |x| x.shallow_clone());
+        let loads = AtomicUsize::new(0);
+        let models: Vec<Arc<CModule>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        torch_session()
+                            .model(&path, Device::Cpu, || {
+                                loads.fetch_add(1, Ordering::SeqCst);
+                                CModule::load_on_device(&path, Device::Cpu)
+                            })
+                            .unwrap()
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert!(models.iter().all(|m| Arc::ptr_eq(m, &models[0])));
+    }
+
+    #[test]
+    fn a_panic_inside_a_session_does_not_block_later_sessions() {
+        let _ = std::thread::spawn(|| {
+            let _session = torch_session();
+            panic!("model failed");
+        })
+        .join();
+        drop(torch_session());
+    }
 
     #[test]
     fn cache_hit_reuses_value_without_calling_loader_again() {
@@ -192,9 +259,8 @@ mod tests {
     fn a_changed_mtime_invalidates_the_cache_entry() {
         // Simulates retraining and re-saving a model under the same path
         // while the process is still running - the point of keying on mtime
-        // at all, since `model_cache.rs`'s doc comment on `MODEL_CACHE` notes
-        // these caches persist for the whole process lifetime, not just one
-        // pipeline run.
+        // at all, since these caches persist for the whole process lifetime,
+        // not just one pipeline run.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("model.evamodel");
         std::fs::write(&path, b"v1").unwrap();
@@ -245,7 +311,7 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &after_retrain));
     }
 
-    // -- load_cached_classifier (real end-to-end, unlike `load_cached_model` -
+    // -- load_cached_classifier (real end-to-end, unlike `TorchSession::model` -
     // a `SavedClassifier` is a plain in-memory value, no TorchScript fixture
     // file needed to exercise the real cache) ------------------------------
 

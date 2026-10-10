@@ -421,7 +421,7 @@ impl Object {
     pub fn finalize_intensity_statistics(&mut self) {
         let n = self.area.max(1) as f64;
         for (_channel_id, intensity) in self.intensities.iter_mut() {
-            intensity.avg_intensity = (intensity.sum_intensity / n);
+            intensity.avg_intensity = intensity.sum_intensity / n;
         }
     }
 }
