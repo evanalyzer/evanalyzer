@@ -199,15 +199,15 @@ fn check_prediction_count_matches(
 
 impl AiObjectClassifier {
     /// Whether `object` is in scope for this classifier: matches
-    /// `origin_segmentation` (if any is configured) and carries every class
-    /// listed in `input_classes` (if any is configured) - the same input
+    /// `origin_segmentation` (if any is configured) and carries at least one
+    /// class listed in `input_classes` (if any is configured) - the same input
     /// selection `ClassifyObjects` applies before evaluating its criteria.
     fn matches_input(&self, object: &Object) -> bool {
         (self.origin_segmentation.is_empty()
             || self
                 .origin_segmentation
                 .contains(&object.segmentation_class))
-            && (self.input_classes.is_empty() || object.has_object_classes(&self.input_classes))
+            && (self.input_classes.is_empty() || object.has_any_object_class(&self.input_classes))
     }
 }
 
@@ -540,6 +540,42 @@ mod tests {
         assert!(
             !large.has_object_class(&ObjectClass::Valid(42)),
             "object from a non-matching segmentation class must not be classified"
+        );
+    }
+
+    /// One of several `input_classes` is enough to be classified.
+    #[test]
+    fn execute_classifies_objects_carrying_any_of_the_input_classes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.evamodel");
+        save_to_file(&saved_object_classifier(labels()), &path).unwrap();
+
+        let cmd = AiObjectClassifier {
+            model_path: path,
+            segmentation_mapping: vec![ClassificationMapping {
+                object_class: ObjectClass::Valid(6),
+                output_class: ObjectClass::Valid(42),
+            }],
+            origin_segmentation: vec![],
+            // The object carries only the second one.
+            input_classes: vec![
+                ObjectClass::Valid(99),
+                ObjectClass::from_segmentation_class(SegmentationClass(1)),
+            ],
+            match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+        };
+
+        let mut ctx = make_ctx();
+        let mut cache = GlobalPipelineCache::default();
+        let large = make_object(LARGE_ID, 100, SegmentationClass(1));
+        cache.object_cache.insert(large.id.clone(), large);
+
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let large = cache.object_cache.get(&ObjectId(LARGE_ID)).unwrap();
+        assert!(
+            large.has_object_class(&ObjectClass::Valid(42)),
+            "an object carrying one of the input classes must be classified"
         );
     }
 

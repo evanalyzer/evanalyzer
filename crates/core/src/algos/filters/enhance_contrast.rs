@@ -18,24 +18,15 @@ use std::sync::Arc;
 ///
 /// This algorithm can perform linear contrast stretching, normalization,
 /// or histogram equalization to improve the dynamic range of an image.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::EnhanceContrast;
-/// let settings = EnhanceContrast {
-///     saturated_pixels: 0.01,   // Clip 1% of outliers
-///     normalize: true,          // Stretch to [0.0, 1.0]
-///     equalize_histogram: false,
-/// };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct EnhanceContrast {
     /// Percentage of pixels to "clip" from the top and bottom of the histogram.
     ///
-    /// Range: [0.0, 1.0]. A value of 0.01 (1%) helps ignore hot/dead pixels
-    /// that would otherwise prevent effective contrast stretching.
+    /// In percent (0 - 100), split evenly between the darkest and the
+    /// brightest pixels, like ImageJ: 0.35 clips 0.175 % at each end. A small
+    /// value (ImageJ's default is 0.35) ignores hot/dead pixels that would
+    /// otherwise prevent effective contrast stretching.
     pub saturated_pixels: f32,
 
     /// Whether to linearly stretch the remaining pixel intensities to fill

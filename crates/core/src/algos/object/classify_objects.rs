@@ -303,7 +303,12 @@ impl ImageAlgorithm for ClassifyObjects {
             .object_cache
             .values()
             .filter(|object| {
-                self.input_classes.is_empty() || object.has_object_classes(&self.input_classes)
+                (self.origin_segmentation.is_empty()
+                    || self
+                        .origin_segmentation
+                        .contains(&object.segmentation_class))
+                    && (self.input_classes.is_empty()
+                        || object.has_any_object_class(&self.input_classes))
             })
             .map(|object| {
                 let matches = self.matches_criteria(object, px_size)
@@ -744,6 +749,68 @@ mod tests {
                 .unwrap()
                 .has_object_class(&CLASS_B)
         );
+    }
+
+    /// `input_classes` selects objects carrying at least one of the listed
+    /// classes (not all of them).
+    #[test]
+    fn input_classes_select_objects_carrying_any_of_them() {
+        const CLASS_C: ObjectClass = ObjectClass::Valid(3);
+        const CLASS_OUT: ObjectClass = ObjectClass::Valid(9);
+        let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
+            output_class: CLASS_OUT,
+            match_handling: ClassifyMatchHandling::AddOutputClassIfMatch,
+            ..Default::default()
+        };
+        let mut cache = GlobalPipelineCache::default();
+        for (id, class) in [(ID_A, CLASS_A), (ID_B, CLASS_B), (300_000, CLASS_C)] {
+            cache
+                .object_cache
+                .insert(ObjectId(id), make_filled_object(id, [0, 0, 4, 4], class));
+        }
+        run(&cmd, &mut cache);
+
+        let classified = |id| {
+            cache
+                .object_cache
+                .get(&ObjectId(id))
+                .unwrap()
+                .has_object_class(&CLASS_OUT)
+        };
+        assert!(classified(ID_A), "carries one listed class (A)");
+        assert!(classified(ID_B), "carries the other listed class (B)");
+        assert!(!classified(300_000), "carries none of them");
+    }
+
+    /// `origin_segmentation` restricts the objects evaluated, like in the AI
+    /// object classifier.
+    #[test]
+    fn origin_segmentation_restricts_the_classified_objects() {
+        const CLASS_OUT: ObjectClass = ObjectClass::Valid(9);
+        let cmd = ClassifyObjects {
+            origin_segmentation: vec![SegmentationClass(2)],
+            output_class: CLASS_OUT,
+            match_handling: ClassifyMatchHandling::AddOutputClassIfMatch,
+            ..Default::default()
+        };
+        let mut cache = GlobalPipelineCache::default();
+        for (id, seg) in [(ID_A, 1), (ID_B, 2)] {
+            let mut object = make_filled_object(id, [0, 0, 4, 4], CLASS_A);
+            object.segmentation_class = SegmentationClass(seg);
+            cache.object_cache.insert(ObjectId(id), object);
+        }
+        run(&cmd, &mut cache);
+
+        let classified = |id| {
+            cache
+                .object_cache
+                .get(&ObjectId(id))
+                .unwrap()
+                .has_object_class(&CLASS_OUT)
+        };
+        assert!(!classified(ID_A), "segmentation class 1 is not selected");
+        assert!(classified(ID_B), "segmentation class 2 is");
     }
 
     #[test]

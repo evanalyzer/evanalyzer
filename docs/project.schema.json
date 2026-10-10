@@ -589,7 +589,7 @@
       ]
     },
     "EnhanceContrastSettings": {
-      "description": "Configuration for contrast enhancement and histogram manipulation.\n\nThis algorithm can perform linear contrast stretching, normalization,\nor histogram equalization to improve the dynamic range of an image.\n\n# Examples\n\n```\n# use imagec::backend::algos::EnhanceContrast;\nlet settings = EnhanceContrast {\nsaturated_pixels: 0.01,   // Clip 1% of outliers\nnormalize: true,          // Stretch to [0.0, 1.0]\nequalize_histogram: false,\n};\n```",
+      "description": "Configuration for contrast enhancement and histogram manipulation.\n\nThis algorithm can perform linear contrast stretching, normalization,\nor histogram equalization to improve the dynamic range of an image.",
       "type": "object",
       "properties": {
         "equalizeHistogram": {
@@ -601,7 +601,7 @@
           "type": "boolean"
         },
         "saturatedPixels": {
-          "description": "Percentage of pixels to \"clip\" from the top and bottom of the histogram.\n\nRange: [0.0, 1.0]. A value of 0.01 (1%) helps ignore hot/dead pixels\nthat would otherwise prevent effective contrast stretching.",
+          "description": "Percentage of pixels to \"clip\" from the top and bottom of the histogram.\n\nIn percent (0 - 100), split evenly between the darkest and the\nbrightest pixels, like ImageJ: 0.35 clips 0.175 % at each end. A small\nvalue (ImageJ's default is 0.35) ignores hot/dead pixels that would\notherwise prevent effective contrast stretching.",
           "type": "number",
           "format": "float"
         }

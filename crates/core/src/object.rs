@@ -268,10 +268,13 @@ impl Object {
         self.object_class.contains(object_class)
     }
 
-    pub fn has_object_classes(&self, object_classes: &[ObjectClass]) -> bool {
+    /// Whether the object carries at least one of `object_classes` - how
+    /// every "only objects of these classes" list of a pipeline command
+    /// selects its objects.
+    pub fn has_any_object_class(&self, object_classes: &[ObjectClass]) -> bool {
         object_classes
             .iter()
-            .all(|class| self.has_object_class(class))
+            .any(|class| self.has_object_class(class))
     }
 
     pub fn remove_object_class(&mut self, object_class: &ObjectClass) {
