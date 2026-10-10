@@ -8,13 +8,15 @@ publish = { workspace = true }
 
 [dependencies]
 evanalyzer_cfg = { workspace = true }
-evanalyzer_gui    = { path = "../gui" }
-evanalyzer_cli    = { path = "../cli" }
+evanalyzer_gui    = { workspace = true }
+evanalyzer_cli    = { workspace = true }
 evanalyzer_app    = { workspace = true }
+evanalyzer_server    = { workspace = true }
 evanalyzer_llm    = { workspace = true, optional = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+rpassword = { workspace = true }
 
 # Off by default: local-LLM pipeline generation is too slow on CPU for a
 # shipped desktop build right now. Build with `--features llm` to include it.

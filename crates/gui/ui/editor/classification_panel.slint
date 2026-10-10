@@ -6,11 +6,17 @@ import {
     Spinner,
 } from "std-widgets.slint";
 import { Theme } from "../style.slint";
+import { FocusBanner } from "pipeline_focus.slint";
 import { GlobalAppState, DialogType } from "../state.slint";
 import { ImagesListState } from "../editor/images_list_panel.slint";
 import {
     ClassificationSettingsState,
 } from "../dialogs/classification_class_edit_dialog.slint";
+import {
+    ViewportObjectState,
+    ToolState,
+} from "viewport_state.slint";
+
 
 export struct ClassItemData {
     id: int,
@@ -82,7 +88,7 @@ component ActionButton inherits Rectangle {
 // One row in the class list. Encapsulating it as its own
 // component keeps the `selected` flag, the hover state, and
 // the click handler all colocated.
-component ClassListRow inherits Rectangle {
+export component ClassListRow inherits Rectangle {
     in property <ClassItemData> data;
     in property <bool> selected;
     callback row_clicked;
@@ -300,6 +306,8 @@ export component ClassificationPanel inherits Rectangle {
             }
         }
 
+        FocusBanner { }
+
         // ----- CLASS LIST -----
         Rectangle {
             vertical-stretch: 1;
@@ -314,6 +322,7 @@ export component ClassificationPanel inherits Rectangle {
                             ClassificationState.selected_class_name = "";
                             ClassificationState.selected_class_id = -1;
                             ClassificationState.class_selected(-1);
+                            ViewportObjectState.act_tool_state = ToolState.Move;
                         } else {
                             ClassificationState.selected_class_name = data.name;
                             ClassificationState.selected_class_id = data.id;
@@ -445,7 +454,8 @@ export component ClassificationPanel inherits Rectangle {
                         primary: true;
                         enabled: ImagesListState.images_list.length > 0;
                         clicked => {
-                            if (ClassificationState.classes_list.length > 0) {
+                            // Bigger 1 since Background label is always available. So ask only if more then one lables are available
+                            if (ClassificationState.classes_list.length > 1) {
                                 GlobalAppState.active_dialog = DialogType.classification_confirm_auto_add_dialog;
                             } else {
                                 ClassificationState.class_auto_add_and_replace();

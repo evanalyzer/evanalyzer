@@ -65,8 +65,8 @@ impl ImageAlgorithm for FillHoles {
         "Fill Holes"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::IMAGEJ]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -247,7 +247,6 @@ mod tests {
     use super::*;
     use crate::F32Gray;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     #[test]
     fn test_fill_holes_name() {
@@ -344,11 +343,7 @@ mod tests {
         data[3 * 5 + 2] = 9; // (2,3)
 
         let mut ctx = PipelineContext::new_test::<F32Gray>(size)?;
-        ctx.segmentation_map = Some(Image::<u32, 1, CpuAllocator>::new(
-            size,
-            data,
-            CpuAllocator,
-        )?);
+        ctx.segmentation_map = Some(Image::<u32, 1>::new(size, data)?);
 
         FillHoles {}.execute(&mut ctx, &mut GlobalPipelineCache::default())?;
 

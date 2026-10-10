@@ -30,6 +30,8 @@ jobs:
     # blocks every build-* job below (needs: [templates]) and the release
     # itself - no need for a separate scheduled check, since "before the
     # project is built and before it's released" is exactly this point.
+    # Exception: on a test tag (e.g. 0.1.0-test.11) a failed check is only
+    # reported as a warning and the builds go on.
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.2.0
@@ -56,8 +58,18 @@ jobs:
           mkdir templates
           find evanalyzer-templates -type f \( -name '*.evapipe' -o -name '*.evapt' \) -exec cp -t templates {} +
 
+      # Blocking for real releases. On a test tag (e.g. 0.1.0-test.11) a
+      # failure is only reported (step below) and the builds still run.
       - name: Check templates against the current schema
+        id: check_templates
+        continue-on-error: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-test.') }}
         run: cargo run -p evanalyzer_cfg --example check_templates -- templates
+
+      - name: Report template check failure (test tag - not blocking)
+        if: steps.check_templates.outcome == 'failure'
+        run: |
+          echo "::warning title=Template check failed::Some templates don't match the current schema (see the step above). Not blocking because ${GITHUB_REF_NAME} is a test tag."
+          echo "### :warning: Template check failed (not blocking on test tag \`${GITHUB_REF_NAME}\`)" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -251,6 +263,13 @@ jobs:
       - name: Build
         run: cargo build-linux
 
+      - name: Check that libtorch_cuda is linked
+        # Without it the binary silently runs CPU-only - see relink_torch_cuda
+        # in crates/bin/build.rs.
+        run: |
+          readelf -d target/x86_64-unknown-linux-gnu/release/evanalyzer | grep -q "libtorch_cuda.so" \
+            || { echo "::error::evanalyzer does not link libtorch_cuda.so - the CUDA build would run CPU-only"; exit 1; }
+
       - name: Download templates
         uses: actions/download-artifact@v4
         with:
@@ -368,6 +387,19 @@ jobs:
 
       - name: Build
         run: cargo build-win
+
+      - name: Check that torch_cuda.dll is linked
+        # Without it the exe silently runs CPU-only - see relink_torch_cuda in
+        # crates/bin/build.rs. POSIX sh only (the container has no bash).
+        run: |
+          exe=target/x86_64-pc-windows-msvc/release/evanalyzer.exe
+          dump=$(command -v llvm-objdump || ls /usr/bin/llvm-objdump-* 2>/dev/null | head -n 1)
+          if [ -z "$dump" ]; then
+            echo "::warning::llvm-objdump not found - cannot check that torch_cuda.dll is linked"
+            exit 0
+          fi
+          "$dump" -p "$exe" | grep -qi "DLL Name: torch_cuda.dll" \
+            || { echo "::error::evanalyzer.exe does not import torch_cuda.dll - the CUDA build would run CPU-only"; exit 1; }
 
       - name: Download templates
         uses: actions/download-artifact@v4

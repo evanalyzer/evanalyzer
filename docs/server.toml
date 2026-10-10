@@ -1,0 +1,104 @@
+# EVAnalyzer server configuration - complete example.
+#
+#   evanalyzer server --config /etc/evanalyzer/server.toml
+#
+# Every key is optional: the values below are the defaults unless noted, so
+# a real config only needs the lines that differ. Command-line arguments
+# (--listen, --session-store, --log-level) override this file. Misspelled or
+# unknown keys stop the server with an error. Changes apply on restart.
+#
+# The reference for each key is the doc comment of its field in
+# crates/server/src/config.rs; the guide is docs/server.md. This file is
+# parsed by the server's tests, so it always matches the code.
+
+# Address and port to accept clients on. 127.0.0.1 = this machine only;
+# 0.0.0.0:7400 accepts connections from every network.
+listen = "127.0.0.1:7400"
+
+# File the running workers are recorded in, so a restarted server finds them
+# again. Default: /run/evanalyzer/sessions.json for a system service,
+# otherwise in the temp folder.
+# session_store = "/run/evanalyzer/sessions.json"
+
+# What the server and its workers log: error, warn, info, debug, trace, off,
+# or per module, e.g. "info,evanalyzer_core=debug".
+log_level = "info"
+
+[users]
+# Who may log in:
+#   "single" - one account, configured in [users.single]
+#   "linux"  - this machine's system users, see [users.linux]
+#   "file"   - the accounts listed in a users file, see [users.file]
+source = "single"
+
+# Folders every user's worker may read and write, unless the account sets
+# its own allowed_dirs. {home} stands for the user's home folder.
+default_allowed_dirs = ["{home}"]
+
+[users.single]
+# Login name. Can be changed at any time: the account's internal id is fixed.
+username = "admin"
+# The password, hashed: create one with `evanalyzer hash-password`. Other
+# formats: see "Passwords" in docs/server.md. Default: none - the server
+# makes up a random password at every start and prints it to the console.
+# password = "$argon2id$v=19$m=19456,t=2,p=1$..."
+# Home folder: the worker's working directory, where it keeps the user's
+# settings and templates. Absolute path. Default: a folder of its own,
+# created on start - /var/lib/evanalyzer/single-user for a system service,
+# otherwise evanalyzer/single-user in the server account's data folder
+# (~/.local/share on Linux, %LOCALAPPDATA% on Windows). With the default
+# allowed_dirs it is all the worker may read and write.
+# home = "/srv/evanalyzer/admin"
+# Default: users.default_allowed_dirs.
+# allowed_dirs = ["{home}", "/data/microscopy"]
+
+[users.linux]
+# Passwords are checked against the shadow file (the server needs root or
+# the shadow group); home, uid and gid come from the passwd file. Run as
+# root, the server starts each worker as its user's system account.
+shadow_file = "/etc/shadow"
+passwd_file = "/etc/passwd"
+
+# Per-user exceptions to users.default_allowed_dirs:
+# [users.linux.overrides.alice]
+# allowed_dirs = ["{home}", "/data/shared"]
+
+[users.file]
+# The users file - required for source = "file". Format: see
+# docs/server-users.toml. Keep it readable by the server only (chmod 600).
+# path = "/etc/evanalyzer/users.toml"
+
+[tls]
+# Encrypt client connections: clients connect with wss:// instead of ws://.
+# Turn it off only when something else encrypts (reverse proxy, VPN, SSH
+# tunnel) or for tests on this machine - otherwise passwords and data cross
+# the network readable. Workers are always reached unencrypted on 127.0.0.1.
+enabled = true
+# Certificate chain and private key (PEM), e.g. from Let's Encrypt or your
+# organisation's CA - clients then need no fingerprint. Both or neither.
+# Default: a self-signed certificate the server creates (see below).
+# cert = "/etc/evanalyzer/cert.pem"
+# key = "/etc/evanalyzer/key.pem"
+# Where the self-signed certificate is created on first start and kept, so
+# its fingerprint stays the same. Default: /var/lib/evanalyzer/tls for a
+# system service, otherwise .evanalyzer-server/tls in the server account's
+# home folder.
+# self_signed_dir = "/var/lib/evanalyzer/tls"
+
+[workers]
+# Each logged-in user gets a worker process. It stops by itself once no
+# client has been connected and no analysis has run for this many minutes;
+# the user's next login starts a new one. A running analysis keeps it alive
+# however long it takes - logging out or losing the connection doesn't stop
+# it. At least 1.
+idle_timeout_minutes = 120
+
+[limits]
+# Not set: no limit.
+# At most this many workers (= users working at the same time). A login that
+# would start one more is refused with "try again later"; users whose worker
+# runs already can always log in.
+# max_workers = 20
+# At most this many client connections at once, all users together (one GUI
+# or CLI is one connection).
+# max_connections = 100

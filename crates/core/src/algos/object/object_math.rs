@@ -77,15 +77,16 @@ pub struct ObjectMath {
     /// Optional additional label filters applied to `other_class` objects.
     ///
     /// Only `other_class` objects that carry all listed classes are used.
+    #[cmdsmeta(visibility = Advanced)]
     pub other_filter_classes: Vec<ObjectClass>,
 
     /// Size unit for `min_overlap_area`
-    #[cmdsmeta(default = SizeUnits::Pixels)]
+    #[cmdsmeta(default = SizeUnits::Pixels, visibility = Advanced)]
     pub size_unit: SizeUnits,
 
     /// Minimum overlap area before an `other_class` object is treated as a partner
     /// of an input object; objects overlapping less than this are ignored.
-    #[cmdsmeta(default = 2)]
+    #[cmdsmeta(default = 2, visibility = Advanced)]
     pub min_overlap_area: f32,
 
     /// If unset, the result replaces the input object in place.
@@ -101,7 +102,7 @@ pub struct ObjectMath {
     /// Note this is a policy override, not the literal mathematical result: e.g. for
     /// `And`, the true result of "A and nothing" is empty, but `keep_unmatched = true`
     /// still leaves A untouched rather than emitting a zero-area object.
-    #[cmdsmeta(default = true)]
+    #[cmdsmeta(default = true, visibility = Advanced)]
     pub keep_unmatched: bool,
 }
 
@@ -232,8 +233,8 @@ impl ImageAlgorithm for ObjectMath {
         "Object Math"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -244,6 +245,7 @@ impl ImageAlgorithm for ObjectMath {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image::Point2d;
     use crate::{
         ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::PixelSizes,
@@ -254,19 +256,12 @@ mod tests {
         },
     };
     use bitvec::prelude::*;
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     const ID_A: u128 = 100_000;
 
     fn make_ctx(size: ImageSize) -> PipelineContext {
-        let img = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![0.0f32; size.width * size.height],
-            CpuAllocator,
-        )
-        .unwrap();
+        let img = Image::<f32, 1>::new(size, vec![0.0f32; size.width * size.height]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -303,12 +298,7 @@ mod tests {
         value: f32,
     ) -> PipelineContext {
         let ctx = make_ctx(size);
-        let img = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![value; size.width * size.height],
-            CpuAllocator,
-        )
-        .unwrap();
+        let img = Image::<f32, 1>::new(size, vec![value; size.width * size.height]).unwrap();
         cache.image_meta = GlobalImageMeta {
             full_image_width: size,
             is_rgb: false,

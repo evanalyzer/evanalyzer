@@ -150,7 +150,7 @@ pub struct ThresholdEntry {
     /// bit: 0 - 255/65535
     /// %: 0 - 100.0
     /// rel: 0 - 1.0
-    #[cmdsmeta(default = PixelUnits::Bit)]
+    #[cmdsmeta(default = PixelUnits::Bit, visibility = Advanced)]
     pub unit: PixelUnits,
 
     /// The classification ID assigned to pixels falling within this threshold range.
@@ -160,7 +160,7 @@ pub struct ThresholdEntry {
     ///
     /// This is the source which is used to calculate the threshold value.
     /// The value itself is applied to the actual image the pipeline stands.
-    #[cmdsmeta(default = ThresholdValueSource::ActualImage, optional = true)]
+    #[cmdsmeta(default = ThresholdValueSource::ActualImage, optional = true, visibility = Advanced)]
     pub value_source: ThresholdValueSource,
 }
 
@@ -321,8 +321,23 @@ impl ImageAlgorithm for Threshold {
         "Threshold"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    /// The papers of every automatic method used (each once, in order);
+    /// EVAnalyzer itself when only manual thresholds are used.
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        let mut citations: Vec<&'static CitationMetadata> = Vec::new();
+        for citation in self
+            .thresholds
+            .iter()
+            .filter_map(|entry| method_citation(&entry.method))
+        {
+            if !citations.iter().any(|c| c.cite_key == citation.cite_key) {
+                citations.push(citation);
+            }
+        }
+        if citations.is_empty() {
+            citations.push(&CitationMetadata::DANMAYR);
+        }
+        citations
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -1349,15 +1364,335 @@ fn median_of_sorted(sorted: &[f32]) -> f32 {
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
+// --- Citations of the automatic threshold methods ---
+
+const OTSU: CitationMetadata = CitationMetadata {
+    cite_key: "otsu1979threshold",
+    title: "A Threshold Selection Method from Gray-Level Histograms",
+    authors: &["Nobuyuki Otsu"],
+    year: 1979,
+    container: Some("IEEE Transactions on Systems, Man, and Cybernetics"),
+    doi: Some("10.1109/TSMC.1979.4310076"),
+    url: Some("https://doi.org/10.1109/TSMC.1979.4310076"),
+    pages: Some("62-66"),
+};
+
+const LI: CitationMetadata = CitationMetadata {
+    cite_key: "li1993minimum",
+    title: "Minimum cross entropy thresholding",
+    authors: &["C. H. Li", "C. K. Lee"],
+    year: 1993,
+    container: Some("Pattern Recognition"),
+    doi: Some("10.1016/0031-3203(93)90115-D"),
+    url: Some("https://doi.org/10.1016/0031-3203(93)90115-D"),
+    pages: Some("617-625"),
+};
+
+const MIN_ERROR: CitationMetadata = CitationMetadata {
+    cite_key: "kittler1986minimum",
+    title: "Minimum error thresholding",
+    authors: &["J. Kittler", "J. Illingworth"],
+    year: 1986,
+    container: Some("Pattern Recognition"),
+    doi: Some("10.1016/0031-3203(86)90030-0"),
+    url: Some("https://doi.org/10.1016/0031-3203(86)90030-0"),
+    pages: Some("41-47"),
+};
+
+const TRIANGLE: CitationMetadata = CitationMetadata {
+    cite_key: "zack1977automatic",
+    title: "Automatic measurement of sister chromatid exchange frequency",
+    authors: &["G. W. Zack", "W. E. Rogers", "S. A. Latt"],
+    year: 1977,
+    container: Some("Journal of Histochemistry & Cytochemistry"),
+    doi: Some("10.1177/25.7.70454"),
+    url: Some("https://doi.org/10.1177/25.7.70454"),
+    pages: Some("741-753"),
+};
+
+const MOMENTS: CitationMetadata = CitationMetadata {
+    cite_key: "tsai1985moment",
+    title: "Moment-preserving thresholding: A new approach",
+    authors: &["Wen-Hsiang Tsai"],
+    year: 1985,
+    container: Some("Computer Vision, Graphics, and Image Processing"),
+    doi: Some("10.1016/0734-189X(85)90133-1"),
+    url: Some("https://doi.org/10.1016/0734-189X(85)90133-1"),
+    pages: Some("377-393"),
+};
+
+const HUANG: CitationMetadata = CitationMetadata {
+    cite_key: "huang1995image",
+    title: "Image thresholding by minimizing the measures of fuzziness",
+    authors: &["Liang-Kai Huang", "Mao-Jiun J. Wang"],
+    year: 1995,
+    container: Some("Pattern Recognition"),
+    doi: Some("10.1016/0031-3203(94)E0043-K"),
+    url: Some("https://doi.org/10.1016/0031-3203(94)E0043-K"),
+    pages: Some("41-51"),
+};
+
+const PREWITT: CitationMetadata = CitationMetadata {
+    cite_key: "prewitt1966analysis",
+    title: "The Analysis of Cell Images",
+    authors: &["Judith M. S. Prewitt", "Mortimer L. Mendelsohn"],
+    year: 1966,
+    container: Some("Annals of the New York Academy of Sciences"),
+    doi: Some("10.1111/j.1749-6632.1965.tb11715.x"),
+    url: Some("https://doi.org/10.1111/j.1749-6632.1965.tb11715.x"),
+    pages: Some("1035-1053"),
+};
+
+const ISODATA: CitationMetadata = CitationMetadata {
+    cite_key: "ridler1978picture",
+    title: "Picture Thresholding Using an Iterative Selection Method",
+    authors: &["T. W. Ridler", "S. Calvard"],
+    year: 1978,
+    container: Some("IEEE Transactions on Systems, Man, and Cybernetics"),
+    doi: Some("10.1109/TSMC.1978.4310039"),
+    url: Some("https://doi.org/10.1109/TSMC.1978.4310039"),
+    pages: Some("630-632"),
+};
+
+const KAPUR: CitationMetadata = CitationMetadata {
+    cite_key: "kapur1985new",
+    title: "A new method for gray-level picture thresholding using the entropy of the histogram",
+    authors: &["J. N. Kapur", "P. K. Sahoo", "A. K. C. Wong"],
+    year: 1985,
+    container: Some("Computer Vision, Graphics, and Image Processing"),
+    doi: Some("10.1016/0734-189X(85)90125-2"),
+    url: Some("https://doi.org/10.1016/0734-189X(85)90125-2"),
+    pages: Some("273-285"),
+};
+
+const GLASBEY: CitationMetadata = CitationMetadata {
+    cite_key: "glasbey1993analysis",
+    title: "An Analysis of Histogram-Based Thresholding Algorithms",
+    authors: &["C. A. Glasbey"],
+    year: 1993,
+    container: Some("CVGIP: Graphical Models and Image Processing"),
+    doi: Some("10.1006/cgip.1993.1040"),
+    url: Some("https://doi.org/10.1006/cgip.1993.1040"),
+    pages: Some("532-537"),
+};
+
+const DOYLE: CitationMetadata = CitationMetadata {
+    cite_key: "doyle1962operations",
+    title: "Operations Useful for Similarity-Invariant Pattern Recognition",
+    authors: &["W. Doyle"],
+    year: 1962,
+    container: Some("Journal of the ACM"),
+    doi: Some("10.1145/321119.321123"),
+    url: Some("https://doi.org/10.1145/321119.321123"),
+    pages: Some("259-267"),
+};
+
+const SHANBHAG: CitationMetadata = CitationMetadata {
+    cite_key: "shanbhag1994utilization",
+    title: "Utilization of Information Measure as a Means of Image Thresholding",
+    authors: &["Abhijit G. Shanbhag"],
+    year: 1994,
+    container: Some("CVGIP: Graphical Models and Image Processing"),
+    doi: Some("10.1006/cgip.1994.1037"),
+    url: Some("https://doi.org/10.1006/cgip.1994.1037"),
+    pages: Some("414-419"),
+};
+
+const YEN: CitationMetadata = CitationMetadata {
+    cite_key: "yen1995new",
+    title: "A new criterion for automatic multilevel thresholding",
+    authors: &["Jui-Cheng Yen", "Fu-Juay Chang", "Shyang Chang"],
+    year: 1995,
+    container: Some("IEEE Transactions on Image Processing"),
+    doi: Some("10.1109/83.366472"),
+    url: Some("https://doi.org/10.1109/83.366472"),
+    pages: Some("370-378"),
+};
+
+/// The paper describing an automatic threshold method (as cited by ImageJ's
+/// AutoThresholder, which these are ported from); `None` for manual ones.
+fn method_citation(method: &ThresholdMethod) -> Option<&'static CitationMetadata> {
+    Some(match method {
+        ThresholdMethod::None | ThresholdMethod::Manual => return None,
+        ThresholdMethod::Li => &LI,
+        ThresholdMethod::MinError => &MIN_ERROR,
+        ThresholdMethod::Triangle => &TRIANGLE,
+        ThresholdMethod::Moments => &MOMENTS,
+        ThresholdMethod::Huang => &HUANG,
+        ThresholdMethod::Intermodes | ThresholdMethod::Minimum => &PREWITT,
+        ThresholdMethod::IsoData => &ISODATA,
+        ThresholdMethod::MaxEntropy | ThresholdMethod::RenyiEntropy => &KAPUR,
+        ThresholdMethod::Mean => &GLASBEY,
+        ThresholdMethod::Otsu { .. } => &OTSU,
+        ThresholdMethod::Percentile => &DOYLE,
+        ThresholdMethod::Shanbhag => &SHANBHAG,
+        ThresholdMethod::Yen => &YEN,
+        ThresholdMethod::RobustBackground { .. } => &CitationMetadata::CELLPROFILER,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every automatic method (all methods using `compute_auto_threshold`).
+    fn automatic_methods() -> Vec<ThresholdMethod> {
+        vec![
+            ThresholdMethod::Li,
+            ThresholdMethod::MinError,
+            ThresholdMethod::Triangle,
+            ThresholdMethod::Moments,
+            ThresholdMethod::Huang,
+            ThresholdMethod::Intermodes,
+            ThresholdMethod::IsoData,
+            ThresholdMethod::MaxEntropy,
+            ThresholdMethod::Mean,
+            ThresholdMethod::Minimum,
+            ThresholdMethod::Otsu {
+                classes: OtsuClasses::Two,
+            },
+            ThresholdMethod::Otsu {
+                classes: OtsuClasses::Three {
+                    middle_class: OtsuMiddleClass::Background,
+                },
+            },
+            ThresholdMethod::Otsu {
+                classes: OtsuClasses::Three {
+                    middle_class: OtsuMiddleClass::Foreground,
+                },
+            },
+            ThresholdMethod::Percentile,
+            ThresholdMethod::RenyiEntropy,
+            ThresholdMethod::Shanbhag,
+            ThresholdMethod::Yen,
+        ]
+    }
+
+    #[test]
+    fn every_automatic_method_copes_with_an_empty_histogram() {
+        // E.g. a tile without any pixel in range: no panic, no division by
+        // zero turning into an arbitrary threshold.
+        let empty = [0f32; 256];
+        for method in automatic_methods() {
+            let t = compute_auto_threshold(&method, &empty);
+            assert!(t <= 255, "{method:?}: {t}");
+        }
+    }
+
+    #[test]
+    fn every_automatic_method_copes_with_a_single_intensity() {
+        // A flat tile: all pixels in one bin.
+        let mut flat = [0f32; 256];
+        flat[100] = 1000.0;
+        for method in automatic_methods() {
+            let t = compute_auto_threshold(&method, &flat);
+            assert!(t <= 255, "{method:?}: {t}");
+        }
+    }
+
+    #[test]
+    fn manual_and_none_need_no_histogram_threshold() {
+        let mut hist = [0f32; 256];
+        hist[10] = 5.0;
+        assert_eq!(compute_auto_threshold(&ThresholdMethod::None, &hist), 0);
+        assert_eq!(compute_auto_threshold(&ThresholdMethod::Manual, &hist), 0);
+    }
+
+    #[test]
+    fn every_method_cites_its_paper() {
+        let robust = ThresholdMethod::RobustBackground {
+            lower_outlier_fraction: 0.05,
+            upper_outlier_fraction: 0.05,
+            averaging_method: Averaging::Mean,
+            deviations_above_average: 2.0,
+        };
+        let key = |m: &ThresholdMethod| method_citation(m).map(|c| c.cite_key);
+        assert_eq!(key(&ThresholdMethod::None), None);
+        assert_eq!(key(&ThresholdMethod::Manual), None);
+        assert_eq!(key(&robust), Some("mcquin2018cellprofiler"));
+        let expected = [
+            "li1993minimum",
+            "kittler1986minimum",
+            "zack1977automatic",
+            "tsai1985moment",
+            "huang1995image",
+            "prewitt1966analysis",
+            "ridler1978picture",
+            "kapur1985new",
+            "glasbey1993analysis",
+            "prewitt1966analysis",
+            "otsu1979threshold",
+            "otsu1979threshold",
+            "otsu1979threshold",
+            "doyle1962operations",
+            "kapur1985new",
+            "shanbhag1994utilization",
+            "yen1995new",
+        ];
+        let got: Vec<&str> = automatic_methods()
+            .iter()
+            .map(|m| key(m).unwrap())
+            .collect();
+        assert_eq!(got, expected);
+    }
+
+    fn threshold_with(methods: &[ThresholdMethod]) -> Threshold {
+        Threshold {
+            thresholds: methods
+                .iter()
+                .map(|&method| ThresholdEntry {
+                    method,
+                    min_threshold: 0.0,
+                    max_threshold: 255.0,
+                    unit: PixelUnits::Bit,
+                    object_class_id: SegmentationClass(1),
+                    value_source: ThresholdValueSource::ActualImage,
+                })
+                .collect(),
+        }
+    }
+
+    fn cite_keys(methods: &[ThresholdMethod]) -> Vec<&'static str> {
+        threshold_with(methods)
+            .cite()
+            .iter()
+            .map(|c| c.cite_key)
+            .collect()
+    }
+
+    #[test]
+    fn cite_names_the_paper_of_every_automatic_method_once() {
+        assert_eq!(cite_keys(&[ThresholdMethod::Li]), ["li1993minimum"]);
+        assert_eq!(
+            cite_keys(&[
+                ThresholdMethod::Manual,
+                ThresholdMethod::Triangle,
+                ThresholdMethod::Li,
+                ThresholdMethod::Triangle,
+            ]),
+            ["zack1977automatic", "li1993minimum"]
+        );
+        // Intermodes and Minimum share one paper: cited once.
+        assert_eq!(
+            cite_keys(&[ThresholdMethod::Intermodes, ThresholdMethod::Minimum]),
+            ["prewitt1966analysis"]
+        );
+    }
+
+    #[test]
+    fn cite_falls_back_to_evanalyzer_for_manual_thresholds() {
+        assert_eq!(
+            cite_keys(&[ThresholdMethod::Manual, ThresholdMethod::None]),
+            ["danmayr2026"]
+        );
+        assert_eq!(cite_keys(&[]), ["danmayr2026"]);
+    }
+
     use crate::{
         image::{ImageContainer, ImageDebugExt},
         pipeline::pipeline_cache::CacheAddress,
     };
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
     use std::sync::Arc;
 
     #[test]
@@ -1367,7 +1702,7 @@ mod tests {
             height: 2,
         };
         let input_data = vec![0.1, 0.5, 0.9, 0.0, 1.0, 0.4];
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, input_data)?;
         input_img.print_window();
 
         let settings = vec![
@@ -1530,7 +1865,7 @@ mod tests {
             };
         }
 
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, input_data)?;
         let settings = vec![ThresholdEntry {
             method: ThresholdMethod::Li,
             min_threshold: 0.0,
@@ -1641,7 +1976,7 @@ mod tests {
                 };
             }
 
-            let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+            let input_img = Image::<f32, 1>::new(size, input_data)?;
             let settings = vec![ThresholdEntry {
                 method,
                 min_threshold: 0.0,
@@ -1794,8 +2129,7 @@ mod tests {
         };
 
         let run = |middle_class: OtsuMiddleClass| -> Result<f32, Box<dyn std::error::Error>> {
-            let input_img =
-                Image::<f32, 1, CpuAllocator>::new(size, input_data.clone(), CpuAllocator)?;
+            let input_img = Image::<f32, 1>::new(size, input_data.clone())?;
             let settings = vec![ThresholdEntry {
                 method: ThresholdMethod::Otsu {
                     classes: OtsuClasses::Three { middle_class },
@@ -2016,7 +2350,7 @@ mod tests {
             width: input_data.len(),
             height: 1,
         };
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, input_data)?;
 
         let settings = vec![ThresholdEntry {
             method: ThresholdMethod::RobustBackground {
@@ -2079,7 +2413,7 @@ mod tests {
             width: input_data.len(),
             height: 1,
         };
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, input_data)?;
 
         let settings = vec![ThresholdEntry {
             method: ThresholdMethod::Otsu {
@@ -2248,7 +2582,7 @@ mod tests {
             width: N,
             height: 1,
         };
-        let image = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?;
+        let image = Image::<f32, 1>::new(size, data)?;
         let mut ctx = PipelineContext::new_from_image_test(image)?;
         ctx.image_meta.nr_of_bits = 16;
 
@@ -2287,18 +2621,12 @@ mod tests {
 
     /// Builds a 2x2 constant-value gray image, standing in for the pipeline's
     /// current (e.g. blurred) image.
-    fn constant_gray_image(
-        value: f32,
-    ) -> Result<Image<f32, 1, CpuAllocator>, Box<dyn std::error::Error>> {
+    fn constant_gray_image(value: f32) -> Result<Image<f32, 1>, Box<dyn std::error::Error>> {
         let size = ImageSize {
             width: 2,
             height: 2,
         };
-        Ok(Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![value; 4],
-            CpuAllocator,
-        )?)
+        Ok(Image::<f32, 1>::new(size, vec![value; 4])?)
     }
 
     /// A single `Mean`-thresholded entry over the full relative range, with
@@ -2360,8 +2688,7 @@ mod tests {
             width: 4,
             height: 1,
         };
-        let raw_image =
-            Image::<f32, 1, CpuAllocator>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0], CpuAllocator)?;
+        let raw_image = Image::<f32, 1>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0])?;
         let mut cache = GlobalPipelineCache::default();
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_gray_from_image_test(raw_image)),
@@ -2408,11 +2735,7 @@ mod tests {
             width: 4,
             height: 1,
         };
-        let snapshot_image = Image::<f32, 1, CpuAllocator>::new(
-            snapshot_size,
-            vec![0.0, 0.0, 0.0, 1.0],
-            CpuAllocator,
-        )?;
+        let snapshot_image = Image::<f32, 1>::new(snapshot_size, vec![0.0, 0.0, 0.0, 1.0])?;
         let memory_id = MemoryId::PipelineContext(7);
         let mut cache = GlobalPipelineCache::default();
         cache.image_cache.insert(
@@ -2463,8 +2786,7 @@ mod tests {
             width: 1,
             height: 1,
         };
-        let rgb_image =
-            Image::<f32, 3, CpuAllocator>::new(rgb_size, vec![0.1, 0.2, 0.3], CpuAllocator)?;
+        let rgb_image = Image::<f32, 3>::new(rgb_size, vec![0.1, 0.2, 0.3])?;
         let mut cache = GlobalPipelineCache::default();
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_rgb_from_image_test(rgb_image)),
@@ -2496,8 +2818,7 @@ mod tests {
             width: 4,
             height: 1,
         };
-        let raw_image =
-            Image::<f32, 1, CpuAllocator>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0], CpuAllocator)?;
+        let raw_image = Image::<f32, 1>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0])?;
         let mut cache = GlobalPipelineCache::default();
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_gray_from_image_test(raw_image)),

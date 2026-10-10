@@ -4,24 +4,102 @@ use crate::{
     MultiSelectItem, ResultRow, ResultsChartKind2, ResultsListState, ResultsRailMode, ResultsState,
     UiState,
 };
-use evanalyzer_app::result::{
-    self, Aggregation, BoxplotFilter, Cell, CellValue, ColorScale, ColorSchema, Column,
-    ColumnEntry, DatabaseResult, ExportFormat, GroupedByImageFilter, HistogramFilter, ImageEntry,
-    ImageHeatmapFilter, PlateDimensions, ResultCharts, ResultExport, ResultsGenerator,
-    ScatterFilter, WellFilter, WellSize,
-};
+use evanalyzer_app::results::CellValue;
+use evanalyzer_app::results::ColorScale;
+use evanalyzer_app::results::ColorSchema;
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ColumnEntry;
+use evanalyzer_app::results::DatabaseResult;
+use evanalyzer_app::results::ExportFormat;
+use evanalyzer_app::results::GroupedByImageFilter;
+use evanalyzer_app::results::HistogramFilter;
+use evanalyzer_app::results::ImageEntry;
+use evanalyzer_app::results::ImageHeatmapFilter;
+use evanalyzer_app::results::ResultExport;
+use evanalyzer_app::results::ResultsSource;
+use evanalyzer_app::results::ScatterFilter;
+use evanalyzer_app::results::WellFilter;
+use evanalyzer_app::results::WellSize;
+use evanalyzer_app::results::{Aggregation, HistogramResult};
+use evanalyzer_app::results::{BoxplotBox, Cell};
+use evanalyzer_app::results::{BoxplotFilter, ScatterResult};
+use evanalyzer_app::results::{Grouping, PlateSize};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
+use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings, WellLayout};
 use evanalyzer_gui_slint::ResultsWindow;
 use log::{error, info, warn};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 const LIST_PAGE_SIZE: i32 = 500;
+
+type DbJob = Box<dyn FnOnce() + Send>;
+
+/// Runs database work off the UI thread, one job at a time and in the order
+/// it was queued, so a slow disk never freezes the window - every UI update
+/// a job makes already goes through `invoke_from_event_loop`. A runner
+/// thread is started when work arrives and ends once the queue is empty.
+///
+/// Tests run the jobs inline (`inline`), so they can check the outcome right
+/// after triggering one.
+struct DbWorker {
+    /// Queued jobs, and whether a runner thread is draining them.
+    queue: Mutex<(std::collections::VecDeque<DbJob>, bool)>,
+    inline: AtomicBool,
+    /// Jobs queued or running - drives `ResultsState.loading`.
+    pending: AtomicUsize,
+}
+
+impl DbWorker {
+    fn new() -> Self {
+        Self {
+            queue: Mutex::new((std::collections::VecDeque::new(), false)),
+            inline: AtomicBool::new(cfg!(test)),
+            pending: AtomicUsize::new(0),
+        }
+    }
+
+    fn submit(self: &Arc<Self>, job: DbJob) {
+        if self.inline.load(Ordering::SeqCst) {
+            job();
+            return;
+        }
+        let mut queue = self.queue.lock().expect("Poisoned");
+        queue.0.push_back(job);
+        if queue.1 {
+            return;
+        }
+        queue.1 = true;
+        drop(queue);
+        let worker = self.clone();
+        crate::helper::ui_thread::spawn(move || worker.run_queued());
+    }
+
+    fn run_queued(&self) {
+        loop {
+            let job = {
+                let mut queue = self.queue.lock().expect("Poisoned");
+                match queue.0.pop_front() {
+                    Some(job) => job,
+                    None => {
+                        queue.1 = false;
+                        return;
+                    }
+                }
+            };
+            // A failing job must not take the jobs queued after it down.
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_err() {
+                error!("A results database job panicked");
+            }
+        }
+    }
+}
+
 const CHART_HISTOGRAM_BINS: usize = 24;
 const CHART_SCATTER_MAX_POINTS: usize = 2000;
 
@@ -51,6 +129,8 @@ struct ListFilter {
     pub object_classes: Vec<ObjectClass>,
     pub columns: Vec<Column>,
     pub with_coloc_details: bool,
+    /// Classes side by side instead of one row per object/(image, class).
+    pub transpond: bool,
     pub group_by: ListGroupBy,
     /// Unused in Objects mode.
     pub aggregations: Vec<Aggregation>,
@@ -81,21 +161,21 @@ struct MatrixFilter {
     pub object_classe: ObjectClass,
     pub column: Column,
     pub aggregation: Aggregation,
-    pub group_by_regex: String,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
-    // Per-level grid-size overrides, one of which applies depending on
-    // `matrix-level` — `None` keeps each level's own default (see
-    // `update_matrix_view`/`update_well_view`/`update_image_heatmap_view`).
-    pub plate_dimension: Option<PlateDimensions>,
-    pub well_size: Option<WellSize>,
+    // Grouping, plate size and well layout: the project's plate settings,
+    // kept in sync both ways (see `edit_plate_settings`/
+    // `apply_project_plate_settings`).
+    pub plate: PlateSettings,
+    // The image heatmap's tile size - `None` keeps its default.
     pub square_size: Option<usize>,
 }
 
 pub struct ResultsStateController {
     pub(crate) ui: slint::Weak<ResultsWindow>,
     pub(crate) _app_state: Arc<UiState>,
-    result_generator: Mutex<Option<ResultsGenerator>>,
+    /// The open results database - on the server in remote mode.
+    result_generator: Mutex<Option<Arc<dyn ResultsSource>>>,
     list_filter: Mutex<ListFilter>,
     matrix_filter: Mutex<Option<MatrixFilter>>,
     chart_filter: Mutex<ChartFilter>,
@@ -149,6 +229,18 @@ pub struct ResultsStateController {
     // (successfully, with an error, or cancelled) — mirrors
     // `PipelinesController::pipeline_cancel_flag`'s pattern.
     export_cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
+    // Opening a database and toggling an image run here, off the UI thread.
+    db_worker: Arc<DbWorker>,
+    // The tab on screen (`ResultsState.rail-mode`), readable off the UI
+    // thread. Only the visible tab queries the database: a hidden List or
+    // Charts view is just marked stale (`list_stale`/`charts_stale`) and
+    // refreshed when it's shown; Matrix always refreshes when it's shown.
+    rail_mode: Mutex<ResultsRailMode>,
+    list_stale: AtomicBool,
+    charts_stale: AtomicBool,
+    // Called after the results window changed the project's plate settings,
+    // so the project settings dialog shows them too (wired in editor.rs).
+    plate_settings_written: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl ResultsStateController {
@@ -179,6 +271,11 @@ impl ResultsStateController {
             image_list_controller,
             export_populated: Mutex::new(false),
             export_cancel_flag: Mutex::new(None),
+            db_worker: Arc::new(DbWorker::new()),
+            rail_mode: Mutex::new(ResultsRailMode::List),
+            list_stale: AtomicBool::new(false),
+            charts_stale: AtomicBool::new(false),
+            plate_settings_written: Mutex::new(None),
         }
     }
 
@@ -225,12 +322,14 @@ impl ResultsStateController {
                     };
                     state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
                     state.set_matrix_level(MatrixLevel::Plate);
+                    manager.apply_matrix_aggregate_enabled(&ui_ready, MatrixLevel::Plate);
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
                     state.set_active_well_disabled(false);
                     *manager.current_well.lock().expect("Poisned") = None;
                     *manager.current_image.lock().expect("Poisned") = None;
+                    manager.show_view(mode);
                     if mode == ResultsRailMode::Matrix {
                         manager.update_matrix_view();
                     }
@@ -257,12 +356,14 @@ impl ResultsStateController {
                 // of just truncating within Matrix.
                 if index == 0 {
                     state.set_rail_mode(ResultsRailMode::List);
+                    manager.show_view(ResultsRailMode::List);
                     state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(vec![
                         BreadcrumbItem {
                             label: "All results".into(),
                         },
                     ]))));
                     state.set_matrix_level(MatrixLevel::Plate);
+                    manager.apply_matrix_aggregate_enabled(&ui_ready, MatrixLevel::Plate);
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
@@ -277,6 +378,7 @@ impl ResultsStateController {
                 state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
                 if keep <= 2 {
                     state.set_matrix_level(MatrixLevel::Plate);
+                    manager.apply_matrix_aggregate_enabled(&ui_ready, MatrixLevel::Plate);
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
@@ -286,6 +388,7 @@ impl ResultsStateController {
                     manager.update_matrix_view();
                 } else if keep == 3 {
                     state.set_matrix_level(MatrixLevel::Well);
+                    manager.apply_matrix_aggregate_enabled(&ui_ready, MatrixLevel::Well);
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
@@ -462,6 +565,15 @@ impl ResultsStateController {
                 });
 
             let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_transpond_changed(move |enabled| {
+                    manager.list_filter.lock().expect("Poisened").transpond = enabled;
+                    // Rows and cursors mean something else in the other
+                    // layout: start over at page 1.
+                    manager.refresh_list();
+                });
+
+            let manager = self.clone();
             ui.global::<ResultsState>().on_list_next_page(move || {
                 manager.change_list_page(1);
             });
@@ -513,16 +625,9 @@ impl ResultsStateController {
                         return;
                     };
                     drop(classes);
-                    // Count is a row tally, not a per-object measurement —
-                    // averaging/summing/etc. it doesn't mean anything beyond
-                    // the count itself, so the Aggregate picker is disabled
-                    // while it's selected (see `aggregate_sql` in
-                    // results_generator.rs, which ignores `Aggregation`
-                    // entirely for `Column::Count` and always uses COUNT(*)).
-                    ui_ready
-                        .global::<ResultsState>()
-                        .set_matrix_aggregate_enabled(!matches!(column, Column::Count));
                     manager.update_matrix_filter(|filter| filter.column = column);
+                    let level = ui_ready.global::<ResultsState>().get_matrix_level();
+                    manager.apply_matrix_aggregate_enabled(&ui_ready, level);
                     manager.refresh_active_matrix_view();
                 });
 
@@ -571,12 +676,56 @@ impl ResultsStateController {
                     manager.refresh_active_matrix_view();
                 });
 
+            // Grouping, plate size and well size are the project's plate
+            // settings: every change goes back to the project
+            // (`edit_plate_settings`).
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_matrix_grouping_selected(move |key, selected| {
+                    if !selected {
+                        return;
+                    }
+                    let Some((_, mode)) = GROUPING_MODES.iter().find(|(name, _)| key == *name)
+                    else {
+                        warn!("Unknown grouping selected: {key}");
+                        return;
+                    };
+                    // Switching to a custom regex starts from the pattern
+                    // in use, rather than from nothing.
+                    let in_use = manager.effective_grouping_regex();
+                    manager.edit_plate_settings(|plate| {
+                        if *mode == GroupingMode::Custom && plate.grouping_regex.trim().is_empty() {
+                            plate.grouping_regex = in_use.unwrap_or_default();
+                        }
+                        plate.grouping_mode = *mode;
+                    });
+                });
+
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ResultsState>()
+                .on_well_image_moved(move |from, to| {
+                    let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to)) else {
+                        return;
+                    };
+                    let Some(ui) = ui_weak.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<ResultsState>();
+                    let shown = (
+                        state.get_well_rows().max(1) as u32,
+                        state.get_well_cols().max(1) as u32,
+                    );
+                    manager.move_well_image(from, to, shown);
+                });
+
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_matrix_regex_changed(move |regex| {
-                    manager
-                        .update_matrix_filter(|filter| filter.group_by_regex = regex.to_string());
-                    manager.refresh_active_matrix_view();
+                    manager.edit_plate_settings(|plate| {
+                        plate.grouping_mode = GroupingMode::Custom;
+                        plate.grouping_regex = regex.to_string();
+                    });
                 });
 
             let manager = self.clone();
@@ -628,42 +777,80 @@ impl ResultsStateController {
                     if !selected {
                         return;
                     }
-                    let Some(dimension) = plate_dimension_from_key(key.as_str()) else {
+                    let Some(size) = plate_size_from_key(key.as_str()) else {
                         warn!("Unknown plate size selected: {key}");
                         return;
                     };
-                    manager.update_matrix_filter(|filter| filter.plate_dimension = dimension);
-                    manager.refresh_active_matrix_view();
+                    manager.edit_plate_settings(|plate| plate.plate_size = size);
+                });
+
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ResultsState>()
+                .on_matrix_well_layout_selected(move |key, selected| {
+                    if !selected {
+                        return;
+                    }
+                    let layout = if key == WELL_LAYOUT_AUTO {
+                        WellLayout::Auto
+                    } else {
+                        // Custom: the grid now shown, as a start.
+                        let shown = ui_weak.upgrade().map(|ui| {
+                            let state = ui.global::<ResultsState>();
+                            (state.get_well_rows(), state.get_well_cols())
+                        });
+                        let (rows, cols) = shown.unwrap_or((4, 4));
+                        WellLayout::Fixed {
+                            rows: rows.max(1) as u32,
+                            cols: cols.max(1) as u32,
+                        }
+                    };
+                    manager.edit_plate_settings(|plate| {
+                        if !matches!(
+                            (plate.well_layout, layout),
+                            (WellLayout::Fixed { .. }, WellLayout::Fixed { .. })
+                        ) {
+                            plate.set_well_layout(layout);
+                        }
+                    });
                 });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_matrix_well_rows_changed(move |value| {
-                    let Ok(rows) = value.trim().parse::<usize>() else {
+                    let Ok(rows) = value.trim().parse::<u32>() else {
                         warn!("Invalid well rows value: {value}");
                         return;
                     };
-                    manager.update_matrix_filter(|filter| {
-                        let mut size = filter.well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
-                        size.rows = rows.max(1);
-                        filter.well_size = Some(size);
+                    manager.edit_plate_settings(|plate| {
+                        let cols = match plate.well_layout {
+                            WellLayout::Fixed { cols, .. } => cols,
+                            WellLayout::Auto => 4,
+                        };
+                        plate.set_well_layout(WellLayout::Fixed {
+                            rows: rows.max(1),
+                            cols,
+                        });
                     });
-                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_matrix_well_cols_changed(move |value| {
-                    let Ok(cols) = value.trim().parse::<usize>() else {
+                    let Ok(cols) = value.trim().parse::<u32>() else {
                         warn!("Invalid well cols value: {value}");
                         return;
                     };
-                    manager.update_matrix_filter(|filter| {
-                        let mut size = filter.well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
-                        size.cols = cols.max(1);
-                        filter.well_size = Some(size);
+                    manager.edit_plate_settings(|plate| {
+                        let rows = match plate.well_layout {
+                            WellLayout::Fixed { rows, .. } => rows,
+                            WellLayout::Auto => 4,
+                        };
+                        plate.set_well_layout(WellLayout::Fixed {
+                            rows,
+                            cols: cols.max(1),
+                        });
                     });
-                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
@@ -788,6 +975,7 @@ impl ResultsStateController {
                         });
                         state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
                         state.set_active_image_name(image_name);
+                        manager.apply_matrix_aggregate_enabled(&ui_ready, MatrixLevel::Object);
                     } else {
                         warn!("Failed to upgrade UI handle in on_well_field_clicked");
                     }
@@ -836,38 +1024,52 @@ impl ResultsStateController {
                         return;
                     };
                     let disable = !state.get_active_well_disabled();
-                    {
-                        let guard = manager.result_generator.lock().expect("Poisned");
-                        let Some(db) = guard.as_ref() else {
-                            warn!("No database opened!");
-                            return;
-                        };
-                        if let Err(err) = db.enable_image(&rel_path, disable) {
-                            error!("Could not toggle image {rel_path}: {err}");
-                            return;
-                        }
-                    }
+                    // Shown right away; the write and the refresh run on the
+                    // database thread.
                     state.set_active_well_disabled(disable);
-                    manager.refresh_active_matrix_view();
-
-                    let manager = manager.clone();
-                    slint::invoke_from_event_loop(move || {
-                        let Some(ui_ready) = manager.ui.upgrade() else {
-                            warn!(
-                                "Failed to upgrade UI handle re-selecting field after toggling disabled"
-                            );
-                            return;
+                    let level = state.get_matrix_level();
+                    manager.run_db_job(move |manager| {
+                        let toggled = {
+                            let guard = manager.result_generator.lock().expect("Poisned");
+                            match guard.as_ref() {
+                                None => Err("No database opened!".to_string()),
+                                Some(db) => db
+                                    .enable_image(&rel_path, disable)
+                                    .map_err(|err| format!("Could not toggle image {rel_path}: {err}")),
+                            }
                         };
-                        let state = ui_ready.global::<ResultsState>();
-                        let cells = manager.well_cells.lock().expect("Poisned");
-                        if let Some(cell) = cells.get(image_name.as_str()) {
-                            state.set_active_well(image_name.clone());
-                            state.set_active_well_has_value(cell.exists);
-                            state.set_active_well_value(cell.label.clone());
-                            state.set_active_well_disabled(cell.disabled);
+                        if let Err(err) = toggled {
+                            error!("{err}");
+                            let ui_weak = manager.ui.clone();
+                            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                                if let Some(ui) = ui_weak.upgrade() {
+                                    ui.global::<ResultsState>().set_active_well_disabled(!disable);
+                                }
+                            })
+                            .ok();
+                            return;
                         }
-                    })
-                    .ok();
+                        manager.refresh_matrix_view_at(level);
+
+                        let manager = manager.clone();
+                        crate::helper::ui_thread::invoke_from_event_loop(move || {
+                            let Some(ui_ready) = manager.ui.upgrade() else {
+                                warn!(
+                                    "Failed to upgrade UI handle re-selecting field after toggling disabled"
+                                );
+                                return;
+                            };
+                            let state = ui_ready.global::<ResultsState>();
+                            let cells = manager.well_cells.lock().expect("Poisned");
+                            if let Some(cell) = cells.get(image_name.as_str()) {
+                                state.set_active_well(image_name.clone());
+                                state.set_active_well_has_value(cell.exists);
+                                state.set_active_well_value(cell.label.clone());
+                                state.set_active_well_disabled(cell.disabled);
+                            }
+                        })
+                        .ok();
+                    });
                 });
 
             let manager = self.clone();
@@ -1018,17 +1220,25 @@ impl ResultsStateController {
             });
 
             let ui_weak = self.ui.clone();
+            let browser = self._app_state.results_file_browser.clone();
             ui.global::<ExportDialogState>()
                 .on_pick_output_dir(move || {
                     let Some(ui_ready) = ui_weak.upgrade() else {
                         warn!("Failed to upgrade UI handle in on_pick_output_dir");
                         return;
                     };
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                    let current = ui_ready.global::<ExportDialogState>().get_output_dir();
+                    let request = crate::FileRequest::open_folder("Choose export folder")
+                        .start_in(current.as_str());
+                    let ui_weak = ui_weak.clone();
+                    browser.open(request, move |path| {
+                        let (Some(path), Some(ui_ready)) = (path, ui_weak.upgrade()) else {
+                            return;
+                        };
                         ui_ready
                             .global::<ExportDialogState>()
                             .set_output_dir(path.to_string_lossy().into_owned().into());
-                    }
+                    });
                 });
 
             let manager = self.clone();
@@ -1274,12 +1484,263 @@ impl ResultsStateController {
         }
     }
 
-    pub fn open_database(&self, path: PathBuf) {
+    /// `f` runs whenever the results window changed the project's plate
+    /// settings.
+    pub fn on_plate_settings_written(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.plate_settings_written.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    /// The plate settings the Matrix view uses: the project's, as last
+    /// synced.
+    fn current_plate_settings(&self) -> PlateSettings {
+        match self.matrix_filter.lock().expect("Poisoned").as_ref() {
+            Some(filter) => filter.plate.clone(),
+            None => self._app_state.get_project().plate.clone(),
+        }
+    }
+
+    /// The regex the current grouping uses on the open database - for Auto
+    /// the pattern detected.
+    fn effective_grouping_regex(&self) -> Option<String> {
+        let grouping = grouping_of(&self.current_plate_settings());
+        let guard = self.result_generator.lock().expect("Poisoned");
+        let db = guard.as_ref()?;
+        db.grouping_regex(&grouping)
+            .inspect_err(|err| warn!("Could not resolve the grouping: {err}"))
+            .ok()
+    }
+
+    /// Changes the plate settings from the results window: in the Matrix
+    /// view, in the project (marked unsaved, and shown in the project
+    /// settings) and on screen.
+    fn edit_plate_settings(&self, edit: impl FnOnce(&mut PlateSettings)) {
+        let plate = {
+            let mut guard = self.matrix_filter.lock().expect("Poisoned");
+            let filter = guard.get_or_insert_with(MatrixFilter::default);
+            let before = filter.plate.clone();
+            edit(&mut filter.plate);
+            if filter.plate == before {
+                return;
+            }
+            filter.plate.clone()
+        };
+        let changed_project = {
+            let mut project = self._app_state.get_project_write();
+            let changed = project.plate != plate;
+            project.plate = plate;
+            changed
+        };
+        if changed_project {
+            self._app_state.mark_dirty();
+            if let Some(written) = self
+                .plate_settings_written
+                .lock()
+                .expect("Poisoned")
+                .as_ref()
+            {
+                written();
+            }
+        }
+        self.push_plate_settings_in_slint();
+        self.refresh_active_matrix_view();
+    }
+
+    /// Drag and drop in the well view: the images at grid positions `from`
+    /// and `to` (row by row) swap places in the well's image order. A well
+    /// fitted automatically becomes a fixed grid of the size `shown`, in
+    /// number order - what Auto showed - first.
+    fn move_well_image(&self, from: usize, to: usize, shown: (u32, u32)) {
+        if from == to {
+            return;
+        }
+        self.edit_plate_settings(|plate| {
+            if plate.well_layout == WellLayout::Auto {
+                let (rows, cols) = shown;
+                plate.well_image_order = PlateSettings::default_image_order(rows, cols);
+                plate.set_well_layout(WellLayout::Fixed { rows, cols });
+            }
+            let order = &mut plate.well_image_order;
+            if from < order.len() && to < order.len() {
+                order.swap(from, to);
+            }
+        });
+    }
+
+    /// The project's plate settings changed elsewhere (project settings
+    /// dialog, undo, another project): show and use them.
+    pub fn apply_project_plate_settings(&self) {
+        let plate = self._app_state.get_project().plate.clone();
+        let changed = match self.matrix_filter.lock().expect("Poisoned").as_mut() {
+            Some(filter) if filter.plate != plate => {
+                filter.plate = plate;
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.push_plate_settings_in_slint();
+            self.refresh_active_matrix_view();
+        }
+    }
+
+    /// Shows the current plate settings in the Matrix toolbar: grouping
+    /// (with the regex in use), plate size and well size.
+    fn push_plate_settings_in_slint(&self) {
+        let plate = self.current_plate_settings();
+        let in_use = self.effective_grouping_regex().unwrap_or_default();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let state = ui.global::<ResultsState>();
+            let summary = |items: &[MultiSelectItem]| {
+                items
+                    .iter()
+                    .find(|item| item.selected)
+                    .map(|item| item.value.clone())
+                    .unwrap_or_default()
+            };
+            let grouping = grouping_items(plate.grouping_mode);
+            state.set_matrix_grouping_summary(summary(&grouping));
+            state.set_matrix_grouping_items(ModelRc::from(Rc::new(VecModel::from(grouping))));
+            state.set_matrix_group_regex_custom(plate.grouping_mode == GroupingMode::Custom);
+            if state.get_matrix_group_regex() != plate.grouping_regex.as_str() {
+                state.set_matrix_group_regex(plate.grouping_regex.as_str().into());
+            }
+            state.set_matrix_group_regex_in_use(in_use.into());
+
+            let sizes = plate_size_items(plate.plate_size);
+            state.set_matrix_plate_size_summary(summary(&sizes));
+            state.set_matrix_plate_size_items(ModelRc::from(Rc::new(VecModel::from(sizes))));
+
+            let layouts = well_layout_items(plate.well_layout);
+            state.set_matrix_well_layout_summary(summary(&layouts));
+            state.set_matrix_well_layout_items(ModelRc::from(Rc::new(VecModel::from(layouts))));
+            if let WellLayout::Fixed { rows, cols } = plate.well_layout {
+                state.set_matrix_well_rows(rows.to_string().into());
+                state.set_matrix_well_cols(cols.to_string().into());
+            }
+        })
+        .ok();
+    }
+
+    /// Runs `job` on the database thread (see [`DbWorker`]), with
+    /// `ResultsState.loading` set while any job is queued or running.
+    fn run_db_job(self: &Arc<Self>, job: impl FnOnce(&Arc<Self>) + Send + 'static) {
+        /// Counts the job as done even if it panics.
+        struct Done(Arc<ResultsStateController>);
+        impl Drop for Done {
+            fn drop(&mut self) {
+                if self.0.db_worker.pending.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    self.0.set_loading_in_slint(false);
+                }
+            }
+        }
+        if self.db_worker.pending.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.set_loading_in_slint(true);
+        }
+        let done = Done(self.clone());
+        self.db_worker.submit(Box::new(move || {
+            job(&done.0);
+            drop(done);
+        }));
+    }
+
+    fn set_database_name_in_slint(&self, name: String) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_database_name(name.into());
+            }
+        })
+        .ok();
+    }
+
+    fn set_loading_in_slint(&self, loading: bool) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_loading(loading);
+            }
+        })
+        .ok();
+    }
+
+    /// Whether `mode` is the tab on screen. If not, its view is only marked
+    /// `stale` - refreshed once the tab is shown - so a hidden view never
+    /// queries the database.
+    fn is_view_shown(&self, mode: ResultsRailMode, stale: &AtomicBool) -> bool {
+        let shown = *self.rail_mode.lock().expect("Poisoned") == mode;
+        if !shown {
+            stale.store(true, Ordering::SeqCst);
+        }
+        shown
+    }
+
+    /// `mode` became the tab on screen: catch up on what changed while it
+    /// was hidden.
+    fn show_view(self: &Arc<Self>, mode: ResultsRailMode) {
+        *self.rail_mode.lock().expect("Poisoned") = mode;
+        let stale = match mode {
+            ResultsRailMode::List => &self.list_stale,
+            ResultsRailMode::Charts => &self.charts_stale,
+            // Always refreshed when shown (`on_rail_mode_selected`).
+            _ => return,
+        };
+        if stale.swap(false, Ordering::SeqCst) {
+            self.run_db_job(move |manager| match mode {
+                ResultsRailMode::List => manager.update_list_view(),
+                _ => manager.refresh_charts(),
+            });
+        }
+    }
+
+    /// The Aggregate picker means nothing for `Column::Count` below the
+    /// Plate level: a field (Well level) is a single image and a heatmap
+    /// tile (Object level) is a region of a single image, so the count is
+    /// just the count. At the Plate level Count is aggregated over the
+    /// per-image counts of a well, so the picker stays enabled there.
+    fn apply_matrix_aggregate_enabled(&self, ui: &ResultsWindow, level: MatrixLevel) {
+        let is_count = self
+            .matrix_filter
+            .lock()
+            .expect("Poisned")
+            .as_ref()
+            .is_some_and(|filter| matches!(filter.column, Column::Count));
+        let below_plate = matches!(level, MatrixLevel::Well | MatrixLevel::Object);
+        ui.global::<ResultsState>()
+            .set_matrix_aggregate_enabled(!(is_count && below_plate));
+    }
+
+    /// Opens the results database at `path` on the database thread (see
+    /// [`DbWorker`]); the window stays responsive meanwhile.
+    pub fn open_database(self: &Arc<Self>, path: PathBuf) {
+        self.run_db_job(move |manager| manager.open_database_now(path));
+    }
+
+    fn open_database_now(&self, path: PathBuf) {
         info!("Opening database {:?}", path);
-        let db = result::ResultsGenerator::open_database(path);
+        let db = self._app_state.backend().open_results(&path);
         match db {
             Ok(results) => {
                 *self.export_populated.lock().expect("Poisened") = false;
+                let run_warning = match results.run_status() {
+                    Ok(status) => status.warning().unwrap_or_default(),
+                    Err(err) => {
+                        error!("Could not read how the analysis ended: {err}");
+                        String::new()
+                    }
+                };
+                if !run_warning.is_empty() {
+                    warn!("{}: {run_warning}", path.display());
+                }
+                self.set_run_warning_in_slint(run_warning);
+                self.set_database_name_in_slint(
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                );
                 let mut default_object_classes = Vec::new();
                 match results.get_object_classes() {
                     Ok(classes) => {
@@ -1327,6 +1788,7 @@ impl ResultsStateController {
                     object_classes: default_object_classes,
                     columns: DEFAULT_LIST_COLUMNS.to_vec(),
                     with_coloc_details: false,
+                    transpond: false,
                     group_by: ListGroupBy::Objects,
                     aggregations: vec![Aggregation::Avg],
                 };
@@ -1375,8 +1837,11 @@ impl ResultsStateController {
                     .map(|entry| entry.key.clone())
                     .find(is_matrix_column)
                     .unwrap_or_default();
+                // Grouping, plate size and well layout start from the
+                // project's plate settings.
                 *self.matrix_filter.lock().expect("Poisned") = Some(MatrixFilter {
                     column: default_matrix_column.clone(),
+                    plate: self._app_state.get_project().plate.clone(),
                     ..MatrixFilter::default()
                 });
                 let matrix_eligible_columns: Vec<ColumnEntry> = available_columns
@@ -1392,10 +1857,15 @@ impl ResultsStateController {
                     default_matrix_column.display_label(&classes_for_charts);
 
                 let ui_weak = self.ui.clone();
-                slint::invoke_from_event_loop(move || {
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
                     if let Some(ui_ready) = ui_weak.upgrade() {
                         let state = ui_ready.global::<ResultsState>();
                         state.set_list_with_coloc_details(false);
+                        state.set_list_transpond(false);
+                        state.set_list_layout_summary("Rows".into());
+                        state.set_list_layout_items(ModelRc::from(Rc::new(VecModel::from(
+                            layout_items(false),
+                        ))));
                         state.set_list_group_by_summary("Objects".into());
                         state.set_list_group_by_items(ModelRc::from(Rc::new(VecModel::from(
                             group_by_items(false),
@@ -1409,14 +1879,7 @@ impl ResultsStateController {
                             matrix_column_items_vec,
                         ))));
                         state.set_matrix_column_summary(default_matrix_column_label.into());
-                        // Same "Count can't be aggregated" rule
-                        // `on_matrix_value_clicked` applies on every later
-                        // column change — applied here too so the very
-                        // first render is consistent with it.
-                        state.set_matrix_aggregate_enabled(!matches!(
-                            default_matrix_column,
-                            Column::Count
-                        ));
+                        state.set_matrix_aggregate_enabled(true);
 
                         state.set_chart_kind(ResultsChartKind2::Histogram);
                         state.set_chart_column_items(ModelRc::from(Rc::new(VecModel::from(
@@ -1439,6 +1902,9 @@ impl ResultsStateController {
 
                 self.show_results_window();
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
+                self.push_plate_settings_in_slint();
+                // Only the tab on screen queries the database; the others
+                // catch up when they're shown.
                 self.refresh_list();
                 self.update_matrix_view();
                 self.refresh_charts();
@@ -1451,7 +1917,7 @@ impl ResultsStateController {
 
     pub fn show_results_window(&self) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 if let Err(e) = ui_ready.show() {
                     error!("Failed to show results window: {e}");
@@ -1478,12 +1944,15 @@ impl ResultsStateController {
     /// on changes (chart kind, column(s), class filter, z/t plane, or a
     /// fresh database).
     fn refresh_charts(&self) {
+        if !self.is_view_shown(ResultsRailMode::Charts, &self.charts_stale) {
+            return;
+        }
         let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
             return;
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
-        let plane = result::PlaneFilter {
+        let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
             t_stack: plane_filter.selected_t_stack,
         };
@@ -1491,54 +1960,44 @@ impl ResultsStateController {
 
         let chart_filter = self.chart_filter.lock().expect("Poisened").clone();
         let object_classes = chart_filter.object_class.map(|class| vec![class]);
-        let charts = ResultCharts {};
 
         match chart_filter.kind {
             ChartKind::Histogram => {
-                match charts.paint_histogram(
-                    db,
-                    &HistogramFilter {
-                        plane,
-                        images: None,
-                        object_classes,
-                        column: chart_filter.column,
-                        bins: CHART_HISTOGRAM_BINS,
-                    },
-                ) {
+                match db.histogram(&HistogramFilter {
+                    plane,
+                    images: None,
+                    object_classes,
+                    column: chart_filter.column,
+                    bins: CHART_HISTOGRAM_BINS,
+                }) {
                     Ok(histogram) => self.push_histogram_in_slint(&histogram),
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
             ChartKind::Scatter => {
-                match charts.paint_scatter(
-                    db,
-                    &ScatterFilter {
-                        plane,
-                        images: None,
-                        object_classes,
-                        x_column: chart_filter.column,
-                        y_column: chart_filter.y_column,
-                        max_points: Some(CHART_SCATTER_MAX_POINTS),
-                    },
-                ) {
+                match db.scatter(&ScatterFilter {
+                    plane,
+                    images: None,
+                    object_classes,
+                    x_column: chart_filter.column,
+                    y_column: chart_filter.y_column,
+                    max_points: Some(CHART_SCATTER_MAX_POINTS),
+                }) {
                     Ok(scatter) => self.push_scatter_in_slint(&scatter),
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
             ChartKind::Boxplot => {
-                match charts.paint_boxplot(
-                    db,
-                    &BoxplotFilter {
-                        plane,
-                        images: None,
-                        // Boxplot always groups by every class present —
-                        // the CLASS dropdown doesn't gate it the way it
-                        // does Histogram/Scatter (see `ChartFilter::object_class`'s
-                        // doc comment).
-                        object_classes: None,
-                        column: chart_filter.column,
-                    },
-                ) {
+                match db.boxplot(&BoxplotFilter {
+                    plane,
+                    images: None,
+                    // Boxplot always groups by every class present —
+                    // the CLASS dropdown doesn't gate it the way it
+                    // does Histogram/Scatter (see `ChartFilter::object_class`'s
+                    // doc comment).
+                    object_classes: None,
+                    column: chart_filter.column,
+                }) {
                     Ok(boxplot) => self.push_boxplot_in_slint(&boxplot.boxes),
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
@@ -1548,7 +2007,7 @@ impl ResultsStateController {
 
     fn push_chart_error(&self, message: String) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_chart_error(message.into());
@@ -1570,7 +2029,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn push_histogram_in_slint(&self, result: &result::HistogramResult) {
+    fn push_histogram_in_slint(&self, result: &HistogramResult) {
         let max_count = result.counts.iter().copied().max().unwrap_or(0).max(1);
         let bins: Vec<f32> = result
             .counts
@@ -1582,7 +2041,7 @@ impl ResultsStateController {
         let max_label = format_chart_value(result.max);
 
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_chart_error("".into());
@@ -1597,7 +2056,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn push_scatter_in_slint(&self, result: &result::ScatterResult) {
+    fn push_scatter_in_slint(&self, result: &ScatterResult) {
         let x_range = (result.x_max - result.x_min).max(f64::EPSILON);
         let y_range = (result.y_max - result.y_min).max(f64::EPSILON);
         let points: Vec<ChartScatterPoint> = result
@@ -1616,7 +2075,7 @@ impl ResultsStateController {
         let y_max_label = format_chart_value(result.y_max);
 
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_chart_error("".into());
@@ -1634,7 +2093,7 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn push_boxplot_in_slint(&self, boxes: &[evanalyzer_app::result::BoxplotBox]) {
+    fn push_boxplot_in_slint(&self, boxes: &[BoxplotBox]) {
         // Every box normalized against the combined min/max across *all*
         // boxes, so they stay comparable to each other on one shared axis
         // rather than each box silently rescaling to its own range.
@@ -1679,7 +2138,7 @@ impl ResultsStateController {
             .collect();
 
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 let boxes: Vec<ChartBoxplotBox> = rows
@@ -1731,13 +2190,16 @@ impl ResultsStateController {
     }
 
     pub fn update_list_view(&self) {
+        if !self.is_view_shown(ResultsRailMode::List, &self.list_stale) {
+            return;
+        }
         let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
             warn!("No database opened!");
             return;
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
-        let plane = result::PlaneFilter {
+        let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
             t_stack: plane_filter.selected_t_stack,
         };
@@ -1762,6 +2224,7 @@ impl ResultsStateController {
         };
         let columns = list_filter.columns.clone();
         let with_coloc_details = list_filter.with_coloc_details;
+        let transpond_table = list_filter.transpond;
         let group_by = list_filter.group_by;
         let aggregations = list_filter.aggregations.clone();
         drop(list_filter);
@@ -1776,35 +2239,37 @@ impl ResultsStateController {
             .flatten();
 
         let result = match group_by {
-            ListGroupBy::Objects => db.get_object_list(&evanalyzer_app::result::ListFilter {
+            ListGroupBy::Objects => db.get_object_list(&evanalyzer_app::results::ListFilter {
                 plane,
                 images,
                 object_classes,
                 columns,
                 with_coloc_details,
-                page: result::Pagination {
+                page: evanalyzer_app::results::Pagination {
                     limit: LIST_PAGE_SIZE,
                     after: cursor,
                 },
+                transpond_table,
             }),
             // Non-aggregable columns (Object ID/Image/Class) don't mean
             // anything once rows are grouped by image — silently dropped
             // here, same as the export side's own grid views (see
-            // `is_aggregable` in results_exporter.rs). `aggregations` comes
+            // `Column::is_aggregable`). `aggregations` comes
             // from the AGGREGATE dropdown (results_list.slint), one output
             // column per (selected column x selected aggregation) combo.
             ListGroupBy::Images => {
-                let columns = columns.into_iter().filter(is_aggregable_column).collect();
+                let columns = columns.into_iter().filter(Column::is_aggregable).collect();
                 db.get_grouped_by_image(&GroupedByImageFilter {
                     plane,
                     images,
                     object_classes,
                     columns,
                     aggregation: aggregations,
-                    page: result::Pagination {
+                    page: evanalyzer_app::results::Pagination {
                         limit: LIST_PAGE_SIZE,
                         after: cursor,
                     },
+                    transpond_table,
                 })
             }
         };
@@ -1855,37 +2320,41 @@ impl ResultsStateController {
         // the table properties need are `Rc`-based and can't cross the
         // `invoke_from_event_loop` closure boundary, so they're built below
         // once we're back on the UI thread.
-        // Every `Cell` in a row carries the same `alternating_color` and
-        // `disabled` flag (see `build_coloc_detail_rows`/`cell_for_column`),
-        // so the first cell's flags speak for the whole row; an empty row
-        // (no columns selected) just isn't alternated/disabled.
-        let row_cells: Vec<(Vec<slint::SharedString>, bool, bool)> = result
+        // Every `Cell` in a row carries the same `alternating_color`,
+        // `disabled` and `failed` flag (see `build_coloc_detail_rows`/
+        // `cell_for_column`/`get_grouped_by_image`), so the first cell's
+        // flags speak for the whole row; an empty row (no columns selected)
+        // just isn't alternated/disabled/failed.
+        let row_cells: Vec<(Vec<slint::SharedString>, bool, bool, bool)> = result
             .rows
             .iter()
             .map(|row| {
                 let alternating = row.first().is_some_and(|cell| cell.alternating_color);
                 let disabled = row.first().is_some_and(|cell| cell.disabled);
+                let failed = row.first().is_some_and(|cell| cell.failed);
                 (
                     row.iter().map(cell_to_string).collect(),
                     alternating,
                     disabled,
+                    failed,
                 )
             })
             .collect();
         let column_widths = list_column_widths(
             &headers,
-            row_cells.iter().map(|(cells, _, _)| cells.as_slice()),
+            row_cells.iter().map(|(cells, ..)| cells.as_slice()),
         );
         *self.list_row_locations.lock().expect("Poisned") = result.row_locations.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 let rows: Vec<ResultRow> = row_cells
                     .into_iter()
-                    .map(|(cells, alternating, disabled)| ResultRow {
+                    .map(|(cells, alternating, disabled, failed)| ResultRow {
                         cells: ModelRc::new(VecModel::from(cells)),
                         alternating,
                         disabled,
+                        failed,
                     })
                     .collect();
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
@@ -1904,13 +2373,17 @@ impl ResultsStateController {
     }
 
     pub fn update_matrix_view(&self) {
+        // Hidden: refreshed anyway whenever the Matrix tab is shown.
+        if *self.rail_mode.lock().expect("Poisoned") != ResultsRailMode::Matrix {
+            return;
+        }
         let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
             warn!("No database opened!");
             return;
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
-        let plane = result::PlaneFilter {
+        let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
             t_stack: plane_filter.selected_t_stack,
         };
@@ -1926,9 +2399,9 @@ impl ResultsStateController {
         let value_caption = self.value_caption_for(matrix_filter);
         let is_manual_scale = matches!(matrix_filter.color_scale, ColorScale::Manual(..));
 
-        let group_filter = result::PlateFilter {
+        let group_filter = evanalyzer_app::results::PlateFilter {
             plane,
-            grouping_regex: matrix_filter.group_by_regex.clone(),
+            grouping: grouping_of(&matrix_filter.plate),
             aggregation: matrix_filter.aggregation.clone(),
             object_class: matrix_filter.object_classe,
             column: matrix_filter.column.clone(),
@@ -1937,17 +2410,18 @@ impl ResultsStateController {
             // `None` (the "Auto" dropdown option) has `get_group_by_plate`
             // auto-select the smallest standard dimensions that fit the
             // data; otherwise the user's explicit PLATE SIZE choice.
-            matrix_dimension: matrix_filter.plate_dimension,
+            plate_size: matrix_filter.plate.plate_size,
         };
         drop(matrix_filter_guard);
 
-        let result = match db.get_group_by_plate(&group_filter, &result::View::Heatmap) {
-            Ok(result) => result,
-            Err(err) => {
-                error!("Could not load matrix results: {err}");
-                return;
-            }
-        };
+        let result =
+            match db.get_group_by_plate(&group_filter, &evanalyzer_app::results::View::Heatmap) {
+                Ok(result) => result,
+                Err(err) => {
+                    error!("Could not load matrix results: {err}");
+                    return;
+                }
+            };
         self.set_matrix_in_slint(&result, value_caption, is_manual_scale);
     }
 
@@ -1986,6 +2460,12 @@ impl ResultsStateController {
             return;
         };
         let level = ui_ready.global::<ResultsState>().get_matrix_level();
+        self.refresh_matrix_view_at(level);
+    }
+
+    /// `refresh_active_matrix_view` for a known `level` - callable off the
+    /// UI thread.
+    fn refresh_matrix_view_at(&self, level: MatrixLevel) {
         if level == MatrixLevel::Object {
             if let Some(image_rel_path) = self.current_image.lock().expect("Poisned").clone() {
                 self.update_image_heatmap_view(&image_rel_path);
@@ -2010,7 +2490,7 @@ impl ResultsStateController {
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
-        let plane = result::PlaneFilter {
+        let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
             t_stack: plane_filter.selected_t_stack,
         };
@@ -2027,7 +2507,7 @@ impl ResultsStateController {
         let well_filter = WellFilter {
             plane,
             group_name: well_id.to_string(),
-            grouping_regex: matrix_filter.group_by_regex.clone(),
+            grouping: grouping_of(&matrix_filter.plate),
             aggregation: matrix_filter.aggregation.clone(),
             object_class: matrix_filter.object_classe,
             column: matrix_filter.column.clone(),
@@ -2035,18 +2515,19 @@ impl ResultsStateController {
             color_scale: matrix_filter.color_scale.clone(),
             // `None` has `get_group_by_well` assume the common 4x4 field
             // grid; otherwise the user's explicit ROWS/COLS choice.
-            well_size: matrix_filter.well_size,
-            well_order: None,
+            well_size: well_size_of(&matrix_filter.plate),
+            well_order: well_order_of(&matrix_filter.plate),
         };
         drop(matrix_filter_guard);
 
-        let result = match db.get_group_by_well(&well_filter, &result::View::Heatmap) {
-            Ok(result) => result,
-            Err(err) => {
-                error!("Could not load well results for {well_id}: {err}");
-                return;
-            }
-        };
+        let result =
+            match db.get_group_by_well(&well_filter, &evanalyzer_app::results::View::Heatmap) {
+                Ok(result) => result,
+                Err(err) => {
+                    error!("Could not load well results for {well_id}: {err}");
+                    return;
+                }
+            };
         self.set_well_in_slint(&result, value_caption, is_manual_scale);
     }
 
@@ -2084,7 +2565,7 @@ impl ResultsStateController {
             .map(|cell| (cell.key.to_string(), cell.clone()))
             .collect();
 
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 // The previously selected well (if any) belonged to the old
@@ -2132,7 +2613,7 @@ impl ResultsStateController {
             .map(|cell| (cell.key.to_string(), cell.clone()))
             .collect();
 
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 // The previously selected field (if any) belonged to the
@@ -2167,7 +2648,7 @@ impl ResultsStateController {
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
-        let plane = result::PlaneFilter {
+        let plane = evanalyzer_app::results::PlaneFilter {
             z_stack: plane_filter.selected_z_stack,
             t_stack: plane_filter.selected_t_stack,
         };
@@ -2195,13 +2676,14 @@ impl ResultsStateController {
         };
         drop(matrix_filter_guard);
 
-        let result = match db.get_image_heatmap(&image_filter, &result::View::Heatmap) {
-            Ok(result) => result,
-            Err(err) => {
-                error!("Could not load image heatmap for {image_rel_path}: {err}");
-                return;
-            }
-        };
+        let result =
+            match db.get_image_heatmap(&image_filter, &evanalyzer_app::results::View::Heatmap) {
+                Ok(result) => result,
+                Err(err) => {
+                    error!("Could not load image heatmap for {image_rel_path}: {err}");
+                    return;
+                }
+            };
         self.set_image_heatmap_in_slint(&result, value_caption, is_manual_scale);
     }
 
@@ -2229,7 +2711,7 @@ impl ResultsStateController {
             .map(|cell| (cell.key.to_string(), cell.clone()))
             .collect();
 
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 // The previously selected tile (if any) belonged to the old
@@ -2254,9 +2736,20 @@ impl ResultsStateController {
         .ok();
     }
 
+    /// The incomplete-results banner; empty hides it.
+    fn set_run_warning_in_slint(&self, warning: String) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ResultsState>().set_run_warning(warning.into());
+            }
+        })
+        .ok();
+    }
+
     pub fn set_max_z_and_t_stack_in_slint(&self, t_stack_max: u32, z_stack_max: u32) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_z_stack_max(z_stack_max.saturating_sub(1) as i32);
@@ -2283,7 +2776,7 @@ impl ResultsStateController {
             items.len(),
             "Classes",
         );
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2337,7 +2830,7 @@ impl ResultsStateController {
                 item
             })
             .collect();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2364,7 +2857,7 @@ impl ResultsStateController {
             .map(|item| item.value.clone())
             .unwrap_or_default();
         let stops = color_scale_gradient_slint(&ColorSchema::default());
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_matrix_color_schema_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2384,31 +2877,19 @@ impl ResultsStateController {
     // once at `open_database`, mirroring `set_color_schemas_in_slint`.
     pub fn set_grid_size_options_in_slint(&self) {
         let ui_weak = self.ui.clone();
-        let plate_items = plate_size_items(None);
-        let plate_summary = plate_items
-            .iter()
-            .find(|item| item.selected)
-            .map(|item| item.value.clone())
-            .unwrap_or_default();
         let square_items = square_size_items(DEFAULT_SQUARE_SIZE);
         let square_summary = square_items
             .iter()
             .find(|item| item.selected)
             .map(|item| item.value.clone())
             .unwrap_or_default();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
-                state.set_matrix_plate_size_items(ModelRc::from(Rc::new(VecModel::from(
-                    plate_items,
-                ))));
-                state.set_matrix_plate_size_summary(plate_summary);
                 state.set_matrix_square_size_items(ModelRc::from(Rc::new(VecModel::from(
                     square_items,
                 ))));
                 state.set_matrix_square_size_summary(square_summary);
-                state.set_matrix_well_rows("4".into());
-                state.set_matrix_well_cols("4".into());
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_grid_size_options_in_slint, cannot update grid size options!"
@@ -2425,7 +2906,7 @@ impl ResultsStateController {
             items.iter().filter(|item| item.selected).count(),
             items.len(),
         );
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2448,7 +2929,7 @@ impl ResultsStateController {
         let total = self.images.lock().expect("Poisened").len();
         let text = image_summary_text(selected, total);
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ResultsState>()
@@ -2463,7 +2944,7 @@ impl ResultsStateController {
     fn push_aggregation_summary(&self, selected: usize) {
         let text = list_summary(selected, AGGREGATIONS.len(), "Aggregations");
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready.global::<ResultsState>().set_list_aggregate(text);
             } else {
@@ -2492,7 +2973,7 @@ impl ResultsStateController {
 
     fn push_aggregation_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_aggregation_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2508,7 +2989,7 @@ impl ResultsStateController {
         let total = self.classes.lock().expect("Poisened").len();
         let text = list_summary(selected, total, "Classes");
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ResultsState>()
@@ -2524,7 +3005,7 @@ impl ResultsStateController {
         let total = self.available_columns.lock().expect("Poisened").len();
         let text = list_summary(selected, total, "Columns");
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ResultsState>()
@@ -2564,7 +3045,7 @@ impl ResultsStateController {
 
     fn push_image_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2596,7 +3077,7 @@ impl ResultsStateController {
         drop(images);
 
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ResultsState>()
@@ -2639,7 +3120,7 @@ impl ResultsStateController {
     // toggle should overwrite.
     fn push_class_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2680,7 +3161,7 @@ impl ResultsStateController {
     // separate, single-column aggregation picker for the Matrix view.
     fn push_columns_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -2739,26 +3220,14 @@ impl ResultsStateController {
         // Export always uses `ColorScale::Auto` (see `read_export_settings`)
         // - the dialog exposes no manual min/max override, so the current
         // Matrix view's own scale (which may be pinned) isn't mirrored here.
-        let (aggregations, color_schema, grouping_regex, plate_dimension, well_size, square_size) =
-            match matrix_filter_guard.as_ref() {
-                Some(filter) => (
-                    vec![filter.aggregation.clone()],
-                    filter.color_schema.clone(),
-                    filter.group_by_regex.clone(),
-                    filter.plate_dimension,
-                    filter.well_size,
-                    filter.square_size,
-                ),
-                None => (
-                    vec![Aggregation::default()],
-                    ColorSchema::default(),
-                    String::new(),
-                    None,
-                    None,
-                    None,
-                ),
-            };
-        let well_size = well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
+        let (aggregations, color_schema, square_size) = match matrix_filter_guard.as_ref() {
+            Some(filter) => (
+                vec![filter.aggregation.clone()],
+                filter.color_schema.clone(),
+                filter.square_size,
+            ),
+            None => (vec![Aggregation::default()], ColorSchema::default(), None),
+        };
         let square_size = square_size.unwrap_or(DEFAULT_SQUARE_SIZE);
 
         // Seeds the export dialog's own image selection from whatever the
@@ -2860,7 +3329,6 @@ impl ResultsStateController {
         state.set_column_groups(ModelRc::from(Rc::new(VecModel::from(column_groups_vec))));
         state.set_column_summary(column_summary);
 
-        state.set_grouping_regex(grouping_regex.into());
         state.set_aggregation_items(ModelRc::from(Rc::new(VecModel::from(
             aggregation_items_vec,
         ))));
@@ -2874,19 +3342,6 @@ impl ResultsStateController {
                 .unwrap_or("Viridis")
                 .into(),
         );
-        state.set_plate_size_items(ModelRc::from(Rc::new(VecModel::from(plate_size_items(
-            plate_dimension,
-        )))));
-        state.set_plate_size_summary(
-            plate_dimensions()
-                .into_iter()
-                .find(|(_, dimension)| *dimension == plate_dimension)
-                .map(|(name, _)| name)
-                .unwrap_or("Auto")
-                .into(),
-        );
-        state.set_well_rows(well_size.rows.to_string().into());
-        state.set_well_cols(well_size.cols.to_string().into());
         state.set_square_size_items(ModelRc::from(Rc::new(VecModel::from(square_size_items(
             square_size,
         )))));
@@ -2928,6 +3383,15 @@ impl ResultsStateController {
             return Err("Choose an output folder first.".to_string());
         }
 
+        let file_prefix_tmp = state.get_output_file_prefix().to_string();
+        let file_prefix = if file_prefix_tmp.is_empty() {
+            None
+        } else {
+            Some(file_prefix_tmp)
+        };
+
+        let transpond_table = state.get_transpond_output_table();
+
         let parse_u32 = |label: &str, text: slint::SharedString| -> Result<u32, String> {
             text.trim()
                 .parse::<u32>()
@@ -2937,8 +3401,6 @@ impl ResultsStateController {
         let z_end = parse_u32("Z end", state.get_z_end())?;
         let t_start = parse_u32("T start", state.get_t_start())?;
         let t_end = parse_u32("T end", state.get_t_end())?;
-        let well_rows = parse_u32("well row count", state.get_well_rows())?.max(1) as usize;
-        let well_cols = parse_u32("well column count", state.get_well_cols())?.max(1) as usize;
 
         let selected_keys = |items: ModelRc<MultiSelectItem>| -> Vec<slint::SharedString> {
             items
@@ -2994,15 +3456,9 @@ impl ResultsStateController {
             return Err(format!("Unknown color schema \"{color_schema_key}\"."));
         };
 
-        let plate_size_key = state
-            .get_plate_size_items()
-            .iter()
-            .find(|item| item.selected)
-            .map(|item| item.key)
-            .unwrap_or_else(|| "Auto".into());
-        let Some(plate_dimension) = plate_dimension_from_key(plate_size_key.as_str()) else {
-            return Err(format!("Unknown plate size \"{plate_size_key}\"."));
-        };
+        // Grouping, plate size and well layout: the project's plate
+        // settings, the same the Matrix view shows.
+        let plate = self.current_plate_settings();
 
         let square_size_key = state
             .get_square_size_items()
@@ -3026,6 +3482,7 @@ impl ResultsStateController {
 
         Ok(ResultExport {
             output_dir: PathBuf::from(output_dir),
+            outputfile_prefix: file_prefix,
             format,
             z_stacks: std::range::Range {
                 start: z_start,
@@ -3039,15 +3496,12 @@ impl ResultsStateController {
             columns,
             color_schema,
             color_scale: ColorScale::Auto,
-            grouping_regex: state.get_grouping_regex().to_string(),
+            grouping: grouping_of(&plate),
             object_classes,
             aggregations,
-            plate_dimension,
-            well_size: Some(WellSize {
-                rows: well_rows,
-                cols: well_cols,
-            }),
-            well_order: None,
+            plate_size: plate.plate_size,
+            well_size: well_size_of(&plate),
+            well_order: well_order_of(&plate),
             square_size: Some(square_size),
             with_list_view: state.get_with_list_view(),
             with_list_coloc_details: state.get_with_list_coloc_details(),
@@ -3058,43 +3512,25 @@ impl ResultsStateController {
             with_plate_view_list: state.get_with_plate_list(),
             with_well_view_list: state.get_with_well_list(),
             with_heatmap: state.get_with_heatmap(),
+            transpond_table,
         })
     }
 
-    // Runs `export` on a background thread against its *own* connection to
-    // the same already-open database, so the (potentially long-running)
-    // export doesn't hold `result_generator`'s lock for its whole duration
-    // and block every other List/Matrix query on the UI thread meanwhile.
-    // That second connection is `result_generator`'s own connection cloned
-    // via `ResultsGenerator::try_clone` (a new connection to the same
-    // already-open DuckDB database, not a second file open) - opening the
-    // same path a second time via `open_database` was the original
-    // approach, but on Windows the OS enforces exclusive-by-default file
-    // locking even for a second handle from the same process, so the app
-    // ended up locking itself out of its own database on every export.
+    // Runs `export` on a background thread. The results source gives it its
+    // own database connection (see `LocalResults::export`), so the
+    // (potentially long-running) export doesn't block every other
+    // List/Matrix query meanwhile.
     fn run_export(self: &Arc<Self>, export: ResultExport) {
-        let cloned = match self.result_generator.lock().expect("Poisened").as_ref() {
-            Some(database) => database.try_clone(),
-            None => {
-                self.push_export_error("No database is open.".to_string());
-                return;
-            }
-        };
-        let database = match cloned {
-            Ok(database) => database,
-            Err(err) => {
-                self.push_export_error(format!(
-                    "Could not open a database connection for export: {err}"
-                ));
-                return;
-            }
+        let Some(database) = self.result_generator.lock().expect("Poisened").clone() else {
+            self.push_export_error("No database is open.".to_string());
+            return;
         };
         let cancel = Arc::new(AtomicBool::new(false));
         *self.export_cancel_flag.lock().expect("Poisened") = Some(cancel.clone());
         let manager = self.clone();
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             let manager_for_progress = manager.clone();
-            let result = export.start_export(&database, &cancel, &mut |message, current, total| {
+            let result = database.export(&export, &cancel, &mut |message, current, total| {
                 manager_for_progress.push_export_progress(message.to_string(), current, total);
             });
             match result {
@@ -3108,7 +3544,7 @@ impl ResultsStateController {
 
     fn push_export_progress(&self, message: String, current: usize, total: usize) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ExportDialogState>();
                 state.set_progress_message(message.into());
@@ -3123,7 +3559,7 @@ impl ResultsStateController {
 
     fn push_export_done(&self) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ExportDialogState>();
                 state.set_is_exporting(false);
@@ -3137,7 +3573,7 @@ impl ResultsStateController {
 
     fn push_export_error(&self, message: String) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ExportDialogState>();
                 state.set_is_exporting(false);
@@ -3155,7 +3591,7 @@ impl ResultsStateController {
     // dialog doesn't flash red for something the user explicitly asked for.
     fn push_export_cancelled(&self) {
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ExportDialogState>();
                 state.set_is_exporting(false);
@@ -3237,27 +3673,10 @@ fn column_items(
         .collect()
 }
 
-/// Whether `column` can be aggregated across an image's objects at all —
-/// mirrors `is_aggregable` in results_exporter.rs (kept in sync with it by
-/// inspecting the same variants), needed here because Images-mode reuses the
-/// List view's own COLUMNS selection rather than a dedicated picker.
-fn is_aggregable_column(column: &Column) -> bool {
-    !matches!(
-        column,
-        Column::ObjectId
-            | Column::ImageName
-            | Column::ObjectClass
-            | Column::IntensityAvg(_)
-            | Column::IntensitySum(_)
-            | Column::IntensityMin(_)
-            | Column::IntensityMax(_)
-    )
-}
-
 /// Whether `column` is something `chart_value_expr`/`column_aggregate_expr`
 /// (results_generator.rs) can resolve to a single per-object SQL
 /// expression — the exact same set that function accepts, kept in sync by
-/// inspecting the same variants. Unlike `is_aggregable_column`, `Count` is
+/// inspecting the same variants. Unlike `Column::is_aggregable`, `Count` is
 /// also excluded here: it's a row tally (1 per object), not a per-object
 /// measurement, so charting it doesn't mean anything the way it does for
 /// Images-mode's own per-image counts.
@@ -3320,6 +3739,26 @@ fn group_by_items(selected_images: bool) -> Vec<MultiSelectItem> {
             color: Color::default(),
             group: "".into(),
             selected: selected_images,
+        },
+    ]
+}
+
+/// The LAYOUT dropdown: rows, or the Side by side.
+fn layout_items(side_by_side: bool) -> Vec<MultiSelectItem> {
+    vec![
+        MultiSelectItem {
+            key: "rows".into(),
+            value: "Rows".into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: !side_by_side,
+        },
+        MultiSelectItem {
+            key: "side-by-side".into(),
+            value: "Side by side".into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: side_by_side,
         },
     ]
 }
@@ -3456,45 +3895,91 @@ fn color_schema_from_key(key: &str) -> Option<ColorSchema> {
         .map(|(_, schema)| schema)
 }
 
-// PLATE SIZE dropdown vocabulary: "Auto" (`None`, `get_group_by_plate`
-// auto-selects the smallest standard format that fits the data — see
-// `best_matching_dimensions`) followed by every standard microplate well
-// count `PlateDimensions` supports, smallest first.
-fn plate_dimensions() -> [(&'static str, Option<PlateDimensions>); 8] {
-    [
-        ("Auto", None),
-        ("6-well (2x3)", Some(PlateDimensions::PLate2x3)),
-        ("12-well (3x4)", Some(PlateDimensions::Plate3x4)),
-        ("24-well (4x6)", Some(PlateDimensions::Plate4x6)),
-        ("48-well (6x8)", Some(PlateDimensions::Plate6x8)),
-        ("96-well (8x12)", Some(PlateDimensions::Plate8x12)),
-        ("384-well (16x24)", Some(PlateDimensions::Plate16x24)),
-        ("1536-well (32x48)", Some(PlateDimensions::Plate32x48)),
-    ]
+/// How the results queries group images for `plate`.
+fn grouping_of(plate: &PlateSettings) -> Grouping {
+    match plate.grouping_mode {
+        GroupingMode::Auto => Grouping::Auto,
+        GroupingMode::Custom => Grouping::Regex(plate.grouping_regex.clone()),
+        GroupingMode::Folder => Grouping::Folder,
+    }
 }
 
-fn plate_size_items(selected: Option<PlateDimensions>) -> Vec<MultiSelectItem> {
-    plate_dimensions()
+/// The well grid for `plate` - `None` lets the query fit it (Auto).
+fn well_size_of(plate: &PlateSettings) -> Option<WellSize> {
+    match plate.well_layout {
+        WellLayout::Auto => None,
+        WellLayout::Fixed { rows, cols } => Some(WellSize {
+            rows: rows.max(1) as usize,
+            cols: cols.max(1) as usize,
+        }),
+    }
+}
+
+/// Which image goes where in a fixed well grid - `None` (number order) for
+/// Auto or without an order.
+fn well_order_of(plate: &PlateSettings) -> Option<Vec<u32>> {
+    match plate.well_layout {
+        WellLayout::Fixed { .. } if !plate.well_image_order.is_empty() => {
+            Some(plate.well_image_order.clone())
+        }
+        _ => None,
+    }
+}
+
+// GROUP BY dropdown vocabulary.
+const GROUPING_MODES: [(&str, GroupingMode); 3] = [
+    ("Auto", GroupingMode::Auto),
+    ("Custom regex", GroupingMode::Custom),
+    ("Folder", GroupingMode::Folder),
+];
+
+fn single_select_items<T: PartialEq>(
+    choices: impl IntoIterator<Item = (String, T)>,
+    selected: &T,
+) -> Vec<MultiSelectItem> {
+    choices
         .into_iter()
-        .map(|(name, dimension)| MultiSelectItem {
-            key: name.into(),
+        .map(|(name, value)| MultiSelectItem {
+            key: name.clone().into(),
             value: name.into(),
             color: Color::default(),
             group: "".into(),
-            selected: dimension == selected,
+            selected: value == *selected,
         })
         .collect()
 }
 
-// Returns `Some(dimension)` for a recognized key — note this is
-// `Option<Option<PlateDimensions>>`: the outer `Option` is "was `key`
-// recognized at all", the inner one is the dropdown item's own meaning
-// ("Auto" -> `None`, an explicit size -> `Some(_)`).
-fn plate_dimension_from_key(key: &str) -> Option<Option<PlateDimensions>> {
-    plate_dimensions()
-        .into_iter()
-        .find(|(name, _)| *name == key)
-        .map(|(_, dimension)| dimension)
+fn grouping_items(selected: GroupingMode) -> Vec<MultiSelectItem> {
+    single_select_items(
+        GROUPING_MODES.map(|(name, mode)| (name.to_string(), mode)),
+        &selected,
+    )
+}
+
+// PLATE SIZE dropdown vocabulary: the same list as the project settings
+// (`PlateSize::ALL`, keyed by its label).
+fn plate_size_items(selected: PlateSize) -> Vec<MultiSelectItem> {
+    single_select_items(PlateSize::ALL.map(|size| (size.label(), size)), &selected)
+}
+
+fn plate_size_from_key(key: &str) -> Option<PlateSize> {
+    PlateSize::ALL.into_iter().find(|size| size.label() == key)
+}
+
+// WELL SIZE dropdown vocabulary: fitted to the images (Auto) or the ROWS/COLS
+// fields (Custom).
+const WELL_LAYOUT_AUTO: &str = "Auto";
+const WELL_LAYOUT_CUSTOM: &str = "Custom";
+
+fn well_layout_items(layout: WellLayout) -> Vec<MultiSelectItem> {
+    let auto = matches!(layout, WellLayout::Auto);
+    single_select_items(
+        [
+            (WELL_LAYOUT_AUTO.to_string(), true),
+            (WELL_LAYOUT_CUSTOM.to_string(), false),
+        ],
+        &auto,
+    )
 }
 
 // SQUARE SIZE dropdown vocabulary for the image heatmap — matches
@@ -3615,6 +4100,8 @@ fn flatten_grid_cells(result: &DatabaseResult) -> Vec<MatrixCell> {
                         color: bg_color_to_slint(cell.bg_color),
                         disabled: cell.disabled,
                         any_disabled: cell.any_disabled,
+                        failed: cell.failed,
+                        any_failed: cell.any_failed,
                     }
                 })
         })
@@ -3637,7 +4124,7 @@ fn bg_color_to_slint(bg_color: u32) -> Color {
 // always matches what's on screen instead of reimplementing the
 // interpolation a second time in Slint.
 fn color_scale_gradient_slint(schema: &ColorSchema) -> Vec<Color> {
-    result::color_scale_gradient(schema)
+    evanalyzer_app::results::color_scale_gradient(schema)
         .into_iter()
         .map(bg_color_to_slint)
         .collect()
@@ -3708,7 +4195,14 @@ mod tests {
         ui: slint::Weak<AppWindow>,
         results_ui: slint::Weak<ResultsWindow>,
     ) -> Arc<ResultsStateController> {
-        let ui_state = test_ui_state();
+        make_controller_with_state(ui, results_ui, test_ui_state())
+    }
+
+    fn make_controller_with_state(
+        ui: slint::Weak<AppWindow>,
+        results_ui: slint::Weak<ResultsWindow>,
+        ui_state: Arc<UiState>,
+    ) -> Arc<ResultsStateController> {
         let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
@@ -3726,12 +4220,20 @@ mod tests {
             viewport_controller.clone(),
         ));
         let image_list_controller = Arc::new(ImagesListController::new(
-            ui,
+            ui.clone(),
             ui_state.clone(),
-            viewport_controller,
+            viewport_controller.clone(),
             histogram_controller,
             image_meta_controller,
-            object_list_controller,
+            object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    ui.clone(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
         ));
         Arc::new(ResultsStateController::new(
             results_ui,
@@ -3937,7 +4439,7 @@ mod tests {
                 c_stack INTEGER, z_stack INTEGER, t_stack INTEGER,
                 object_id UUID NOT NULL,
                 seg_class_name VARCHAR, seg_class_id INTEGER,
-                object_class_name VARCHAR, object_class_id VARCHAR,
+                object_class_name VARCHAR, object_class_id INTEGER[],
                 parent_id VARCHAR, children VARCHAR, track_id UBIGINT,
                 centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
                 bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
@@ -3950,7 +4452,11 @@ mod tests {
                 touches_edge BOOLEAN,
                 pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
                 image_bit_depth UTINYINT,
-                intensities_json JSON, coloc_json JSON
+                intensity_sum_normalized DOUBLE[], intensity_sum_gray DOUBLE[],
+                intensity_mean_normalized DOUBLE[], intensity_mean_gray DOUBLE[],
+                intensity_min_normalized DOUBLE[], intensity_min_gray DOUBLE[],
+                intensity_max_normalized DOUBLE[], intensity_max_gray DOUBLE[],
+                coloc_partner_ids MAP(INTEGER, UUID[])
             );
             CREATE TABLE images (
                 image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
@@ -3965,17 +4471,20 @@ mod tests {
         )
         .expect("create test schema");
 
-        let ch0_intensities = r#"{"0":{"sum_raw":1.0,"sum_scaled":255.0,"mean_raw":0.5,"mean_scaled":127.0,"median_raw":0.5,"median_scaled":127.0,"std_raw":0.1,"std_scaled":25.5,"min_raw":0.0,"min_scaled":0.0,"max_raw":1.0,"max_scaled":255.0}}"#;
+        // Channel 0 only: sum 1.0 (255 gray values), mean 0.5 (127), min 0,
+        // max 1.0 (255).
+        let ch0_intensities = "[1.0], [255.0], [0.5], [127.0], [0.0], [0.0], [1.0], [255.0]";
         let insert = |idx: usize,
                       image: &str,
                       class_name: &str,
                       class_id: i32,
                       area_px: u64,
                       centroid: (f64, f64),
-                      coloc_json: &str| {
+                      // SQL map literal, partner class -> partner ids.
+                      coloc_partner_ids: &str| {
             let object_id = format!("00000000-0000-0000-0000-{idx:012}");
             conn.execute(
-                "INSERT INTO objects (
+                &format!("INSERT INTO objects (
                     image_name, image_rel_path, t_stack, z_stack, object_id, seg_class_name, seg_class_id,
                     object_class_name, object_class_id, track_id,
                     centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
@@ -3985,7 +4494,9 @@ mod tests {
                     circularity, solidity, aspect_ratio, roundness, compactness,
                     major_axis_px, minor_axis_px, eccentricity, touches_edge,
                     pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-                    intensities_json, coloc_json
+                    intensity_sum_normalized, intensity_sum_gray, intensity_mean_normalized,
+                    intensity_mean_gray, intensity_min_normalized, intensity_min_gray,
+                    intensity_max_normalized, intensity_max_gray, coloc_partner_ids
                 ) VALUES (
                     ?, ?, 0, 0, ?, ?, ?,
                     ?, ?, 0,
@@ -3996,8 +4507,8 @@ mod tests {
                     1.0, 1.0, 1.0, 1.0, 1.0,
                     10, 10, 1.0, false,
                     1.0, 1.0, 1.0,
-                    ?, ?
-                )",
+                    {ch0_intensities}, {coloc_partner_ids}
+                )"),
                 duckdb::params![
                     image,
                     image,
@@ -4010,8 +4521,6 @@ mod tests {
                     centroid.1,
                     area_px,
                     area_px as f64,
-                    ch0_intensities,
-                    coloc_json,
                 ],
             )
             .unwrap_or_else(|e| panic!("insert object {idx}: {e}"));
@@ -4024,10 +4533,10 @@ mod tests {
             1,
             10,
             (10.0, 10.0),
-            r#"{"2":["00000000-0000-0000-0000-000000000002"]}"#,
+            "MAP {2: ['00000000-0000-0000-0000-000000000002']}",
         );
-        insert(1, "A1_02.tif", "ClassA", 1, 20, (60.0, 10.0), "{}");
-        insert(2, "A2_01.tif", "ClassB", 2, 30, (10.0, 10.0), "{}");
+        insert(1, "A1_02.tif", "ClassA", 1, 20, (60.0, 10.0), "MAP {}");
+        insert(2, "A2_01.tif", "ClassB", 2, 30, (10.0, 10.0), "MAP {}");
 
         for image in ["A1_01.tif", "A1_02.tif", "A2_01.tif"] {
             conn.execute(
@@ -4091,10 +4600,14 @@ mod tests {
         assert!(controller.result_generator.lock().unwrap().is_some());
         assert!(!*controller.export_populated.lock().unwrap());
 
-        // `refresh_list`/`update_matrix_view` both ran as part of opening -
-        // every object's location is cached, and both seeded wells got a
-        // plate cell.
+        // The List tab is on screen, so the list was queried as part of
+        // opening - every object's location is cached. The hidden Matrix
+        // tab wasn't, until it's shown: then both seeded wells get a cell.
         assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
+        assert!(controller.matrix_cells.lock().unwrap().is_empty());
+        _results_ui
+            .global::<ResultsState>()
+            .invoke_rail_mode_selected(ResultsRailMode::Matrix);
         let matrix_cells = controller.matrix_cells.lock().unwrap();
         assert!(matrix_cells.contains_key("A1"));
         assert!(matrix_cells.contains_key("A2"));
@@ -4311,6 +4824,11 @@ mod tests {
         state.invoke_list_with_coloc_details_changed(true);
         assert!(controller.list_filter.lock().unwrap().with_coloc_details);
 
+        state.invoke_list_transpond_changed(true);
+        assert!(controller.list_filter.lock().unwrap().transpond);
+        state.invoke_list_transpond_changed(false);
+        assert!(!controller.list_filter.lock().unwrap().transpond);
+
         state.invoke_list_group_by_selected("images".into());
         assert_eq!(
             controller.list_row_locations.lock().unwrap().len(),
@@ -4386,19 +4904,19 @@ mod tests {
             ColorScale::Auto
         ));
 
-        state.invoke_matrix_plate_size_selected("96-well (8x12)".into(), true);
+        state.invoke_matrix_plate_size_selected("96 Well (8 x 12)".into(), true);
         state.invoke_matrix_well_rows_changed("6".into());
         state.invoke_matrix_well_cols_changed("6".into());
-        assert_eq!(
-            controller
-                .matrix_filter
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .well_size,
-            Some(WellSize { rows: 6, cols: 6 })
-        );
+        let plate = controller
+            .matrix_filter
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .plate
+            .clone();
+        assert_eq!(plate.plate_size, PlateSize::Plate8x12);
+        assert_eq!(plate.well_layout, WellLayout::Fixed { rows: 6, cols: 6 });
         state.invoke_matrix_square_size_selected("128".into(), true);
         assert_eq!(
             controller
@@ -4472,6 +4990,11 @@ mod tests {
         let (_ui, results_ui, controller) = controller_with_open_database();
         let state = results_ui.global::<ResultsState>();
 
+        state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        // Count/Avg is the same (1.0) with or without A1_01 (one object per
+        // image), so use Sum: 2 before disabling A1_01, 1 after.
+        state.invoke_matrix_aggregate_selected("Sum".into());
+
         state.invoke_plate_cell_clicked("A1".into());
         let cells = controller.matrix_cells.lock().unwrap();
         let before = cells.get("A1").unwrap();
@@ -4503,6 +5026,52 @@ mod tests {
             after.value, value_before,
             "A1's cached plate cell must reflect the image just disabled, not stale pre-drill-down data"
         );
+    }
+
+    /// Times opening a real results file and toggling one of its images
+    /// through the controller, including building the Slint models.
+    /// `EVADB=<copy.evadb> cargo test --release -p evanalyzer_gui --lib
+    /// bench_real_database -- --ignored --nocapture` (toggles an image, so
+    /// use a copy).
+    #[test]
+    #[ignore]
+    fn bench_real_database() {
+        use std::time::Instant;
+        let Ok(path) = std::env::var("EVADB") else {
+            return;
+        };
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        let state = results_ui.global::<ResultsState>();
+        for i in 0..3 {
+            let start = Instant::now();
+            controller.open_database(PathBuf::from(&path));
+            let opened = start.elapsed();
+            drain_ui_queue();
+            println!(
+                "open #{i}: open_database {opened:.2?}, + UI queue {:.2?}, list rows {}",
+                start.elapsed(),
+                state.get_list_rows().row_count()
+            );
+        }
+        let image_name = controller.images.lock().unwrap()[0].name.clone();
+        let well = image_name.split('_').next().unwrap().to_string();
+        state.invoke_plate_cell_clicked(well.clone().into());
+        state.invoke_open_well_clicked(well.into());
+        drain_ui_queue();
+        for i in 0..4 {
+            state.invoke_well_cell_clicked(image_name.clone().into());
+            let start = Instant::now();
+            state.invoke_toggle_active_well_disabled();
+            let toggled = start.elapsed();
+            drain_ui_queue();
+            println!(
+                "toggle #{i}: {toggled:.2?}, + UI queue {:.2?}",
+                start.elapsed()
+            );
+        }
     }
 
     #[test]
@@ -4638,5 +5207,712 @@ mod tests {
         let plane = controller.plane_filter.lock().unwrap();
         assert_eq!(plane.selected_z_stack, 2);
         assert_eq!(plane.selected_t_stack, 3);
+    }
+
+    // -- what the results window shows (UI updates applied) ------------------
+
+    use crate::editor::test_support::{choose_file, ui_state_with_windows};
+    use crate::helper::ui_thread::drain_ui_queue;
+
+    // -- plate settings: shared with the project ------------------------------
+
+    /// A database opened with `plate` as the project's plate settings, and
+    /// the project settings dialog linked like in the app.
+    fn opened_with_plate(
+        plate: PlateSettings,
+    ) -> (
+        Opened,
+        Arc<crate::editor::project_settings_controller::ProjectSettingsController>,
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        ui_state.get_project_write().plate = plate;
+        let controller =
+            make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state.clone());
+        let project_settings = Arc::new(
+            crate::editor::project_settings_controller::ProjectSettingsController::new(
+                ui.as_weak(),
+                results_ui.as_weak(),
+                ui_state,
+            ),
+        );
+        crate::editor::link_plate_settings(&project_settings, &controller);
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        (
+            Opened {
+                _ui: ui,
+                results_ui,
+                controller,
+                _dir: dir,
+            },
+            project_settings,
+        )
+    }
+
+    fn matrix_plate(o: &Opened) -> PlateSettings {
+        o.controller
+            .matrix_filter
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .plate
+            .clone()
+    }
+
+    #[test]
+    fn opening_results_uses_the_projects_plate_settings() {
+        let plate = PlateSettings {
+            grouping_mode: GroupingMode::Folder,
+            plate_size: PlateSize::Plate8x12,
+            well_layout: WellLayout::Fixed { rows: 3, cols: 3 },
+            well_image_order: (1..=9).rev().collect(),
+            ..PlateSettings::default()
+        };
+        let (o, _project_settings) = opened_with_plate(plate.clone());
+        let s = o.state();
+
+        assert_eq!(matrix_plate(&o), plate);
+        assert_eq!(s.get_matrix_grouping_summary(), "Folder");
+        assert!(!s.get_matrix_group_regex_custom());
+        assert_eq!(s.get_matrix_plate_size_summary(), "96 Well (8 x 12)");
+        assert_eq!(s.get_matrix_well_layout_summary(), "Custom");
+        assert_eq!(s.get_matrix_well_rows(), "3");
+
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        drain_ui_queue();
+        assert_eq!(s.get_plate_rows(), 8, "the project's plate size");
+        assert_eq!(s.get_plate_cols(), 12);
+    }
+
+    #[test]
+    fn changes_in_the_results_window_go_to_the_project_and_its_settings_dialog() {
+        // Kept alive, like the app's editor does.
+        let (o, _project_settings) = opened_with_plate(PlateSettings::default());
+        let s = o.state();
+        let ui_state = o.controller._app_state.clone();
+        assert!(!ui_state.is_dirty());
+
+        s.invoke_matrix_plate_size_selected("384 Well (16 x 24)".into(), true);
+        s.invoke_matrix_well_layout_selected("Custom".into(), true);
+        s.invoke_matrix_well_cols_changed("3".into());
+        drain_ui_queue();
+
+        let project_plate = ui_state.get_project().plate.clone();
+        assert_eq!(project_plate.plate_size, PlateSize::Plate16x24);
+        assert!(matches!(
+            project_plate.well_layout,
+            WellLayout::Fixed { cols: 3, .. }
+        ));
+        assert_eq!(project_plate, matrix_plate(&o));
+        assert!(ui_state.is_dirty(), "an unsaved change of the project");
+
+        // The project settings dialog shows it too.
+        let dialog = o._ui.global::<crate::ProjectSettingsState>().get_settings();
+        assert_eq!(
+            dialog.plate_size_index,
+            PlateSize::ALL
+                .iter()
+                .position(|p| *p == PlateSize::Plate16x24)
+                .unwrap() as i32
+        );
+        assert!(!dialog.well_auto);
+        assert_eq!(dialog.well_columns, 3);
+    }
+
+    #[test]
+    fn changes_in_the_project_settings_reach_the_results_window() {
+        let (o, project_settings) = opened_with_plate(PlateSettings::default());
+        let s = o.state();
+        let ui_state = o.controller._app_state.clone();
+
+        // As the project settings dialog's Apply does.
+        ui_state.get_project_write().plate = PlateSettings {
+            grouping_mode: GroupingMode::Custom,
+            grouping_regex: r"^(([A-H])([0-9]+))_([0-9]+)".into(),
+            plate_size: PlateSize::Plate4x6,
+            ..PlateSettings::default()
+        };
+        project_settings.sync_project_settings_to_slint();
+        drain_ui_queue();
+
+        let plate = matrix_plate(&o);
+        assert_eq!(plate.plate_size, PlateSize::Plate4x6);
+        assert_eq!(s.get_matrix_grouping_summary(), "Custom regex");
+        assert!(s.get_matrix_group_regex_custom());
+        assert_eq!(s.get_matrix_group_regex(), r"^(([A-H])([0-9]+))_([0-9]+)");
+        assert_eq!(s.get_matrix_plate_size_summary(), "24 Well (4 x 6)");
+    }
+
+    #[test]
+    fn auto_grouping_shows_the_detected_regex_and_custom_starts_from_it() {
+        let (o, _project_settings) = opened_with_plate(PlateSettings::default());
+        let s = o.state();
+        let detected = s.get_matrix_group_regex_in_use();
+        assert!(!detected.is_empty(), "the detected pattern is shown");
+        assert!(!s.get_matrix_group_regex_custom());
+
+        s.invoke_matrix_grouping_selected("Custom regex".into(), true);
+        drain_ui_queue();
+        assert!(s.get_matrix_group_regex_custom());
+        assert_eq!(s.get_matrix_group_regex(), detected);
+        let project = o.controller._app_state.get_project().plate.clone();
+        assert_eq!(project.grouping_mode, GroupingMode::Custom);
+        assert_eq!(project.grouping_regex, detected.as_str());
+
+        s.invoke_matrix_regex_changed("^(x)".into());
+        drain_ui_queue();
+        assert_eq!(
+            o.controller._app_state.get_project().plate.grouping_regex,
+            "^(x)"
+        );
+        assert_eq!(s.get_matrix_group_regex_in_use(), "^(x)");
+    }
+
+    /// What a double click on a tile (and the detail card's "Open" button)
+    /// does: plate -> the well, well -> the image.
+    #[test]
+    fn open_cell_goes_one_level_deeper() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        drain_ui_queue();
+
+        s.invoke_open_cell("A1".into());
+        drain_ui_queue();
+        assert_eq!(s.get_matrix_level(), MatrixLevel::Well);
+        assert_eq!(
+            o.controller.current_well.lock().unwrap().as_deref(),
+            Some("A1")
+        );
+        assert!(s.get_well_fields().row_count() >= 2);
+
+        s.invoke_open_cell("A1_01.tif".into());
+        drain_ui_queue();
+        assert_eq!(s.get_matrix_level(), MatrixLevel::Object);
+        assert!(o.controller.current_image.lock().unwrap().is_some());
+        assert!(s.get_image_heatmap_cells().row_count() > 0);
+
+        // Nothing deeper than the image heatmap.
+        s.invoke_open_cell("R0C0".into());
+        drain_ui_queue();
+        assert_eq!(s.get_matrix_level(), MatrixLevel::Object);
+    }
+
+    /// The image keys of the well grid, row by row ("" = no image there).
+    fn well_grid_keys(s: &ResultsState) -> Vec<String> {
+        s.get_well_fields()
+            .iter()
+            .map(|cell| {
+                if cell.exists {
+                    cell.key.to_string()
+                } else {
+                    String::new()
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dropping_an_image_on_another_position_swaps_them_in_the_project() {
+        let (o, _project_settings) = opened_with_plate(PlateSettings::default());
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        s.invoke_open_cell("A1".into());
+        drain_ui_queue();
+        assert_eq!(
+            well_grid_keys(&s),
+            vec!["A1_01.tif", "A1_02.tif"],
+            "Auto: 1 x 2"
+        );
+
+        s.invoke_well_image_moved(0, 1);
+        drain_ui_queue();
+        let plate = o.controller._app_state.get_project().plate.clone();
+        assert_eq!(
+            plate.well_layout,
+            WellLayout::Fixed { rows: 1, cols: 2 },
+            "Auto becomes the grid that was shown"
+        );
+        assert_eq!(plate.well_image_order, vec![2, 1]);
+        assert!(o.controller._app_state.is_dirty());
+        assert_eq!(well_grid_keys(&s), vec!["A1_02.tif", "A1_01.tif"]);
+        assert_eq!(s.get_matrix_well_layout_summary(), "Custom");
+
+        // Back again; dropping on itself changes nothing.
+        s.invoke_well_image_moved(1, 0);
+        s.invoke_well_image_moved(1, 1);
+        drain_ui_queue();
+        assert_eq!(
+            o.controller._app_state.get_project().plate.well_image_order,
+            vec![1, 2]
+        );
+        assert_eq!(well_grid_keys(&s), vec!["A1_01.tif", "A1_02.tif"]);
+    }
+
+    /// The real gestures in the (headless) window: a double click on a plate
+    /// tile opens the well, a plain click on a well tile selects it, and
+    /// pressing on the first tile, moving to the second and releasing swaps
+    /// them.
+    #[test]
+    fn dragging_and_double_clicking_tiles_in_the_window() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::LogicalPosition;
+        use slint::platform::{PointerEventButton, WindowEvent};
+
+        let (o, _project_settings) = opened_with_plate(PlateSettings::default());
+        let s = o.state();
+        let window = o.results_ui.window();
+        window.set_size(slint::LogicalSize::new(1500.0, 900.0));
+        s.set_rail_mode(ResultsRailMode::Matrix);
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        drain_ui_queue();
+
+        let tiles = || -> Vec<(String, LogicalPosition)> {
+            ElementHandle::find_by_element_type_name(&o.results_ui, "MatrixCellView")
+                .filter(|tile| tile.size().width > 0.0)
+                .map(|tile| {
+                    let p = tile.absolute_position();
+                    let size = tile.size();
+                    (
+                        tile.accessible_label().unwrap_or_default().to_string(),
+                        LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0),
+                    )
+                })
+                .collect()
+        };
+        let press = |at: LogicalPosition| {
+            window.dispatch_event(WindowEvent::PointerMoved { position: at });
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position: at,
+                button: PointerEventButton::Left,
+            });
+        };
+        let release = |at: LogicalPosition| {
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position: at,
+                button: PointerEventButton::Left,
+            });
+        };
+
+        // Double click on the plate's first tile (A1).
+        let plate_tiles = tiles();
+        assert!(!plate_tiles.is_empty(), "plate tiles found in the window");
+        let a1 = plate_tiles[0].1;
+        press(a1);
+        release(a1);
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
+        press(a1);
+        release(a1);
+        drain_ui_queue();
+        assert_eq!(
+            s.get_matrix_level(),
+            MatrixLevel::Well,
+            "double click opened the well"
+        );
+        assert_eq!(
+            o.controller.current_well.lock().unwrap().as_deref(),
+            Some("A1")
+        );
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+
+        // A plain click on the second image selects it.
+        let well_tiles = tiles();
+        assert_eq!(well_tiles.len(), 2, "A1 has two images (Auto: 1 x 2)");
+        let (first, second) = (well_tiles[0].1, well_tiles[1].1);
+        press(second);
+        release(second);
+        drain_ui_queue();
+        assert_eq!(s.get_active_well(), "A1_02.tif");
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+
+        // Drag the first image onto the second.
+        press(first);
+        for step in 1..=10 {
+            let t = step as f32 / 10.0;
+            window.dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(
+                    first.x + (second.x - first.x) * t,
+                    first.y + (second.y - first.y) * t,
+                ),
+            });
+        }
+        release(second);
+        drain_ui_queue();
+        assert_eq!(
+            o.controller._app_state.get_project().plate.well_image_order,
+            vec![2, 1],
+            "dropped: swapped"
+        );
+        assert_eq!(well_grid_keys(&s), vec!["A1_02.tif", "A1_01.tif"]);
+    }
+
+    #[test]
+    fn the_export_uses_the_shared_plate_settings() {
+        let plate = PlateSettings {
+            grouping_mode: GroupingMode::Folder,
+            plate_size: PlateSize::Plate6x8,
+            well_layout: WellLayout::Fixed { rows: 2, cols: 2 },
+            well_image_order: vec![2, 1, 3, 4],
+            ..PlateSettings::default()
+        };
+        let (o, _project_settings) = opened_with_plate(plate);
+        o.state().invoke_export_dialog_open();
+        drain_ui_queue();
+        o.results_ui
+            .global::<ExportDialogState>()
+            .set_output_dir("/tmp".into());
+        let export = o.controller.read_export_settings(&o.results_ui).unwrap();
+        assert_eq!(export.grouping, Grouping::Folder);
+        assert_eq!(export.plate_size, PlateSize::Plate6x8);
+        assert_eq!(export.well_size, Some(WellSize { rows: 2, cols: 2 }));
+        assert_eq!(export.well_order, Some(vec![2, 1, 3, 4]));
+    }
+
+    struct Opened {
+        _ui: AppWindow,
+        results_ui: ResultsWindow,
+        controller: Arc<ResultsStateController>,
+        _dir: tempfile::TempDir,
+    }
+
+    /// An opened database with the results-window file browser wired up,
+    /// every queued UI update applied.
+    fn opened() -> Opened {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        controller.open_database(path);
+        drain_ui_queue();
+        Opened {
+            _ui: ui,
+            results_ui,
+            controller,
+            _dir: dir,
+        }
+    }
+
+    impl Opened {
+        fn state(&self) -> ResultsState<'_> {
+            self.results_ui.global::<ResultsState>()
+        }
+        fn export(&self) -> ExportDialogState<'_> {
+            self.results_ui.global::<ExportDialogState>()
+        }
+    }
+
+    #[test]
+    fn opening_a_database_fills_every_results_panel() {
+        let o = opened();
+        let s = o.state();
+        assert_eq!(
+            s.get_list_rows().row_count(),
+            3,
+            "one row per seeded object"
+        );
+        assert!(s.get_list_column_headers().row_count() > 0);
+        assert_eq!(
+            s.get_list_column_widths().row_count(),
+            s.get_list_column_headers().row_count()
+        );
+        assert_eq!(s.get_list_class_items().row_count(), 2);
+        assert_eq!(s.get_list_image_items().row_count(), 3);
+        assert_eq!(s.get_list_image_summary(), "All Images");
+        assert!(s.get_list_columns().row_count() > 0);
+        assert!(s.get_list_aggregation_items().row_count() > 0);
+        assert!(s.get_matrix_column_items().row_count() > 0);
+        assert!(s.get_matrix_class_items().row_count() > 0);
+        assert!(s.get_matrix_color_schema_items().row_count() > 0);
+        assert!(s.get_matrix_plate_size_items().row_count() > 0);
+        assert!(s.get_matrix_square_size_items().row_count() > 0);
+        assert!(s.get_chart_column_items().row_count() > 0);
+        assert_eq!(s.get_chart_error(), "");
+
+        // The hidden tabs' data is only queried once they're shown.
+        assert_eq!(s.get_plate_cells().row_count(), 0);
+        assert_eq!(s.get_chart_histogram_bins().row_count(), 0);
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        drain_ui_queue();
+        assert!(s.get_plate_cells().row_count() > 0);
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        drain_ui_queue();
+        assert!(s.get_chart_histogram_bins().row_count() > 0);
+    }
+
+    /// A filter changed while its tab is hidden takes effect when the tab
+    /// is shown again - without querying while hidden.
+    #[test]
+    fn a_hidden_list_catches_up_on_filter_changes_when_shown() {
+        let o = opened();
+        let s = o.state();
+        assert_eq!(o.controller.list_row_locations.lock().unwrap().len(), 3);
+
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.invoke_list_image_selected("A1_01.tif".into(), true);
+        drain_ui_queue();
+        assert_eq!(
+            o.controller.list_row_locations.lock().unwrap().len(),
+            3,
+            "not queried while hidden"
+        );
+
+        s.invoke_rail_mode_selected(ResultsRailMode::List);
+        drain_ui_queue();
+        assert_eq!(o.controller.list_row_locations.lock().unwrap().len(), 1);
+    }
+
+    /// Outside tests, database work runs on a background thread: opening a
+    /// database and toggling an image must still fill/refresh the window,
+    /// and `loading` must be cleared once it's done.
+    #[test]
+    fn opening_and_toggling_run_on_the_database_thread() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state);
+        controller.db_worker.inline.store(false, Ordering::SeqCst);
+        controller.attach_callbacks();
+        let s = results_ui.global::<ResultsState>();
+
+        controller.open_database(path);
+        drain_ui_queue();
+        assert!(controller.result_generator.lock().unwrap().is_some());
+        assert_eq!(s.get_list_rows().row_count(), 3);
+        assert!(!s.get_loading(), "the status bar is back to Ready");
+        assert_eq!(s.get_database_name(), "results.evadb");
+
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        s.invoke_plate_cell_clicked("A1".into());
+        s.invoke_open_well_clicked("A1".into());
+        // Switched by the Slint UI itself.
+        s.set_matrix_level(MatrixLevel::Well);
+        // The well's grid lands (and resets the active field) first.
+        drain_ui_queue();
+        s.invoke_well_cell_clicked("A1_01.tif".into());
+        s.invoke_toggle_active_well_disabled();
+        assert!(s.get_active_well_disabled(), "shown right away");
+        drain_ui_queue();
+        let images = controller
+            .result_generator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .get_images()
+            .unwrap();
+        let image = images.iter().find(|i| i.name == "A1_01.tif").unwrap();
+        assert!(image.disabled, "written by the database thread");
+        assert!(controller.well_cells.lock().unwrap()["A1_01.tif"].disabled);
+        assert!(!s.get_loading());
+        drop(dir);
+    }
+
+    #[test]
+    fn drilling_down_shows_the_well_and_image_heatmap() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        s.invoke_plate_cell_clicked("A1".into());
+        s.invoke_open_well_clicked("A1".into());
+        drain_ui_queue();
+        // (`matrix_level` itself is switched by the Slint UI.)
+        assert!(s.get_well_fields().row_count() >= 2);
+
+        s.invoke_well_field_clicked("A1_01.tif".into());
+        drain_ui_queue();
+        assert!(s.get_image_heatmap_cells().row_count() > 0);
+        assert!(s.get_breadcrumb().row_count() >= 3);
+
+        s.invoke_toggle_active_well_disabled();
+        drain_ui_queue();
+
+        s.invoke_breadcrumb_nav(0);
+        drain_ui_queue();
+        assert!(o.controller.current_well.lock().unwrap().is_none());
+        assert!(s.get_plate_cells().row_count() > 0);
+    }
+
+    #[test]
+    fn every_chart_kind_draws_into_the_window() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Charts);
+        s.invoke_chart_kind_selected(ResultsChartKind2::Scatter);
+        s.invoke_chart_y_column_selected("area_px".into());
+        drain_ui_queue();
+        assert!(s.get_chart_scatter_points().row_count() > 0);
+        assert!(s.get_chart_scatter_total_count() > 0);
+
+        s.invoke_chart_kind_selected(ResultsChartKind2::Boxplot);
+        drain_ui_queue();
+        assert!(s.get_chart_boxplot_boxes().row_count() > 0);
+
+        s.invoke_chart_kind_selected(ResultsChartKind2::Histogram);
+        s.invoke_chart_class_selected("ClassA".into(), true);
+        drain_ui_queue();
+        assert!(s.get_chart_histogram_object_count() > 0);
+    }
+
+    #[test]
+    fn matrix_and_list_controls_refresh_the_window() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        s.invoke_matrix_aggregate_selected("Maximum".into());
+        s.invoke_matrix_color_schema_selected("Viridis".into(), true);
+        s.invoke_matrix_scale_set_manual(0.0, 10.0);
+        s.invoke_matrix_scale_set_auto();
+        drain_ui_queue();
+        assert!(s.get_plate_cells().row_count() > 0);
+
+        s.invoke_rail_mode_selected(ResultsRailMode::List);
+        s.invoke_list_group_by_selected("images".into());
+        s.invoke_list_aggregation_item_selected("min".into(), true);
+        drain_ui_queue();
+        assert!(s.get_list_rows().row_count() > 0);
+        s.invoke_list_transpond_changed(true);
+        drain_ui_queue();
+        assert!(s.get_list_rows().row_count() > 0);
+        s.invoke_list_group_by_selected("objects".into());
+        s.invoke_list_class_select_none();
+        drain_ui_queue();
+        assert_eq!(s.get_list_rows().row_count(), 0, "no class selected");
+        s.invoke_list_class_select_all();
+        s.invoke_list_image_selected("A1_01.tif".into(), true);
+        drain_ui_queue();
+        assert!(s.get_list_image_summary().starts_with("1 of"));
+    }
+
+    #[test]
+    fn grouped_by_image_keeps_a_selected_intensity_column() {
+        let o = opened();
+        let s = o.state();
+        s.invoke_rail_mode_selected(ResultsRailMode::List);
+        s.invoke_list_columns_item_selected("intensity_mean_gray_ch0".into(), true);
+        drain_ui_queue();
+        let has_intensity_header = |s: &ResultsState| {
+            s.get_list_column_headers()
+                .iter()
+                .any(|h| h.contains("Avg Intensity (Ch 0)"))
+        };
+        assert!(has_intensity_header(&s), "object view shows the column");
+
+        s.invoke_list_group_by_selected("images".into());
+        drain_ui_queue();
+        assert!(
+            has_intensity_header(&s),
+            "grouped by image keeps the column"
+        );
+    }
+
+    fn start_export(o: &Opened, folder: &std::path::Path) {
+        let export = o.export();
+        o.state().invoke_export_dialog_open();
+        drain_ui_queue();
+        export.invoke_pick_output_dir();
+        choose_file(&o.results_ui, folder);
+        assert_eq!(export.get_output_dir(), folder.to_string_lossy().as_ref());
+        export.invoke_start_clicked();
+        drain_ui_queue();
+    }
+
+    #[test]
+    fn export_writes_the_chosen_views_into_the_picked_folder() {
+        let o = opened();
+        let dir = tempfile::tempdir().unwrap();
+        let export = o.export();
+        o.state().invoke_export_dialog_open();
+        export.set_with_list_view(true);
+        export.set_with_grouped_by_image_list(true);
+        export.set_output_file_prefix("run1".into());
+        start_export(&o, dir.path());
+        assert!(!export.get_has_error(), "{}", export.get_error_message());
+        assert!(export.get_done());
+        assert!(!export.get_is_exporting());
+        let written: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(!written.is_empty());
+        assert!(
+            written.iter().all(|f| f.starts_with("run1_")),
+            "{written:?}"
+        );
+    }
+
+    #[test]
+    fn export_reports_invalid_settings_instead_of_starting() {
+        let o = opened();
+        let export = o.export();
+        o.state().invoke_export_dialog_open();
+        export.set_output_dir("/tmp".into());
+        let fields = ["Z start", "Z end", "T start", "T end"];
+        for (broken, label) in fields.iter().enumerate() {
+            o.state().invoke_export_dialog_open();
+            let value = |i: usize| -> slint::SharedString {
+                if i == broken { "x".into() } else { "1".into() }
+            };
+            export.set_z_start(value(0));
+            export.set_z_end(value(1));
+            export.set_t_start(value(2));
+            export.set_t_end(value(3));
+            export.invoke_start_clicked();
+            assert!(export.get_has_error());
+            assert!(
+                export.get_error_message().contains(label),
+                "{}",
+                export.get_error_message()
+            );
+        }
+    }
+
+    #[test]
+    fn export_without_an_open_database_reports_it() {
+        let (_ui, results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(slint::Weak::default(), results_ui.as_weak());
+        controller.run_export(ResultExport::default());
+        drain_ui_queue();
+        let export = results_ui.global::<ExportDialogState>();
+        assert!(export.get_has_error());
+        assert_eq!(export.get_error_message(), "No database is open.");
+    }
+
+    #[test]
+    fn export_progress_cancel_and_failure_are_shown() {
+        let o = opened();
+        o.controller.push_export_progress("Working".into(), 2, 5);
+        drain_ui_queue();
+        let export = o.export();
+        assert_eq!(export.get_progress_message(), "Working");
+        assert_eq!(export.get_progress_current(), 2);
+        assert_eq!(export.get_progress_total(), 5);
+
+        export.set_is_exporting(true);
+        o.controller.push_export_cancelled();
+        drain_ui_queue();
+        assert!(!export.get_is_exporting());
+        assert_eq!(export.get_progress_message(), "Export cancelled.");
+
+        // An export into a folder that can't be created fails visibly.
+        let file = o._dir.path().join("a-file");
+        std::fs::write(&file, "").unwrap();
+        o.controller.run_export(ResultExport {
+            output_dir: file.join("sub"),
+            with_list_view: true,
+            ..Default::default()
+        });
+        drain_ui_queue();
+        assert!(export.get_has_error());
     }
 }

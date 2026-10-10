@@ -138,6 +138,26 @@ impl From<MathSaveImageImageSourceSettings> for ImageSource {
     }
 }
 
+impl From<ObjectClassifyObjectsIntensityComparisonSettings> for IntensityComparison {
+    fn from(_s: ObjectClassifyObjectsIntensityComparisonSettings) -> Self {
+        match _s {
+            ObjectClassifyObjectsIntensityComparisonSettings::Above => IntensityComparison::Above,
+            ObjectClassifyObjectsIntensityComparisonSettings::Below => IntensityComparison::Below,
+        }
+    }
+}
+
+impl From<ObjectClassifyObjectsIntensityMetricSettings> for IntensityMetric {
+    fn from(_s: ObjectClassifyObjectsIntensityMetricSettings) -> Self {
+        match _s {
+            ObjectClassifyObjectsIntensityMetricSettings::Avg => IntensityMetric::Avg,
+            ObjectClassifyObjectsIntensityMetricSettings::Sum => IntensityMetric::Sum,
+            ObjectClassifyObjectsIntensityMetricSettings::Min => IntensityMetric::Min,
+            ObjectClassifyObjectsIntensityMetricSettings::Max => IntensityMetric::Max,
+        }
+    }
+}
+
 impl From<FiltersIntensityTransformIntensityTransformModeSettings> for IntensityTransformMode {
     fn from(_s: FiltersIntensityTransformIntensityTransformModeSettings) -> Self {
         match _s {
@@ -436,6 +456,10 @@ impl From<CellposeSettings> for Cellpose {
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             flow_iterations: _s.flow_iterations,
             min_object_size: _s.min_object_size,
+            max_resize: _s.max_resize,
+            flow_threshold: _s.flow_threshold.clamp(0.0, 10.0),
+            cellpose_postprocessing: _s.cellpose_postprocessing,
+            replicate_gray_channel: _s.replicate_gray_channel,
         }
     }
 }
@@ -477,6 +501,7 @@ impl From<ClassifyObjectsSettings> for ClassifyObjects {
             min_feret: _s.min_feret.clamp(0.0, 2147483600.0),
             max_feret: _s.max_feret.clamp(0.0, 2147483600.0),
             allow_edge_touching: _s.allow_edge_touching,
+            intensity_filters: _s.intensity_filters.into_iter().map(|v| v.into()).collect(),
         }
     }
 }
@@ -562,6 +587,12 @@ impl From<FillHolesSettings> for FillHoles {
     }
 }
 
+impl From<FillObjectHolesSettings> for FillObjectHoles {
+    fn from(_s: FillObjectHolesSettings) -> Self {
+        FillObjectHoles {}
+    }
+}
+
 impl From<GaussianBlurSettings> for GaussianBlur {
     fn from(_s: GaussianBlurSettings) -> Self {
         GaussianBlur {
@@ -623,6 +654,18 @@ impl From<ImageMathSettings> for ImageMath {
     }
 }
 
+impl From<IntensityFilterSettings> for IntensityFilter {
+    fn from(_s: IntensityFilterSettings) -> Self {
+        IntensityFilter {
+            channel: _s.channel,
+            metric: IntensityMetric::from(_s.metric),
+            comparison: IntensityComparison::from(_s.comparison),
+            threshold: _s.threshold.clamp(0.0, 2147483600.0),
+            unit: _s.unit,
+        }
+    }
+}
+
 impl From<IntensityTransformationSettings> for IntensityTransformation {
     fn from(_s: IntensityTransformationSettings) -> Self {
         IntensityTransformation {
@@ -637,6 +680,16 @@ impl From<LaplacianSettings> for Laplacian {
     fn from(_s: LaplacianSettings) -> Self {
         Laplacian {
             kernel_size: _s.kernel_size,
+        }
+    }
+}
+
+impl From<LoadAnnotatedObjectsSettings> for LoadAnnotatedObjects {
+    fn from(_s: LoadAnnotatedObjectsSettings) -> Self {
+        LoadAnnotatedObjects {
+            input_classes: _s.input_classes.into_iter().map(|v| v.into()).collect(),
+            output_class: _s.output_class,
+            keep_annotated_classes: _s.keep_annotated_classes,
         }
     }
 }
@@ -715,6 +768,15 @@ impl From<SaveImageSettings> for SaveImage {
         SaveImage {
             name: _s.name,
             source: ImageSource::from(_s.source),
+        }
+    }
+}
+
+impl From<ScriptSettings> for Script {
+    fn from(_s: ScriptSettings) -> Self {
+        Script {
+            classes: _s.classes.into_iter().map(|v| v.into()).collect(),
+            source: _s.source,
         }
     }
 }
@@ -841,6 +903,32 @@ impl From<WeightedDeviationSettings> for WeightedDeviation {
     }
 }
 
+#[cfg(feature = "ai")]
+impl From<YoloClassMappingSettings> for YoloClassMapping {
+    fn from(_s: YoloClassMappingSettings) -> Self {
+        YoloClassMapping {
+            model_class: _s.model_class,
+            segmentation_class: _s.segmentation_class,
+        }
+    }
+}
+
+#[cfg(feature = "ai")]
+impl From<Yolov5Settings> for Yolov5 {
+    fn from(_s: Yolov5Settings) -> Self {
+        Yolov5 {
+            model_path: _s.model_path,
+            class_mapping: _s.class_mapping.into_iter().map(|v| v.into()).collect(),
+            confidence_threshold: _s.confidence_threshold.clamp(0.0, 1.0),
+            iou_threshold: _s.iou_threshold.clamp(0.0, 1.0),
+            mask_threshold: _s.mask_threshold.clamp(0.0, 1.0),
+            image_scale: _s.image_scale.clamp(0.05, 4.0),
+            window_overlap: _s.window_overlap,
+            min_object_size: _s.min_object_size,
+        }
+    }
+}
+
 // ============ INTO ALGORITHM ============
 
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -894,6 +982,9 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::FillHoles(settings) => {
             Ok(Box::new(crate::algos::FillHoles::from(settings)))
         }
+        PipelineCommand::FillObjectHoles(settings) => {
+            Ok(Box::new(crate::algos::FillObjectHoles::from(settings)))
+        }
         PipelineCommand::GaussianBlur(settings) => {
             Ok(Box::new(crate::algos::GaussianBlur::from(settings)))
         }
@@ -912,6 +1003,9 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         )),
         PipelineCommand::Laplacian(settings) => {
             Ok(Box::new(crate::algos::Laplacian::from(settings)))
+        }
+        PipelineCommand::LoadAnnotatedObjects(settings) => {
+            Ok(Box::new(crate::algos::LoadAnnotatedObjects::from(settings)))
         }
         PipelineCommand::MedianSubtract(settings) => {
             Ok(Box::new(crate::algos::MedianSubtract::from(settings)))
@@ -940,6 +1034,7 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::SaveImage(settings) => {
             Ok(Box::new(crate::algos::SaveImage::from(settings)))
         }
+        PipelineCommand::Script(settings) => Ok(Box::new(crate::algos::Script::from(settings))),
         #[cfg(feature = "ai")]
         PipelineCommand::Stardist(settings) => Ok(Box::new(crate::algos::Stardist::from(settings))),
         #[cfg(not(feature = "ai"))]
@@ -968,5 +1063,11 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::WeightedDeviation(settings) => {
             Ok(Box::new(crate::algos::WeightedDeviation::from(settings)))
         }
+        #[cfg(feature = "ai")]
+        PipelineCommand::Yolov5(settings) => Ok(Box::new(crate::algos::Yolov5::from(settings))),
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::Yolov5(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; Yolov5 is unavailable.".into(),
+        )),
     }
 }

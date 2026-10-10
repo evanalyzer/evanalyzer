@@ -1,6 +1,6 @@
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, max_gray_value};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
@@ -188,15 +188,15 @@ impl PipelineResultExporter for CsvExporter {
             ];
 
             for ch in &channel_ids {
-                // Raw values are stored in [0, 1]; scaled values are in [0, 2^bit_depth - 1]
-                header.push(format!("ch{}_integrated_density_raw", ch));
-                header.push(format!("ch{}_integrated_density_scaled", ch));
-                header.push(format!("ch{}_mean_intensity_raw", ch));
-                header.push(format!("ch{}_mean_intensity_scaled", ch));
-                header.push(format!("ch{}_min_intensity_raw", ch));
-                header.push(format!("ch{}_min_intensity_scaled", ch));
-                header.push(format!("ch{}_max_intensity_raw", ch));
-                header.push(format!("ch{}_max_intensity_scaled", ch));
+                // `_normalized` values are in [0, 1]; `_gray` values are gray values, in [0, 2^bit_depth - 1]
+                header.push(format!("ch{}_integrated_density_normalized", ch));
+                header.push(format!("ch{}_integrated_density_gray", ch));
+                header.push(format!("ch{}_mean_intensity_normalized", ch));
+                header.push(format!("ch{}_mean_intensity_gray", ch));
+                header.push(format!("ch{}_min_intensity_normalized", ch));
+                header.push(format!("ch{}_min_intensity_gray", ch));
+                header.push(format!("ch{}_max_intensity_normalized", ch));
+                header.push(format!("ch{}_max_intensity_gray", ch));
             }
 
             for class in &coloc_classes {
@@ -213,18 +213,15 @@ impl PipelineResultExporter for CsvExporter {
         // --- Phase 4: Data Row Serialization ---
         let px_len = (px.px_size_x * px.px_size_y).sqrt();
         let nr_of_bits = cache.image_meta.nr_of_bits;
-        // Same implausible-bit-depth guard as image_reader.rs's read path -
-        // unguarded, `1u64 << nr_of_bits` for nr_of_bits > 63 is a
-        // shift-by-too-large, silently producing a wrong scale factor
-        // instead of an error.
-        if !(1..=32).contains(&nr_of_bits) {
+        // Same implausible-bit-depth guard as image_reader.rs's read path
+        // (see `max_gray_value`). Max pixel value for the bit depth (e.g.
+        // 65535 for 16-bit).
+        let Some(bit_max) = max_gray_value(nr_of_bits) else {
             return Err(InternalErrors::Generic(format!(
                 "cannot export {}: implausible bit depth {nr_of_bits} (expected 1-32)",
                 cache.image_rel_path.display()
             )));
-        }
-        // Max pixel value for the bit depth (e.g. 65535 for 16-bit)
-        let bit_max = ((1u64 << nr_of_bits) - 1) as f64;
+        };
 
         for object in cache.object_cache.values() {
             let perimeter = object.get_perimeter();
@@ -313,18 +310,18 @@ impl PipelineResultExporter for CsvExporter {
 
             for ch in &channel_ids {
                 if let Some(intensity) = object.intensities.get(ch) {
-                    let mean_raw = intensity.sum_intensity / (object.area as f64).max(1.0);
-                    let min_raw = intensity.min_intensity as f64;
-                    let max_raw = intensity.max_intensity as f64;
+                    let mean_normalized = intensity.sum_intensity / (object.area as f64).max(1.0);
+                    let min_normalized = intensity.min_intensity as f64;
+                    let max_normalized = intensity.max_intensity as f64;
 
                     row.push(format!("{:.6}", intensity.sum_intensity));
                     row.push(format!("{:.2}", intensity.sum_intensity * bit_max));
-                    row.push(format!("{:.6}", mean_raw));
-                    row.push(format!("{:.2}", mean_raw * bit_max));
-                    row.push(format!("{:.6}", min_raw));
-                    row.push(format!("{:.2}", min_raw * bit_max));
-                    row.push(format!("{:.6}", max_raw));
-                    row.push(format!("{:.2}", max_raw * bit_max));
+                    row.push(format!("{:.6}", mean_normalized));
+                    row.push(format!("{:.2}", mean_normalized * bit_max));
+                    row.push(format!("{:.6}", min_normalized));
+                    row.push(format!("{:.2}", min_normalized * bit_max));
+                    row.push(format!("{:.6}", max_normalized));
+                    row.push(format!("{:.2}", max_normalized * bit_max));
                 } else {
                     // 8 empty cells (4 metrics × 2 scales)
                     row.extend(std::iter::repeat_n("".to_string(), 8));
@@ -767,41 +764,45 @@ mod tests {
         let row = row_by_object_id(&headers, &rows, &object_id.to_string());
 
         for (ch, intensity) in [(0, &ch0), (3, &ch3)] {
-            let mean_raw = intensity.sum_intensity / (area as f64).max(1.0);
-            let min_raw = intensity.min_intensity as f64;
-            let max_raw = intensity.max_intensity as f64;
+            let mean_normalized = intensity.sum_intensity / (area as f64).max(1.0);
+            let min_normalized = intensity.min_intensity as f64;
+            let max_normalized = intensity.max_intensity as f64;
 
             assert_eq!(
-                column(&headers, row, &format!("ch{ch}_integrated_density_raw")),
+                column(
+                    &headers,
+                    row,
+                    &format!("ch{ch}_integrated_density_normalized")
+                ),
                 format!("{:.6}", intensity.sum_intensity)
             );
             assert_eq!(
-                column(&headers, row, &format!("ch{ch}_integrated_density_scaled")),
+                column(&headers, row, &format!("ch{ch}_integrated_density_gray")),
                 format!("{:.2}", intensity.sum_intensity * bit_max)
             );
             assert_eq!(
-                column(&headers, row, &format!("ch{ch}_mean_intensity_raw")),
-                format!("{:.6}", mean_raw)
+                column(&headers, row, &format!("ch{ch}_mean_intensity_normalized")),
+                format!("{:.6}", mean_normalized)
             );
             assert_eq!(
-                column(&headers, row, &format!("ch{ch}_mean_intensity_scaled")),
-                format!("{:.2}", mean_raw * bit_max)
+                column(&headers, row, &format!("ch{ch}_mean_intensity_gray")),
+                format!("{:.2}", mean_normalized * bit_max)
             );
             assert_eq!(
-                column(&headers, row, &format!("ch{ch}_min_intensity_raw")),
-                format!("{:.6}", min_raw)
+                column(&headers, row, &format!("ch{ch}_min_intensity_normalized")),
+                format!("{:.6}", min_normalized)
             );
             assert_eq!(
-                column(&headers, row, &format!("ch{ch}_min_intensity_scaled")),
-                format!("{:.2}", min_raw * bit_max)
+                column(&headers, row, &format!("ch{ch}_min_intensity_gray")),
+                format!("{:.2}", min_normalized * bit_max)
             );
             assert_eq!(
-                column(&headers, row, &format!("ch{ch}_max_intensity_raw")),
-                format!("{:.6}", max_raw)
+                column(&headers, row, &format!("ch{ch}_max_intensity_normalized")),
+                format!("{:.6}", max_normalized)
             );
             assert_eq!(
-                column(&headers, row, &format!("ch{ch}_max_intensity_scaled")),
-                format!("{:.2}", max_raw * bit_max)
+                column(&headers, row, &format!("ch{ch}_max_intensity_gray")),
+                format!("{:.2}", max_normalized * bit_max)
             );
         }
     }

@@ -1,10 +1,9 @@
 use clru::{CLruCache, CLruCacheConfig, WeightScale};
 use log::{info, warn};
 
+use crate::image::Point2d;
 use crate::{ImageContainer, ImagePlane, ManagedImage, pipeline::pipeline_cache::CacheAddress};
-use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
-use kornia_tensor::CpuAllocator;
 use std::{
     collections::{HashMap, hash_map::RandomState},
     fs::{self, File},
@@ -430,7 +429,7 @@ impl ImageCache {
             TAG_F32_GRAY => {
                 let data = read_pod_vec(&mut r, width * height, 0f32)?;
                 Ok(ImageContainer::F32Gray(ManagedImage {
-                    data: Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)
+                    data: Image::<f32, 1>::new(size, data)
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
                     tile_offset,
                     plane,
@@ -439,7 +438,7 @@ impl ImageCache {
             TAG_F32_RGB => {
                 let data = read_pod_vec(&mut r, width * height * 3, 0f32)?;
                 Ok(ImageContainer::F32Rgb(ManagedImage {
-                    data: Image::<f32, 3, CpuAllocator>::new(size, data, CpuAllocator)
+                    data: Image::<f32, 3>::new(size, data)
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
                     tile_offset,
                     plane,
@@ -448,7 +447,7 @@ impl ImageCache {
             TAG_U32 => {
                 let data = read_pod_vec(&mut r, width * height, 0u32)?;
                 Ok(ImageContainer::U32(ManagedImage {
-                    data: Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator)
+                    data: Image::<u32, 1>::new(size, data)
                         .map_err(|e| to_io_err(format!("{e:?}")))?,
                     tile_offset,
                     plane,
@@ -601,12 +600,7 @@ mod tests {
 
     fn gray_container(width: usize, height: usize, data: Vec<f32>) -> Arc<ImageContainer> {
         Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::new(
-                ImageSize { width, height },
-                data,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::new(ImageSize { width, height }, data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }))
@@ -710,5 +704,127 @@ mod tests {
 
         let fetched = cache.get(&first).unwrap();
         assert_eq!(fetched.as_f32_slice(), Some([3.0; 16].as_slice()));
+    }
+
+    // ---- disk round trip of every image type ----
+
+    fn spill_path(dir: &tempfile::TempDir, name: &str) -> PathBuf {
+        dir.path().join(name)
+    }
+
+    fn round_trip(image: &ImageContainer) -> ImageContainer {
+        let dir = tempfile::tempdir().unwrap();
+        let path = spill_path(&dir, "image.bin");
+        ImageCache::try_write_to_disk(&path, image).unwrap();
+        ImageCache::try_load_from_disk(&path).unwrap()
+    }
+
+    #[test]
+    fn an_rgb_image_survives_the_disk_round_trip_with_offset_and_plane() {
+        let data: Vec<f32> = (0..2 * 3 * 3).map(|v| v as f32 * 0.5).collect();
+        let plane = Some(ImagePlane { z: 2, c: -1, t: 7 });
+        let original = ImageContainer::F32Rgb(ManagedImage {
+            data: Image::<f32, 3>::new(
+                ImageSize {
+                    width: 2,
+                    height: 3,
+                },
+                data.clone(),
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 640, y: 1280 },
+            plane: plane.clone(),
+        });
+        match round_trip(&original) {
+            ImageContainer::F32Rgb(img) => {
+                assert_eq!(
+                    img.size(),
+                    ImageSize {
+                        width: 2,
+                        height: 3
+                    }
+                );
+                assert_eq!(img.as_slice(), data.as_slice());
+                assert_eq!((img.tile_offset.x, img.tile_offset.y), (640, 1280));
+                assert_eq!(img.plane, plane);
+            }
+            other => panic!("expected an RGB image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_label_image_survives_the_disk_round_trip() {
+        let labels = vec![0u32, 1, 4_000_000_000, 7];
+        let original = ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1>::new(
+                ImageSize {
+                    width: 2,
+                    height: 2,
+                },
+                labels.clone(),
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 3, y: 5 },
+            plane: None,
+        });
+        match round_trip(&original) {
+            ImageContainer::U32(img) => {
+                assert_eq!(img.as_slice(), labels.as_slice());
+                assert_eq!((img.tile_offset.x, img.tile_offset.y), (3, 5));
+                assert_eq!(img.plane, None);
+            }
+            other => panic!("expected a label image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_damaged_or_unknown_cache_file_is_a_cache_miss_not_a_crash() {
+        let cache = cache_with_capacity(DEFAULT_HOT_CACHE_CAPACITY_BYTES);
+        let dir = tempfile::tempdir().unwrap();
+
+        // Truncated: the header promises more pixels than the file holds.
+        let truncated = spill_path(&dir, "truncated.bin");
+        ImageCache::try_write_to_disk(&truncated, &gray_container(8, 8, vec![1.0; 64])).unwrap();
+        let bytes = fs::read(&truncated).unwrap();
+        fs::write(&truncated, &bytes[..bytes.len() / 2]).unwrap();
+        assert!(cache.load_from_disk(&truncated).is_none());
+
+        // Unknown type tag.
+        let unknown = spill_path(&dir, "unknown.bin");
+        let mut bytes = fs::read(&spill_path(&dir, "truncated.bin")).unwrap();
+        bytes[0] = 99;
+        fs::write(&unknown, &bytes).unwrap();
+        let err = ImageCache::try_load_from_disk(&unknown).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown image cache tag 99"),
+            "{err}"
+        );
+
+        // Missing file.
+        assert!(
+            cache
+                .load_from_disk(&spill_path(&dir, "missing.bin"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_spilled_entry_whose_file_vanished_reads_as_a_miss() {
+        let mut cache = cache_with_capacity(100);
+        let first = CacheAddress::Memory(MemoryId::PipelineContext(1));
+        let second = CacheAddress::Memory(MemoryId::PipelineContext(2));
+        cache.insert(first, gray_container(4, 4, vec![1.0; 16]));
+        cache.insert(second, gray_container(4, 4, vec![2.0; 16]));
+        assert_eq!(disk_file_count(&cache), 1);
+
+        // Someone wiped the scratch directory.
+        for entry in fs::read_dir(cache.temp_dir.path()).unwrap() {
+            fs::remove_file(entry.unwrap().path()).unwrap();
+        }
+        assert!(cache.get(&first).is_none());
+        assert!(
+            cache.get(&second).is_some(),
+            "resident entries are unaffected"
+        );
     }
 }

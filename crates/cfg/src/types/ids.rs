@@ -40,6 +40,49 @@ impl Default for ImageAddress {
     }
 }
 
+// The build script also compiles this file, without using these.
+#[allow(dead_code)]
+impl ImageAddress {
+    /// Kind and number as the pipeline UI edits them: ("scratchpad", 0),
+    /// ("memory", slot), ("cache", slot) or ("channel", channel).
+    pub fn param_parts(&self) -> (&'static str, i64) {
+        match *self {
+            ImageAddress::Scratchpad => ("scratchpad", 0),
+            ImageAddress::Memory(MemoryId::PipelineContext(slot)) => ("memory", slot as i64),
+            ImageAddress::Memory(MemoryId::ProjectCache(slot)) => ("cache", slot as i64),
+            ImageAddress::Channel(channel) => ("channel", channel as i64),
+        }
+    }
+
+    /// The pipeline UI's value string, e.g. "channel:2" or "scratchpad".
+    /// Round-trips through [`ImageAddress::from_param_value`].
+    pub fn to_param_value(&self) -> String {
+        match self.param_parts() {
+            ("scratchpad", _) => "scratchpad".to_string(),
+            (kind, nr) => format!("{kind}:{nr}"),
+        }
+    }
+
+    /// Parses [`ImageAddress::to_param_value`]'s format; `None` for anything
+    /// else (unknown kind, missing or out-of-range number).
+    pub fn from_param_value(value: &str) -> Option<Self> {
+        if value == "scratchpad" {
+            return Some(ImageAddress::Scratchpad);
+        }
+        let (kind, nr) = value.split_once(':')?;
+        match kind {
+            "memory" => Some(ImageAddress::Memory(MemoryId::PipelineContext(
+                nr.parse().ok()?,
+            ))),
+            "cache" => Some(ImageAddress::Memory(MemoryId::ProjectCache(
+                nr.parse().ok()?,
+            ))),
+            "channel" => Some(ImageAddress::Channel(nr.parse().ok()?)),
+            _ => None,
+        }
+    }
+}
+
 // Pipeline ID -----------------
 #[derive(
     Debug,
@@ -116,9 +159,71 @@ impl TrackId {
     }
 }
 
+// ImageChannel Idx -----------------
+/// 0-based index of an image channel, as a command setting. Shown in the
+/// pipeline UI as the channel picker (channel name + color of the open
+/// image). Serializes as a plain number, so it can replace an existing
+/// integer channel field without breaking saved projects.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Default,
+    JsonSchema,
+    Ord,
+    PartialOrd,
+)]
+pub struct ImageChannelIdx(pub u32);
+
+impl fmt::Display for ImageChannelIdx {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_address_param_value_round_trips_every_variant() {
+        for address in [
+            ImageAddress::Scratchpad,
+            ImageAddress::Memory(MemoryId::PipelineContext(3)),
+            ImageAddress::Memory(MemoryId::ProjectCache(7)),
+            ImageAddress::Channel(0),
+            ImageAddress::Channel(15),
+        ] {
+            let value = address.to_param_value();
+            assert_eq!(
+                ImageAddress::from_param_value(&value),
+                Some(address),
+                "{value}"
+            );
+        }
+        assert_eq!(ImageAddress::Channel(2).to_param_value(), "channel:2");
+        assert_eq!(ImageAddress::Scratchpad.to_param_value(), "scratchpad");
+    }
+
+    #[test]
+    fn image_address_from_param_value_rejects_malformed_values() {
+        for value in [
+            "",
+            "channel",
+            "channel:",
+            "channel:x",
+            "memory:-1",
+            "foo:1",
+            "Channel 2",
+        ] {
+            assert_eq!(ImageAddress::from_param_value(value), None, "{value:?}");
+        }
+    }
 
     #[test]
     fn memory_id_default_is_pipeline_context_slot_one() {
@@ -206,6 +311,18 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ImageAddress::Channel(3)).unwrap(),
             serde_json::json!({"channel": 3})
+        );
+    }
+
+    #[test]
+    fn image_channel_idx_serializes_as_a_plain_number() {
+        assert_eq!(
+            serde_json::to_value(ImageChannelIdx(3)).unwrap(),
+            serde_json::json!(3)
+        );
+        assert_eq!(
+            serde_json::from_value::<ImageChannelIdx>(serde_json::json!(3)).unwrap(),
+            ImageChannelIdx(3)
         );
     }
 

@@ -7,6 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
+use crate::image::Point2d;
 use crate::{
     ImagePlane,
     algos::{ExecutionScope, ImageAlgorithm},
@@ -21,7 +22,6 @@ use evanalyzer_cfg::core_types::{
     CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass,
 };
 use indexmap::IndexMap;
-use kornia_apriltag::utils::Point2d;
 use kornia_image::ImageSize;
 use macros::CommandsMeta;
 use std::sync::Arc;
@@ -41,7 +41,8 @@ pub struct ExtractObjects {
         min = 100000,
         max = 100000,
         step = 1,
-        optional = true
+        optional = true,
+        visibility = Advanced
     )]
     pub max_objects_before_fail: i32,
 }
@@ -144,8 +145,8 @@ impl ImageAlgorithm for ExtractObjects {
         // Only sum / min / max are kept; mean (avg) is derived as sum / area in pass 2.
         // No per-pixel value storage — that (for median/stddev) was the bottleneck.
         let mut i_sum = vec![0f64; n_obj * n_ch];
-        let mut i_min = vec![f32::MAX; n_obj * n_ch];
-        let mut i_max = vec![f32::MIN; n_obj * n_ch];
+        let mut i_min = vec![f64::MAX; n_obj * n_ch];
+        let mut i_max = vec![f64::MIN; n_obj * n_ch];
 
         // --- Pass 1: accumulate per-object area, moments, intensities and bbox ---
         let edge_x = full_image_size.width.saturating_sub(1);
@@ -167,7 +168,7 @@ impl ImageAlgorithm for ExtractObjects {
                 let sample = row + x;
                 let base = id * n_ch;
                 for (ci, (is_rgb, slice)) in channel_slices.iter().enumerate() {
-                    let val = sample_channel_pixel(*is_rgb, slice, sample);
+                    let val = sample_channel_pixel(*is_rgb, slice, sample) as f64;
                     let k = base + ci;
                     i_sum[k] += val as f64;
                     if val < i_min[k] {
@@ -234,7 +235,7 @@ impl ImageAlgorithm for ExtractObjects {
                             sum_intensity: i_sum[k],
                             min_intensity: i_min[k],
                             max_intensity: i_max[k],
-                            avg_intensity: (i_sum[k] / n) as f32,
+                            avg_intensity: (i_sum[k] / n),
                             pixel_values: Vec::new(),
                         },
                     );
@@ -273,8 +274,8 @@ impl ImageAlgorithm for ExtractObjects {
         "Extract Objects"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -359,7 +360,7 @@ impl Object {
             match image.as_ref() {
                 crate::ImageContainer::F32Gray(image) => {
                     let intensity_slice = image.as_slice();
-                    let val = intensity_slice[y_rel * origin_image.size().width + x_rel];
+                    let val = intensity_slice[y_rel * origin_image.size().width + x_rel] as f64;
                     let channel_intensity = self
                         .intensities
                         .entry(*index)
@@ -378,11 +379,11 @@ impl Object {
 
                     // Biological Best Practice: Perceptual Luminance (BT.709)
                     // This provides a consistent brightness metric regardless of dye color.
-                    let raw_val = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                    let raw_val = (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
 
                     // Background Correction: Subtracting background noise (CTCF)
                     // Ensure you have a 'background_level' derived from a non-sample area of the image.
-                    let background_level: f32 = 0.0;
+                    let background_level: f64 = 0.0;
                     let corrected_val = (raw_val - background_level).max(0.0);
 
                     let channel_intensity = self
@@ -420,7 +421,7 @@ impl Object {
     pub fn finalize_intensity_statistics(&mut self) {
         let n = self.area.max(1) as f64;
         for (_channel_id, intensity) in self.intensities.iter_mut() {
-            intensity.avg_intensity = (intensity.sum_intensity / n) as f32;
+            intensity.avg_intensity = (intensity.sum_intensity / n);
         }
     }
 }
@@ -429,8 +430,8 @@ impl Object {
 /// the opposite sentinels so the first real pixel always replaces them.
 fn new_intensity_acc() -> Intensity {
     Intensity {
-        min_intensity: f32::MAX,
-        max_intensity: f32::MIN,
+        min_intensity: f64::MAX,
+        max_intensity: f64::MIN,
         ..Intensity::default()
     }
 }
@@ -446,7 +447,6 @@ mod tests {
     };
     use bitvec::slice::BitSlice;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
     // Adjust imports based on your internal project structure
 
     #[test]
@@ -484,13 +484,12 @@ mod tests {
 
         // Load data into context (assuming your API allows this)
         ctx.image = Arc::new(crate::image::ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
+            data: Image::<f32, 1>::from_size_slice(
                 ImageSize {
                     width: 10,
                     height: 10,
                 },
                 &intensity,
-                CpuAllocator,
             )
             .expect("Failed to create test image"),
             tile_offset: Point2d { x: 0, y: 0 },
@@ -498,25 +497,23 @@ mod tests {
         }));
 
         ctx.segmentation_map = Some(
-            Image::<u32, 1, CpuAllocator>::from_size_slice(
+            Image::<u32, 1>::from_size_slice(
                 ImageSize {
                     width: 10,
                     height: 10,
                 },
                 &labels,
-                CpuAllocator,
             )
             .expect("Failed to create test image"),
         );
 
         ctx.instance_map = Some(
-            Image::<u32, 1, CpuAllocator>::from_size_slice(
+            Image::<u32, 1>::from_size_slice(
                 ImageSize {
                     width: 10,
                     height: 10,
                 },
                 &classes,
-                CpuAllocator,
             )
             .expect("Failed to create test image"),
         );
@@ -601,27 +598,16 @@ mod tests {
 
         // Mock ImageContainer in Context
         ctx.image = Arc::new(crate::image::ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
-                tile_size,
-                &intensity,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::from_size_slice(tile_size, &intensity).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
 
-        ctx.instance_map = Some(
-            Image::<u32, 1, CpuAllocator>::from_size_slice(tile_size, &classes, CpuAllocator)
-                .unwrap(),
-        );
+        ctx.instance_map = Some(Image::<u32, 1>::from_size_slice(tile_size, &classes).unwrap());
 
         // Semantic labels are required by the logic
         let labels = vec![1u32; 15 * 20];
-        ctx.segmentation_map = Some(
-            Image::<u32, 1, CpuAllocator>::from_size_slice(tile_size, &labels, CpuAllocator)
-                .unwrap(),
-        );
+        ctx.segmentation_map = Some(Image::<u32, 1>::from_size_slice(tile_size, &labels).unwrap());
 
         cache.add_to_channel_cache(ctx.image.clone(), 0, ImageTile::default());
 
@@ -684,25 +670,14 @@ mod tests {
         intensity[5 * 15 + 7] = 99.0;
 
         ctx.image = Arc::new(crate::image::ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
-                tile_size,
-                &intensity,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::from_size_slice(tile_size, &intensity).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
 
-        ctx.instance_map = Some(
-            Image::<u32, 1, CpuAllocator>::from_size_slice(tile_size, &classes, CpuAllocator)
-                .unwrap(),
-        );
+        ctx.instance_map = Some(Image::<u32, 1>::from_size_slice(tile_size, &classes).unwrap());
         let labels = vec![1u32; 15 * 20];
-        ctx.segmentation_map = Some(
-            Image::<u32, 1, CpuAllocator>::from_size_slice(tile_size, &labels, CpuAllocator)
-                .unwrap(),
-        );
+        ctx.segmentation_map = Some(Image::<u32, 1>::from_size_slice(tile_size, &labels).unwrap());
 
         cache.add_to_channel_cache(ctx.image.clone(), 0, ImageTile::default());
 
@@ -737,12 +712,7 @@ mod tests {
         // Mock image: 2x2, all 10.0
         let img_data = vec![10.0f32; 4];
         let container = Arc::new(crate::image::ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
-                image_size,
-                &img_data,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::from_size_slice(image_size, &img_data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
@@ -777,12 +747,7 @@ mod tests {
 
         let img_data = vec![5.0f32; 4];
         let container = Arc::new(crate::image::ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
-                tile_size,
-                &img_data,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::from_size_slice(tile_size, &img_data).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
@@ -814,8 +779,7 @@ mod tests {
         // R=1.0, G=0.0, B=0.0 -> Luminance = 0.2126
         let rgb_data = vec![1.0f32, 0.0f32, 0.0f32];
         let container = Arc::new(crate::image::ImageContainer::F32Rgb(ManagedImage {
-            data: Image::<f32, 3, CpuAllocator>::from_size_slice(size, &rgb_data, CpuAllocator)
-                .unwrap(),
+            data: Image::<f32, 3>::from_size_slice(size, &rgb_data).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));

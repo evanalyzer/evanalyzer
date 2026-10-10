@@ -175,8 +175,8 @@ impl ImageAlgorithm for ImageMath {
         "Image Math"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -273,7 +273,6 @@ mod tests {
     use evanalyzer_cfg::core_types::MemoryId;
     use kornia_image::Image;
     use kornia_image::ImageSize;
-    use kornia_tensor::CpuAllocator;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -284,7 +283,7 @@ mod tests {
             height: 2,
         };
         let data = vec![val; 4];
-        ImageContainer::new_f32_gray_from_image_test(Image::new(size, data, CpuAllocator).unwrap())
+        ImageContainer::new_f32_gray_from_image_test(Image::new(size, data).unwrap())
     }
 
     fn run_math_test(op: Operand, val1: f32, val2: f32, swap: bool) -> f32 {
@@ -449,7 +448,6 @@ mod tests {
                     height: 1,
                 },
                 vec![0.2],
-                CpuAllocator,
             )
             .unwrap(),
         );
@@ -479,7 +477,7 @@ mod tests {
             swap_operands: false,
         };
         assert_eq!(algo.name(), "Image Math");
-        assert!(algo.cite().is_none());
+        assert_eq!(algo.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 

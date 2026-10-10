@@ -28,6 +28,17 @@ pub enum ParamType {
     /// means any file); the dialog's initial directory is derived from the
     /// field's current value.
     FilePath,
+    /// `ImageAddress` displayed as a source picker (channel / memory slot /
+    /// scratchpad). `value` is `ImageAddress::to_param_value`'s string
+    /// (e.g. "channel:2"); `options` holds the same pre-split as
+    /// `[kind, number]`, since Slint can't split strings.
+    ImageAddress,
+    /// `ImageChannelIdx` displayed as the channel picker (channel name +
+    /// color of the open image). `value` is the channel index.
+    ImageChannel,
+    /// `String` holding a Rhai script (`#[cmdsmeta(script)]`), edited in the
+    /// script editor dialog instead of a single-line text field.
+    Script,
 }
 
 #[allow(dead_code)]
@@ -46,4 +57,13 @@ pub struct ParameterDef {
     /// Non-empty only when param_type == Group.
     /// Each inner Vec is one item in the list (e.g. one ThresholdEntry).
     pub groups: Vec<Vec<ParameterDef>>,
+    /// The setting's default, formatted like `value`; empty when unknown. The UI
+    /// counts advanced settings whose value differs from it as "changed".
+    pub default_value: String,
+    /// `visibility = Advanced`: shown only while the step's advanced settings
+    /// are expanded.
+    pub advanced: bool,
+    /// Per entry of `options` (dropdowns): whether that option is advanced.
+    /// Empty when no option is.
+    pub option_advanced: Vec<bool>,
 }

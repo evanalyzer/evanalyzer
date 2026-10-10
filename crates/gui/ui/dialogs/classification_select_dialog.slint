@@ -1,0 +1,113 @@
+import {
+    Button,
+    LineEdit,
+    ComboBox,
+    SpinBox,
+    VerticalBox,
+    HorizontalBox,
+    Palette,
+    CheckBox,
+    ScrollView,
+    ListView,
+    Spinner,
+} from "std-widgets.slint";
+import { DialogType, GlobalAppState } from "../state.slint";
+import { Theme } from "../style.slint";
+import { AppButton } from "../components/app_button.slint";
+import {
+    ClassificationPanel,
+    ClassListRow,
+    ClassificationState,
+} from "../editor/classification_panel.slint";
+import { BaseDialog } from "dialog_base.slint";
+import { ObjectListState } from "../editor/object_list_panel.slint";
+
+
+export global ClassSelectDialogState {
+    in-out property <int> selected_class_id: -1;
+    in-out property <string> selected_class_name;
+}
+
+export component ClassSelectDialog inherits BaseDialog {
+    title-text: "Select class";
+    main-height: 520px;
+    main-width: 480px;
+    show-icon: false;
+
+    VerticalLayout {
+        spacing: 12px;
+        Rectangle {
+            vertical-stretch: 1;
+
+            ListView {
+                for data in ClassificationState.classes_list: ClassListRow {
+                    data: data;
+                    selected: ClassSelectDialogState.selected_class_id == data.id;
+
+                    row_clicked => {
+                        if (data.id == ClassSelectDialogState.selected_class_id) {
+                            ClassSelectDialogState.selected_class_name = "";
+                            ClassSelectDialogState.selected_class_id = -1;
+                        } else {
+                            ClassSelectDialogState.selected_class_name = data.name;
+                            ClassSelectDialogState.selected_class_id = data.id;
+                        }
+                    }
+                    visibility_clicked => {
+                        ClassificationState.class_visibility_toggled(data.id);
+                    }
+                }
+            }
+
+            // Scanning overlay
+            if (ClassificationState.is_scanning): Rectangle {
+                background: Theme.overlay-scrim;
+                Spinner {
+                    indeterminate: true;
+                }
+
+                TouchArea { }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: end;
+
+            AppButton {
+                text: "Close";
+                primary: false;
+                clicked => {
+                    ClassSelectDialogState.selected_class_name = "";
+                    ClassSelectDialogState.selected_class_id = -1;
+                    GlobalAppState.active-dialog = DialogType.none;
+                }
+            }
+
+            AppButton {
+                text: "Add class";
+                primary: false;
+                enabled: ClassSelectDialogState.selected_class_id >= 0;
+                clicked => {
+                    ObjectListState.object_add_class(ObjectListState.selected_object.id, ClassSelectDialogState.selected_class_id);
+                    ClassSelectDialogState.selected_class_name = "";
+                    ClassSelectDialogState.selected_class_id = -1;
+                    GlobalAppState.active-dialog = DialogType.none;
+                }
+            }
+
+            AppButton {
+                text: "Set class";
+                primary: true;
+                enabled: ClassSelectDialogState.selected_class_id >= 0;
+                clicked => {
+                    ObjectListState.object_replace_class(ObjectListState.selected_object.id, ClassSelectDialogState.selected_class_id);
+                    ClassSelectDialogState.selected_class_name = "";
+                    ClassSelectDialogState.selected_class_id = -1;
+                    GlobalAppState.active-dialog = DialogType.none;
+                    GlobalAppState.active-dialog = DialogType.none;
+                }
+            }
+        }
+    }
+}

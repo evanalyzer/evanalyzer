@@ -1,10 +1,12 @@
 use crate::UiState;
-use crate::editor::object_list_controller::ObjectListController;
+use crate::editor::object_list_controller::{ObjectListController, resolve_object_id};
 use crate::editor::viewport_controller::ViewportController;
-use crate::prelude::*;
 use crate::{
     AppWindow, ClassItemData, ClassSettingsSlint, ClassificationSettingsState, ClassificationState,
+    ObjectListState,
 };
+use evanalyzer_app::prelude::classification_ext::ClassificationExt;
+use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::AssignObjectClass;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -45,6 +47,101 @@ impl ClassificationController {
     pub fn attach_callbacks(self: &Arc<Self>) {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
+            // Class operations on single objects (object list buttons). Here,
+            // not in the object list controller: they change the class counts
+            // too, and only this controller can refresh both.
+            // Add class to object
+            let manager = self.clone();
+            ui.global::<ObjectListState>()
+                .on_object_add_class(move |object_id, class_id| {
+                    let mut project = manager.app_state.get_project_write();
+                    if let Some(id) = resolve_object_id(&project, object_id) {
+                        // let class_id = project.get_selected_object_class();
+                        if class_id >= 0 {
+                            let class_id = ObjectClass::Valid(class_id as u32);
+                            project.add_class_to_object(id, class_id);
+                        }
+                    }
+                    manager
+                        .object_list_controller
+                        .sync_selected_object_to_slint(false);
+                    manager.object_list_controller.sync_objects_to_slint();
+                    // The object's classes changed: so do the class counts.
+                    manager.sync_classification_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
+                });
+
+            // Rplace all classes
+            let manager = self.clone();
+            ui.global::<ObjectListState>()
+                .on_object_replace_class(move |object_id, class_id| {
+                    let mut project = manager.app_state.get_project_write();
+                    if let Some(id) = resolve_object_id(&project, object_id) {
+                        // let class_id = project.get_selected_object_class();
+                        if class_id >= 0 {
+                            let class_id = ObjectClass::Valid(class_id as u32);
+                            project.replace_classes_of_object(id, class_id);
+                        }
+                    }
+                    manager
+                        .object_list_controller
+                        .sync_selected_object_to_slint(false);
+                    manager.object_list_controller.sync_objects_to_slint();
+                    // The object's classes changed: so do the class counts.
+                    manager.sync_classification_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
+                });
+
+            // Remove class from object
+            let manager = self.clone();
+            ui.global::<ObjectListState>()
+                .on_object_remove_class(move |object_id, class_id| {
+                    let mut project = manager.app_state.get_project_write();
+                    if let Some(id) = resolve_object_id(&project, object_id) {
+                        let class_id = ObjectClass::Valid(class_id as u32);
+                        project.remove_class_from_object(id, &class_id);
+                    }
+                    manager
+                        .object_list_controller
+                        .sync_selected_object_to_slint(false);
+                    manager.object_list_controller.sync_objects_to_slint();
+                    // The object's classes changed: so do the class counts.
+                    manager.sync_classification_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
+                });
+
+            // Delete object
+            let manager = self.clone();
+            ui.global::<ObjectListState>()
+                .on_object_delete(move |object_id| {
+                    let mut project = manager.app_state.get_project_write();
+                    if let Some(id) = resolve_object_id(&project, object_id) {
+                        project.delete_object(id);
+                    }
+                    project.set_selected_object(None);
+                    drop(project);
+                    manager.app_state.mark_dirty();
+                    manager.object_list_controller.sync_objects_to_slint();
+                    // The object's classes changed: so do the class counts.
+                    manager.sync_classification_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
+                });
+
+            // Delete manual annotated objects
+            let manager = self.clone();
+            ui.global::<ObjectListState>()
+                .on_object_delete_all_manual_annotated(move || {
+                    let mut project = manager.app_state.get_project_write();
+                    project.delete_all_manual_annoted_objects();
+                    project.set_selected_object(None);
+                    drop(project);
+                    manager.app_state.mark_dirty();
+                    manager.object_list_controller.sync_objects_to_slint();
+                    // The object's classes changed: so do the class counts.
+                    manager.sync_classification_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
+                });
+
             // Selected class changed
             let manager = self.clone();
             ui.global::<ClassificationState>()
@@ -56,6 +153,8 @@ impl ClassificationController {
                     };
                     let mut project = manager.app_state.get_project_write();
                     project.set_selected_object_class(obj_class);
+                    // Redraw the objects because class selection changes the z-order visibility
+                    manager.viewport_controller.trigger_image_redraw_objects();
                 });
 
             // Add / Update class
@@ -178,7 +277,7 @@ impl ClassificationController {
         let ui_weak = self.ui.clone();
         let bridge_ptr = self.clone();
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let project = bridge_ptr.app_state.get_project();
                 let total_visible: i32 = project
@@ -258,7 +357,7 @@ impl ClassificationController {
         let Some(class) = class_cloned else {
             return;
         };
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let r = ((class.color >> 16) & 0xff) as u8;
                 let g = ((class.color >> 8) & 0xff) as u8;
@@ -560,7 +659,8 @@ mod tests {
 
     // -- attach_callbacks (live AppWindow) -----------------------------------------
 
-    use crate::editor::test_support::test_ui_windows;
+    use crate::editor::test_support::{project_with_one_image, test_ui_windows};
+    use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 
     #[test]
     fn attach_callbacks_class_selected_stores_the_selected_object_class() {
@@ -658,5 +758,153 @@ mod tests {
         // classes()[0] is the auto-prepended Background class.
         assert_eq!(project.classification.classes().len(), 2);
         assert_eq!(project.classification.classes()[1].name, "Nuclei");
+    }
+
+    // ---- class operations on single objects ----
+
+    fn object_with_class(id: u128, has_class: bool) -> ObjectMetricSettings {
+        let mut object = ObjectMetricSettings {
+            id: evanalyzer_cfg::core_types::ObjectId(id),
+            segmentation_class: evanalyzer_cfg::core_types::SegmentationClass(1),
+            ..Default::default()
+        };
+        if has_class {
+            object.object_class.insert(ObjectClass::Valid(1));
+        }
+        object
+    }
+
+    /// A classification controller on real windows, for `project`.
+    fn classification_on_windows(
+        ui: &AppWindow,
+        results_ui: &crate::ResultsWindow,
+        project: evanalyzer_app::project::ProjectWithRuntime,
+    ) -> (Arc<UiState>, Arc<ClassificationController>) {
+        let ui_state = crate::editor::test_support::ui_state_with_windows(ui, results_ui, project);
+        let weak = ui.as_weak();
+        let viewport = Arc::new(ViewportController::new(weak.clone(), ui_state.clone()));
+        let object_list = Arc::new(ObjectListController::new(
+            weak.clone(),
+            ui_state.clone(),
+            viewport.clone(),
+        ));
+        let controller = Arc::new(ClassificationController::new(
+            weak,
+            ui_state.clone(),
+            object_list,
+            viewport,
+        ));
+        (ui_state, controller)
+    }
+
+    fn with_nuclei_class(
+        mut project: evanalyzer_app::project::ProjectWithRuntime,
+    ) -> evanalyzer_app::project::ProjectWithRuntime {
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(1),
+            color: 0,
+            name: "Nuclei".to_string(),
+            notes: String::new(),
+        });
+        project
+    }
+
+    #[test]
+    fn adding_and_removing_a_class_on_an_object_updates_the_counts() {
+        use crate::helper::ui_thread::drain_ui_queue;
+        let mut project = with_nuclei_class(crate::editor::test_support::project_with_one_image());
+        project.add_object(&object_with_class(1, false));
+        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
+        let (ui_state, controller) = classification_on_windows(&ui, &results_ui, project);
+        controller.attach_callbacks();
+        ui_state
+            .get_project_write()
+            .set_selected_object_class(ObjectClass::Valid(1));
+        let total = || {
+            ui.global::<ClassificationState>()
+                .get_total_visible_objects()
+        };
+
+        ui.global::<ObjectListState>().invoke_object_add_class(1, 1);
+        drain_ui_queue();
+        assert_eq!(total(), 1);
+
+        ui.global::<ObjectListState>()
+            .invoke_object_remove_class(1, 1);
+        drain_ui_queue();
+        assert_eq!(total(), 0);
+    }
+
+    #[test]
+    fn deleting_an_object_updates_the_counts() {
+        use crate::helper::ui_thread::drain_ui_queue;
+        let mut project = with_nuclei_class(crate::editor::test_support::project_with_one_image());
+        project.add_object(&object_with_class(1, true));
+        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
+        let (_ui_state, controller) = classification_on_windows(&ui, &results_ui, project);
+        controller.attach_callbacks();
+        controller.sync_classification_to_slint();
+        drain_ui_queue();
+        let total = || {
+            ui.global::<ClassificationState>()
+                .get_total_visible_objects()
+        };
+        assert_eq!(total(), 1);
+
+        ui.global::<ObjectListState>().invoke_object_delete(1);
+        drain_ui_queue();
+        assert_eq!(total(), 0);
+    }
+
+    #[test]
+    fn object_add_class_targets_the_manual_object_when_preview_objects_are_also_present() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, false)); // manual, unclassified
+        project
+            .tmp_settings
+            .preview_objects
+            .push(object_with_class(2, true)); // preview, combined index 1
+
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = classification_on_windows(&ui, &_results_ui, project);
+        controller.attach_callbacks();
+        ui_state
+            .get_project_write()
+            .set_selected_object_class(ObjectClass::Valid(1));
+
+        // id 1 is the manual object even though a preview object also exists
+        // in the combined list - regression coverage that the shared
+        // resolution logic still picks the right one when both lists are
+        // non-empty at once.
+        ui.global::<ObjectListState>().invoke_object_add_class(1, 1);
+
+        let project = ui_state.get_project();
+        let manual_object = &project.get_objects().unwrap()[0];
+        assert!(
+            manual_object.object_class.contains(&ObjectClass::Valid(1)),
+            "the manual object should have had the class applied"
+        );
+    }
+
+    #[test]
+    fn object_delete_removes_the_manual_object_when_preview_objects_are_also_present() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, true)); // manual, combined index 0
+        project
+            .tmp_settings
+            .preview_objects
+            .push(object_with_class(2, true)); // preview, combined index 1
+
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = classification_on_windows(&ui, &_results_ui, project);
+        controller.attach_callbacks();
+
+        ui.global::<ObjectListState>().invoke_object_delete(1);
+
+        let project = ui_state.get_project();
+        assert!(project.get_objects().unwrap().is_empty());
+        // The preview object (not touched by delete_object, which only ever
+        // operates on the manual list) must be unaffected.
+        assert_eq!(project.get_preview_objects().len(), 1);
     }
 }

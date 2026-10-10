@@ -1,11 +1,10 @@
 use crate::converters::wavelength_to_rgb_float;
+use crate::image::Point2d;
 use crate::image::image_meta::{ImageMeta, ImagePlane, ImageTile};
 use crate::image::image_ome_parser::{build_image_meta, effective_size_c};
 use bioformats::common::reader::FormatReader;
-use evanalyzer_cfg::core_types::InternalErrors;
-use kornia_apriltag::utils::Point2d;
+use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
 use kornia_image::{Image, ImageSize};
-use kornia_tensor::CpuAllocator;
 use log::info;
 use rayon::prelude::*;
 use std::ops::RangeInclusive;
@@ -42,19 +41,9 @@ pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &[
     "avi", "cif", "arf", "sld",
 ];
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ZProjection {
-    #[default]
-    None,
-    MaxIntensity,
-    MinIntensity,
-    AvgIntensity,
-    SumIntensity,
-    TakeTheMiddle,
-}
 #[derive(Clone)]
 pub struct ManagedImage<T, const C: usize> {
-    pub data: Image<T, C, CpuAllocator>,
+    pub data: Image<T, C>,
     /// The x/y offset from the top left of the tile which was loaded
     pub tile_offset: Point2d,
     /// Image plane info this image was extracted from
@@ -68,7 +57,7 @@ pub struct ManagedImage<T, const C: usize> {
 }
 
 impl<T, const C: usize> Deref for ManagedImage<T, C> {
-    type Target = Image<T, C, CpuAllocator>;
+    type Target = Image<T, C>;
 
     fn deref(&self) -> &Self::Target {
         &self.data
@@ -117,7 +106,7 @@ impl ImageContainer {
     pub fn clone_empty(&self) -> Self {
         match self {
             ImageContainer::F32Gray(img) => {
-                let new_img = kornia_image::Image::from_size_val(img.size(), 0.0, CpuAllocator)
+                let new_img = kornia_image::Image::from_size_val(img.size(), 0.0)
                     .expect("Failed to allocate scratch buffer");
                 ImageContainer::F32Gray(ManagedImage {
                     data: new_img,
@@ -126,7 +115,7 @@ impl ImageContainer {
                 })
             }
             ImageContainer::F32Rgb(img) => {
-                let new_img = kornia_image::Image::from_size_val(img.size(), 0.0, CpuAllocator)
+                let new_img = kornia_image::Image::from_size_val(img.size(), 0.0)
                     .expect("Failed to allocate scratch buffer");
                 ImageContainer::F32Rgb(ManagedImage {
                     data: new_img,
@@ -135,7 +124,7 @@ impl ImageContainer {
                 })
             }
             ImageContainer::U32(img) => {
-                let new_img = kornia_image::Image::from_size_val(img.size(), 0u32, CpuAllocator)
+                let new_img = kornia_image::Image::from_size_val(img.size(), 0u32)
                     .expect("Failed to allocate scratch buffer");
                 ImageContainer::U32(ManagedImage {
                     data: new_img,
@@ -276,8 +265,8 @@ impl ImageReader {
     pub fn new(path: &PathBuf, mode: ReadMode) -> Result<Self, InternalErrors> {
         if !path.exists() {
             return Err(InternalErrors::Io(format!(
-                "File '{:?}' not existing",
-                path
+                "File '{}' does not exist",
+                path.display()
             )));
         }
 
@@ -662,6 +651,13 @@ impl ImageReader {
             .iter()
             .filter_map(|c_stack_to_read| {
                 if c_stack_to_read >= &series_info.nr_c_stacks {
+                    log::warn!(
+                        "Channel {c_stack_to_read} was requested, but {} has only {} \
+                         channel(s) (0-{}) - skipped, a pipeline reading it gets no image",
+                        primary.current_path.display(),
+                        series_info.nr_c_stacks,
+                        series_info.nr_c_stacks - 1
+                    );
                     return None;
                 }
                 if primary.read_mode == ReadMode::Default
@@ -918,8 +914,8 @@ fn decode_image(
 
     // Convert to korina-rs image tensor
     if color_channels >= 3 {
-        let img = Image::<f32, 3, CpuAllocator>::new(image_size, final_data, CpuAllocator)
-            .map_err(InternalErrors::from_kornia)?;
+        let img =
+            Image::<f32, 3>::new(image_size, final_data).map_err(InternalErrors::from_kornia)?;
         Ok(ImageContainer::F32Rgb(ManagedImage {
             data: img,
             tile_offset: Point2d {
@@ -929,8 +925,8 @@ fn decode_image(
             plane: Some(plane),
         }))
     } else {
-        let img = Image::<f32, 1, CpuAllocator>::new(image_size, final_data, CpuAllocator)
-            .map_err(InternalErrors::from_kornia)?;
+        let img =
+            Image::<f32, 1>::new(image_size, final_data).map_err(InternalErrors::from_kornia)?;
         Ok(ImageContainer::F32Gray(ManagedImage {
             data: img,
             tile_offset: Point2d {
@@ -1333,6 +1329,74 @@ mod tests {
         assert!(
             matches!(err, InternalErrors::Internal(msg) if msg.contains("Reader pool is empty"))
         );
+    }
+
+    #[test]
+    fn a_nonexistent_channel_is_skipped_not_an_error() {
+        // `read_image_tile_combined_impl` filters requested channels the image
+        // doesn't have (as it filters channels > 0 of an RGB image): the
+        // result simply holds no tile for them.
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let channels = reader
+            .read_image_tile_combined(
+                0,
+                0,
+                ZProjection::None,
+                &None,
+                0,
+                Some(&vec![99]),
+                &full_tile(),
+            )
+            .unwrap();
+        assert!(channels.is_empty());
+    }
+
+    #[test]
+    fn an_implausible_bit_depth_is_refused_before_reading() {
+        // Corrupt metadata (e.g. BitsPerPixel 40) must be an error, not a
+        // silently wrong normalization.
+        let mut reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let meta = Arc::make_mut(&mut reader.image_meta);
+        for info in meta.series.values_mut() {
+            for resolution in info.resolutions.values_mut() {
+                resolution.nr_bits = 40;
+            }
+        }
+        let err = reader
+            .read_image_tile_combined(0, 0, ZProjection::None, &None, 0, None, &full_tile())
+            .unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("implausible bit depth")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn per_sample_and_parallel_decoding_agree_for_every_bit_depth() {
+        for (bits, bytes) in [(8u16, 1usize), (12, 2), (16, 2), (24, 3), (32, 4)] {
+            let max = ((1u64 << bits) - 1) as f32;
+            let inv = 1.0 / max;
+            let buffer: Vec<u8> = (0..bytes * 5).map(|i| (i * 37 + 11) as u8).collect();
+            for little_endian in [true, false] {
+                let parallel = decode_samples_parallel(&buffer, bits, little_endian, inv);
+                assert_eq!(parallel.len(), 5, "{bits} bit");
+                for (i, &value) in parallel.iter().enumerate() {
+                    let single = sample_f32(&buffer, i * bytes, bits, little_endian, inv);
+                    assert_eq!(single, value, "{bits} bit, LE {little_endian}, sample {i}");
+                }
+            }
+            // The largest value of the bit depth normalizes to exactly 1.
+            let full: Vec<u8> = if bits == 12 {
+                vec![0xFF, 0x0F]
+            } else {
+                vec![0xFF; bytes]
+            };
+            assert_eq!(
+                decode_samples_parallel(&full, bits, true, inv),
+                vec![1.0],
+                "{bits} bit"
+            );
+        }
     }
 
     #[test]
@@ -1973,12 +2037,7 @@ mod tests {
             height: 3,
         };
         let source = ImageContainer::U32(ManagedImage {
-            data: Image::<u32, 1, CpuAllocator>::new(
-                size,
-                vec![7u32; size.width * size.height],
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<u32, 1>::new(size, vec![7u32; size.width * size.height]).unwrap(),
             tile_offset: Point2d { x: 1, y: 2 },
             plane: None,
         });
@@ -2010,12 +2069,7 @@ mod tests {
         };
         let plane = Some(ImagePlane { z: 1, c: 2, t: 3 });
         let container = ImageContainer::U32(ManagedImage {
-            data: Image::<u32, 1, CpuAllocator>::new(
-                size,
-                vec![7u32; size.width * size.height],
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<u32, 1>::new(size, vec![7u32; size.width * size.height]).unwrap(),
             tile_offset: Point2d { x: 5, y: 6 },
             plane,
         });

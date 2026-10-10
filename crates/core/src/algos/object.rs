@@ -3,6 +3,7 @@ pub mod ai_object_classifier;
 pub mod classify_objects;
 pub mod coloc_objects;
 pub mod extract_objects;
+pub mod load_annotaed_objects;
 pub mod object_math;
 pub(crate) mod tile_merge;
 pub mod transform_objects;

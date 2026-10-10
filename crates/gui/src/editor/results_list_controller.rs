@@ -1,6 +1,7 @@
 use crate::AppWindow;
 use crate::editor::results_state_controller::ResultsStateController;
 use crate::{ResultItemData, ResultsListState, UiState};
+use evanalyzer_app::fs::FileSystem;
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use log::warn;
 use slint::ComponentHandle;
@@ -66,10 +67,11 @@ impl ResultsListController {
         // Drop the read lock before doing file I/O
         drop(project);
 
-        let mut items: Vec<(std::time::SystemTime, ResultItemData)> = Vec::new();
-
-        if results_dir.exists() {
-            collect_results_files(&results_dir, &mut items);
+        let mut items: Vec<(i64, ResultItemData)> = Vec::new();
+        let backend = self.app_state.backend();
+        let files = backend.files();
+        if matches!(files.stat(&results_dir), Ok(Some(entry)) if entry.is_dir) {
+            collect_results_files(files, &results_dir, &mut items);
         }
 
         // Newest first
@@ -77,7 +79,7 @@ impl ResultsListController {
         let slint_items: Vec<ResultItemData> = items.into_iter().map(|(_, d)| d).collect();
 
         let ui_handle = self.ui.clone();
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_handle.upgrade() {
                 ui.global::<ResultsListState>()
                     .set_results_list(slint::ModelRc::new(slint::VecModel::from(slint_items)));
@@ -95,6 +97,21 @@ impl ResultsListController {
         };
         let results_dir = project_dir.join("results");
         drop(project);
+
+        // The results live on the server: the local file manager can't show
+        // them, so browse them in-app - picking a results file opens it.
+        if self.app_state.backend().is_remote() {
+            let request = crate::FileRequest::open_file("Results")
+                .filter("Results", &[RESULTS_FILE_EXTENSION])
+                .start_in(results_dir);
+            let table = self.results_state_controller.clone();
+            self.app_state.file_browser.open(request, move |path| {
+                if let Some(path) = path {
+                    table.open_database(path);
+                }
+            });
+            return;
+        }
 
         let path = if results_dir.exists() {
             results_dir
@@ -117,10 +134,15 @@ impl ResultsListController {
     }
 }
 
-/// Recursively walks `dir`, appending every file whose extension matches
-/// [`RESULTS_FILE_EXTENSION`] to `items` together with its modification time.
-fn collect_results_files(dir: &Path, items: &mut Vec<(std::time::SystemTime, ResultItemData)>) {
-    let entries = match std::fs::read_dir(dir) {
+/// Recursively walks `dir` through the backend's file system, appending
+/// every file whose extension matches [`RESULTS_FILE_EXTENSION`] to `items`
+/// together with its modification time (seconds since the Unix epoch).
+fn collect_results_files(
+    files: &dyn FileSystem,
+    dir: &Path,
+    items: &mut Vec<(i64, ResultItemData)>,
+) {
+    let entries = match files.list_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
             warn!("Could not read results directory {:?}: {}", dir, e);
@@ -128,11 +150,11 @@ fn collect_results_files(dir: &Path, items: &mut Vec<(std::time::SystemTime, Res
         }
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for entry in entries {
+        let path = entry.path;
 
-        if path.is_dir() {
-            collect_results_files(&path, items);
+        if entry.is_dir {
+            collect_results_files(files, &path, items);
             continue;
         }
 
@@ -140,17 +162,9 @@ fn collect_results_files(dir: &Path, items: &mut Vec<(std::time::SystemTime, Res
             continue;
         }
 
-        let (file_size, modified, mtime) = match std::fs::metadata(&path) {
-            Ok(meta) => {
-                let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                (
-                    format_file_size(meta.len()),
-                    format_modified_time(mtime),
-                    mtime,
-                )
-            }
-            Err(_) => (String::new(), String::new(), std::time::UNIX_EPOCH),
-        };
+        let mtime = entry.modified.unwrap_or(0);
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime.max(0) as u64);
+        let (file_size, modified) = (format_file_size(entry.size), format_modified_time(modified));
 
         let name = extract_name_from_path(&path).unwrap_or("-");
         items.push((
@@ -208,6 +222,14 @@ fn extract_name_from_path(path: &PathBuf) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    use evanalyzer_app::{fs::LocalFileSystem, project::ProjectWithRuntime};
+
+    use crate::editor::{
+        histogram_controller::HistogramController, image_meta_controller::ImageMetaController,
+        images_list_controller::ImagesListController, object_list_controller::ObjectListController,
+        test_support::test_ui_state_with_project, viewport_controller::ViewportController,
+    };
+
     use super::*;
 
     // -- format_file_size ----------------------------------------------------
@@ -329,7 +351,7 @@ mod tests {
         std::fs::write(nested.join("also_keep.evadb"), b"x").unwrap();
 
         let mut items = Vec::new();
-        collect_results_files(&dir, &mut items);
+        collect_results_files(&LocalFileSystem::default(), &dir, &mut items);
 
         let names: std::collections::HashSet<String> =
             items.iter().map(|(_, d)| d.name.to_string()).collect();
@@ -344,7 +366,60 @@ mod tests {
     fn collect_results_files_on_a_nonexistent_directory_leaves_items_empty() {
         let dir = std::env::temp_dir().join("evanalyzer_results_list_controller_does_not_exist");
         let mut items = Vec::new();
-        collect_results_files(&dir, &mut items);
+        collect_results_files(&LocalFileSystem::default(), &dir, &mut items);
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn open_results_folder_test() {
+        let ui = slint::Weak::default();
+        let results_ui = slint::Weak::default();
+        let ui_state: Arc<UiState> = test_ui_state_with_project(ProjectWithRuntime::default());
+
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+
+        let image_list_controller = Arc::new(ImagesListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+            Arc::new(HistogramController::new(
+                ui.clone(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            Arc::new(ImageMetaController::new(
+                ui.clone(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    ui.clone(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
+        ));
+
+        let results_table_controller = Arc::new(ResultsStateController::new(
+            results_ui.clone(),
+            ui_state.clone(),
+            image_list_controller.clone(),
+        ));
+
+        let results_list_controller = Arc::new(ResultsListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            results_table_controller,
+        ));
+
+        results_list_controller.open_results_folder();
     }
 }

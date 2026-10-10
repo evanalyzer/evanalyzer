@@ -197,8 +197,8 @@ impl ImageAlgorithm for SaveImage {
         "Save Image"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -236,18 +236,16 @@ mod tests {
     use super::*;
     use kornia_image::Image;
     use kornia_image::ImageSize;
-    use kornia_tensor::CpuAllocator;
     use std::fs;
 
     #[test]
     fn execute_errors_when_ctx_has_no_output_path() {
-        let img = Image::<f32, 1, _>::from_size_val(
+        let img = Image::<f32, 1>::from_size_val(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             0.0,
-            CpuAllocator,
         )
         .unwrap();
         // `new_from_image_test` leaves `output_path: None` - never set here,
@@ -271,13 +269,12 @@ mod tests {
     fn test_save_command_execution() {
         // 1. Create a dummy 2x2 grayscale image (4 pixels)
         let image_data = vec![0.0f32, 0.5, 0.5, 1.0];
-        let input_img = Image::<f32, 1, _>::from_size_slice(
+        let input_img = Image::<f32, 1>::from_size_slice(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             &image_data,
-            CpuAllocator,
         )
         .expect("Failed to create test image");
 
@@ -331,13 +328,12 @@ mod tests {
             1.0, 1.0, 1.0, // Pixel 3 (White)
         ];
 
-        let input_img = Image::<f32, 3, _>::from_size_slice(
+        let input_img = Image::<f32, 3>::from_size_slice(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             &image_data,
-            CpuAllocator,
         )
         .expect("Failed to create test RGB image");
 
@@ -371,8 +367,7 @@ mod tests {
             height: 1,
         };
         let data = vec![0u32; 1];
-        let unsupported_img =
-            Image::<u32, 1, _>::from_size_slice(size, &data, CpuAllocator).unwrap();
+        let unsupported_img = Image::<u32, 1>::from_size_slice(size, &data).unwrap();
 
         // 2. Setup context
         let dir = tempfile::tempdir().unwrap();
@@ -399,13 +394,12 @@ mod tests {
         // Create an image, but force the internal logic to think the buffer is the wrong size
         // by passing an invalid dimension.
         let _ctx = PipelineContext::new_from_image_test(
-            Image::<f32, 1, _>::from_size_slice(
+            Image::<f32, 1>::from_size_slice(
                 ImageSize {
                     width: 1,
                     height: 1,
                 },
                 &[0.0f32],
-                CpuAllocator,
             )
             .unwrap(),
         )
@@ -431,7 +425,7 @@ mod tests {
         // data[center_idx + 1] = 0.0; // Green (already 0)
         // data[center_idx + 2] = 0.0; // Blue (already 0)
 
-        let input_img = Image::new(size, data, CpuAllocator).unwrap();
+        let input_img = Image::new(size, data).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
         ctx.output_path = Some(dir.path().to_path_buf());
@@ -470,7 +464,7 @@ mod tests {
         };
         let data = vec![0.0f32; 1]; // 1 pixel, not the 4 a 2x2 image needs
 
-        let result = Image::<f32, 1, _>::from_size_slice(size, &data, CpuAllocator);
+        let result = Image::<f32, 1>::from_size_slice(size, &data);
 
         assert!(
             result.is_err(),
@@ -483,13 +477,12 @@ mod tests {
         // `new_from_image_test` already seeds `ctx.instance_map`, so the
         // `ImageSource::InstanceMap` branch (untested before this) can reuse
         // the same fixture as the `ImageSource::Image` tests above.
-        let input_img = Image::<f32, 1, _>::from_size_slice(
+        let input_img = Image::<f32, 1>::from_size_slice(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             &[0.0f32, 0.5, 0.5, 1.0],
-            CpuAllocator,
         )
         .unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -513,13 +506,12 @@ mod tests {
 
     #[test]
     fn test_save_segmentation_mask_command_execution() {
-        let input_img = Image::<f32, 1, _>::from_size_slice(
+        let input_img = Image::<f32, 1>::from_size_slice(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             &[0.0f32, 0.5, 0.5, 1.0],
-            CpuAllocator,
         )
         .unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -563,7 +555,7 @@ mod tests {
             source: ImageSource::Image,
         };
         assert_eq!(saver.name(), "Save Image");
-        assert!(saver.cite().is_none());
+        assert_eq!(saver.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(saver.execution_scope(), ExecutionScope::Tile));
     }
 }

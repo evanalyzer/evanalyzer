@@ -1,15 +1,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::image::Point2d;
 use crate::{
     ImagePlane,
     image::{ImageContainer, ImageTypeMarker, ManagedImage, PixelSizes},
     pipeline::pipeline::PipelineImageMeta,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
-use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
-use kornia_tensor::CpuAllocator;
 
 pub struct PipelineContext {
     // Output path where pipeline artifacts are stored in
@@ -24,9 +23,9 @@ pub struct PipelineContext {
     // A secondary buffer used as a workspace to avoid re-allocation
     pub scratch_pad: Arc<ImageContainer>,
     // Instance map: Every unique object gets its own unique ID
-    pub instance_map: Option<Image<u32, 1, CpuAllocator>>,
+    pub instance_map: Option<Image<u32, 1>>,
     // Segmentation map: Every pixel is assigned a category label (e.g., "Background", "Cell", "Nucleus").
-    pub segmentation_map: Option<Image<u32, 1, CpuAllocator>>,
+    pub segmentation_map: Option<Image<u32, 1>>,
 }
 
 impl PipelineContext {
@@ -52,11 +51,11 @@ impl PipelineContext {
             image: Arc::new(T::create_container(size, tile_offset, plane)?),
             scratch_pad: Arc::new(T::create_container(size, tile_offset, plane)?),
             segmentation_map: Some(
-                Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                     .map_err(InternalErrors::from_kornia)?,
             ),
             instance_map: Some(
-                Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                     .map_err(InternalErrors::from_kornia)?,
             ),
         })
@@ -81,14 +80,45 @@ impl PipelineContext {
             image,
             scratch_pad: Arc::new(empty_image),
             segmentation_map: Some(
-                Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                     .map_err(InternalErrors::from_kornia)?,
             ),
             instance_map: Some(
-                Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                     .map_err(InternalErrors::from_kornia)?,
             ),
         })
+    }
+
+    /// Moves the whole context out, leaving a 1x1 placeholder behind - for
+    /// code that must own the context for a while (the script step lends it
+    /// to the script engine) and puts it back afterwards. The placeholder has
+    /// its own buffers, so the moved-out `Arc`s stay unshared and in-place
+    /// writes on them don't trigger copy-on-write.
+    pub(crate) fn take(&mut self) -> PipelineContext {
+        let placeholder = || {
+            Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: Image::new(
+                    ImageSize {
+                        width: 1,
+                        height: 1,
+                    },
+                    vec![0.0],
+                )
+                .expect("1x1 image with 1 pixel is valid"),
+                tile_offset: Point2d::default(),
+                plane: None,
+            }))
+        };
+        let empty = PipelineContext {
+            output_path: None,
+            image_meta: self.image_meta.clone(),
+            image: placeholder(),
+            scratch_pad: placeholder(),
+            instance_map: None,
+            segmentation_map: None,
+        };
+        std::mem::replace(self, empty)
     }
 
     /// Swaps the scratch pad and the main image. Since both are `Arc`-wrapped,
@@ -105,6 +135,7 @@ impl PipelineContext {
 
         // Perform the O(1) pointer swap
         std::mem::swap(&mut self.image, &mut self.scratch_pad);
+
         Ok(())
     }
 
@@ -146,9 +177,7 @@ impl PipelineContext {
     /// cache, a sibling pipeline, a mid-pipeline snapshot) still holds a
     /// reference to it: a pipeline that never calls this keeps sharing the
     /// original buffer for free.
-    pub fn get_f32_gray_image_mut(
-        &mut self,
-    ) -> Result<&mut Image<f32, 1, CpuAllocator>, InternalErrors> {
+    pub fn get_f32_gray_image_mut(&mut self) -> Result<&mut Image<f32, 1>, InternalErrors> {
         // Use a guard pattern to check if the variant is wrong
         if !matches!(self.image.as_ref(), ImageContainer::F32Gray(_)) {
             // Here, the immutable borrow for the 'if' is finished,
@@ -168,7 +197,7 @@ impl PipelineContext {
 
     pub fn get_f32_gray_image_and_prep_scratch<M: ImageTypeMarker>(
         &mut self,
-    ) -> Result<(&Image<f32, 1, CpuAllocator>, &mut M::ImageRef), InternalErrors> {
+    ) -> Result<(&Image<f32, 1>, &mut M::ImageRef), InternalErrors> {
         // Get the size first (this borrow ends immediately)
         let img = self.get_f32_gray_image()?;
         let size = img.size();
@@ -198,11 +227,11 @@ impl PipelineContext {
         Ok((input?, scratch))
     }
 
-    pub fn get_scratch_as_f32_gray(&mut self) -> &mut Image<f32, 1, CpuAllocator> {
+    pub fn get_scratch_as_f32_gray(&mut self) -> &mut Image<f32, 1> {
         if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Gray(_)) {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::F32Gray(ManagedImage {
-                data: Image::new(size, vec![0.0; size.width * size.height], CpuAllocator).unwrap(),
+                data: Image::new(size, vec![0.0; size.width * size.height]).unwrap(),
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
             }));
@@ -214,12 +243,11 @@ impl PipelineContext {
         }
     }
 
-    pub fn get_scratch_as_f32_rgb(&mut self) -> &mut Image<f32, 3, CpuAllocator> {
+    pub fn get_scratch_as_f32_rgb(&mut self) -> &mut Image<f32, 3> {
         if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)) {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::F32Rgb(ManagedImage {
-                data: Image::new(size, vec![0.0; size.width * size.height * 3], CpuAllocator)
-                    .unwrap(),
+                data: Image::new(size, vec![0.0; size.width * size.height * 3]).unwrap(),
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
             }));
@@ -231,11 +259,11 @@ impl PipelineContext {
         }
     }
 
-    pub fn get_scratch_as_u32(&mut self) -> &mut Image<u32, 1, CpuAllocator> {
+    pub fn get_scratch_as_u32(&mut self) -> &mut Image<u32, 1> {
         if !matches!(self.scratch_pad.as_ref(), ImageContainer::U32(_)) {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::U32(ManagedImage {
-                data: Image::new(size, vec![0u32; size.width * size.height], CpuAllocator).unwrap(),
+                data: Image::new(size, vec![0u32; size.width * size.height]).unwrap(),
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
             }));
@@ -251,7 +279,7 @@ impl PipelineContext {
         if !matches!(self.scratch_pad.as_ref(), ImageContainer::U32(_)) {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::U32(ManagedImage {
-                data: Image::new(size, vec![0u32; size.width * size.height], CpuAllocator)
+                data: Image::new(size, vec![0u32; size.width * size.height])
                     .map_err(InternalErrors::from_kornia)?,
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
@@ -272,7 +300,7 @@ impl PipelineContext {
         if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Gray(_)) {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::F32Gray(ManagedImage {
-                data: Image::new(size, vec![0f32; size.width * size.height], CpuAllocator)
+                data: Image::new(size, vec![0f32; size.width * size.height])
                     .map_err(InternalErrors::from_kornia)?,
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
@@ -285,7 +313,8 @@ impl PipelineContext {
         if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)) {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::F32Rgb(ManagedImage {
-                data: Image::new(size, vec![0f32; size.width * size.height], CpuAllocator)
+                // Three values (R, G, B) per pixel.
+                data: Image::new(size, vec![0f32; size.width * size.height * 3])
                     .map_err(InternalErrors::from_kornia)?,
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
@@ -296,13 +325,7 @@ impl PipelineContext {
 
     pub fn get_segmentation_map_u32_buf(
         &mut self,
-    ) -> Result<
-        (
-            &Image<u32, 1, CpuAllocator>,
-            &mut Image<u32, 1, CpuAllocator>,
-        ),
-        InternalErrors,
-    > {
+    ) -> Result<(&Image<u32, 1>, &mut Image<u32, 1>), InternalErrors> {
         self.prepare_segmentation_map()?;
         self.prepare_u32_scratch()?;
         if let ImageContainer::U32(scratch_img) = Arc::make_mut(&mut self.scratch_pad) {
@@ -322,7 +345,7 @@ impl PipelineContext {
             let size = self.image.size();
             let pixel_count = size.width * size.height;
             self.segmentation_map = Some(
-                Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                     .map_err(|e| InternalErrors::Internal(e.to_string()))?,
             );
         }
@@ -331,13 +354,7 @@ impl PipelineContext {
 
     pub fn get_gray_img_gray_buf(
         &mut self,
-    ) -> Result<
-        (
-            &Image<f32, 1, CpuAllocator>,
-            &mut Image<f32, 1, CpuAllocator>,
-        ),
-        InternalErrors,
-    > {
+    ) -> Result<(&Image<f32, 1>, &mut Image<f32, 1>), InternalErrors> {
         self.prepare_f32_gray_scratch()?;
 
         match (self.image.as_ref(), Arc::make_mut(&mut self.scratch_pad)) {
@@ -356,13 +373,7 @@ impl PipelineContext {
 
     pub fn get_rgb_img_rgb_buf(
         &mut self,
-    ) -> Result<
-        (
-            &Image<f32, 3, CpuAllocator>,
-            &mut Image<f32, 3, CpuAllocator>,
-        ),
-        InternalErrors,
-    > {
+    ) -> Result<(&Image<f32, 3>, &mut Image<f32, 3>), InternalErrors> {
         self.prepare_f32_rgb_scratch()?;
 
         match (self.image.as_ref(), Arc::make_mut(&mut self.scratch_pad)) {
@@ -399,7 +410,7 @@ impl PipelineContext {
         }
     }
 
-    pub fn get_segmentation_map(&self) -> Result<&Image<u32, 1, CpuAllocator>, InternalErrors> {
+    pub fn get_segmentation_map(&self) -> Result<&Image<u32, 1>, InternalErrors> {
         self.segmentation_map
             .as_ref()
             .ok_or(InternalErrors::FormatMismatch {
@@ -408,15 +419,21 @@ impl PipelineContext {
             })
     }
 
+    /// The segmentation map, created on first use, for algorithms that write
+    /// it without needing the image in any particular format.
+    pub fn get_segmentation_map_mut(&mut self) -> Result<&mut Image<u32, 1>, InternalErrors> {
+        self.prepare_segmentation_map()?;
+        self.segmentation_map
+            .as_mut()
+            .ok_or(InternalErrors::FormatMismatch {
+                expected: "Initialized segmentation buffer".into(),
+                found: "None (Buffer not initialized)".into(),
+            })
+    }
+
     pub fn get_f32_gray_and_segmentation_mask_mut(
         &mut self,
-    ) -> Result<
-        (
-            &Image<f32, 1, CpuAllocator>,
-            &mut Image<u32, 1, CpuAllocator>,
-        ),
-        InternalErrors,
-    > {
+    ) -> Result<(&Image<f32, 1>, &mut Image<u32, 1>), InternalErrors> {
         let image = match self.image.as_ref() {
             ImageContainer::F32Gray(img) => Ok(img),
             _ => Err(InternalErrors::FormatMismatch {
@@ -429,7 +446,7 @@ impl PipelineContext {
             let size = self.image.size();
             let pixel_count = size.width * size.height;
             self.segmentation_map = Some(
-                Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                     .map_err(|e| InternalErrors::Internal(e.to_string()))?,
             );
         }
@@ -448,14 +465,7 @@ impl PipelineContext {
     /// semantic class and a unique per-object instance ID in one pass.
     pub fn get_f32_gray_segmentation_and_instances_mut(
         &mut self,
-    ) -> Result<
-        (
-            &Image<f32, 1, CpuAllocator>,
-            &mut Image<u32, 1, CpuAllocator>,
-            &mut Image<u32, 1, CpuAllocator>,
-        ),
-        InternalErrors,
-    > {
+    ) -> Result<(&Image<f32, 1>, &mut Image<u32, 1>, &mut Image<u32, 1>), InternalErrors> {
         let image = match self.image.as_ref() {
             ImageContainer::F32Gray(img) => Ok(img),
             _ => Err(InternalErrors::FormatMismatch {
@@ -469,13 +479,13 @@ impl PipelineContext {
 
         if self.segmentation_map.is_none() {
             self.segmentation_map = Some(
-                Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                     .map_err(|e| InternalErrors::Internal(e.to_string()))?,
             );
         }
         if self.instance_map.is_none() {
             self.instance_map = Some(
-                Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                     .map_err(|e| InternalErrors::Internal(e.to_string()))?,
             );
         }
@@ -498,7 +508,7 @@ impl PipelineContext {
         Ok((image, segmentation_mut, instance_mut))
     }
 
-    pub fn get_instance_map(&self) -> Result<&Image<u32, 1, CpuAllocator>, InternalErrors> {
+    pub fn get_instance_map(&self) -> Result<&Image<u32, 1>, InternalErrors> {
         let classes = self
             .instance_map
             .as_ref()
@@ -512,26 +522,19 @@ impl PipelineContext {
     pub fn get_segmentation_and_instances_mut(
         &mut self,
         create_segmentation_if_not_exist: bool,
-    ) -> Result<
-        (
-            &Image<u32, 1, CpuAllocator>,
-            &mut Image<u32, 1, CpuAllocator>,
-        ),
-        InternalErrors,
-    > {
+    ) -> Result<(&Image<u32, 1>, &mut Image<u32, 1>), InternalErrors> {
         let size = self.image.size();
         let pixel_count = size.width * size.height;
 
         if self.segmentation_map.is_none() {
             if create_segmentation_if_not_exist {
-                self.segmentation_map = Some(
-                    Image::new(size, vec![0u32; pixel_count], CpuAllocator).map_err(|_e| {
+                self.segmentation_map =
+                    Some(Image::new(size, vec![0u32; pixel_count]).map_err(|_e| {
                         InternalErrors::FormatMismatch {
                             expected: "Initialized segmentation buffer".into(),
                             found: "None (Buffer not initialized)".into(),
                         }
-                    })?,
-                );
+                    })?);
             } else {
                 return Err(InternalErrors::FormatMismatch {
                     expected: "Initialized segmentation buffer".into(),
@@ -541,14 +544,12 @@ impl PipelineContext {
         }
 
         if self.instance_map.is_none() {
-            self.instance_map = Some(
-                Image::new(size, vec![0u32; pixel_count], CpuAllocator).map_err(|_e| {
-                    InternalErrors::FormatMismatch {
-                        expected: "Initialized instance buffer".into(),
-                        found: "None (Buffer not initialized)".into(),
-                    }
-                })?,
-            );
+            self.instance_map = Some(Image::new(size, vec![0u32; pixel_count]).map_err(|_e| {
+                InternalErrors::FormatMismatch {
+                    expected: "Initialized instance buffer".into(),
+                    found: "None (Buffer not initialized)".into(),
+                }
+            })?);
         }
 
         // We get a shared reference from segmentarion and a mut reference from classes
@@ -596,9 +597,7 @@ mod tests {
     };
 
     impl PipelineContext {
-        pub fn new_from_image_test(
-            input_img: Image<f32, 1, CpuAllocator>,
-        ) -> Result<Self, InternalErrors> {
+        pub fn new_from_image_test(input_img: Image<f32, 1>) -> Result<Self, InternalErrors> {
             let image = ImageContainer::F32Gray(ManagedImage {
                 data: input_img,
                 tile_offset: Point2d { x: 0, y: 0 },
@@ -613,11 +612,11 @@ mod tests {
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
-                    Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                         .map_err(InternalErrors::from_kornia)?,
                 ),
                 instance_map: Some(
-                    Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                         .map_err(InternalErrors::from_kornia)?,
                 ),
                 image_meta: PipelineImageMeta {
@@ -642,9 +641,7 @@ mod tests {
             })
         }
 
-        pub fn new_from_image_test_rgb(
-            input_img: Image<f32, 3, CpuAllocator>,
-        ) -> Result<Self, InternalErrors> {
+        pub fn new_from_image_test_rgb(input_img: Image<f32, 3>) -> Result<Self, InternalErrors> {
             let image = ImageContainer::F32Rgb(ManagedImage {
                 data: input_img,
                 tile_offset: Point2d { x: 0, y: 0 },
@@ -659,11 +656,11 @@ mod tests {
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
-                    Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                         .map_err(InternalErrors::from_kornia)?,
                 ),
                 instance_map: Some(
-                    Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                         .map_err(InternalErrors::from_kornia)?,
                 ),
                 image_meta: PipelineImageMeta {
@@ -688,9 +685,7 @@ mod tests {
             })
         }
 
-        pub fn new_from_u32_image_test(
-            input_img: Image<u32, 1, CpuAllocator>,
-        ) -> Result<Self, InternalErrors> {
+        pub fn new_from_u32_image_test(input_img: Image<u32, 1>) -> Result<Self, InternalErrors> {
             let image = ImageContainer::U32(ManagedImage {
                 data: input_img,
                 tile_offset: Point2d { x: 0, y: 0 },
@@ -705,11 +700,11 @@ mod tests {
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
-                    Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                         .map_err(InternalErrors::from_kornia)?,
                 ),
                 instance_map: Some(
-                    Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                         .map_err(InternalErrors::from_kornia)?,
                 ),
                 image_meta: PipelineImageMeta {
@@ -751,11 +746,11 @@ mod tests {
                     ImagePlane { z: 0, c: 0, t: 0 },
                 )?),
                 segmentation_map: Some(
-                    Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                         .map_err(InternalErrors::from_kornia)?,
                 ),
                 instance_map: Some(
-                    Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                         .map_err(InternalErrors::from_kornia)?,
                 ),
                 image_meta: PipelineImageMeta {
@@ -799,11 +794,11 @@ mod tests {
                     ImagePlane { z: 0, c: 0, t: 0 },
                 )?),
                 segmentation_map: Some(
-                    Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                         .map_err(InternalErrors::from_kornia)?,
                 ),
                 instance_map: Some(
-                    Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    Image::<u32, 1>::new(size, vec![0u32; pixel_count])
                         .map_err(InternalErrors::from_kornia)?,
                 ),
                 image_meta: PipelineImageMeta {
@@ -827,9 +822,7 @@ mod tests {
     }
 
     impl ImageContainer {
-        pub fn new_f32_gray_from_image_test(
-            input_img: Image<f32, 1, CpuAllocator>,
-        ) -> ImageContainer {
+        pub fn new_f32_gray_from_image_test(input_img: Image<f32, 1>) -> ImageContainer {
             ImageContainer::F32Gray(ManagedImage {
                 data: input_img,
                 tile_offset: Point2d { x: 0, y: 0 },
@@ -837,9 +830,7 @@ mod tests {
             })
         }
 
-        pub fn new_f32_rgb_from_image_test(
-            input_img: Image<f32, 3, CpuAllocator>,
-        ) -> ImageContainer {
+        pub fn new_f32_rgb_from_image_test(input_img: Image<f32, 3>) -> ImageContainer {
             ImageContainer::F32Rgb(ManagedImage {
                 data: input_img,
                 tile_offset: Point2d { x: 0, y: 0 },
@@ -906,9 +897,7 @@ mod tests {
             width: 2,
             height: 2,
         };
-        let input_img =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![1.0, 2.0, 3.0, 4.0], CpuAllocator)
-                .unwrap();
+        let input_img = Image::<f32, 1>::new(size, vec![1.0, 2.0, 3.0, 4.0]).unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
         // Freshly constructed via `new_from_image_test`, so the scratch pad
         // starts out as an F32Gray clone of the main image (not F32Rgb).
@@ -932,9 +921,7 @@ mod tests {
             width: 2,
             height: 2,
         };
-        let input_img =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![0.0, 0.0, 0.0, 0.0], CpuAllocator)
-                .unwrap();
+        let input_img = Image::<f32, 1>::new(size, vec![0.0, 0.0, 0.0, 0.0]).unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
 
         // First call replaces the scratch pad with an F32Rgb buffer.
@@ -949,13 +936,12 @@ mod tests {
 
     #[test]
     fn get_scratch_as_f32_gray_replaces_a_mismatched_scratch_and_reuses_a_matching_one() {
-        let img = Image::<f32, 3, CpuAllocator>::new(
+        let img = Image::<f32, 3>::new(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             vec![0.0; 12],
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
@@ -980,13 +966,12 @@ mod tests {
 
     #[test]
     fn get_scratch_as_f32_rgb_replaces_a_mismatched_scratch_and_reuses_a_matching_one() {
-        let img = Image::<f32, 1, CpuAllocator>::new(
+        let img = Image::<f32, 1>::new(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             vec![0.0; 4],
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
@@ -1011,13 +996,12 @@ mod tests {
 
     #[test]
     fn get_scratch_as_u32_replaces_a_mismatched_scratch_and_reuses_a_matching_one() {
-        let img = Image::<f32, 1, CpuAllocator>::new(
+        let img = Image::<f32, 1>::new(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             vec![0.0; 4],
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
@@ -1039,13 +1023,12 @@ mod tests {
 
     #[test]
     fn prepare_segmentation_map_creates_a_zeroed_map_only_when_none_exists() {
-        let img = Image::<f32, 1, CpuAllocator>::new(
+        let img = Image::<f32, 1>::new(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             vec![0.0; 4],
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
@@ -1065,13 +1048,12 @@ mod tests {
 
     #[test]
     fn get_f32_gray_segmentation_and_instances_mut_lazily_creates_missing_maps() {
-        let img = Image::<f32, 1, CpuAllocator>::new(
+        let img = Image::<f32, 1>::new(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             vec![5.0; 4],
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
@@ -1090,13 +1072,12 @@ mod tests {
 
     #[test]
     fn get_f32_gray_segmentation_and_instances_mut_fails_for_a_non_gray_image() {
-        let img = Image::<f32, 3, CpuAllocator>::new(
+        let img = Image::<f32, 3>::new(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             vec![0.0; 12],
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
@@ -1105,15 +1086,145 @@ mod tests {
         assert!(matches!(result, Err(InternalErrors::FormatMismatch { .. })));
     }
 
+    // ---- the wrong image type gives an error, never a panic ----
+
+    fn size(w: usize, h: usize) -> ImageSize {
+        ImageSize {
+            width: w,
+            height: h,
+        }
+    }
+
+    fn rgb_ctx() -> PipelineContext {
+        PipelineContext::new_from_image_test_rgb(
+            Image::<f32, 3>::new(size(2, 1), vec![0.5; 6]).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn gray_ctx() -> PipelineContext {
+        PipelineContext::new_from_image_test(
+            Image::<f32, 1>::new(size(2, 1), vec![0.5; 2]).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn label_ctx() -> PipelineContext {
+        PipelineContext::new_from_u32_image_test(
+            Image::<u32, 1>::new(size(2, 1), vec![1, 2]).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn is_format_mismatch<T>(result: Result<T, InternalErrors>) -> bool {
+        matches!(result, Err(InternalErrors::FormatMismatch { .. }))
+    }
+
+    #[test]
+    fn gray_accessors_reject_an_rgb_image() {
+        assert!(is_format_mismatch(rgb_ctx().get_f32_gray_image()));
+        assert!(is_format_mismatch(rgb_ctx().get_f32_gray_image_mut()));
+        assert!(is_format_mismatch(rgb_ctx().get_gray_img_gray_buf()));
+        assert!(is_format_mismatch(
+            rgb_ctx().get_f32_gray_and_segmentation_mask_mut()
+        ));
+        assert!(is_format_mismatch(
+            rgb_ctx().get_f32_gray_image_and_prep_scratch::<F32Gray>()
+        ));
+    }
+
+    #[test]
+    fn the_rgb_accessor_rejects_a_gray_image() {
+        assert!(is_format_mismatch(gray_ctx().get_rgb_img_rgb_buf()));
+    }
+
+    #[test]
+    fn an_rgb_image_gets_an_rgb_scratchpad_whatever_the_scratchpad_held_before() {
+        // E.g. an earlier step left a gray buffer in the scratchpad.
+        let mut ctx = rgb_ctx();
+        ctx.prepare_f32_gray_scratch().unwrap();
+        let (image, scratch) = ctx
+            .get_rgb_img_rgb_buf()
+            .expect("the RGB scratchpad must be allocated for all three channels");
+        assert_eq!(scratch.size(), image.size());
+        assert_eq!(scratch.as_slice().len(), 2 * 1 * 3);
+    }
+
+    #[test]
+    fn a_label_image_in_the_scratchpad_cannot_become_the_image() {
+        let mut ctx = gray_ctx();
+        ctx.scratch_pad = Arc::new(ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1>::new(size(2, 1), vec![0, 0]).unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }));
+        assert!(is_format_mismatch(ctx.swap()));
+    }
+
+    #[test]
+    fn a_swapped_out_image_used_nowhere_else_is_kept_as_the_scratchpad() {
+        let mut ctx = gray_ctx();
+        ctx.image = Arc::new((*ctx.image).clone());
+        let unshared = Arc::as_ptr(&ctx.image);
+        ctx.swap().unwrap();
+        assert_eq!(Arc::as_ptr(&ctx.scratch_pad), unshared, "no new buffer");
+    }
+
+    #[test]
+    fn swapping_segmentations_needs_a_label_scratchpad() {
+        let mut ctx = gray_ctx();
+        ctx.prepare_segmentation_map().unwrap();
+        // The scratchpad holds a gray image, not labels.
+        ctx.prepare_f32_gray_scratch().unwrap();
+        assert!(is_format_mismatch(ctx.swap_scratch_with_segmentations()));
+    }
+
+    #[test]
+    fn a_missing_segmentation_map_is_reported() {
+        let mut ctx = gray_ctx();
+        ctx.segmentation_map = None;
+        assert!(is_format_mismatch(ctx.get_segmentation_map()));
+        assert!(!ctx.does_segmentation_map_exist());
+    }
+
+    #[test]
+    fn size_offset_and_plane_are_read_from_every_image_type() {
+        let plane = Some(ImagePlane { z: 1, c: 2, t: 3 });
+        let offset = Point2d { x: 5, y: 6 };
+        let images = [
+            ImageContainer::F32Gray(ManagedImage {
+                data: Image::<f32, 1>::new(size(2, 1), vec![0.0; 2]).unwrap(),
+                tile_offset: offset,
+                plane,
+            }),
+            ImageContainer::F32Rgb(ManagedImage {
+                data: Image::<f32, 3>::new(size(2, 1), vec![0.0; 6]).unwrap(),
+                tile_offset: offset,
+                plane,
+            }),
+            ImageContainer::U32(ManagedImage {
+                data: Image::<u32, 1>::new(size(2, 1), vec![0; 2]).unwrap(),
+                tile_offset: offset,
+                plane,
+            }),
+        ];
+        for image in images {
+            let mut ctx = gray_ctx();
+            ctx.image = Arc::new(image);
+            assert_eq!(ctx.get_image_size(), size(2, 1));
+            assert_eq!(ctx.get_image_tile_offset(), offset);
+            assert_eq!(ctx.get_image_plane(), plane);
+        }
+    }
+
     #[test]
     fn get_segmentation_and_instances_mut_creates_a_segmentation_map_when_requested() {
-        let img = Image::<f32, 1, CpuAllocator>::new(
+        let img = Image::<f32, 1>::new(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             vec![0.0; 4],
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
@@ -1128,13 +1239,12 @@ mod tests {
     #[test]
     fn get_segmentation_and_instances_mut_errors_when_segmentation_missing_and_not_allowed_to_create()
      {
-        let img = Image::<f32, 1, CpuAllocator>::new(
+        let img = Image::<f32, 1>::new(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             vec![0.0; 4],
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
@@ -1146,13 +1256,12 @@ mod tests {
 
     #[test]
     fn does_segmentation_map_exist_reflects_presence_of_the_segmentation_buffer() {
-        let img = Image::<f32, 1, CpuAllocator>::new(
+        let img = Image::<f32, 1>::new(
             ImageSize {
                 width: 2,
                 height: 2,
             },
             vec![0.0; 4],
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();

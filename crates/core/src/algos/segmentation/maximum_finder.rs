@@ -928,7 +928,6 @@ mod cpp_reference_tests {
     use crate::pipeline::pipeline_cache::GlobalPipelineCache;
     use crate::pipeline::pipeline_context::PipelineContext;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     /// Parses a compact `#`/`.` mask into a flat row-major `f32` buffer
     /// (`1.0` foreground, `0.0` background) plus its dimensions.
@@ -955,12 +954,7 @@ mod cpp_reference_tests {
     /// `Watershed::execute` does: `DistanceTransform { threshold: 0.0,
     /// edges_are_background: false }` followed by `watershed_segment_edm`.
     fn run_pipeline(mask: &[f32], width: usize, height: usize, tolerance: f32) -> Vec<u8> {
-        let img = Image::<f32, 1, CpuAllocator>::new(
-            ImageSize { width, height },
-            mask.to_vec(),
-            CpuAllocator,
-        )
-        .unwrap();
+        let img = Image::<f32, 1>::new(ImageSize { width, height }, mask.to_vec()).unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
         let mut cache = GlobalPipelineCache::default();
         DistanceTransform {

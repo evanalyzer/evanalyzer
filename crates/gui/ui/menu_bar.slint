@@ -1,6 +1,6 @@
 import { VerticalBox, HorizontalBox } from "std-widgets.slint";
 import { Theme } from "style.slint";
-import { GlobalAppState, DialogType } from "state.slint";
+import { GlobalAppState, DialogType, ConnectionState } from "state.slint";
 import { ToolbarState } from "toolbar.slint";
 
 component MenuItem inherits Rectangle {
@@ -145,6 +145,26 @@ export component CustomMenuBar inherits Rectangle {
                         text: "Save as Template…";
                         clicked => {
                             ToolbarState.save_project_as_template_clicked();
+                            file-menu.close();
+                        }
+                    }
+
+                    MenuSeparator { }
+
+                    MenuItem {
+                        text: ConnectionState.remote ? "Connect to other server…" : "Connect to server…";
+                        icon: @image-url("icons/regular-black/cloud.svg");
+                        clicked => {
+                            ToolbarState.connect_clicked();
+                            file-menu.close();
+                        }
+                    }
+
+                    if ConnectionState.remote: MenuItem {
+                        text: "Disconnect";
+                        icon: @image-url("icons/regular-black/cloud-slash.svg");
+                        clicked => {
+                            ToolbarState.disconnect_clicked();
                             file-menu.close();
                         }
                     }

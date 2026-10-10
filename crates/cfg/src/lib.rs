@@ -25,7 +25,7 @@ pub const LEGACY_PROJECT_FILE_EXTENSION: &str = &"icproj";
 /// of `.evaproj` files written by an older version of the app - e.g. a
 /// renamed field/enum variant that isn't just an additive
 /// `#[serde(default)]` field.
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 3;
 
 /// Current on-disk format version for
 /// [`settings::ai_learning_settings::AiLearningSettings`] - both the
@@ -57,18 +57,28 @@ pub mod settings {
 
 // Shared types
 pub mod core_types {
+    pub use crate::types::breakpoint::BreakpointMode;
+    pub use crate::types::breakpoint::BreakpointSettings;
     pub use crate::types::cite::CitationMetadata;
     pub use crate::types::classes::ObjectClass;
     pub use crate::types::classes::SegmentationClass;
     pub use crate::types::errors::*;
+    pub use crate::types::events::TrainingProgressEvent;
+    pub use crate::types::events::TrainingStats;
     pub use crate::types::ids::ImageAddress;
+    pub use crate::types::ids::ImageChannelIdx;
     pub use crate::types::ids::MemoryId;
     pub use crate::types::ids::MemorySlot;
     pub use crate::types::ids::ObjectId;
     pub use crate::types::ids::PipelineId;
     pub use crate::types::ids::TrackId;
+    pub use crate::types::image::ImagePlane;
+    pub use crate::types::image::ImageTile;
+    pub use crate::types::image::ZProjection;
     pub use crate::types::units::PixelUnits;
     pub use crate::types::units::SizeUnits;
+    pub use crate::types::units::SizeUnitsRel;
+    pub use crate::types::units::max_gray_value;
 }
 
 #[cfg(test)]

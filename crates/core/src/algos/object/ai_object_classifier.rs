@@ -70,7 +70,7 @@ pub struct AiObjectClassifier {
     /// The segmentation class value is assigned to each pixel in the image
     /// after a Threshold, Pixel classifier or AI classifier.
     /// If no seg class is selected the criteria are applied to all objects.
-    #[cmdsmeta(visible = false)]
+    #[cmdsmeta(visibility = Hidden)]
     pub origin_segmentation: Vec<SegmentationClass>,
 
     /// Restrict classification to objects that already carry one of these classes
@@ -169,8 +169,10 @@ impl ImageAlgorithm for AiObjectClassifier {
         "Ai Object Classifier"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    /// Nothing: the learning backend (random forest, KNN, MLP) is only known
+    /// from the model file, and citing the wrong method would mislead.
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        Vec::new()
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -197,15 +199,15 @@ fn check_prediction_count_matches(
 
 impl AiObjectClassifier {
     /// Whether `object` is in scope for this classifier: matches
-    /// `origin_segmentation` (if any is configured) and carries every class
-    /// listed in `input_classes` (if any is configured) - the same input
+    /// `origin_segmentation` (if any is configured) and carries at least one
+    /// class listed in `input_classes` (if any is configured) - the same input
     /// selection `ClassifyObjects` applies before evaluating its criteria.
     fn matches_input(&self, object: &Object) -> bool {
         (self.origin_segmentation.is_empty()
             || self
                 .origin_segmentation
                 .contains(&object.segmentation_class))
-            && (self.input_classes.is_empty() || object.has_object_classes(&self.input_classes))
+            && (self.input_classes.is_empty() || object.has_any_object_class(&self.input_classes))
     }
 }
 
@@ -216,6 +218,7 @@ mod tests {
     use crate::ai_learning::model::{
         CURRENT_SAVED_CLASSIFIER_VERSION, SavedClassifier, save_to_file,
     };
+    use crate::image::Point2d;
     use crate::object::ObjectInit;
     use crate::{ImageContainer, ImagePlane, ManagedImage};
     use bitvec::prelude::*;
@@ -226,9 +229,7 @@ mod tests {
         RandomForestSettings,
     };
     use evanalyzer_cfg::settings::meta_data::MetaData;
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     fn reliable_rf_settings() -> RandomForestSettings {
         RandomForestSettings {
@@ -287,6 +288,7 @@ mod tests {
                 backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 classifier: AiLearningClassifierSettings::Pixel {
                     feature_spec: AiLearningPixelFeatureSettings { channels: vec![] },
+                    input_color: Default::default(),
                     class_labels: Vec::<PixelClassLabel>::new(),
                 },
             },
@@ -298,7 +300,7 @@ mod tests {
             width: 1,
             height: 1,
         };
-        let img = Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32], CpuAllocator).unwrap();
+        let img = Image::<f32, 1>::new(size, vec![0.0f32]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -538,6 +540,42 @@ mod tests {
         assert!(
             !large.has_object_class(&ObjectClass::Valid(42)),
             "object from a non-matching segmentation class must not be classified"
+        );
+    }
+
+    /// One of several `input_classes` is enough to be classified.
+    #[test]
+    fn execute_classifies_objects_carrying_any_of_the_input_classes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.evamodel");
+        save_to_file(&saved_object_classifier(labels()), &path).unwrap();
+
+        let cmd = AiObjectClassifier {
+            model_path: path,
+            segmentation_mapping: vec![ClassificationMapping {
+                object_class: ObjectClass::Valid(6),
+                output_class: ObjectClass::Valid(42),
+            }],
+            origin_segmentation: vec![],
+            // The object carries only the second one.
+            input_classes: vec![
+                ObjectClass::Valid(99),
+                ObjectClass::from_segmentation_class(SegmentationClass(1)),
+            ],
+            match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
+        };
+
+        let mut ctx = make_ctx();
+        let mut cache = GlobalPipelineCache::default();
+        let large = make_object(LARGE_ID, 100, SegmentationClass(1));
+        cache.object_cache.insert(large.id.clone(), large);
+
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let large = cache.object_cache.get(&ObjectId(LARGE_ID)).unwrap();
+        assert!(
+            large.has_object_class(&ObjectClass::Valid(42)),
+            "an object carrying one of the input classes must be classified"
         );
     }
 

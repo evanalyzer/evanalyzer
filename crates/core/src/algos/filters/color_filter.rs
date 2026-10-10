@@ -9,11 +9,10 @@
 
 use crate::ImagePlane;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
+use crate::image::Point2d;
 use crate::image::{ImageContainer, ManagedImage};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
-use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use std::sync::Arc;
 
@@ -64,6 +63,7 @@ pub struct HsvRange {
         step = 0.1,
         display_name = "Min. Sat."
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub min_s: f32,
     /// Maximum Saturation normalized [0.0, 1.0].
     #[cmdsmeta(
@@ -74,6 +74,7 @@ pub struct HsvRange {
         step = 0.1,
         display_name = "Max. Sat."
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub max_s: f32,
 
     /// Minimum Value (Brightness) normalized [0.0, 1.0].
@@ -85,6 +86,7 @@ pub struct HsvRange {
         step = 0.1,
         display_name = "Min. Brightness"
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub min_v: f32,
     /// Maximum Value (Brightness) normalized [0.0, 1.0].
     #[cmdsmeta(
@@ -95,6 +97,7 @@ pub struct HsvRange {
         step = 0.1,
         display_name = "Max. Brightness"
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub max_v: f32,
 }
 
@@ -157,10 +160,9 @@ impl ImageAlgorithm for ColorFilterCommand {
             || ctx.scratch_pad.size() != input.size()
         {
             ctx.scratch_pad = Arc::new(ImageContainer::F32Gray(ManagedImage {
-                data: Image::<f32, 1, CpuAllocator>::from_size_val(input.size(), 0.0, CpuAllocator)
-                    .map_err(|_| {
-                        InternalErrors::AllocationError("Failed to resize scratch pad".into())
-                    })?,
+                data: Image::<f32, 1>::from_size_val(input.size(), 0.0).map_err(|_| {
+                    InternalErrors::AllocationError("Failed to resize scratch pad".into())
+                })?,
                 tile_offset: input.tile_offset.clone(),
                 plane: input.plane.clone(),
             }));
@@ -216,8 +218,8 @@ impl ImageAlgorithm for ColorFilterCommand {
         "HsvColorFilter"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -262,7 +264,6 @@ mod tests {
     use super::*;
     use crate::image::PixelSizes;
     use crate::pipeline::pipeline::PipelineImageMeta;
-    use kornia_image::allocator::CpuAllocator;
     use kornia_image::{Image, ImageSize};
 
     #[test]
@@ -270,13 +271,12 @@ mod tests {
         // 1. Setup: Create a 2x1 RGB image
         // Pixel 0: Pure Green [0.0, 1.0, 0.0] -> Should stay
         // Pixel 1: Pure Blue  [0.0, 0.0, 1.0] -> Should turn black
-        let mut img = Image::<f32, 3, CpuAllocator>::from_size_val(
+        let mut img = Image::<f32, 3>::from_size_val(
             ImageSize {
                 width: 2,
                 height: 1,
             },
             0.0,
-            CpuAllocator,
         )
         .unwrap();
 
@@ -355,13 +355,12 @@ mod tests {
 
     #[test]
     fn test_hue_wrap_around_red() {
-        let mut img = Image::<f32, 3, CpuAllocator>::from_size_val(
+        let mut img = Image::<f32, 3>::from_size_val(
             ImageSize {
                 width: 1,
                 height: 1,
             },
             0.0,
-            CpuAllocator,
         )
         .unwrap();
         // Set to a "Reddish" color (Hue ~355)
@@ -424,24 +423,22 @@ mod tests {
         // wrong type) - `execute` must resize/retype it rather than reusing
         // it as-is or erroring, since a stale scratch pad is a normal
         // in-pipeline occurrence, not a caller mistake.
-        let img = Image::<f32, 3, CpuAllocator>::from_size_val(
+        let img = Image::<f32, 3>::from_size_val(
             ImageSize {
                 width: 3,
                 height: 2,
             },
             0.0,
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
         ctx.scratch_pad = std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_val(
+            data: Image::<f32, 1>::from_size_val(
                 ImageSize {
                     width: 1,
                     height: 1,
                 },
                 0.0,
-                CpuAllocator,
             )
             .unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
@@ -475,13 +472,12 @@ mod tests {
     #[test]
     fn test_color_filter_format_mismatch_error() {
         // 1. Create a 1x1 Grayscale image (Unsupported input type for Color Filter)
-        let img = Image::<f32, 1, CpuAllocator>::from_size_val(
+        let img = Image::<f32, 1>::from_size_val(
             ImageSize {
                 width: 1,
                 height: 1,
             },
             0.5,
-            CpuAllocator,
         )
         .unwrap();
 
@@ -553,7 +549,7 @@ mod tests {
         };
         let name = extractor.name();
         assert_eq!(name, "HsvColorFilter");
-        assert!(extractor.cite().is_none());
+        assert_eq!(extractor.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(extractor.execution_scope(), ExecutionScope::Tile));
     }
 }

@@ -19,11 +19,11 @@ pub struct Intensity {
     /// Sum of all pixel intensities in the object
     pub sum_intensity: f64,
     /// Minimum pixel intensity in the object
-    pub min_intensity: f32,
+    pub min_intensity: f64,
     /// Maximum pixel intensity in the object
-    pub max_intensity: f32,
+    pub max_intensity: f64,
     /// Average pixel intensity in the object
-    pub avg_intensity: f32,
+    pub avg_intensity: f64,
     /// All pixel values (used for computing median and std_dev)
     pub pixel_values: Vec<f32>,
 }
@@ -268,10 +268,13 @@ impl Object {
         self.object_class.contains(object_class)
     }
 
-    pub fn has_object_classes(&self, object_classes: &[ObjectClass]) -> bool {
+    /// Whether the object carries at least one of `object_classes` - how
+    /// every "only objects of these classes" list of a pipeline command
+    /// selects its objects.
+    pub fn has_any_object_class(&self, object_classes: &[ObjectClass]) -> bool {
         object_classes
             .iter()
-            .all(|class| self.has_object_class(class))
+            .any(|class| self.has_object_class(class))
     }
 
     pub fn remove_object_class(&mut self, object_class: &ObjectClass) {
@@ -904,9 +907,9 @@ impl Object {
                     channel_id,
                     Intensity {
                         sum_intensity: sum,
-                        min_intensity: if has_data { min } else { 0.0 },
-                        max_intensity: if has_data { max } else { 0.0 },
-                        avg_intensity: (sum / n.max(1) as f64) as f32,
+                        min_intensity: if has_data { min as f64 } else { 0.0 },
+                        max_intensity: if has_data { max as f64 } else { 0.0 },
+                        avg_intensity: (sum / n.max(1) as f64),
                         pixel_values: Vec::new(),
                     },
                 )
@@ -1482,11 +1485,10 @@ mod tests {
         // synthesized object (e.g. colocalization intersections, Voronoi regions)
         // sample channel pixel 0 regardless of its actual tile-local position.
         use crate::image::ManagedImage;
+        use crate::image::Point2d;
         use crate::pipeline::pipeline_cache::GlobalPipelineCache;
         use crate::{ImageContainer, ImagePlane};
-        use kornia_apriltag::utils::Point2d;
         use kornia_image::{Image, ImageSize};
-        use kornia_tensor::CpuAllocator;
         use std::sync::Arc;
 
         let tile_size = ImageSize {
@@ -1502,12 +1504,7 @@ mod tests {
         intensity[0] = 10.0; // local (0,0)
         intensity[5 * 15 + 7] = 99.0; // local (7,5)
         let channel = Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
-                tile_size,
-                &intensity,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::from_size_slice(tile_size, &intensity).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
@@ -1553,11 +1550,10 @@ mod tests {
         // channel slice miles out of bounds, panicking. Now those pixels must simply be
         // skipped rather than sampled.
         use crate::image::ManagedImage;
+        use crate::image::Point2d;
         use crate::pipeline::pipeline_cache::GlobalPipelineCache;
         use crate::{ImageContainer, ImagePlane};
-        use kornia_apriltag::utils::Point2d;
         use kornia_image::{Image, ImageSize};
-        use kornia_tensor::CpuAllocator;
         use std::sync::Arc;
 
         let tile_size = ImageSize {
@@ -1571,12 +1567,7 @@ mod tests {
         let mut intensity = vec![7.0f32; 15 * 20];
         intensity[5 * 15 + 7] = 99.0; // tile-local (7,5)
         let channel = Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
-                tile_size,
-                &intensity,
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<f32, 1>::from_size_slice(tile_size, &intensity).unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));

@@ -7,8 +7,13 @@ use crate::{
         viewport_controller::ViewportController,
     },
 };
-use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+use evanalyzer_app::analysis::AnalysisRequest;
+use evanalyzer_app::analysis::ProgressEvent;
+use evanalyzer_app::preview::MAX_PREVIEW_VISIBLE_TILES;
+use evanalyzer_app::preview::PreviewRequest;
+use evanalyzer_app::preview::PreviewViewport;
+use evanalyzer_app::preview::StartPreviewError;
+use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
 use log::{error, info};
 use slint::ComponentHandle;
 use std::sync::{Arc, Condvar, Mutex};
@@ -55,84 +60,78 @@ impl PipelineWorker {
 
     fn run_worker_loop(self: &Arc<Self>) -> ! {
         let task_request = &self.pipeline_controller.task_request;
-        let self_handle = Arc::clone(self);
         loop {
             let task = wait_for_task(task_request.clone());
+            self.run_task(task);
+        }
+    }
+
+    /// A job that could not start (e.g. a pipeline reads a channel the images
+    /// don't have): logged, and shown to the user in the run status - the
+    /// same place "zoomed out too far to preview" is reported.
+    fn report_start_failure(&self, what: &str, e: &InternalErrors) {
+        error!("{what} could not be started: {e}");
+        let message = format!("{what} could not be started: {e}");
+        let ui_handle = self.app_state.ui_handle.clone();
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_handle.upgrade() {
+                let running = ui.global::<PipelineRunningState>();
+                running.set_status_message(message.into());
+                running.set_has_error(true);
+                running.set_done(true);
+            }
+        });
+    }
+
+    /// Runs one preview or analysis job to the end, reporting its progress
+    /// and result to the UI.
+    fn run_task(self: &Arc<Self>, task: PipelineTask) {
+        let self_handle = Arc::clone(self);
+        {
             let is_preview = task.preview;
-            // `out_objects` is only `Some` for a preview run - it's the in-memory
-            // store `MemoryExporter::export` fills in once the job's whole-image
-            // phase (TileMerge included) finishes for an image, which is the
-            // *actual* final, correctly-merged object set. The per-tile
-            // `TileCompleted` events below stream in each tile's own objects
-            // *before* tile-merge has run, purely for fast incremental preview
-            // feedback - `out_objects` is read back once the job completes to
-            // replace that pre-merge snapshot with the real result.
-            let (job, out_objects): (
-                Result<evanalyzer_core::JobExecutor, InternalErrors>,
-                Option<Arc<Mutex<Vec<ObjectMetricSettings>>>>,
-            ) = if is_preview {
-                match evanalyzer_core::generate_preview_job_from_project_settings(
-                    task.project_settings,
-                    task.project_path,
-                ) {
-                    Ok((job, out_objects)) => (Ok(job), Some(out_objects)),
-                    Err(e) => (Err(e), None),
-                }
-            } else {
-                (
-                    evanalyzer_core::generate_analyze_job_from_project_settings(
-                        task.project_settings,
-                        task.project_path,
-                        task.job_name,
-                    ),
-                    None,
-                )
-            };
 
-            info!("Started pipeline worker task");
-
-            let Ok(mut job_exec) = job else {
-                error!("Could not execute job!");
-                continue;
-            };
-
-            // For preview runs, restrict processing to tiles that are currently
-            // visible in the viewport so the user sees results immediately.
-            if is_preview {
-                let vp = self
-                    .viewport_controller
-                    .viewport_state
-                    .read()
-                    .expect("Failed to acquire read lock on viewport state");
-                job_exec.preview_tile_settings = Some(evanalyzer_core::PreviewTileSettings {
-                    offset_x: vp.offset_x,
-                    offset_y: vp.offset_y,
-                    viewport_width: vp.viewport_width,
-                    viewport_height: vp.viewport_height,
-                    zoom: vp.zoom,
-                    process_all_tiles: false,
-                });
-                drop(vp);
-
-                // Reject previews that would cover too much of a whole-slide image at
-                // once: at low zoom the viewport can span hundreds of tiles, each
-                // potentially producing huge numbers of ROIs that the viewport renderer
-                // and object list can't handle responsively. Tell the user to zoom in
-                // instead of silently grinding through it.
-                const MAX_PREVIEW_VISIBLE_TILES: usize = 4;
-                match job_exec.count_preview_visible_tiles() {
-                    Ok(n) if n > MAX_PREVIEW_VISIBLE_TILES => {
-                        info!(
-                            "Preview rejected: viewport covers {n} tiles (max {MAX_PREVIEW_VISIBLE_TILES})"
-                        );
+            let job = if is_preview {
+                // Restrict processing to tiles currently visible in the viewport
+                // so the user sees results immediately.
+                let viewport = {
+                    let vp = self
+                        .viewport_controller
+                        .viewport_state
+                        .read()
+                        .expect("Failed to acquire read lock on viewport state");
+                    PreviewViewport {
+                        offset_x: vp.offset_x,
+                        offset_y: vp.offset_y,
+                        viewport_width: vp.viewport_width,
+                        viewport_height: vp.viewport_height,
+                        zoom: vp.zoom,
+                    }
+                };
+                let breakpoint = task
+                    .breakpoint
+                    .map(|(pipeline_id, pipeline_step_id, mode)| BreakpointSettings {
+                        pipeline_id,
+                        pipeline_step_id,
+                        mode,
+                    });
+                match self.app_state.backend().start_preview(PreviewRequest {
+                    settings: task.project_settings,
+                    project_path: task.project_path,
+                    viewport,
+                    breakpoint,
+                }) {
+                    Ok(job) => job,
+                    Err(StartPreviewError::TooManyTiles { tiles }) => {
+                        // Tell the user to zoom in instead of silently grinding
+                        // through hundreds of tiles.
                         self.pipeline_controller.disable_auto_preview();
                         let ui_handle = self.app_state.ui_handle.clone();
                         let message = format!(
-                            "Zoomed out too far to preview live: the visible area covers {n} tiles \
+                            "Zoomed out too far to preview live: the visible area covers {tiles} tiles \
                              (max {MAX_PREVIEW_VISIBLE_TILES}). Zoom in, then run the preview again. \
                              Auto preview has been turned off."
                         );
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>()
                                     .set_status_message(message.into());
@@ -140,47 +139,51 @@ impl PipelineWorker {
                                 ui.global::<PipelineRunningState>().set_done(true);
                             }
                         });
-                        continue;
+                        return;
                     }
+                    Err(StartPreviewError::Failed(e)) => {
+                        self.report_start_failure("The preview", &e);
+                        return;
+                    }
+                }
+            } else {
+                let backend = self.app_state.backend();
+                let started = match &task.attach {
+                    Some(id) => backend.attach_job(id),
+                    None => backend.start_analysis(AnalysisRequest {
+                        settings: task.project_settings,
+                        project_path: task.project_path,
+                        job_name: task.job_name,
+                        threads: None,
+                    }),
+                };
+                match started {
+                    Ok(job) => job,
                     Err(e) => {
-                        error!("Failed to count visible preview tiles: {e:?}");
+                        self.report_start_failure("The analysis", &e);
+                        return;
                     }
-                    _ => {}
                 }
-
-                if let Some((pipeline_id, step_id, mode)) = task.breakpoint {
-                    job_exec.breakpoint = Some(evanalyzer_core::BreakpointSettings {
-                        pipeline_id,
-                        pipeline_step_id: step_id,
-                        mode,
-                    });
-                } else {
-                    job_exec.breakpoint = None;
-                }
-            }
+            };
+            let analysis_running = &self.pipeline_controller.analysis_running;
+            analysis_running.store(!is_preview, std::sync::atomic::Ordering::SeqCst);
+            let job_id = job.id().map(str::to_string);
 
             info!("Pipeline job started ...");
 
-            // Caps parallelism to available RAM as well as CPU cores, so a low-memory
-            // machine doesn't try to run as many concurrent workers as it has cores.
-            // The per-worker estimate is sized to the images actually being
-            // analyzed, not a flat guess - see `estimate_ram_per_worker_bytes`.
-            let ram_per_worker = job_exec.estimate_ram_per_worker_bytes();
-            let parallelism = evanalyzer_core::recommended_parallelism(ram_per_worker);
-            let (handle, rx, cancel_flag) = job_exec.run_async(parallelism);
             *self
                 .pipeline_controller
                 .pipeline_cancel_flag
                 .lock()
-                .unwrap() = Some(cancel_flag);
+                .unwrap() = Some(job.cancel_handle());
             let mut last_ui_update = std::time::Instant::now();
             let mut pipeline_start: Option<std::time::Instant> = None;
-            for event in rx {
+            for event in job.events() {
                 match event {
-                    evanalyzer_core::ProgressEvent::TilesScheduled { total_tiles } => {
+                    ProgressEvent::TilesScheduled { total_tiles } => {
                         let ui_handle = self.app_state.ui_handle.clone();
                         let total = total_tiles as i32;
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>().set_total(total);
                                 ui.global::<PipelineRunningState>().set_processed(0);
@@ -189,7 +192,7 @@ impl PipelineWorker {
                             }
                         });
                     }
-                    evanalyzer_core::ProgressEvent::Started { total } => {
+                    ProgressEvent::Started { total } => {
                         info!("Pipeline started: {total} images to process");
                         pipeline_start = Some(std::time::Instant::now());
                         // Clear any stale preview ROIs so the incremental tile updates
@@ -204,7 +207,7 @@ impl PipelineWorker {
                         }
                         let ui_handle = self.app_state.ui_handle.clone();
                         let total = total as i32;
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>().set_done(false);
                                 ui.global::<PipelineRunningState>().set_has_error(false);
@@ -215,7 +218,7 @@ impl PipelineWorker {
                             }
                         });
                     }
-                    evanalyzer_core::ProgressEvent::TileCompleted {
+                    ProgressEvent::TileCompleted {
                         tile_index,
                         total_tiles,
                         objects,
@@ -238,7 +241,7 @@ impl PipelineWorker {
                                 .trigger_image_redraw_objects();
                         }
                         let ui_handle = self.app_state.ui_handle.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>()
                                     .set_processed(tile_index as i32);
@@ -249,7 +252,7 @@ impl PipelineWorker {
                             }
                         });
                     }
-                    evanalyzer_core::ProgressEvent::WholeImagePhaseCompleted {
+                    ProgressEvent::WholeImagePhaseCompleted {
                         completed,
                         total_tiles,
                     } => {
@@ -263,7 +266,7 @@ impl PipelineWorker {
                         // not recompute the total.
                         info!("Whole-image phase completed ({completed}/{total_tiles})");
                         let ui_handle = self.app_state.ui_handle.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
+                        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>()
                                     .set_processed(completed as i32);
@@ -274,7 +277,7 @@ impl PipelineWorker {
                             }
                         });
                     }
-                    evanalyzer_core::ProgressEvent::ImageCompleted { index, total, path } => {
+                    ProgressEvent::ImageCompleted { index, total, path } => {
                         info!(
                             "Pipeline progress: {}/{} - {}",
                             index,
@@ -292,7 +295,7 @@ impl PipelineWorker {
                             let ui_handle = self.app_state.ui_handle.clone();
                             let index = index as i32;
                             let total = total as i32;
-                            let _ = slint::invoke_from_event_loop(move || {
+                            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_handle.upgrade() {
                                     ui.global::<PipelineRunningState>().set_processed(index);
                                     ui.global::<PipelineRunningState>().set_total(total);
@@ -302,7 +305,7 @@ impl PipelineWorker {
                             });
                         }
                     }
-                    evanalyzer_core::ProgressEvent::BreakpointReached {
+                    ProgressEvent::BreakpointReached {
                         image,
                         segmentation,
                         instances,
@@ -331,10 +334,10 @@ impl PipelineWorker {
                             channel_idx,
                         );
                     }
-                    evanalyzer_core::ProgressEvent::ImageFailed { path } => {
+                    ProgressEvent::ImageFailed { path } => {
                         error!("Pipeline image failed: {}", path.display());
                     }
-                    evanalyzer_core::ProgressEvent::Finished => {
+                    ProgressEvent::Finished => {
                         info!("Pipeline job finished - waiting for result");
                         *self
                             .pipeline_controller
@@ -344,23 +347,27 @@ impl PipelineWorker {
                     }
                 }
             }
-            // A panic inside the spawned job thread (e.g. a malformed tile at
-            // the image edge) used to re-panic here via `.expect()`, which
-            // killed this worker thread too and left the UI stuck showing
-            // "running" forever, since the status-update code below never
-            // ran. Treat it as a normal job error instead so the user sees
-            // it and the worker survives to run the next job.
-            let job_result = match handle.join() {
-                Ok(result) => result,
-                Err(panic_payload) => {
-                    let msg = crate::helper::worker_supervisor::panic_message(&panic_payload);
-                    error!("Pipeline job thread panicked: {msg}");
-                    Err(InternalErrors::Internal(format!(
-                        "Pipeline worker crashed: {msg}"
-                    )))
+            // A panic inside the job thread comes back as a normal error
+            // (see `RunningJob::wait`), so the user sees it and this worker
+            // survives to run the next job.
+            let job_result = job.wait();
+            analysis_running.store(false, std::sync::atomic::Ordering::SeqCst);
+            let backend = self.app_state.backend();
+            let connection_lost = job_result.is_err() && !backend.is_connected();
+            // Seen through to its end here: no need to report it again
+            // the next time a window opens.
+            if let (Some(id), false) = (&job_id, connection_lost) {
+                if let Err(e) = backend.forget_job(id) {
+                    log::warn!("Could not forget analysis {id} on the server: {e}");
                 }
-            };
+            }
             let (status_message, is_error) = match job_result {
+                Err(_) if connection_lost && job_id.is_some() => (
+                    "The connection to the server was lost. The analysis keeps running \
+                     there - it is shown again once EVAnalyzer is connected."
+                        .to_string(),
+                    true,
+                ),
                 Err(InternalErrors::Cancelled) => {
                     info!("Pipeline cancelled by user");
                     ("Cancelled by user.".to_string(), false)
@@ -369,20 +376,14 @@ impl PipelineWorker {
                     error!("Pipeline job error: {e:?}");
                     (format!("Error: {e}"), true)
                 }
-                Ok(()) => {
+                Ok(output) => {
                     info!("Pipeline completed successfully");
                     if is_preview {
-                        // Replace the incrementally-streamed per-tile ROIs (each
-                        // tile's own objects, sent via `TileCompleted` *before* the
-                        // whole-image phase's `TileMerge` ran) with the actual
-                        // final, merged result now that the job has finished -
-                        // otherwise cross-tile fragments stay displayed as two
-                        // separate objects even though the backend merged them.
-                        if let Some(out_objects) = &out_objects {
-                            let final_objects = out_objects
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .clone();
+                        // Replace the incrementally-streamed per-tile ROIs with
+                        // the final, tile-merged result - otherwise cross-tile
+                        // fragments stay displayed as two separate objects even
+                        // though the backend merged them.
+                        if let Some(final_objects) = output.preview_objects {
                             let mut project = self_handle.app_state.get_project_write();
                             project.tmp_settings.preview_objects.clear();
                             project.tmp_settings.preview_objects.extend(final_objects);
@@ -405,7 +406,7 @@ impl PipelineWorker {
             };
             let ui_handle = self.app_state.ui_handle.clone();
             let is_preview = task.preview;
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_handle.upgrade() {
                     ui.global::<PipelineRunningState>()
                         .set_status_message(status_message.into());
@@ -489,5 +490,312 @@ mod tests {
 
         assert_eq!(task.job_name.as_deref(), Some("posted-from-another-thread"));
         handle.join().unwrap();
+    }
+
+    // -- running real jobs (UI updates applied via the test queue) -----------
+
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::image_meta_controller::ImageMetaController;
+    use crate::editor::images_list_controller::ImagesListController;
+    use crate::editor::results_state_controller::ResultsStateController;
+    use crate::editor::template_controller::TemplateController;
+    use crate::editor::test_support::{fixture_image_path, test_ui_windows};
+    use crate::helper::ui_thread::drain_ui_queue;
+    use crate::{AppWindow, ResultsWindow};
+    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::project::{ProjectExt, ProjectWithRuntime};
+
+    struct Fixture {
+        ui: AppWindow,
+        _results_ui: ResultsWindow,
+        worker: Arc<PipelineWorker>,
+        dir: tempfile::TempDir,
+        settings: evanalyzer_cfg::settings::project_settings::ProjectSettings,
+    }
+
+    /// A worker wired to real windows and a project with a copy of the
+    /// fixture image in a temp folder.
+    fn fixture() -> Fixture {
+        fixture_on(crate::editor::test_support::test_project_owner())
+    }
+
+    /// [`fixture`] on `owner`'s backend.
+    fn fixture_on(owner: evanalyzer_app::project::ProjectOwner) -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let images = dir.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        std::fs::copy(fixture_image_path(), images.join("fixture.ome.tif")).unwrap();
+        let mut project = ProjectWithRuntime::default();
+        project.images.root = Some(images);
+        project.scan_image_folder_and_add(&LocalBackend::default());
+        let settings = project.settings.clone();
+
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state =
+            crate::editor::test_support::ui_state_with_windows_on(&ui, &results_ui, project, owner);
+        let w = ui.as_weak();
+        let viewport = Arc::new(ViewportController::new(w.clone(), ui_state.clone()));
+        let objects = Arc::new(ObjectListController::new(
+            w.clone(),
+            ui_state.clone(),
+            viewport.clone(),
+        ));
+        let templates = Arc::new(TemplateController::new(w.clone(), ui_state.clone()));
+        let pipelines = Arc::new(PipelinesController::new(
+            w.clone(),
+            ui_state.clone(),
+            objects.clone(),
+            viewport.clone(),
+            templates,
+            crate::editor::test_support::test_focus_controller(
+                w.clone(),
+                &ui_state,
+                &objects,
+                &viewport,
+            ),
+        ));
+        let classification = Arc::new(ClassificationController::new(
+            w.clone(),
+            ui_state.clone(),
+            objects.clone(),
+            viewport.clone(),
+        ));
+        let images_list = Arc::new(ImagesListController::new(
+            w.clone(),
+            ui_state.clone(),
+            viewport.clone(),
+            Arc::new(HistogramController::new(
+                w.clone(),
+                ui_state.clone(),
+                viewport.clone(),
+            )),
+            Arc::new(ImageMetaController::new(
+                w.clone(),
+                ui_state.clone(),
+                viewport.clone(),
+            )),
+            objects.clone(),
+            classification.clone(),
+        ));
+        let results_state = Arc::new(ResultsStateController::new(
+            results_ui.as_weak(),
+            ui_state.clone(),
+            images_list,
+        ));
+        let results_list = Arc::new(ResultsListController::new(
+            w,
+            ui_state.clone(),
+            results_state,
+        ));
+        {
+            let mut vp = viewport.viewport_state.write().unwrap();
+            vp.viewport_width = 256.0;
+            vp.viewport_height = 256.0;
+            vp.zoom = 1.0;
+        }
+        let worker = Arc::new(PipelineWorker::new(
+            ui_state,
+            pipelines,
+            viewport,
+            objects,
+            classification,
+            results_list,
+        ));
+        Fixture {
+            ui,
+            _results_ui: results_ui,
+            worker,
+            dir,
+            settings,
+        }
+    }
+
+    impl Fixture {
+        fn task(&self, preview: bool) -> PipelineTask {
+            PipelineTask {
+                project_settings: self.settings.clone(),
+                project_path: self.dir.path().to_path_buf(),
+                preview,
+                breakpoint: None,
+                job_name: Some("worker_test".into()),
+                attach: None,
+            }
+        }
+        fn running(&self) -> PipelineRunningState<'_> {
+            self.ui.global::<PipelineRunningState>()
+        }
+    }
+
+    #[test]
+    fn an_analysis_run_reports_progress_and_completion() {
+        let f = fixture();
+        f.ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::PipelineRunning);
+        f.worker.run_task(f.task(false));
+        drain_ui_queue();
+        let running = f.running();
+        assert!(running.get_done());
+        assert!(!running.get_has_error());
+        assert_eq!(
+            running.get_status_message(),
+            "Analysis completed successfully."
+        );
+        assert!(running.get_total() >= 1);
+        assert_eq!(running.get_processed(), running.get_total());
+        assert!(
+            !f.ui
+                .global::<PipelinesPanelState>()
+                .get_eta_seconds_per_image()
+                .is_empty()
+        );
+        // The full run's dialog stays open to show the result.
+        assert_eq!(
+            f.ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::PipelineRunning
+        );
+        assert!(
+            f.worker
+                .pipeline_controller
+                .pipeline_cancel_flag
+                .lock()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// A remote fixture: an in-process worker serving the local backend,
+    /// and the GUI connected to it.
+    fn remote_fixture() -> (Fixture, Arc<dyn evanalyzer_app::backends::Backend>) {
+        use evanalyzer_app::backends::remote::{RemoteBackend, Worker};
+        let worker = Worker::bind("127.0.0.1:0", "gui-test".into()).unwrap();
+        let url = format!("ws://{}", worker.local_addr().unwrap());
+        std::thread::spawn(move || worker.run(Arc::new(LocalBackend::default())));
+        let remote: Arc<dyn evanalyzer_app::backends::Backend> =
+            Arc::new(RemoteBackend::connect(&url, "gui-test").unwrap());
+        let owner = evanalyzer_app::project::ProjectOwner::with_backend(Arc::clone(&remote));
+        (fixture_on(owner), remote)
+    }
+
+    #[test]
+    fn an_analysis_running_on_the_server_is_followed_to_its_end_and_then_forgotten() {
+        let (f, remote) = remote_fixture();
+        // Started elsewhere - e.g. by this window before the connection dropped.
+        let mut task = f.task(false);
+        let job = remote
+            .start_analysis(AnalysisRequest {
+                settings: task.project_settings.clone(),
+                project_path: task.project_path.clone(),
+                job_name: Some("elsewhere".into()),
+                threads: Some(1),
+            })
+            .unwrap();
+        let id = job.id().unwrap().to_string();
+
+        task.attach = Some(id.clone());
+        f.worker.run_task(task);
+        drain_ui_queue();
+
+        assert!(f.running().get_done());
+        assert!(
+            !f.running().get_has_error(),
+            "{}",
+            f.running().get_status_message()
+        );
+        assert_eq!(
+            f.running().get_status_message(),
+            "Analysis completed successfully."
+        );
+        assert!(f.running().get_total() >= 1);
+        let analysis_running = &f.worker.pipeline_controller.analysis_running;
+        assert!(!analysis_running.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            remote.list_jobs().unwrap().iter().all(|j| j.id != id),
+            "shown here, so not reported again"
+        );
+        drop(job);
+    }
+
+    #[test]
+    fn attaching_where_nothing_is_tracked_is_reported() {
+        let f = fixture();
+        let mut task = f.task(false);
+        task.attach = Some("0123456789abcdef".into());
+        f.worker.run_task(task);
+        drain_ui_queue();
+        assert!(f.running().get_has_error());
+        assert!(
+            f.running()
+                .get_status_message()
+                .contains("could not be started"),
+            "{}",
+            f.running().get_status_message()
+        );
+        let analysis_running = &f.worker.pipeline_controller.analysis_running;
+        assert!(!analysis_running.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_preview_run_closes_its_dialog_when_done() {
+        let f = fixture();
+        f.ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::PreviewRendering);
+        f.worker.run_task(f.task(true));
+        drain_ui_queue();
+        assert!(f.running().get_done());
+        assert!(!f.running().get_has_error());
+        assert_eq!(
+            f.ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::None
+        );
+    }
+
+    /// Pins down today's behaviour: a job that can't even start (here its
+    /// results folder can't be created) is only logged - the running dialog
+    /// gets no result and stays as it was. Flagged as a usability gap; if
+    /// that changes, this test should assert the shown error instead.
+    #[test]
+    fn an_analysis_with_a_pipeline_on_a_missing_channel_is_refused_visibly() {
+        let f = fixture();
+        let mut task = f.task(false);
+        task.project_settings.pipelines.push(
+            evanalyzer_cfg::settings::pipeline_settings::PipelineSettings {
+                id: evanalyzer_cfg::core_types::PipelineId(1),
+                name: "Spots".into(),
+                description: None,
+                image_source: evanalyzer_cfg::core_types::ImageAddress::Channel(9),
+                enabled: true,
+                steps: vec![],
+            },
+        );
+        f.worker.run_task(task);
+        drain_ui_queue();
+
+        assert!(f.running().get_has_error());
+        let message = f.running().get_status_message().to_string();
+        assert!(
+            message.contains("pipeline 'Spots' reads channel 9"),
+            "{message}"
+        );
+        assert!(
+            !f.dir.path().join("results").exists(),
+            "nothing was started, so no results folder"
+        );
+    }
+
+    #[test]
+    fn a_job_that_cannot_start_tells_the_user_why() {
+        let f = fixture();
+        std::fs::write(f.dir.path().join("missing"), "a file, not a folder").unwrap();
+        let mut task = f.task(false);
+        task.project_path = f.dir.path().join("missing").join("deeper");
+        f.worker.run_task(task);
+        drain_ui_queue();
+        assert!(f.running().get_done());
+        assert!(f.running().get_has_error());
+        let message = f.running().get_status_message().to_string();
+        assert!(
+            message.starts_with("The analysis could not be started:"),
+            "{message}"
+        );
     }
 }

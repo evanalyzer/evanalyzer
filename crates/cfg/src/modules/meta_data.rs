@@ -3,6 +3,16 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct AuthorInformation {
+    /// Full name of the author
+    pub full_name: String,
+
+    /// Author organization
+    pub organization: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct MetaData {
     /// Name of the module
     pub name: String,
@@ -17,10 +27,7 @@ pub struct MetaData {
     /// primary author in template/pipeline picker dialogs, the rest as
     /// co-authors). Free-form display strings, not split into first/last.
     #[serde(default)]
-    pub authors: Vec<String>,
-
-    /// Author organization
-    pub author_organization: String,
+    pub authors: Vec<AuthorInformation>,
 
     /// Creation time
     pub creation_time: chrono::DateTime<chrono::Utc>,

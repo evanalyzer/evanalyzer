@@ -7,12 +7,12 @@ use crate::{
     AppWindow, ChannelInfo, ChannelState, ImageMetaData, ImagePixelInfo, IntensityProjection,
     ViewportState as ViewportSlintState,
 };
-use evanalyzer_app::extensions::project_ext::ProjectExt;
+use evanalyzer_app::images::ImageContainer;
+use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::{
     TStackHandling, TStackSettings, ZStackHandling, ZStackSettings,
 };
-use evanalyzer_core::ImageContainer;
 use log::warn;
 use slint::{ComponentHandle, Model, Timer, TimerMode};
 use std::collections::BTreeMap;
@@ -496,7 +496,7 @@ impl ViewportImageController {
             );
 
             let ui_weak = self.ui.clone();
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.global::<ImagePixelInfo>()
                         .set_pixel_value(pixel_values.join(" | ").into());
@@ -550,8 +550,12 @@ impl ViewportImageController {
             IntensityProjection::Middle => (None, ZStackHandling::TakeTheMiddle),
         };
 
-        // Store the new settings to the project
-        project.set_global_preferences(&channel_visibility);
+        // Store the new settings to the project - in grayscale mode with
+        // one visible channel at most; the list then shows that, too.
+        let allowed = project.with_one_visible_channel(&channel_visibility);
+        self.show_channel_visibilities(allowed.clone(), allowed != channel_visibility);
+
+        project.set_global_preferences(&allowed);
 
         project.set_global_z_stack(&ZStackSettings {
             z_projection: z_projection,
@@ -566,6 +570,37 @@ impl ViewportImageController {
 
         self.viewport_controller
             .trigger_redraw_low_res_and_high_res();
+    }
+
+    /// Shows how many channels are visible - and with `update_rows` which,
+    /// when grayscale mode changed the user's choice.
+    fn show_channel_visibilities(&self, visibilities: BTreeMap<i32, bool>, update_rows: bool) {
+        let ui = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui.upgrade() else {
+                return;
+            };
+            let visible = visibilities.values().filter(|visible| **visible).count();
+            ui.global::<ChannelState>().set_active_count(visible as i32);
+
+            if !update_rows {
+                return;
+            }
+
+            let channels = ui.global::<ChannelState>().get_channels().clone();
+
+            for row in 0..channels.row_count() {
+                if let Some(mut channel) = channels.row_data(row)
+                    && let Some(visible) = visibilities.get(&channel.idx)
+                {
+                    channel.active = *visible;
+                    channels.set_row_data(row, channel);
+                }
+            }
+            ui.global::<ChannelState>()
+                .set_channels(std::rc::Rc::new(channels).into());
+        })
+        .ok();
     }
 
     /// Updates the currently selected image channel in the project and triggers a UI histogram refresh.
@@ -801,7 +836,37 @@ mod tests {
             idx,
             color: slint::Color::from_rgb_u8(0, 0, 0),
             emission_wave_length: 0.0,
+            wavelength_overridden: false,
         }
+    }
+
+    #[test]
+    fn in_grayscale_switching_a_channel_on_hides_the_other() {
+        let (ui_state, controller) = make_controller();
+        controller.update_channel_options_in_project(
+            vec![channel(0, true), channel(1, false)],
+            0,
+            0,
+            IntensityProjection::SingleStack,
+            1.0,
+        );
+        ui_state.get_project_write().set_grayscale(true);
+
+        controller.update_channel_options_in_project(
+            vec![channel(0, true), channel(1, true)],
+            0,
+            0,
+            IntensityProjection::SingleStack,
+            1.0,
+        );
+
+        let visibilities = ui_state.get_project().get_image_channel_visibilities();
+        assert_eq!(visibilities.get(&0), Some(&false));
+        assert_eq!(
+            visibilities.get(&1),
+            Some(&true),
+            "the one just switched on"
+        );
     }
 
     #[test]
@@ -911,16 +976,17 @@ mod tests {
     // -- update_active_series_in_project --------------------------------------------
 
     #[test]
-    fn update_active_series_stores_the_selected_series_on_the_current_image() {
+    fn update_active_series_selects_the_series_for_every_image() {
+        use evanalyzer_app::project::ImageEntryExt;
         let (ui_state, controller) = make_controller();
 
         controller.update_active_series_in_project(&2);
 
         let project = ui_state.get_project();
-        let entry = project
-            .get_current_image_settings()
-            .expect("fixture project has a current image");
-        assert_eq!(entry.selected_series, 2);
+        assert_eq!(project.images.settings.selected_series, Some(2));
+        for entry in project.images.list.values() {
+            assert_eq!(entry.active_series(&project.images.settings), 2);
+        }
     }
 
     // -- sync_pixel_info_throttled / sync_actual_mouse_position_information_to_slint

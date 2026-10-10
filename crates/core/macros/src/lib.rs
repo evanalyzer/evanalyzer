@@ -26,7 +26,8 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     // Keys allowed on struct-level #[cmdsmeta(...)]
-    let struct_allowed_keys = ["category", "display_name", "next"];
+    // `key`: stable serialized/script name, snake_case (defaults to the struct name).
+    let struct_allowed_keys = ["category", "display_name", "next", "key"];
 
     // Keys allowed on field-level #[cmdsmeta(...)]
     let field_allowed_keys = [
@@ -34,19 +35,24 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         "min",
         "max",
         "step",
-        "rename",
+        // Stable serialized/script name of the field, snake_case (defaults to
+        // the field name).
+        "key",
         "unit",
         "regex",
         "display_name",
         "summary",
         "optional",
-        "visible",
+        // Default | Advanced | Hidden - see the generator's `Visibility`.
+        "visibility",
         // Comma-separated file extensions (no dots, e.g. "pt,pth") for a
         // `PathBuf` field's native file-picker filter - see this module's
         // doc comment above for what a `PathBuf` field gets automatically
         // *without* this attribute (ParamType::FilePath, project-relative
         // storage). Optional; an empty/absent filter just allows any file.
         "file_extensions",
+        // `String` field holding a Rhai script - edited in the script editor.
+        "script",
     ];
 
     // Validate struct-level #[cmdsmeta(...)]

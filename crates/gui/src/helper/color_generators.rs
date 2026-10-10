@@ -1,5 +1,5 @@
-use evanalyzer_app::ProjectWithRuntime;
-use evanalyzer_app::extensions::project_ext::ProjectExt;
+use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::ProjectWithRuntime;
 use evanalyzer_cfg::core_types::ObjectClass;
 use slint::Color;
 use std::collections::HashSet;

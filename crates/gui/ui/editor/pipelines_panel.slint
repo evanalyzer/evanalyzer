@@ -12,7 +12,10 @@ import {
     Palette,
 } from "std-widgets.slint";
 import { Theme } from "../style.slint";
+import { ImageAddressPicker, ChannelPicker } from "../components/channel_picker.slint";
 import { ClassificationState, ClassItemData } from "classification_panel.slint";
+import { PipelineFocusState, FocusModeButton } from "pipeline_focus.slint";
+import { ScriptEditorState, ScriptFont } from "script_editor_panel.slint";
 
 // ----------------------------------------------------------
 // Data model
@@ -34,7 +37,10 @@ export enum ParamType {
     pixel-units,
     size-units,
     label,
-    file-path }
+    file-path,
+    image-address,
+    image-channel,
+    script }
 
 export struct LeafParam {
         name: string,
@@ -79,6 +85,16 @@ export struct PipelineCommand {
     enabled: bool,
         expanded: bool,
         parameters: [CommandParameter],
+        // Settings marked `visibility = Advanced`: shown below the "Advanced
+        // settings" row, and only while it is expanded (empty otherwise).
+        advanced-parameters: [CommandParameter],
+        // The advanced section of this step is expanded (kept per step).
+        show-advanced: bool,
+        // How many advanced settings the step has, and how many of them differ
+        // from their default (shown on the collapsed row so changed hidden
+        // values never go unnoticed).
+        advanced-count: int,
+        advanced-changed: int,
     }
 
 export struct Pipeline {
@@ -240,10 +256,86 @@ component DotPx inherits Rectangle {
 // ----------------------------------------------------------
 // Pipeline tab row
 
+// "Advanced (n) · m changed" row of a step card: expands/collapses the
+// step's advanced settings; "Always" expands them in every step. Labels are
+// short and elide, so this row never widens the card (and with it the list,
+// which would then show a horizontal scrollbar).
+component AdvancedRow inherits Rectangle {
+        in property <int> count;
+        in property <int> changed-count;
+        in property <bool> expanded;
+        in property <bool> always;
+        callback toggled;
+        callback always-toggled(bool);
+
+        height: 24px;
+
+        HorizontalLayout {
+            spacing: 6px;
+            row-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.toggled();
+                }
+                HorizontalLayout {
+                    spacing: 5px;
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: root.expanded ? @image-url("../icons/regular-white/caret-down.svg") : @image-url("../icons/regular-white/caret-right.svg");
+                            width: 10px;
+                            height: 10px;
+                            colorize: row-ta.has-hover ? Theme.text : Theme.text-dim;
+                        }
+                    }
+                    Text {
+                        text: "Advanced (\{root.count})";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: row-ta.has-hover ? Theme.text : Theme.text-dim;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if root.changed-count > 0: Text {
+                        text: "· \{root.changed-count} changed";
+                        font-size: 11px;
+                        color: Theme.warn;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 5px;
+                alignment: end;
+                VerticalLayout {
+                    alignment: center;
+                    SquareCheck {
+                        checked: root.always;
+                        toggled => {
+                            root.always-toggled(!root.always);
+                        }
+                    }
+                }
+                Text {
+                    text: "Always";
+                    font-size: 10px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+
 component PipelineTab inherits Rectangle {
         in property <Pipeline> pipeline;
         in property <bool> active;
         callback selected;
+        callback double-clicked;
+        callback alt-clicked;
         callback toggled;
         callback more-clicked;
         callback move-up;
@@ -272,6 +364,16 @@ component PipelineTab inherits Rectangle {
             mouse-cursor: pointer;
             clicked => {
                 root.selected();
+            }
+            double-clicked => {
+                root.double-clicked();
+            }
+            // `clicked` carries no modifier keys - Alt+click is caught on
+            // the press itself.
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left && e.modifiers.alt) {
+                    root.alt-clicked();
+                }
             }
         }
 
@@ -1031,7 +1133,8 @@ component SpinnerInput inherits HorizontalLayout {
 component LeafParamRow inherits VerticalLayout {
         in property <LeafParam> p;
         callback changed(string);
-        property <string> browsed-path: "";
+        // This row's pending file-browser request (see `browse-file`).
+        property <int> browse-token: -1;
 
         spacing: 4px;
 
@@ -1103,6 +1206,16 @@ component LeafParamRow inherits VerticalLayout {
         }
 
         if p.param-type == ParamType.file-path: HorizontalLayout {
+            // Applies this row's file-browser result once it arrives.
+            property <int> result-token: PipelinesPanelState.browse-result-token;
+            changed result-token => {
+                if (self.result-token == root.browse-token && root.browse-token >= 0) {
+                    root.browse-token = -1;
+                    leaf-fp-input.text = PipelinesPanelState.browse-result-path;
+                    root.changed(PipelinesPanelState.browse-result-path);
+                }
+            }
+
             spacing: 4px;
             leaf-fp-input := LineEdit {
                 height: 24px;
@@ -1131,13 +1244,12 @@ component LeafParamRow inherits VerticalLayout {
                 leaf-browse-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
-                        root.browsed-path = PipelinesPanelState.browse-file(
+                        PipelinesPanelState.browse-token-counter += 1;
+                        root.browse-token = PipelinesPanelState.browse-token-counter;
+                        PipelinesPanelState.browse-file(
                         p.options.length > 0 ? p.options[0] : "",
-                        leaf-fp-input.text);
-                        if (root.browsed-path != "") {
-                            leaf-fp-input.text = root.browsed-path;
-                            root.changed(root.browsed-path);
-                        }
+                        leaf-fp-input.text,
+                        root.browse-token);
                     }
                 }
             }
@@ -1249,6 +1361,25 @@ component LeafParamRow inherits VerticalLayout {
                 root.changed(v);
             }
         }
+
+        if p.param-type == ParamType.image-address:
+    ImageAddressPicker {
+            kind: p.options[0];
+            number: p.options[1].to-float();
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.image-channel:
+    ChannelPicker {
+            height: 24px;
+            font-size: 11px;
+            value: p.value.to-float();
+            changed(v) => {
+                root.changed(v);
+            }
+        }
     }
 
 // ----------------------------------------------------------
@@ -1261,7 +1392,10 @@ component ParamRow inherits VerticalLayout {
         callback add-item();
         callback remove-item(int);
         callback show-model-info();
-        property <string> browsed-path: "";
+        // This row's pending file-browser request (see `browse-file`).
+        property <int> browse-token: -1;
+        // This row's pending script-editor request (see `ScriptEditorState`).
+        property <int> script-token: -1;
 
         spacing: 4px;
 
@@ -1322,6 +1456,63 @@ component ParamRow inherits VerticalLayout {
             }
         }
 
+        // Script: read-only preview, click opens the script editor.
+        if p.param-type == ParamType.script: Rectangle {
+            property <int> result-token: ScriptEditorState.result-token;
+            changed result-token => {
+                if (self.result-token == root.script-token && root.script-token >= 0) {
+                    root.script-token = -1;
+                    root.changed(ScriptEditorState.result-text);
+                }
+            }
+
+            height: 84px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: script-ta.has-hover ? Theme.accent.with-alpha(0.6) : Theme.border;
+            background: Theme.bg;
+            clip: true;
+
+            Text {
+                x: 6px;
+                y: 4px;
+                width: parent.width - 12px;
+                height: parent.height - 8px;
+                text: p.value;
+                font-family: ScriptFont.family;
+                font-size: 10px;
+                color: Theme.text-dim;
+                wrap: no-wrap;
+                overflow: clip;
+                vertical-alignment: top;
+            }
+
+            Rectangle {
+                x: parent.width - self.width - 4px;
+                y: parent.height - self.height - 4px;
+                width: edit-label.preferred-width + 12px;
+                height: 18px;
+                border-radius: 3px;
+                background: script-ta.has-hover ? Theme.accent : Theme.raised;
+                edit-label := Text {
+                    text: "Edit script";
+                    font-size: 10px;
+                    color: script-ta.has-hover ? #FFFFFF : Theme.text-dim;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            script-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    ScriptEditorState.token-counter += 1;
+                    root.script-token = ScriptEditorState.token-counter;
+                    ScriptEditorState.open(p.display-name, p.value, root.script-token);
+                }
+            }
+        }
+
         if p.param-type == ParamType.number || p.param-type == ParamType.text:
     LineEdit {
             height: 26px;
@@ -1333,6 +1524,16 @@ component ParamRow inherits VerticalLayout {
         }
 
         if p.param-type == ParamType.file-path: HorizontalLayout {
+            // Applies this row's file-browser result once it arrives.
+            property <int> result-token: PipelinesPanelState.browse-result-token;
+            changed result-token => {
+                if (self.result-token == root.browse-token && root.browse-token >= 0) {
+                    root.browse-token = -1;
+                    fp-input.text = PipelinesPanelState.browse-result-path;
+                    root.changed(PipelinesPanelState.browse-result-path);
+                }
+            }
+
             spacing: 4px;
             fp-input := LineEdit {
                 height: 26px;
@@ -1361,13 +1562,12 @@ component ParamRow inherits VerticalLayout {
                 browse-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
-                        root.browsed-path = PipelinesPanelState.browse-file(
+                        PipelinesPanelState.browse-token-counter += 1;
+                        root.browse-token = PipelinesPanelState.browse-token-counter;
+                        PipelinesPanelState.browse-file(
                         p.options.length > 0 ? p.options[0] : "",
-                        fp-input.text);
-                        if (root.browsed-path != "") {
-                            fp-input.text = root.browsed-path;
-                            root.changed(root.browsed-path);
-                        }
+                        fp-input.text,
+                        root.browse-token);
                     }
                 }
             }
@@ -1500,6 +1700,25 @@ component ParamRow inherits VerticalLayout {
             model: p.options;
             current-value: p.value;
             selected(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.image-address:
+    ImageAddressPicker {
+            kind: p.options[0];
+            number: p.options[1].to-float();
+            changed(v) => {
+                root.changed(v);
+            }
+        }
+
+        if p.param-type == ParamType.image-channel:
+    ChannelPicker {
+            height: 24px;
+            font-size: 11px;
+            value: p.value.to-float();
+            changed(v) => {
                 root.changed(v);
             }
         }
@@ -1780,6 +1999,38 @@ component StepRow inherits Rectangle {
                         }
                     }
 
+                    if step.advanced-count > 0: AdvancedRow {
+                        count: step.advanced-count;
+                        changed-count: step.advanced-changed;
+                        expanded: step.show-advanced || PipelinesPanelState.always-show-advanced;
+                        always: PipelinesPanelState.always-show-advanced;
+                        toggled => {
+                            PipelinesPanelState.toggle-advanced(step.id);
+                        }
+                        always-toggled(on) => {
+                            PipelinesPanelState.always-show-advanced-toggled(on);
+                        }
+                    }
+
+                    for p in step.advanced-parameters: ParamRow {
+                        p: p;
+                        changed(v) => {
+                            root.param-changed(p.name, v);
+                        }
+                        item-field-changed(item_idx, field_name, v) => {
+                            root.param-changed("\{p.name}.\{item_idx}.\{field_name}", v);
+                        }
+                        add-item => {
+                            PipelinesPanelState.add-group-item(step.id, p.name);
+                        }
+                        remove-item(idx) => {
+                            PipelinesPanelState.remove-group-item(step.id, p.name, idx);
+                        }
+                        show-model-info => {
+                            PipelinesPanelState.show-model-info(step.id);
+                        }
+                    }
+
                     HorizontalLayout {
                         spacing: 6px;
                         padding-top: 2px;
@@ -2038,6 +2289,11 @@ export global PipelinesPanelState {
         callback insert-step(int, int);          // pipeline-id, after-idx
     callback param-changed(int, string, string);
         callback add-group-item(int, string);    // step-id, param-name
+        // Expands/collapses a step's advanced settings (step-id).
+        callback toggle-advanced(int);
+        // "Always show advanced settings" (user preference, every step).
+        in-out property <bool> always-show-advanced: false;
+        callback always-show-advanced-toggled(bool);
     callback remove-group-item(int, string, int); // step-id, param-name, item-idx
     callback show-model-info(int); // step-id
 
@@ -2046,10 +2302,16 @@ export global PipelinesPanelState {
         callback auto-preview(bool);
         callback save-as-template();
 
-        // Opens a native "open file" dialog filtered to the given comma-separated
-    // extensions (empty = any file), starting from current-path's directory.
-    // Returns the picked path, or "" if the dialog was cancelled.
-    callback browse-file(string, string) -> string;
+    // Opens the file browser for a file-path parameter, filtered to the given
+    // comma-separated extensions (empty = any file), starting from the
+    // current path's folder. The chosen path comes back asynchronously: Rust
+    // sets `browse-result-path`, then `browse-result-token` to the token the
+    // row passed, and the row with that token applies it (see
+    // `LeafParamRow`/`ParamRow`).
+    callback browse-file(string, string, int);
+    in-out property <int> browse-token-counter: 0;
+    in-out property <int> browse-result-token: -1;
+    in-out property <string> browse-result-path;
     }
 
 
@@ -2103,6 +2365,13 @@ export component PipelinesPanel inherits Rectangle {
                     // inside it gets its own centering VerticalLayout below,
                     // matching the "Duplicate"/"Remove" buttons further down
                     // in this file.
+                    HorizontalLayout {
+                    spacing: 6px;
+                    alignment: end;
+                    VerticalLayout {
+                        alignment: center;
+                        FocusModeButton { }
+                    }
                     VerticalLayout {
                         alignment: center;
                         Rectangle {
@@ -2145,6 +2414,7 @@ export component PipelinesPanel inherits Rectangle {
                             }
                         }
                     }
+                    }
                 }
             }
 
@@ -2173,6 +2443,15 @@ export component PipelinesPanel inherits Rectangle {
                                 selected => {
                                     PipelinesPanelState.active-pipeline-id = p.id;
                                     PipelinesPanelState.select-pipeline(p.id);
+                                    PipelineFocusState.pipeline-selected(p.id);
+                                }
+                                // Double-click edits the pipeline (same dialog as
+                                // the "..." button), Alt+click focuses it.
+                                double-clicked => {
+                                    PipelinesPanelState.pipeline-more(p.id);
+                                }
+                                alt-clicked => {
+                                    PipelineFocusState.toggle-pipeline-focus(p.id);
                                 }
                                 toggled => {
                                     PipelinesPanelState.toggle-pipeline(p.id);

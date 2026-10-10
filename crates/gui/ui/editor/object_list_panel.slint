@@ -8,6 +8,7 @@ import {
 import { Theme } from "../style.slint";
 import { GlobalAppState } from "../state.slint";
 import { DialogType, ChannelState } from "../state.slint";
+import { AppButton } from "../components/app_button.slint";
 
 export struct ObjectItemDataSlint {
     id: int,
@@ -32,56 +33,8 @@ export struct ObjectItemDataSlint {
 export global ObjectListState {
     in-out property <bool> is_scanning: false;
     in-out property <int> scroll_to_object_index: -1;
-    in property <[ObjectItemDataSlint]> object_list: [
-        {
-            id: 1,
-            name: "Annotation",
-            display_color: #ff0000,
-            display_name: "object_1",
-            class_names: ["Nucleus"],
-            class_colors: [#0066ff],
-            class_ids: [0],
-            label_name: "Nucleus",
-            label_id: 0,
-            area: 1234,
-            intensities: ["128.4", "64.0"],
-            intensity_avgs: ["12.8", "6.4"],
-            circularity: "0.92",
-            label_count: 1,
-        },
-        {
-            id: 2,
-            name: "Annotation",
-            display_color: #00ff00,
-            display_name: "object_2",
-            class_names: ["Cytoplasm", "Membrane", "Artifact", "Background"],
-            class_colors: [#ff6600, #ffff00, #00ffff, #cccccc],
-            class_ids: [1, 2, 3, 4],
-            label_name: "Multi-class",
-            label_id: 1,
-            area: 5678,
-            intensities: ["64.2", "32.1"],
-            intensity_avgs: ["6.4", "3.2"],
-            circularity: "0.71",
-            label_count: 2,
-        },
-        {
-            id: 3,
-            name: "Annotation",
-            display_color: #ff0000,
-            display_name: "object_3",
-            class_names: [],
-            class_colors: [],
-            class_ids: [],
-            label_name: "Multi-class",
-            label_id: 1,
-            area: 0,
-            intensities: [],
-            intensity_avgs: [],
-            circularity: "",
-            label_count: 2,
-        }
-    ];
+    // Filled by Rust from the open image's objects.
+    in property <[ObjectItemDataSlint]> object_list: [];
 
     in-out property <ObjectItemDataSlint> selected_object;
 
@@ -89,7 +42,11 @@ export global ObjectListState {
     callback object_copy(int);
     callback object_edit(int);
     callback object_delete(int);
-    callback object_add_class(int);
+    callback object_delete_all_manual_annotated();
+    // Params: Adds the given class to the selected object (params are: object id, class id)
+    callback object_add_class(int, int);
+     // Params: Replaces all classed of the selected object by the given class (params are: object id, class id)
+    callback object_replace_class(int, int);
     callback object_remove_class(int, int);
 }
 
@@ -98,6 +55,7 @@ export global ObjectListState {
 component ActionButton inherits Rectangle {
     in property <image> icon;
     in property <bool> enabled: true;
+    in property <color> colorize: Theme.text;
     callback clicked;
 
     width: 28px;
@@ -111,7 +69,7 @@ component ActionButton inherits Rectangle {
         source: root.icon;
         width: 13px;
         height: 13px;
-        colorize: ta.has-hover && root.enabled ? Theme.text : Theme.text-dim;
+        colorize: ta.has-hover && root.enabled ? root.colorize : Theme.text-dim;
         animate colorize { duration: 100ms; }
     }
 
@@ -256,9 +214,9 @@ export component ObjectListPanel inherits Rectangle {
             property <int> scroll_index: ObjectListState.scroll_to_object_index;
             changed scroll_index => {
                 if (ObjectListState.scroll_to_object_index >= 0) {
-                    object_listview.viewport-y = Math.clamp(
+                    object_listview.content-y = Math.clamp(
                         -(ObjectListState.scroll_to_object_index * 32px) + object_listview.height / 2 - 16px,
-                        object_listview.height - object_listview.viewport-height,
+                        object_listview.height - object_listview.content-height,
                         0px);
                 }
             }
@@ -313,6 +271,7 @@ export component ObjectListPanel inherits Rectangle {
             border-radius: Theme.radius-md;
             border-width: 1px;
             border-color: Theme.border-soft;
+            max-height: 300px;
 
             VerticalLayout {
                 padding: 8px;
@@ -625,17 +584,6 @@ export component ObjectListPanel inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     ActionButton {
-                        icon: @image-url("../icons/regular-white/copy-simple.svg");
-                        enabled: ObjectListState.selected_object.id != 0;
-                        clicked => {
-                            ObjectListState.object_copy(ObjectListState.selected_object.id);
-                        }
-                    }
-                }
-
-                VerticalLayout {
-                    alignment: center;
-                    ActionButton {
                         icon: @image-url("../icons/regular-white/trash-simple.svg");
                         enabled: ObjectListState.selected_object.id != 0;
                         clicked => {
@@ -647,15 +595,40 @@ export component ObjectListPanel inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     ActionButton {
+                        icon: @image-url("../icons/regular-red/backspace.svg");
+                        colorize: Theme.err;
+                        clicked => {
+                            GlobalAppState.active_dialog = DialogType.object_confirm_delete_manual_annotated;
+                        }
+                    }
+                }
+
+                /*   VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        icon: @image-url("../icons/regular-white/copy-simple.svg");
+                        enabled: ObjectListState.selected_object.id != 0;
+                        clicked => {
+                            ObjectListState.object_copy(ObjectListState.selected_object.id);
+                        }
+                    }
+                }
+                    */
+
+                /*
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
                         icon: @image-url("../icons/regular-white/pencil-simple.svg");
                         enabled: ObjectListState.selected_object.id != 0;
                         clicked => {
                             ObjectListState.object_edit(ObjectListState.selected_object.id);
                         }
                     }
-                }
+                        
+            }*/
 
-                // Divider
+            // Divider
                 VerticalLayout {
                     alignment: center;
                     padding-left: 4px;
@@ -675,11 +648,11 @@ export component ObjectListPanel inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     Button {
-                        text: "+ Class";
+                        text: "Set class";
                         primary: true;
                         enabled: ObjectListState.selected_object.id != 0;
                         clicked => {
-                            ObjectListState.object_add_class(ObjectListState.selected_object.id);
+                            GlobalAppState.active-dialog = DialogType.classification_selection_dialog;
                         }
                     }
                 }

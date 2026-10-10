@@ -87,6 +87,11 @@
                 },
                 "feature_spec": {
                   "$ref": "#/$defs/AiLearningPixelFeatureSettings"
+                },
+                "input_color": {
+                  "description": "Set by training from the training images; never configured by\nthe user.",
+                  "$ref": "#/$defs/PixelInputColor",
+                  "default": "GRAY"
                 }
               },
               "required": [
@@ -160,6 +165,23 @@
       },
       "required": [
         "channels"
+      ]
+    },
+    "AuthorInformation": {
+      "type": "object",
+      "properties": {
+        "fullName": {
+          "description": "Full name of the author",
+          "type": "string"
+        },
+        "organization": {
+          "description": "Author organization",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fullName",
+        "organization"
       ]
     },
     "EdgeDetectionSobelSettings": {
@@ -421,16 +443,12 @@
           "type": "string",
           "default": ""
         },
-        "authorOrganization": {
-          "description": "Author organization",
-          "type": "string"
-        },
         "authors": {
           "description": "Every author, in display order (the first entry is treated as the\nprimary author in template/pipeline picker dialogs, the rest as\nco-authors). Free-form display strings, not split into first/last.",
           "type": "array",
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/AuthorInformation"
           }
         },
         "category": {
@@ -468,7 +486,6 @@
         "name",
         "shortDescription",
         "description",
-        "authorOrganization",
         "creationTime"
       ]
     },
@@ -665,6 +682,14 @@
       "required": [
         "class",
         "name"
+      ]
+    },
+    "PixelInputColor": {
+      "description": "Which kind of image a pixel classifier was trained on, and therefore\nthe only kind it can be applied to: a greyscale model expects one value\nper feature recipe entry, a colour model three (R, G, B - see\n`compute_pixel_features`), so the feature vectors aren't interchangeable.\n\nSERIALIZATION-CRITICAL: part of the saved model artifact. Model files\nwritten before this existed carry no value and load as `Gray`, which is\nall training supported back then.",
+      "type": "string",
+      "enum": [
+        "GRAY",
+        "RGB"
       ]
     },
     "PreprocessingSteps": {

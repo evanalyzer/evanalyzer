@@ -12,6 +12,7 @@ import {
 import { PipelinesPanelState } from "editor/pipelines_panel.slint";
 import { ObjectListState } from "editor/object_list_panel.slint";
 import { AiLearningState } from "dialogs/ai_learning_dialog.slint";
+import { ClassificationState } from "editor/classification_panel.slint";
 
 // Define the enum
 
@@ -25,6 +26,8 @@ export global ToolbarState {
     callback save_file_clicked();
     callback save_as_file_clicked();
     callback save_project_as_template_clicked();
+    callback connect_clicked();
+    callback disconnect_clicked();
     callback open_website();
     callback undo_clicked();
     callback redo_clicked();
@@ -152,6 +155,7 @@ export component Toolbar inherits Rectangle {
         ToolToggleButton {
             icon: @image-url("icons/regular-red/rectangle.svg");
             checked: ViewportObjectState.act_tool_state == ToolState.PaintRectangle;
+            enabled: ClassificationState.selected_class_id >= 0;
             clicked => {
                 ViewportObjectState.act_tool_state = ToolState.PaintRectangle;
             }
@@ -160,6 +164,7 @@ export component Toolbar inherits Rectangle {
         ToolToggleButton {
             icon: @image-url("icons/regular-red/circle.svg");
             checked: ViewportObjectState.act_tool_state == ToolState.PaintOval;
+            enabled: ClassificationState.selected_class_id >= 0;
             clicked => {
                 ViewportObjectState.act_tool_state = ToolState.PaintOval;
             }
@@ -168,6 +173,7 @@ export component Toolbar inherits Rectangle {
         ToolToggleButton {
             icon: @image-url("icons/regular-red/polygon.svg");
             checked: ViewportObjectState.act_tool_state == ToolState.PaintPolygon;
+            enabled: ClassificationState.selected_class_id >= 0;
             clicked => {
                 ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
             }
@@ -195,6 +201,15 @@ export component Toolbar inherits Rectangle {
             horizontal-stretch: 1;
         }
 
+        Rectangle {
+            Text {
+                text: "Opacity:";
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                font-size: 14px;
+            }
+        }
+
         Slider {
             width: 150px;
             minimum: 0.0;
@@ -206,10 +221,25 @@ export component Toolbar inherits Rectangle {
             }
         }
 
-        Text {
-            text: "Zoom: \{round(ViewportState.zoom_factor * 100)}%";
-            vertical-alignment: center;
-            font-size: 14px;
+        Rectangle {
+            Text {
+                text: "\{round(ViewportObjectState.object_transparency * 100)}%";
+                vertical-alignment: center;
+                horizontal-alignment: left;
+                font-size: 14px;
+            }
+        }
+
+        VerticalDivider { }
+
+        Rectangle {
+            width: 100px;
+            Text {
+                text: "Zoom: \{round(ViewportState.zoom_factor * 100)}%";
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                font-size: 14px;
+            }
         }
 
         VerticalDivider { }

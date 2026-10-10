@@ -17,7 +17,6 @@ use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_imgproc::filter::gaussian_blur;
 use kornia_imgproc::filter::spatial_gradient_float;
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::prelude::*;
@@ -77,6 +76,7 @@ pub struct StructureTensor {
     /// The standard deviation for the Gaussian weighting of the integration window.
     ///
     /// Controls the spatial "reach" of the neighborhood analysis.
+    #[cmdsmeta(visibility = Advanced)]
     pub sigma: f32,
 }
 impl ImageAlgorithm for StructureTensor {
@@ -125,42 +125,22 @@ impl ImageAlgorithm for StructureTensor {
         }
 
         // Compute gradients
-        let mut gx = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![0.0; size.width * size.height],
-            CpuAllocator,
-        )
-        .map_err(InternalErrors::from_kornia)?;
+        let mut gx = Image::<f32, 1>::new(size, vec![0.0; size.width * size.height])
+            .map_err(InternalErrors::from_kornia)?;
 
-        let mut gy = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![0.0; size.width * size.height],
-            CpuAllocator,
-        )
-        .map_err(InternalErrors::from_kornia)?;
+        let mut gy = Image::<f32, 1>::new(size, vec![0.0; size.width * size.height])
+            .map_err(InternalErrors::from_kornia)?;
         spatial_gradient_float(&input, &mut gx, &mut gy).map_err(InternalErrors::from_kornia)?;
 
         // Structure tensor components
         // Pre-allocate the images directly (no intermediate temp vectors)
         let size = gx.size();
-        let mut jxx = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![0.0; size.width * size.height],
-            CpuAllocator,
-        )
-        .map_err(InternalErrors::from_kornia)?;
-        let mut jyy = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![0.0; size.width * size.height],
-            CpuAllocator,
-        )
-        .map_err(InternalErrors::from_kornia)?;
-        let mut jxy = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![0.0; size.width * size.height],
-            CpuAllocator,
-        )
-        .map_err(InternalErrors::from_kornia)?;
+        let mut jxx = Image::<f32, 1>::new(size, vec![0.0; size.width * size.height])
+            .map_err(InternalErrors::from_kornia)?;
+        let mut jyy = Image::<f32, 1>::new(size, vec![0.0; size.width * size.height])
+            .map_err(InternalErrors::from_kornia)?;
+        let mut jxy = Image::<f32, 1>::new(size, vec![0.0; size.width * size.height])
+            .map_err(InternalErrors::from_kornia)?;
 
         // Use Rayon to compute all three components in parallel across all CPU cores
         // This is cache-friendly because dx/dy are read once and stay in L1/L2 cache
@@ -245,8 +225,8 @@ impl ImageAlgorithm for StructureTensor {
         "Structure Tensor"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "bigun1987orientation",
             title: "Optimal Orientation Detection of Linear Symmetry",
             authors: &["Josef Bigün", "Gösta H. Granlund"],
@@ -257,7 +237,7 @@ impl ImageAlgorithm for StructureTensor {
             doi: None,
             url: None,
             pages: None,
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -271,7 +251,6 @@ impl ImageAlgorithm for StructureTensor {
 mod tests {
     use super::*;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     #[test]
     fn test_structure_tensor_edge_detection() -> Result<(), Box<dyn std::error::Error>> {
@@ -288,7 +267,7 @@ mod tests {
             }
         }
 
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, data)?;
         // 2. Setup Context
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
 
@@ -336,8 +315,7 @@ mod tests {
             width: 0,
             height: 5,
         };
-        let input_img =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![], CpuAllocator).expect("image");
+        let input_img = Image::<f32, 1>::new(size, vec![]).expect("image");
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
         let mut cache = GlobalPipelineCache::default();
 
@@ -369,7 +347,7 @@ mod tests {
                 data[y * 10 + x] = 1.0;
             }
         }
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap();
+        let input_img = Image::<f32, 1>::new(size, data).unwrap();
         PipelineContext::new_from_image_test(input_img).unwrap()
     }
 
@@ -438,13 +416,12 @@ mod tests {
 
     #[test]
     fn execute_returns_format_mismatch_for_an_unsupported_image_type() {
-        let img = Image::<u32, 1, CpuAllocator>::from_size_val(
+        let img = Image::<u32, 1>::from_size_val(
             ImageSize {
                 width: 5,
                 height: 5,
             },
             0,
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();

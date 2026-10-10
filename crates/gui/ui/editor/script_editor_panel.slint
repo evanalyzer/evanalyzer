@@ -1,0 +1,479 @@
+// Script editor for `ParamType.script` step settings (Rhai scripts).
+//
+// Syntax highlighting: Slint's `TextInput` draws its text in one color, so
+// the editable text is drawn in the default color and one `Text` layer per
+// token kind is drawn on top of it. Each layer holds the whole script with
+// every character that is not of its kind replaced by a space (newlines and
+// tabs kept), so with a monospace font every layer lines up exactly with the
+// `TextInput` underneath. The layers come from Rust (`highlight`), as do
+// formatting, syntax check and the Tab/Enter/"}" editing helpers.
+
+import { LineEdit, ListView } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+// Embedded so the editor is monospace on every system - the highlight layers
+// only line up with the text when every character has the same width.
+import "../fonts/DejaVuSansMono.ttf";
+import { AppButton } from "../components/app_button.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+
+export struct ScriptHighlight {
+    keywords: string,
+    functions: string,
+    strings: string,
+    numbers: string,
+    comments: string,
+    line-numbers: string,
+}
+
+// Text plus the cursor (UTF-8 byte offset) after an editing helper ran.
+export struct ScriptEdit {
+    text: string,
+    cursor: int,
+}
+
+// A command a script can `run`, for the command list.
+export struct ScriptCommandDoc {
+    key: string,
+    name: string,
+    // Summary plus one line per parameter.
+    doc: string,
+}
+
+export struct ScriptDiagnostic {
+    ok: bool,
+    // 1-based; 0 when the error has no position.
+    line: int,
+    message: string,
+}
+
+// Font of the code editor and the step's script preview (see the import above).
+export global ScriptFont {
+    out property <string> family: "DejaVu Sans Mono";
+}
+
+export global ScriptEditorState {
+    in-out property <string> title: "Script";
+    // The script the dialog opens with.
+    in-out property <string> source;
+
+    // A row opens the editor with a fresh token (`token-counter + 1`); on
+    // Apply the text goes to `result-text` and `result-token` is set to that
+    // token, so only the row that asked applies it (like `browse-file`).
+    in-out property <int> token-counter: 0;
+    in-out property <int> request-token: -1;
+    in-out property <int> result-token: -1;
+    in-out property <string> result-text;
+
+    pure callback highlight(string) -> ScriptHighlight;
+    pure callback check(string) -> ScriptDiagnostic;
+    pure callback format(string) -> string;
+    // Tab: indent to the next multiple of four columns.
+    pure callback indent(string, int) -> ScriptEdit;
+    // Enter: new line keeping the indentation, one level deeper after an
+    // opening bracket.
+    pure callback newline(string, int) -> ScriptEdit;
+    // "}" / ")" / "]" typed on a blank line: dedent one level first.
+    pure callback close-bracket(string, int, string) -> ScriptEdit;
+    // Commands matching the search text (name or key).
+    pure callback filter-commands(string) -> [ScriptCommandDoc];
+    // Inserts `run("key", #{ defaults })` at the cursor.
+    pure callback insert-command(string, int, string) -> ScriptEdit;
+
+    public function open(title: string, text: string, token: int) {
+        self.title = title;
+        self.source = text;
+        self.request-token = token;
+        GlobalAppState.active_dialog = DialogType.script-editor;
+    }
+
+    public function apply(text: string) {
+        self.result-text = text;
+        self.result-token = self.request-token;
+        GlobalAppState.active_dialog = DialogType.none;
+    }
+
+    public function cancel() {
+        GlobalAppState.active_dialog = DialogType.none;
+    }
+}
+
+component HighlightLayer inherits Text {
+    font-family: ScriptFont.family;
+    wrap: no-wrap;
+    overflow: clip;
+    horizontal-alignment: left;
+    vertical-alignment: top;
+}
+
+export component ScriptEditorPanel inherits Rectangle {
+    // Syntax colors, readable on both themes.
+    property <color> c-keyword: Theme.dark-mode ? #C586C0 : #AF00DB;
+    property <color> c-function: Theme.dark-mode ? #DCDCAA : #795E26;
+    property <color> c-string: Theme.dark-mode ? #CE9178 : #A31515;
+    property <color> c-number: Theme.dark-mode ? #B5CEA8 : #098658;
+    property <color> c-comment: Theme.dark-mode ? #6A9955 : #008000;
+    property <length> code-font-size: 13px;
+    property <length> pad: 6px;
+    // Distance the cursor keeps from the visible edge while scrolling.
+    property <length> margin: 2 * root.code-font-size;
+
+    property <ScriptHighlight> hl: ScriptEditorState.highlight(editor.text);
+    property <ScriptDiagnostic> diag: ScriptEditorState.check(editor.text);
+    property <[ScriptCommandDoc]> commands: ScriptEditorState.filter-commands(search.text);
+    property <string> selected-key;
+    property <string> selected-doc;
+
+    function insert-command(key: string) {
+        root.set-edit(ScriptEditorState.insert-command(editor.text, editor.cursor-position-byte-offset, key));
+        editor.focus();
+    }
+
+    function set-edit(edit: ScriptEdit) {
+        editor.text = edit.text;
+        editor.set-selection-offsets(edit.cursor, edit.cursor);
+    }
+
+    function format-script() {
+        editor.text = ScriptEditorState.format(editor.text);
+        editor.set-selection-offsets(0, 0);
+    }
+
+    background: Theme.modal-overlay;
+
+    // Block clicks to the app. Deliberately no cancel-on-click-outside: a
+    // stray click must not throw away an edited script.
+    TouchArea { }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(parent.width - 48px, 1100px);
+        height: min(parent.height - 48px, 800px);
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+
+            // -- Title + toolbar --
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: ScriptEditorState.title;
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: "Tab indent · Ctrl+Shift+F format · Rhai";
+                    font-size: 11px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+
+                AppButton {
+                    text: "Format";
+                    clicked => {
+                        root.format-script();
+                    }
+                }
+            }
+
+            HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 12px;
+
+            // -- Code area --
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Theme.bg;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: editor.has-focus ? Theme.accent.with-alpha(0.6) : Theme.border;
+                clip: true;
+
+                HorizontalLayout {
+                    padding: 1px;
+
+                    // Line numbers, scrolled along with the code.
+                    Rectangle {
+                        width: 44px;
+                        background: Theme.raised;
+                        clip: true;
+                        Text {
+                            x: 0px;
+                            y: flick.content-y + root.pad;
+                            width: parent.width - 8px;
+                            text: root.hl.line-numbers;
+                            font-family: ScriptFont.family;
+                            font-size: root.code-font-size;
+                            color: Theme.text-faint;
+                            horizontal-alignment: right;
+                            vertical-alignment: top;
+                            wrap: no-wrap;
+                        }
+                    }
+
+                    flick := Flickable {
+                        content-width: max(self.width, editor.preferred-width + 2 * root.pad + 40px);
+                        content-height: max(self.height, editor.preferred-height + 2 * root.pad + 40px);
+
+                        // Clicking below the last line still focuses the editor.
+                        TouchArea {
+                            mouse-cursor: text;
+                            clicked => {
+                                editor.focus();
+                            }
+                        }
+
+                        editor := TextInput {
+                            x: root.pad;
+                            y: root.pad;
+                            width: flick.content-width - 2 * root.pad;
+                            height: flick.content-height - 2 * root.pad;
+                            text: ScriptEditorState.source;
+                            single-line: false;
+                            wrap: no-wrap;
+                            font-family: ScriptFont.family;
+                            font-size: root.code-font-size;
+                            color: Theme.text;
+                            selection-background-color: Theme.accent.with-alpha(0.35);
+                            selection-foreground-color: Theme.text;
+                            init => {
+                                self.focus();
+                            }
+
+                            // Keep the cursor in view.
+                            cursor-position-changed(pos) => {
+                                if (pos.x + flick.content-x + self.x < root.margin) {
+                                    flick.content-x = min(0px, -(pos.x + self.x - root.margin));
+                                } else if (pos.x + flick.content-x + self.x > flick.width - root.margin) {
+                                    flick.content-x = max(flick.width - flick.content-width, -(pos.x + self.x + root.margin - flick.width));
+                                }
+                                if (pos.y + flick.content-y + self.y < root.margin) {
+                                    flick.content-y = min(0px, -(pos.y + self.y - root.margin));
+                                } else if (pos.y + flick.content-y + self.y > flick.height - root.margin) {
+                                    flick.content-y = max(flick.height - flick.content-height, -(pos.y + self.y + root.margin - flick.height));
+                                }
+                            }
+
+                            key-pressed(e) => {
+                                if (e.modifiers.control && e.modifiers.shift && (e.text == "f" || e.text == "F")) {
+                                    root.format-script();
+                                    return accept;
+                                }
+                                if (e.modifiers.control || e.modifiers.alt || e.modifiers.meta) {
+                                    return reject;
+                                }
+                                // Tab with a selection is left to Slint (no block indent yet).
+                                if (e.text == Key.Tab && !e.modifiers.shift
+                                    && self.cursor-position-byte-offset == self.anchor-position-byte-offset) {
+                                    root.set-edit(ScriptEditorState.indent(self.text, self.cursor-position-byte-offset));
+                                    return accept;
+                                }
+                                if (e.text == Key.Return && !e.modifiers.shift
+                                    && self.cursor-position-byte-offset == self.anchor-position-byte-offset) {
+                                    root.set-edit(ScriptEditorState.newline(self.text, self.cursor-position-byte-offset));
+                                    return accept;
+                                }
+                                if ((e.text == "}" || e.text == ")" || e.text == "]")
+                                    && self.cursor-position-byte-offset == self.anchor-position-byte-offset) {
+                                    root.set-edit(ScriptEditorState.close-bracket(self.text, self.cursor-position-byte-offset, e.text));
+                                    return accept;
+                                }
+                                reject
+                            }
+                        }
+
+                        // Highlight layers, drawn over the editor's own text.
+                        HighlightLayer {
+                            x: editor.x;
+                            y: editor.y;
+                            width: editor.width;
+                            height: editor.height;
+                            font-size: root.code-font-size;
+                            text: root.hl.comments;
+                            color: root.c-comment;
+                        }
+
+                        HighlightLayer {
+                            x: editor.x;
+                            y: editor.y;
+                            width: editor.width;
+                            height: editor.height;
+                            font-size: root.code-font-size;
+                            text: root.hl.strings;
+                            color: root.c-string;
+                        }
+
+                        HighlightLayer {
+                            x: editor.x;
+                            y: editor.y;
+                            width: editor.width;
+                            height: editor.height;
+                            font-size: root.code-font-size;
+                            text: root.hl.numbers;
+                            color: root.c-number;
+                        }
+
+                        HighlightLayer {
+                            x: editor.x;
+                            y: editor.y;
+                            width: editor.width;
+                            height: editor.height;
+                            font-size: root.code-font-size;
+                            text: root.hl.keywords;
+                            color: root.c-keyword;
+                        }
+
+                        HighlightLayer {
+                            x: editor.x;
+                            y: editor.y;
+                            width: editor.width;
+                            height: editor.height;
+                            font-size: root.code-font-size;
+                            text: root.hl.functions;
+                            color: root.c-function;
+                        }
+                    }
+                }
+            }
+
+            // -- Command reference --
+            VerticalLayout {
+                width: 280px;
+                spacing: 6px;
+
+                search := LineEdit {
+                    placeholder-text: "Search commands";
+                    font-size: 11px;
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    clip: true;
+
+                    ListView {
+                        for cmd in root.commands: Rectangle {
+                            height: 34px;
+                            background: cmd.key == root.selected-key ? Theme.accent.with-alpha(0.18) : (cmd-ta.has-hover ? Theme.raised : transparent);
+                            VerticalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                alignment: center;
+                                Text {
+                                    text: cmd.name;
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    overflow: elide;
+                                }
+
+                                Text {
+                                    text: cmd.key;
+                                    font-size: 10px;
+                                    font-family: ScriptFont.family;
+                                    color: Theme.text-mute;
+                                    overflow: elide;
+                                }
+                            }
+
+                            cmd-ta := TouchArea {
+                                clicked => {
+                                    root.selected-key = cmd.key;
+                                    root.selected-doc = cmd.doc;
+                                }
+                                double-clicked => {
+                                    root.insert-command(cmd.key);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 180px;
+                    border-radius: 6px;
+                    background: Theme.raised;
+                    clip: true;
+                    Flickable {
+                        content-height: max(self.height, doc-text.preferred-height + 16px);
+                        doc-text := Text {
+                            x: 8px;
+                            y: 8px;
+                            width: parent.width - 16px;
+                            text: root.selected-key == "" ? "Select a command to see its parameters. Double-click or Insert adds it at the cursor." : root.selected-doc;
+                            font-size: 10px;
+                            color: Theme.text-dim;
+                            wrap: word-wrap;
+                            vertical-alignment: top;
+                        }
+                    }
+                }
+
+                AppButton {
+                    text: "Insert at cursor";
+                    enabled: root.selected-key != "";
+                    clicked => {
+                        root.insert-command(root.selected-key);
+                    }
+                }
+            }
+            }
+
+            // -- Syntax check --
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.diag.ok ? "✓" : "✕";
+                    font-size: 12px;
+                    color: root.diag.ok ? Theme.ok : Theme.err;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.diag.ok ? "No syntax errors" : (root.diag.line > 0 ? "Line \{root.diag.line}: \{root.diag.message}" : root.diag.message);
+                    font-size: 11px;
+                    color: root.diag.ok ? Theme.text-dim : Theme.err;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+            }
+
+            // -- Footer --
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        ScriptEditorState.cancel();
+                    }
+                }
+
+                AppButton {
+                    text: "Apply";
+                    primary: true;
+                    clicked => {
+                        ScriptEditorState.apply(editor.text);
+                    }
+                }
+            }
+        }
+    }
+}

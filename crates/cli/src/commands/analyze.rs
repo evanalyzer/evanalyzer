@@ -1,18 +1,20 @@
 use crate::args::AnalyzeArgs;
-use evanalyzer_app::extensions::project_ext::{ProjectExt, load_project};
+use evanalyzer_app::analysis::AnalysisRequest;
+use evanalyzer_app::analysis::ProgressEvent;
+use evanalyzer_app::analysis::RunningJob;
+use evanalyzer_app::backends::Backend;
+use evanalyzer_app::project::{ProjectExt, load_project};
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_core::ProgressEvent;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::SystemTime;
 
-pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
-    let mut project = load_project(&args.project)?;
+pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
+    let mut project = load_project(backend.files(), &args.project)?;
 
     if let Some(images_dir) = &args.images {
         project.images.root = Some(images_dir.clone());
-        project.scan_image_folder_and_add();
+        project.scan_image_folder_and_add(backend);
     }
 
     let image_count = project.images.list.len();
@@ -33,47 +35,64 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
     println!("Images:    {image_count}");
     println!("Pipelines: {enabled_pipelines} enabled");
 
-    let job = evanalyzer_core::generate_analyze_job_from_project_settings(
-        project.settings.clone(),
-        project_dir,
-        args.job_name.clone(),
-    )?;
-    let output_path = job.output_path.clone();
-
-    // Caps parallelism to available RAM as well as CPU cores, so a low-memory
-    // machine doesn't try to run as many concurrent workers as it has cores.
-    // The per-worker estimate is sized to the images actually being
-    // analyzed, not a flat guess - see `estimate_ram_per_worker_bytes`.
-    let threads = args.threads.unwrap_or_else(|| {
-        evanalyzer_core::recommended_parallelism(job.estimate_ram_per_worker_bytes())
-    });
+    let start = SystemTime::now();
+    let job = backend.start_analysis(AnalysisRequest {
+        settings: project.settings.clone(),
+        project_path: project_dir,
+        job_name: args.job_name.clone(),
+        threads: args.threads,
+    })?;
+    let output_path = job.output_path().clone();
     println!("Output:    {}", output_path.display());
-    println!("Running with {threads} parallel thread(s) (Ctrl+C to cancel)...\n");
+    println!(
+        "Running with {} parallel thread(s) (Ctrl+C to cancel)...\n",
+        job.parallelism()
+    );
 
-    let start = Instant::now();
-    let (handle, rx, cancel) = job.run_async(threads);
+    follow(job, backend, image_count, start)
+}
 
+/// Prints `job`'s progress until it ends (Ctrl+C cancels it), then its
+/// summary - with the time since `started`. Shared with `attach`.
+pub(crate) fn follow(
+    job: RunningJob,
+    backend: &dyn Backend,
+    image_count: usize,
+    started: SystemTime,
+) -> Result<(), InternalErrors> {
+    let cancel = job.cancel_handle();
     if let Err(e) = ctrlc::set_handler(move || {
         eprintln!("\nCancelling... (waiting for in-flight images to finish)");
-        cancel.store(true, Ordering::SeqCst);
+        cancel.cancel();
     }) {
         eprintln!("Warning: could not install Ctrl+C handler: {e}");
     }
 
+    let output_path = job.output_path().clone();
+    let id = job.id().map(str::to_string);
     let mut failed = 0usize;
     let mut total = image_count;
-    for event in rx {
+    for event in job.events() {
         apply_progress_event(event, &mut total, &mut failed);
     }
-
-    let result = handle
-        .join()
-        .map_err(|_| InternalErrors::Internal("Pipeline worker thread panicked".into()))?;
-    result?;
+    match job.wait() {
+        Ok(_) => {}
+        // A server's analysis goes on without us.
+        Err(e) if !backend.is_connected() => {
+            return Err(match id {
+                Some(id) => InternalErrors::Io(format!(
+                    "Lost the connection to the server - the analysis keeps running there. \
+                     Follow it again with `cli attach --job {id}` (same --remote and --user)."
+                )),
+                None => e,
+            });
+        }
+        Err(e) => return Err(e),
+    }
 
     println!(
         "Done: {total} image(s) analyzed in {:.1?} ({failed} failed)",
-        start.elapsed()
+        started.elapsed().unwrap_or_default()
     );
     println!("Results database written under: {}", output_path.display());
     Ok(())
@@ -115,10 +134,14 @@ mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
     use calamine::DataType as _;
-    use evanalyzer_app::result::{
-        Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter, ResultsGenerator,
-    };
+    use evanalyzer_app::backends::local::LocalBackend;
+    use evanalyzer_app::results::LocalResultsGenerator;
+    use evanalyzer_app::results::{Cell, CellValue, Column, ListFilter, Pagination, PlaneFilter};
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
+
+    fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
+        super::run(args, &LocalBackend::default())
+    }
 
     #[test]
     fn run_rejects_a_project_with_no_images_and_no_images_dir_override() {
@@ -403,7 +426,7 @@ mod tests {
         // way `export_table` does (`0..=get_nr_of_{z,t}_stacks()`), and
         // keyed by object id so row *order* differences between the direct
         // query and the exported files can't cause a false mismatch.
-        let database = ResultsGenerator::open_database(evadb.clone()).expect("open evadb");
+        let database = LocalResultsGenerator::open_database(evadb.clone()).expect("open evadb");
         let expected_columns: Vec<Column> = database
             .get_available_columns()
             .expect("available columns")
@@ -428,6 +451,7 @@ mod tests {
                             limit: 1_000_000,
                             after: None,
                         },
+                        transpond_table: false,
                     })
                     .expect("ground-truth object list");
                 for (id, row) in page.row_names.iter().zip(page.rows) {
@@ -441,14 +465,17 @@ mod tests {
         );
 
         let csv_out = out_dir.path().join("out.csv");
-        crate::commands::export::run(ExportArgs {
-            command: ExportCommand::Csv(TableExportArgs {
-                db: evadb.clone(),
-                out: csv_out.clone(),
-                filter: FilterArgs::default(),
-                group: GroupArgs::default(),
-            }),
-        })
+        crate::commands::export::run(
+            ExportArgs {
+                command: ExportCommand::Csv(TableExportArgs {
+                    db: evadb.clone(),
+                    out: csv_out.clone(),
+                    filter: FilterArgs::default(),
+                    group: GroupArgs::default(),
+                }),
+            },
+            &LocalBackend::default(),
+        )
         .expect("csv export should succeed");
         let csv_content = std::fs::read_to_string(&csv_out).expect("read exported csv");
         let mut csv_lines = csv_content.lines();
@@ -484,14 +511,17 @@ mod tests {
         );
 
         let xlsx_out = out_dir.path().join("out.xlsx");
-        crate::commands::export::run(ExportArgs {
-            command: ExportCommand::Xlsx(TableExportArgs {
-                db: evadb,
-                out: xlsx_out.clone(),
-                filter: FilterArgs::default(),
-                group: GroupArgs::default(),
-            }),
-        })
+        crate::commands::export::run(
+            ExportArgs {
+                command: ExportCommand::Xlsx(TableExportArgs {
+                    db: evadb,
+                    out: xlsx_out.clone(),
+                    filter: FilterArgs::default(),
+                    group: GroupArgs::default(),
+                }),
+            },
+            &LocalBackend::default(),
+        )
         .expect("xlsx export should succeed");
 
         use calamine::Reader;

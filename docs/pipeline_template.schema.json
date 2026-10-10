@@ -82,6 +82,23 @@
         }
       ]
     },
+    "AuthorInformation": {
+      "type": "object",
+      "properties": {
+        "fullName": {
+          "description": "Full name of the author",
+          "type": "string"
+        },
+        "organization": {
+          "description": "Author organization",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fullName",
+        "organization"
+      ]
+    },
     "BlurSettings": {
       "description": "Smooths an image by averaging pixel intensities within a local neighborhood.\n\nThis algorithm applies a uniform box filter where every pixel within the moving\nwindow contributes equally to the final value. It is a computationally fast\nmethod used for general image smoothing, blending variations, and rapid noise\nsuppression where edge precision is less critical.",
       "type": "object",
@@ -100,6 +117,11 @@
       "description": "Instance segmentation using a Cellpose-SAM model exported as TorchScript\n\n[AI Cellpose Segmentation] -> [Extract Objects]\n\nObject segmentation using Cellpose-SAM model which can be downloaded from\nhttps://evanalyzer.org/downloads/#ai-models\n\nCellpose-SAM is a biological segmentation model that integrates the pretrained transformer\narchitecture of Meta's Segment Anything Model (SAM) with the Cellpose framework to accurately\npredict vector flow fields for dense cellular structures.\nBy combining these methods, it achieves \"superhuman generalization,\" outperforming the average\naccuracy of human annotators and reaching near-optimal cell masking performance. [1]\n\n[1] Pachitariu, M., Rariden, M., & Stringer, C. (2025). Cellpose-SAM: superhuman generalization for cellular segmentation. bioRxiv. doi.org",
       "type": "object",
       "properties": {
+        "cellposePostprocessing": {
+          "description": "Build the objects from the flows exactly like Cellpose does: pixels\nfollow the interpolated flows, an object only starts where more than\n10 pixels end up together, and pixels that reach no such spot become\nbackground. Off, every spot any pixel ends up at starts an object,\nwhich can join touching cells. Cellpose also fills the holes inside\neach object - add a Fill Object Holes step after this one for that.",
+          "type": "boolean",
+          "default": true
+        },
         "flowIterations": {
           "description": "Number of Euler integration steps used to follow the flow field. Higher\nvalues let pixels of large cells reach their sink at the cost of runtime;\nCellpose's default is `200`.",
           "type": "integer",
@@ -108,6 +130,14 @@
           "maximum": 1000,
           "minimum": 1
         },
+        "flowThreshold": {
+          "description": "Flow error threshold: an object whose shape doesn't match the flows\nthe model predicted (mean squared error above this value) is removed.\nIncrease to keep more objects, decrease to keep only clean ones. `0`\ndisables the check (Cellpose's default is `0.4`).",
+          "type": "number",
+          "format": "float",
+          "default": 0.4000000059604645,
+          "maximum": 10,
+          "minimum": 0
+        },
         "inputChannels": {
           "description": "Number of input channels the model expects. The grayscale image goes in\nchannel 0; any further channels are zero-filled. Cellpose-SAM's\npatch-embedding convolution only has weights for up to 3 input\nchannels: `2` (cytoplasm + optional nucleus) is standard, `1` is for\nsingle-channel exports.",
           "type": "integer",
@@ -115,6 +145,14 @@
           "default": 2,
           "maximum": 3,
           "minimum": 1
+        },
+        "maxResize": {
+          "description": "Longest image side, in pixels, the image is scaled down to before\nsegmentation; the masks are scaled back up to the original size\nafterwards. Smaller values make large cells look like the cell sizes\nthe model was trained on and are faster. The scale is taken from the\nfull image, so every tile is scaled the same. `0` keeps the full\nresolution (the Cellpose web demo uses `1000`).",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0
         },
         "minObjectSize": {
           "description": "Minimum object size, in pixels. After the dynamics, any instance smaller\nthan this is removed (its pixels become background). `0` disables the filter.",
@@ -141,6 +179,11 @@
           "default": 0.5,
           "maximum": 1,
           "minimum": 0
+        },
+        "replicateGrayChannel": {
+          "description": "Copy the gray image into every input channel instead of filling the\nextra channels with zeros. With `input_channels = 3` this matches\nCellpose run on an RGB image whose channels are (nearly) equal.",
+          "type": "boolean",
+          "default": true
         }
       }
     },
@@ -177,6 +220,14 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "intensityFilters": {
+          "description": "Intensity criteria, e.g. \"average in channel 1 brighter than 1200\"\n\nAll filters must match (logical AND), like every other criterion of\nthis command. Combine an `Above` and a `Below` filter on the same\nchannel and metric to select an intensity range. Empty: no intensity\ncriterion.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntensityFilterSettings"
           }
         },
         "matchHandling": {
@@ -359,7 +410,7 @@
         },
         "sizeUnit": {
           "description": "Size unit for the minimum coloc area size",
-          "$ref": "#/$defs/SizeUnits",
+          "$ref": "#/$defs/SizeUnitsRel",
           "default": "PIXELS"
         }
       }
@@ -452,7 +503,7 @@
       ]
     },
     "EnhanceContrastSettings": {
-      "description": "Configuration for contrast enhancement and histogram manipulation.\n\nThis algorithm can perform linear contrast stretching, normalization,\nor histogram equalization to improve the dynamic range of an image.\n\n# Examples\n\n```\n# use imagec::backend::algos::EnhanceContrast;\nlet settings = EnhanceContrast {\nsaturated_pixels: 0.01,   // Clip 1% of outliers\nnormalize: true,          // Stretch to [0.0, 1.0]\nequalize_histogram: false,\n};\n```",
+      "description": "Configuration for contrast enhancement and histogram manipulation.\n\nThis algorithm can perform linear contrast stretching, normalization,\nor histogram equalization to improve the dynamic range of an image.",
       "type": "object",
       "properties": {
         "equalizeHistogram": {
@@ -464,7 +515,7 @@
           "type": "boolean"
         },
         "saturatedPixels": {
-          "description": "Percentage of pixels to \"clip\" from the top and bottom of the histogram.\n\nRange: [0.0, 1.0]. A value of 0.01 (1%) helps ignore hot/dead pixels\nthat would otherwise prevent effective contrast stretching.",
+          "description": "Percentage of pixels to \"clip\" from the top and bottom of the histogram.\n\nIn percent (0 - 100), split evenly between the darkest and the\nbrightest pixels, like ImageJ: 0.35 clips 0.175 % at each end. A small\nvalue (ImageJ's default is 0.35) ignores hot/dead pixels that would\notherwise prevent effective contrast stretching.",
           "type": "number",
           "format": "float"
         }
@@ -491,6 +542,10 @@
     },
     "FillHolesSettings": {
       "description": "Fills enclosed background holes in the segmentation map.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]\n\nA direct port of ImageJ's `Process > Binary > Fill Holes` command\n(`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel\nLandini): a background pixel counts as a \"hole\" - and is turned into\nforeground - exactly when it cannot be reached from the image border by a\npath of background pixels using 4-connectivity.\n\nWhich pixels count as a \"hole\" is decided the same way ImageJ does it:\nevery non-background pixel is \"foreground\" regardless of its actual\nlabel/class value, so a background pocket enclosed by *any* mix of labels\nis still a hole. Unlike ImageJ, each hole is then attributed back to the\nclass that actually encloses it - every enclosed background region is\ngrouped into a connected component, and that component is filled with\nwhichever label is most common among its immediately bordering pixels\n(falling back to `FILL_VALUE` only in the degenerate case of a hole with\nno foreground neighbor at all). This keeps multi-class segmentation maps\ncorrect: a hole inside a class-2 object is filled with 2, not merged with\na fixed value that happens to collide with an unrelated class elsewhere\nin the image.",
+      "type": "object"
+    },
+    "FillObjectHolesSettings": {
+      "description": "Fills the holes inside every object, one object at a time.\n\n[AI Cellpose / StarDist Segmentation | Watershed | Connected Components] -> [Fill Object Holes] -> [Extract Objects]\n\nWorks on the objects (instance map), so it has to come after a step that\ncreates objects and before Extract Objects. A pixel becomes part of an\nobject when it is enclosed by that object alone; a gap enclosed by several\ntouching objects together is left as it is. An object lying completely\ninside another object's hole becomes part of the enclosing object. Filled\npixels get the class of the object they now belong to.\n\nUse Fill Holes instead to fill holes in the segmentation map before the\nobjects are created (e.g. right after a Threshold).",
       "type": "object"
     },
     "FiltersHessianHessianModeSettings": {
@@ -883,6 +938,12 @@
         "address"
       ]
     },
+    "ImageChannelIdx": {
+      "description": "0-based index of an image channel, as a command setting. Shown in the\npipeline UI as the channel picker (channel name + color of the open\nimage). Serializes as a plain number, so it can replace an existing\ninteger channel field without breaking saved projects.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
     "ImageMathSettings": {
       "description": "A filter that performs pixel-wise mathematical operations between the current\npipeline image and a secondary image stored in the cache.\n\nThis command allows for complex image blending, masking, and comparison.\n\n# Examples\n\n```\nuse imagec::backend::algos::{ImageMath, Operand};\nlet subtract_bg = ImageMath {\noperand: Operand::Subtract,\nsecond_image_address: ImageAddress::from(\"background\"),\nswap_operands: false,\n};\n```",
       "type": "object",
@@ -905,6 +966,40 @@
         "secondImageAddress",
         "swapOperands"
       ]
+    },
+    "IntensityFilterSettings": {
+      "description": "One intensity criterion of [`ClassifyObjects`], e.g. \"average intensity\nin channel 1 brighter than 1200\".",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "Image channel whose intensity is compared (0-based)\n\nAn object without a measurement for this channel (the image has no\nsuch channel) never matches.",
+          "$ref": "#/$defs/ImageChannelIdx",
+          "default": 0
+        },
+        "comparison": {
+          "description": "Whether the object must be brighter or darker than the threshold",
+          "$ref": "#/$defs/ObjectClassifyObjectsIntensityComparisonSettings",
+          "default": "ABOVE"
+        },
+        "metric": {
+          "description": "Intensity statistic of the object to compare",
+          "$ref": "#/$defs/ObjectClassifyObjectsIntensityMetricSettings",
+          "default": "AVG"
+        },
+        "threshold": {
+          "description": "Intensity threshold, in `unit`\n\nFor `Sum` this is the summed intensity of all object pixels, so it\nscales with the object's area.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 2147483600,
+          "minimum": 0
+        },
+        "unit": {
+          "description": "Unit of `threshold`\n\nbit: gray value, 0 - 255/65535 (as in ImageJ/Fiji)\n%: 0 - 100.0\nrel: 0 - 1.0",
+          "$ref": "#/$defs/PixelUnits",
+          "default": "BIT"
+        }
+      }
     },
     "IntensityTransformationSettings": {
       "description": "Configuration for adjusting image contrast and brightness.\n\nThis transformation applies a linear mapping to pixel values.\nIn [`Mode::Manual`], the output is typically calculated as:\n`output = input * contrast + brightness`.",
@@ -945,6 +1040,30 @@
       "required": [
         "kernelSize"
       ]
+    },
+    "LoadAnnotatedObjectsSettings": {
+      "description": "Loads the hand-annotated objects of the image into the pipeline.\n\nEvery loaded object gets a new object id, is marked as manually annotated\nand has its intensities measured on every channel - from there on it is\nhandled like any segmented object.",
+      "type": "object",
+      "properties": {
+        "inputClasses": {
+          "description": "Only load annotations carrying at least one of these classes.\n\nLeave empty to load every annotated object of the image.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "keepAnnotatedClasses": {
+          "description": "Keep the classes the objects were given while annotating.\n\nTurn off to start from `output_class` alone.",
+          "type": "boolean",
+          "default": false
+        },
+        "outputClass": {
+          "description": "Class added to every loaded object, so later steps can select them.\nSet to `Unset` to add none.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        }
+      }
     },
     "MathImageCacheImageCacheModeSettings": {
       "description": "Defines the interaction type with the persistent image storage.",
@@ -1093,16 +1212,12 @@
           "type": "string",
           "default": ""
         },
-        "authorOrganization": {
-          "description": "Author organization",
-          "type": "string"
-        },
         "authors": {
           "description": "Every author, in display order (the first entry is treated as the\nprimary author in template/pipeline picker dialogs, the rest as\nco-authors). Free-form display strings, not split into first/last.",
           "type": "array",
           "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/AuthorInformation"
           }
         },
         "category": {
@@ -1140,7 +1255,6 @@
         "name",
         "shortDescription",
         "description",
-        "authorOrganization",
         "creationTime"
       ]
     },
@@ -1264,6 +1378,46 @@
         "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
         "RECLASSIFY_IF_MATCH",
         "RECLASSIFY_IF_NOT_MATCH"
+      ]
+    },
+    "ObjectClassifyObjectsIntensityComparisonSettings": {
+      "description": "How an [`IntensityFilter`] compares the object's metric with its threshold.\nBoth comparisons are strict: an object exactly at the threshold matches\nneither.",
+      "oneOf": [
+        {
+          "description": "The metric must be greater than the threshold.",
+          "type": "string",
+          "const": "ABOVE"
+        },
+        {
+          "description": "The metric must be less than the threshold.",
+          "type": "string",
+          "const": "BELOW"
+        }
+      ]
+    },
+    "ObjectClassifyObjectsIntensityMetricSettings": {
+      "description": "Which per-channel intensity statistic of an object an [`IntensityFilter`]\ncompares. All are measured on the raw image channel when the objects are\nextracted (see `Object::intensities`).",
+      "oneOf": [
+        {
+          "description": "Mean pixel intensity inside the object.",
+          "type": "string",
+          "const": "AVG"
+        },
+        {
+          "description": "Sum of all pixel intensities inside the object (integrated density) -\ngrows with the object's size, unlike the other metrics.",
+          "type": "string",
+          "const": "SUM"
+        },
+        {
+          "description": "Darkest pixel inside the object.",
+          "type": "string",
+          "const": "MIN"
+        },
+        {
+          "description": "Brightest pixel inside the object.",
+          "type": "string",
+          "const": "MAX"
+        }
       ]
     },
     "ObjectColocObjectsColocMultiplicitySettings": {
@@ -1725,6 +1879,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "FILL_OBJECT_HOLES"
+            }
+          },
+          "$ref": "#/$defs/FillObjectHolesSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "GAUSSIAN_BLUR"
             }
           },
@@ -1816,6 +1983,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "LOAD_ANNOTATED_OBJECTS"
+            }
+          },
+          "$ref": "#/$defs/LoadAnnotatedObjectsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "MEDIAN_SUBTRACT"
             }
           },
@@ -1898,6 +2078,19 @@
             }
           },
           "$ref": "#/$defs/SaveImageSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "SCRIPT"
+            }
+          },
+          "$ref": "#/$defs/ScriptSettings",
           "required": [
             "type"
           ]
@@ -2002,6 +2195,19 @@
             }
           },
           "$ref": "#/$defs/WeightedDeviationSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "YOLOV5"
+            }
+          },
+          "$ref": "#/$defs/Yolov5Settings",
           "required": [
             "type"
           ]
@@ -2113,6 +2319,25 @@
         "name",
         "source"
       ]
+    },
+    "ScriptSettings": {
+      "description": "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.\n\nThe script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.\n\n# Examples\n\n```rhai\nprint(`Hello world from a ${image_width}x${image_height} tile`);\nrun(\"gaussian_blur\", #{ kernel_size: 5 });\n```",
+      "type": "object",
+      "properties": {
+        "classes": {
+          "description": "Object classes the script creates or uses. Commands the script runs\nmay only use these classes, so the pipeline knows them without\nrunning the script.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "source": {
+          "description": "Script source code",
+          "type": "string",
+          "default": "print(`Hello world from a ${image_width}x${image_height} tile`);\n"
+        }
+      }
     },
     "SegmentationClass": {
       "type": "integer",
@@ -2489,6 +2714,14 @@
         "PIXELS"
       ]
     },
+    "SizeUnitsRel": {
+      "type": "string",
+      "enum": [
+        "NANO_METER",
+        "PIXELS",
+        "PERCENT"
+      ]
+    },
     "StardistSettings": {
       "description": "Instance segmentation using a pretrained StarDist model exported as TorchScript.\n\nThe model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
       "type": "object",
@@ -2632,7 +2865,7 @@
       }
     },
     "UNetSettings": {
-      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\nThe model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.",
+      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\nThe model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.\n\nAny tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets\nhalve the image 4 times and fail otherwise) plus a 16 px border (context\nfor the pixels at the tile edge, the \"halo\" bioimage.io models declare),\nand the prediction is cropped back to the tile.",
       "type": "object",
       "properties": {
         "boundaryChannel": {
@@ -2799,6 +3032,92 @@
         "kernelSize",
         "sigma"
       ]
+    },
+    "YoloClassMappingSettings": {
+      "description": "Which project segmentation class the objects of one model class get.",
+      "type": "object",
+      "properties": {
+        "modelClass": {
+          "description": "Index of the class in the model (`0` = its first class).",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 1000,
+          "minimum": 0
+        },
+        "segmentationClass": {
+          "description": "The project's segmentation class objects of `model_class` are written as.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
+        }
+      }
+    },
+    "Yolov5Settings": {
+      "description": "Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.\n\n[AI YOLOv5 Segmentation] -> [Extract Objects]\n\nTakes a YOLOv5 TorchScript export (`export.py --include torchscript`) with\na fixed 640x640 input. Segmentation models (`yolov5*-seg`) give every\nobject its mask; plain detection models give filled boxes. Any number of\nmodel classes is supported.\n\nTiles larger than 640 px are analyzed in overlapping 640x640 windows at\nfull resolution (small tiles are padded), so small objects stay\ndetectable; objects seen by several windows are merged. Gray images are\ngiven to the model as RGB with equal channels.",
+      "type": "object",
+      "properties": {
+        "classMapping": {
+          "description": "Maps the model's classes to this project's segmentation classes;\nobjects of classes not listed are dropped. Leave empty to write model\nclass `i` as segmentation class `i + 1`, for every class.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/YoloClassMappingSettings"
+          }
+        },
+        "confidenceThreshold": {
+          "description": "Minimum confidence (objectness x class score) of a detection.",
+          "type": "number",
+          "format": "float",
+          "default": 0.25,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "imageScale": {
+          "description": "Factor the image is scaled by before it is given to the model, the\nmasks are scaled back afterwards. Use it when the model was trained on\ndownscaled images: `640 / training image size`, e.g. `0.3125` for\n2048 px images YOLOv5 shrank to 640. `1` = full resolution.",
+          "type": "number",
+          "format": "float",
+          "default": 1.0,
+          "maximum": 4,
+          "minimum": 0.05
+        },
+        "iouThreshold": {
+          "description": "Detections of the same class overlapping more than this (box\nintersection over union) are merged into the more confident one.",
+          "type": "number",
+          "format": "float",
+          "default": 0.44999998807907104,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "maskThreshold": {
+          "description": "Mask probability above which a pixel belongs to its object\n(segmentation models only).",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "minObjectSize": {
+          "description": "Objects with fewer pixels than this (after overlapping objects were\nresolved) are removed. `0` keeps every object.",
+          "type": "integer",
+          "format": "int32",
+          "default": 15,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "modelPath": {
+          "description": "Path to a YOLOv5 model exported as TorchScript.",
+          "type": "string",
+          "default": ""
+        },
+        "windowOverlap": {
+          "description": "Overlap of neighboring 640x640 windows, in pixels. Must be larger\nthan the biggest object, so every object lies completely inside some\nwindow.",
+          "type": "integer",
+          "format": "int32",
+          "default": 128,
+          "maximum": 512,
+          "minimum": 0
+        }
+      }
     }
   }
 }

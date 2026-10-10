@@ -1,4 +1,6 @@
+use crate::FileRequest;
 use crate::UiState;
+use crate::editor::classification_controller::ClassificationController;
 use crate::editor::histogram_controller::HistogramController;
 use crate::editor::image_meta_controller::ImageMetaController;
 use crate::editor::object_list_controller::ObjectListController;
@@ -6,7 +8,8 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::helper::size_formater::format_bytes;
 use crate::{AppWindow, DialogType, GlobalAppState, ObjectHighlightBox, ViewportObjectState};
 use crate::{ImageItemData, ImagesListState};
-use evanalyzer_app::extensions::project_ext::{ProjectExt, SelectNewProjectRootAction};
+use evanalyzer_app::project::collect_images_at_root;
+use evanalyzer_app::project::{ProjectExt, SelectNewProjectRootAction};
 use log::{debug, info, warn};
 use slint::{ComponentHandle, Model};
 use std::path::PathBuf;
@@ -23,6 +26,7 @@ pub struct ImagesListController {
     pub(crate) image_meta_controller: Arc<ImageMetaController>,
     pub(crate) image_controller_state: Arc<ImagesListControllerState>,
     pub(crate) object_list_controller: Arc<ObjectListController>,
+    pub(crate) classification_controller: Arc<ClassificationController>,
 }
 
 impl ImagesListController {
@@ -33,6 +37,7 @@ impl ImagesListController {
         histogram_controller: Arc<HistogramController>,
         image_meta_controller: Arc<ImageMetaController>,
         object_list_controller: Arc<ObjectListController>,
+        classification_controller: Arc<ClassificationController>,
     ) -> Self {
         Self {
             ui,
@@ -44,6 +49,7 @@ impl ImagesListController {
                 image_filter_text: RwLock::new(String::new()),
             }),
             object_list_controller,
+            classification_controller,
         }
     }
 
@@ -94,7 +100,7 @@ impl ImagesListController {
             // (500ms+) reader-open below instead, it would run *after* that
             // later highlight-set and silently erase it.
             let ui_weak = self.ui.clone();
-            let _ = slint::invoke_from_event_loop(move || {
+            let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     let object_state = ui.global::<ViewportObjectState>();
                     object_state.set_markers(slint::ModelRc::new(slint::VecModel::default()));
@@ -103,7 +109,7 @@ impl ImagesListController {
             });
 
             let manager = self.clone();
-            std::thread::spawn(move || {
+            crate::helper::ui_thread::spawn(move || {
                 // Fired first, before the (slow) metadata sync below:
                 // `trigger_new_image_redraw` only enqueues worker tasks
                 // (`dispatch_worker_task`) and returns immediately, it
@@ -124,6 +130,10 @@ impl ImagesListController {
                     warn!("Failed to sync image meta to slint!");
                 }
                 manager.object_list_controller.sync_objects_to_slint();
+                // The class counts belong to the image shown.
+                manager
+                    .classification_controller
+                    .sync_classification_to_slint();
                 // Re-read the current path instead of using the path this
                 // thread was spawned for: if a newer `open_new_image` call
                 // has since superseded it (fast repeated selection), this
@@ -200,7 +210,7 @@ impl ImagesListController {
             paint_as_rectangle,
         };
         let ui_weak = self.ui.clone();
-        let _ = slint::invoke_from_event_loop(move || {
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<ViewportObjectState>()
                     .set_object_highlight(highlight);
@@ -234,7 +244,7 @@ impl ImagesListController {
             .change_images_root(&new_root);
         self.sync_image_list_to_slint(); // The list is now empty, we sync this to slint
 
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ImagesListState>()
@@ -264,16 +274,27 @@ impl ImagesListController {
     /// # Threading
     /// This is a synchronous operation that updates the project state and dispatches
     /// UI property updates to the main event loop.
+    /// Where folder pickers start: the project's image folder, or the home
+    /// folder of whichever machine the backend runs on.
+    fn current_image_root(&self) -> PathBuf {
+        self.app_state
+            .get_project()
+            .images
+            .root
+            .clone()
+            .unwrap_or_default()
+    }
+
     pub fn set_new_image_root(self: &Arc<Self>, new_root: &PathBuf) {
         let ui_weak = self.ui.clone();
         let result = self
             .app_state
             .get_project_write()
-            .select_new_images_root_with_check(&new_root);
+            .select_new_images_root_with_check(self.app_state.backend().files(), &new_root);
 
         if result == SelectNewProjectRootAction::ImageNotFound {
             // Images not found, show the Missing image dialog
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui_ready) = ui_weak.upgrade() {
                     ui_ready
                         .global::<GlobalAppState>()
@@ -284,7 +305,7 @@ impl ImagesListController {
         } else {
             // Images found, set the new root dir
             let image_root_dir_str = new_root.to_string_lossy().into_owned();
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui_ready) = ui_weak.upgrade() {
                     ui_ready
                         .global::<ImagesListState>()
@@ -315,7 +336,7 @@ impl ImagesListController {
 
         // Show spinner
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<ImagesListState>().set_is_scanning(true);
             }
@@ -325,7 +346,7 @@ impl ImagesListController {
         let ui_weak = self.ui.clone();
         let manager = self.clone();
 
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             // Scan the filesystem without holding the project lock - opening
             // an `ImageReader` per file can take seconds on a plate-sized
             // folder, and holding the write guard for that long stalls every
@@ -335,7 +356,7 @@ impl ImagesListController {
             let root_folder = manager.app_state.get_project().images.root.clone();
             if let Some(root_folder) = root_folder {
                 let found_images =
-                    evanalyzer_app::extensions::project_ext::collect_images_at_root(&root_folder);
+                    collect_images_at_root(manager.app_state.backend().as_ref(), &root_folder);
                 manager
                     .app_state
                     .get_project_write()
@@ -359,12 +380,16 @@ impl ImagesListController {
                 }
 
                 manager.object_list_controller.sync_objects_to_slint();
+                // The class counts belong to the image shown.
+                manager
+                    .classification_controller
+                    .sync_classification_to_slint();
                 manager.set_selected_image_index_in_slint_images_list(path, true);
                 manager.viewport_controller.trigger_new_image_redraw();
             }
 
             // Hide spinner
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.global::<ImagesListState>().set_is_scanning(false);
                     info!("Folder scan complete.");
@@ -423,18 +448,36 @@ impl ImagesListController {
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
                 .on_open_images_folder_clicked(move || {
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                        manager.change_image_root(&path, None);
-                    }
+                    let request = FileRequest::open_folder("Choose image folder")
+                        .start_in(manager.current_image_root());
+                    let manager = Arc::clone(&manager);
+                    manager
+                        .app_state
+                        .clone()
+                        .file_browser
+                        .open(request, move |path| {
+                            if let Some(path) = path {
+                                manager.change_image_root(&path, None);
+                            }
+                        });
                 });
 
             // Set new image root. Images stay in the list only the root path is changed and it is checked if images in the new root path are found
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
                 .on_new_image_root_folder_clicked(move || {
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                        manager.set_new_image_root(&path);
-                    }
+                    let request = FileRequest::open_folder("Choose new image folder")
+                        .start_in(manager.current_image_root());
+                    let manager = Arc::clone(&manager);
+                    manager
+                        .app_state
+                        .clone()
+                        .file_browser
+                        .open(request, move |path| {
+                            if let Some(path) = path {
+                                manager.set_new_image_root(&path);
+                            }
+                        });
                 });
 
             // Rerun folder scan on selected image root
@@ -485,7 +528,7 @@ impl ImagesListController {
         let slint_items = build_image_list_items(images_guard, &filter_text);
 
         // The final assignment goes into the event loop
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui_ready) = ui_weak.upgrade() {
                     let model = slint::ModelRc::new(slint::VecModel::from(slint_items));
                     ui_ready.global::<ImagesListState>().set_images_list(model);
@@ -508,7 +551,7 @@ impl ImagesListController {
         let ui_weak = self.ui.clone();
 
         // The final assignment goes into the event loop
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                     let images_state = ui_ready.global::<ImagesListState>();
                    let images_list_model =  images_state.get_images_list();
@@ -604,11 +647,19 @@ mod tests {
         ));
         ImagesListController::new(
             slint::Weak::default(),
-            ui_state,
-            viewport_controller,
+            ui_state.clone(),
+            viewport_controller.clone(),
             histogram_controller,
             image_meta_controller,
-            object_list_controller,
+            object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    slint::Weak::default(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
         )
     }
 
@@ -704,12 +755,20 @@ mod tests {
             viewport_controller.clone(),
         ));
         ImagesListController::new(
-            ui,
-            ui_state,
-            viewport_controller,
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
             histogram_controller,
             image_meta_controller,
-            object_list_controller,
+            object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    ui.clone(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
         )
     }
 
@@ -757,6 +816,58 @@ mod tests {
                 .get_current_image_path_cloned()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn switching_images_shows_the_class_counts_of_the_new_image() {
+        use crate::ClassificationState;
+        use crate::helper::ui_thread::drain_ui_queue;
+        use evanalyzer_cfg::core_types::ObjectClass;
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
+        let classified = || {
+            let mut object = ObjectMetricSettings::default();
+            object.object_class.insert(ObjectClass::Valid(1));
+            object
+        };
+        {
+            let mut project = controller.app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+            project.classification.classes_mut().push(
+                evanalyzer_cfg::settings::classification_settings::Class {
+                    id: ObjectClass::Valid(1),
+                    name: "Nuclei".into(),
+                    ..Default::default()
+                },
+            );
+            for (name, objects) in [("a.tif", 1), ("b.tif", 2)] {
+                let series = SeriesSettings {
+                    objects: (0..objects).map(|_| classified()).collect(),
+                    ..Default::default()
+                };
+                project.images.list.insert(
+                    PathBuf::from(name),
+                    ImageEntry {
+                        rel_path: PathBuf::from(name),
+                        file_size: 0,
+                        selected_series: 0,
+                        series: BTreeMap::from([(0, series)]),
+                    },
+                );
+            }
+        }
+        let total = || {
+            ui.global::<ClassificationState>()
+                .get_total_visible_objects()
+        };
+
+        controller.open_new_image(&PathBuf::from("/data/images/a.tif"));
+        drain_ui_queue();
+        assert_eq!(total(), 1);
+
+        controller.open_new_image(&PathBuf::from("/data/images/b.tif"));
+        drain_ui_queue();
+        assert_eq!(total(), 2, "counts follow the image shown");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 pub mod analyze;
 pub(crate) mod common;
 pub mod export;
+pub mod jobs;
 pub mod project;
 #[cfg(test)]
 pub(crate) mod test_support;

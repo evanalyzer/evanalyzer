@@ -1,8 +1,15 @@
-use crate::object::Intensity;
+use crate::object::{Intensity, Object};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
+use duckdb::arrow::array::{
+    ArrayBuilder, ArrayRef, BooleanBuilder, Float64Builder, Int32Builder, ListBuilder, MapBuilder,
+    StringBuilder, UInt8Builder, UInt32Builder, UInt64Builder,
+};
+use duckdb::arrow::record_batch::RecordBatch;
+use duckdb::types::Value;
 use duckdb::{Connection, params};
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId};
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, max_gray_value};
+use evanalyzer_cfg::settings::meta_data::MetaData;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -47,7 +54,10 @@ static CONNECTION_CACHE: LazyLock<Mutex<HashMap<PathBuf, Connection>>> =
 /// Returns a `Connection` usable for `path`, sharing the resident anchor
 /// connection for that path if one is already open (see `CONNECTION_CACHE`'s
 /// doc comment), opening and caching a fresh one otherwise.
-fn shared_connection(path: &Path) -> Result<Connection, InternalErrors> {
+///
+/// Every connection to a results file in this process must come from here -
+/// a plain `Connection::open` next to a cached one fails on Windows.
+pub fn shared_connection(path: &Path) -> Result<Connection, InternalErrors> {
     let to_io_err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
     let mut cache = CONNECTION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -96,6 +106,7 @@ impl DuckDbExporter {
     pub fn new(
         output_path: impl Into<PathBuf>,
         class_names: HashMap<ObjectClass, (String, u32)>,
+        project_meta: &MetaData,
     ) -> Result<Self, InternalErrors> {
         let path: PathBuf = output_path.into();
         // These two log lines bracket the DuckDB DDL.  On the Windows (MinGW /
@@ -129,6 +140,45 @@ impl DuckDbExporter {
                 }
             }
         }
+
+        let author_names: Value = Value::Text(
+            serde_json::to_string(
+                &project_meta
+                    .authors
+                    .iter()
+                    .map(|a| &a.full_name)
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?,
+        );
+
+        let author_orgs: Value = Value::Text(
+            serde_json::to_string(
+                &project_meta
+                    .authors
+                    .iter()
+                    .map(|a| &a.organization)
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?,
+        );
+
+        conn.execute(
+            "INSERT INTO run (
+                status, title, short_description, description, app_version, author_full_name, author_organization
+            ) VALUES (
+                'running', ?, ?, ?, ?, ?::VARCHAR[], ?::VARCHAR[]
+            )",
+            params![
+                project_meta.name,
+                project_meta.short_description,
+                project_meta.description,
+                project_meta.app_version,
+                author_names,
+                author_orgs,
+            ],
+        )
+        .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
         // Tuning for sustained tile-by-tile appends:
         //
@@ -168,6 +218,319 @@ impl DuckDbExporter {
 }
 
 // ---------------------------------------------------------------------------
+// Arrow columns for the objects table
+// ---------------------------------------------------------------------------
+
+/// Rows per Arrow batch handed to the Appender - bounds how many rows of a
+/// huge image are buffered at once.
+const ARROW_BATCH_ROWS: usize = 50_000;
+
+/// The `objects` table's DOUBLE columns, in table order (see
+/// `ObjectColumns::finish`).
+#[derive(Clone, Copy)]
+enum F64 {
+    CentroidXPx,
+    CentroidYPx,
+    CentroidXNm,
+    CentroidYNm,
+    BboxXminNm,
+    BboxYminNm,
+    BboxXmaxNm,
+    BboxYmaxNm,
+    AreaNm2,
+    PerimeterPx,
+    PerimeterNm,
+    Circularity,
+    Solidity,
+    AspectRatio,
+    Roundness,
+    Compactness,
+    MajorAxisPx,
+    MinorAxisPx,
+    MajorAxisNm,
+    MinorAxisNm,
+    MajorAxisAngle,
+    Eccentricity,
+    FeretDiameterPx,
+    MinFeretPx,
+    FeretDiameterNm,
+    MinFeretNm,
+    PixelSizeXNm,
+    PixelSizeYNm,
+    PixelSizeZNm,
+}
+
+const F64_COLUMNS: usize = F64::PixelSizeZNm as usize + 1;
+
+/// One batch of `objects` rows, column by column, for the Appender's Arrow
+/// path - the only way to append the `object_class_id` list: the row-wise
+/// `append_row` rejects list values ("appending List values is not yet
+/// supported", duckdb-rs issue #422). Arrow types map onto the table's:
+/// text into the UUID and JSON columns is converted by DuckDB.
+struct ObjectColumns {
+    image_name: StringBuilder,
+    image_rel_path: StringBuilder,
+    c_stack: Int32Builder,
+    z_stack: Int32Builder,
+    t_stack: Int32Builder,
+    object_id: StringBuilder,
+    seg_class_name: StringBuilder,
+    seg_class_id: Int32Builder,
+    object_class_name: StringBuilder,
+    object_class_id: ListBuilder<Int32Builder>,
+    parent_id: StringBuilder,
+    children: StringBuilder,
+    track_id: UInt64Builder,
+    bbox_px: [UInt32Builder; 4],
+    area_px: UInt64Builder,
+    touches_edge: BooleanBuilder,
+    image_bit_depth: UInt8Builder,
+    /// `intensity_{sum,mean,min,max}_{raw,scaled}`, in table order.
+    intensities: [ListBuilder<Float64Builder>; INTENSITY_COLUMNS.len()],
+    coloc_partner_ids: MapBuilder<Int32Builder, ListBuilder<StringBuilder>>,
+    f64: Vec<Float64Builder>,
+}
+
+/// The per-channel intensity list columns, in table order.
+const INTENSITY_COLUMNS: [&str; 8] = [
+    "intensity_sum_normalized",
+    "intensity_sum_gray",
+    "intensity_mean_normalized",
+    "intensity_mean_gray",
+    "intensity_min_normalized",
+    "intensity_min_gray",
+    "intensity_max_normalized",
+    "intensity_max_gray",
+];
+
+/// `coloc_partner_ids` key for partners without an object class.
+const COLOC_UNSET_CLASS_KEY: i32 = -1;
+
+impl ObjectColumns {
+    fn with_capacity(rows: usize) -> Self {
+        let strings = || StringBuilder::with_capacity(rows, rows * 16);
+        Self {
+            image_name: strings(),
+            image_rel_path: strings(),
+            c_stack: Int32Builder::with_capacity(rows),
+            z_stack: Int32Builder::with_capacity(rows),
+            t_stack: Int32Builder::with_capacity(rows),
+            object_id: StringBuilder::with_capacity(rows, rows * 36),
+            seg_class_name: strings(),
+            seg_class_id: Int32Builder::with_capacity(rows),
+            object_class_name: strings(),
+            object_class_id: ListBuilder::with_capacity(Int32Builder::with_capacity(rows), rows),
+            parent_id: strings(),
+            children: strings(),
+            track_id: UInt64Builder::with_capacity(rows),
+            bbox_px: std::array::from_fn(|_| UInt32Builder::with_capacity(rows)),
+            area_px: UInt64Builder::with_capacity(rows),
+            touches_edge: BooleanBuilder::with_capacity(rows),
+            image_bit_depth: UInt8Builder::with_capacity(rows),
+            intensities: std::array::from_fn(|_| {
+                ListBuilder::with_capacity(Float64Builder::with_capacity(rows * 4), rows)
+            }),
+            coloc_partner_ids: MapBuilder::new(
+                None,
+                Int32Builder::new(),
+                ListBuilder::new(StringBuilder::new()),
+            ),
+            f64: (0..F64_COLUMNS)
+                .map(|_| Float64Builder::with_capacity(rows))
+                .collect(),
+        }
+    }
+
+    fn f64(&mut self, column: F64, value: f64) {
+        self.f64[column as usize].append_value(value);
+    }
+
+    /// One row of every `intensity_*` list: position c + 1 holds channel c,
+    /// NULL for a channel without a measurement. `bit_max` turns the
+    /// `_normalized` values into gray values (`_gray`).
+    fn append_intensities(&mut self, intensities: &IndexMap<i32, Intensity>, bit_max: f64) {
+        let channels = intensities
+            .keys()
+            .filter(|channel| **channel >= 0)
+            .max()
+            .map_or(0, |max| *max as usize + 1);
+        for channel in 0..channels {
+            let stats = intensities.get(&(channel as i32)).map(|v| {
+                [
+                    v.sum_intensity,
+                    v.avg_intensity as f64,
+                    v.min_intensity as f64,
+                    v.max_intensity as f64,
+                ]
+            });
+            for (stat, pair) in self.intensities.chunks_mut(2).enumerate() {
+                let normalized = stats.map(|values| values[stat]);
+                pair[0].values().append_option(normalized);
+                pair[1]
+                    .values()
+                    .append_option(normalized.map(|normalized| normalized * bit_max));
+            }
+        }
+        for list in &mut self.intensities {
+            list.append(true);
+        }
+    }
+
+    /// One row of `coloc_partner_ids`: partner class -> partner object ids.
+    fn append_coloc(
+        &mut self,
+        colocalized_with: &IndexMap<ObjectClass, Vec<ObjectId>>,
+    ) -> Result<(), InternalErrors> {
+        for (class, ids) in colocalized_with {
+            self.coloc_partner_ids.keys().append_value(match class {
+                ObjectClass::Valid(n) => *n as i32,
+                ObjectClass::Unset => COLOC_UNSET_CLASS_KEY,
+            });
+            let partners = self.coloc_partner_ids.values();
+            for id in ids {
+                partners.values().append_value(id.to_string());
+            }
+            partners.append(true);
+        }
+        self.coloc_partner_ids
+            .append(true)
+            .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+
+    fn len(&self) -> usize {
+        self.object_id.len()
+    }
+
+    /// The collected rows as one batch, in the `objects` table's column
+    /// order (the Appender matches columns by position); leaves the
+    /// builders empty for the next batch.
+    fn finish(&mut self) -> Result<RecordBatch, InternalErrors> {
+        fn arr(builder: &mut dyn ArrayBuilder) -> ArrayRef {
+            builder.finish()
+        }
+        let mut f = |column: F64| arr(&mut self.f64[column as usize]);
+        let doubles_1 = [
+            f(F64::CentroidXPx),
+            f(F64::CentroidYPx),
+            f(F64::CentroidXNm),
+            f(F64::CentroidYNm),
+        ];
+        let doubles_2 = [
+            f(F64::BboxXminNm),
+            f(F64::BboxYminNm),
+            f(F64::BboxXmaxNm),
+            f(F64::BboxYmaxNm),
+        ];
+        let doubles_3 = [
+            f(F64::AreaNm2),
+            f(F64::PerimeterPx),
+            f(F64::PerimeterNm),
+            f(F64::Circularity),
+            f(F64::Solidity),
+            f(F64::AspectRatio),
+            f(F64::Roundness),
+            f(F64::Compactness),
+            f(F64::MajorAxisPx),
+            f(F64::MinorAxisPx),
+            f(F64::MajorAxisNm),
+            f(F64::MinorAxisNm),
+            f(F64::MajorAxisAngle),
+            f(F64::Eccentricity),
+            f(F64::FeretDiameterPx),
+            f(F64::MinFeretPx),
+            f(F64::FeretDiameterNm),
+            f(F64::MinFeretNm),
+        ];
+        let doubles_4 = [
+            f(F64::PixelSizeXNm),
+            f(F64::PixelSizeYNm),
+            f(F64::PixelSizeZNm),
+        ];
+        let [b0, b1, b2, b3] = &mut self.bbox_px;
+        let [n0, n1, n2, n3] = doubles_2;
+        let [
+            a0,
+            a1,
+            a2,
+            a3,
+            a4,
+            a5,
+            a6,
+            a7,
+            a8,
+            a9,
+            a10,
+            a11,
+            a12,
+            a13,
+            a14,
+            a15,
+            a16,
+            a17,
+        ] = doubles_3;
+        let [c0, c1, c2, c3] = doubles_1;
+        let [p0, p1, p2] = doubles_4;
+        let columns: Vec<(&str, ArrayRef)> = vec![
+            ("image_name", arr(&mut self.image_name)),
+            ("image_rel_path", arr(&mut self.image_rel_path)),
+            ("c_stack", arr(&mut self.c_stack)),
+            ("z_stack", arr(&mut self.z_stack)),
+            ("t_stack", arr(&mut self.t_stack)),
+            ("object_id", arr(&mut self.object_id)),
+            ("seg_class_name", arr(&mut self.seg_class_name)),
+            ("seg_class_id", arr(&mut self.seg_class_id)),
+            ("object_class_name", arr(&mut self.object_class_name)),
+            ("object_class_id", arr(&mut self.object_class_id)),
+            ("parent_id", arr(&mut self.parent_id)),
+            ("children", arr(&mut self.children)),
+            ("track_id", arr(&mut self.track_id)),
+            ("centroid_x_px", c0),
+            ("centroid_y_px", c1),
+            ("centroid_x_nm", c2),
+            ("centroid_y_nm", c3),
+            ("bbox_xmin_px", arr(b0)),
+            ("bbox_ymin_px", arr(b1)),
+            ("bbox_xmax_px", arr(b2)),
+            ("bbox_ymax_px", arr(b3)),
+            ("bbox_xmin_nm", n0),
+            ("bbox_ymin_nm", n1),
+            ("bbox_xmax_nm", n2),
+            ("bbox_ymax_nm", n3),
+            ("area_px", arr(&mut self.area_px)),
+            ("area_nm2", a0),
+            ("perimeter_px", a1),
+            ("perimeter_nm", a2),
+            ("circularity", a3),
+            ("solidity", a4),
+            ("aspect_ratio", a5),
+            ("roundness", a6),
+            ("compactness", a7),
+            ("major_axis_px", a8),
+            ("minor_axis_px", a9),
+            ("major_axis_nm", a10),
+            ("minor_axis_nm", a11),
+            ("major_axis_angle", a12),
+            ("eccentricity", a13),
+            ("feret_diameter_px", a14),
+            ("min_feret_px", a15),
+            ("feret_diameter_nm", a16),
+            ("min_feret_nm", a17),
+            ("touches_edge", arr(&mut self.touches_edge)),
+            ("pixel_size_x_nm", p0),
+            ("pixel_size_y_nm", p1),
+            ("pixel_size_z_nm", p2),
+            ("image_bit_depth", arr(&mut self.image_bit_depth)),
+        ];
+        let mut columns = columns;
+        for (name, builder) in INTENSITY_COLUMNS.iter().zip(&mut self.intensities) {
+            columns.push((name, arr(builder)));
+        }
+        columns.push(("coloc_partner_ids", arr(&mut self.coloc_partner_ids)));
+        RecordBatch::try_from_iter(columns).map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DDL
 // ---------------------------------------------------------------------------
 
@@ -182,7 +545,7 @@ CREATE TABLE IF NOT EXISTS objects (
     seg_class_name       VARCHAR,
     seg_class_id         INTEGER,
     object_class_name    VARCHAR,
-    object_class_id      VARCHAR,
+    object_class_id      INTEGER[],
     parent_id            VARCHAR,
     children             VARCHAR,
     track_id             UBIGINT,
@@ -222,8 +585,22 @@ CREATE TABLE IF NOT EXISTS objects (
     pixel_size_y_nm      DOUBLE,
     pixel_size_z_nm      DOUBLE,
     image_bit_depth      UTINYINT,
-    intensities_json     JSON,
-    coloc_json           JSON
+    -- Per-channel intensity statistics, one list each, indexed by channel:
+    -- channel c is at position c + 1 (DuckDB lists are 1-based), NULL for a
+    -- channel that wasn't measured. `_normalized` is the value divided by
+    -- the image's maximum gray value (0..1); `_gray` is the same value in
+    -- gray values, as in ImageJ/Fiji (normalized * (2^image_bit_depth - 1)).
+    intensity_sum_normalized     DOUBLE[],
+    intensity_sum_gray           DOUBLE[],
+    intensity_mean_normalized    DOUBLE[],
+    intensity_mean_gray          DOUBLE[],
+    intensity_min_normalized     DOUBLE[],
+    intensity_min_gray           DOUBLE[],
+    intensity_max_normalized     DOUBLE[],
+    intensity_max_gray           DOUBLE[],
+    -- Colocalization partners: partner object class id -> the ids of the
+    -- partner objects of that class (key -1: partners without a class).
+    coloc_partner_ids            MAP(INTEGER, UUID[])
 );
 
 CREATE TABLE IF NOT EXISTS images (
@@ -244,6 +621,23 @@ CREATE TABLE IF NOT EXISTS classes (
     name      VARCHAR NOT NULL,
     color     UINTEGER
 );
+
+-- How the analysis run that wrote this file ended: 'running' from its start
+-- until 'finished', 'cancelled' or 'failed' (with `message`). Still
+-- 'running' afterwards means it was interrupted (crash, killed process).
+-- One row. Files from before this table existed have none.
+CREATE TABLE IF NOT EXISTS run (
+    status              VARCHAR NOT NULL,
+    title               VARCHAR,
+    short_description   VARCHAR,
+    description         VARCHAR,
+    app_version         VARCHAR,
+    author_full_name    VARCHAR[],
+    author_organization VARCHAR[],
+    message             VARCHAR,
+    started_at          TIMESTAMP NOT NULL DEFAULT current_timestamp,
+    finished_at         TIMESTAMP
+);
 ";
 
 // ---------------------------------------------------------------------------
@@ -258,154 +652,42 @@ fn json_string_array(values: &[String]) -> String {
     format!("[{}]", items.join(","))
 }
 
-fn json_int_array(values: &[i32]) -> String {
-    let items: Vec<String> = values.iter().map(|n| n.to_string()).collect();
-    format!("[{}]", items.join(","))
-}
-
-// ---------------------------------------------------------------------------
-// JSON serialisation helpers
-// ---------------------------------------------------------------------------
-
-// Keys by the class's raw numeric id (not its display name) - a class
-// rename never invalidates an already-written `coloc_json`, and the id is
-// exactly what `Column::ColocCount`/`coloc_count` (results_generator.rs)
-// need anyway, since it only sums values regardless of key.
-fn coloc_to_json(colocalized_with: &IndexMap<ObjectClass, Vec<ObjectId>>) -> String {
-    let mut entries = Vec::with_capacity(colocalized_with.len());
-    for (class, ids) in colocalized_with {
-        let key = match class {
-            ObjectClass::Unset => "unset".to_string(),
-            ObjectClass::Valid(n) => n.to_string(),
-        };
-        let ids_str = ids
-            .iter()
-            .map(|id| format!("\"{}\"", id))
-            .collect::<Vec<_>>()
-            .join(",");
-        entries.push(format!("\"{}\":[{}]", key, ids_str));
-    }
-    format!("{{{}}}", entries.join(","))
-}
-
-fn intensities_to_json(intensities: &IndexMap<i32, Intensity>, bit_max: f64) -> String {
-    let mut entries = Vec::with_capacity(intensities.len());
-    for (ch, v) in intensities {
-        // Mean is the precomputed per-channel average (sum / area), so the DB matches
-        // what the rest of the app reports rather than re-deriving it here.
-        let mean = v.avg_intensity as f64;
-        let min = v.min_intensity as f64;
-        let max = v.max_intensity as f64;
-        entries.push(format!(
-            "\"{}\":{{\"sum_raw\":{:.6},\"sum_scaled\":{:.2},\
-                               \"mean_raw\":{:.6},\"mean_scaled\":{:.2},\
-                               \"min_raw\":{:.6},\"min_scaled\":{:.2},\
-                               \"max_raw\":{:.6},\"max_scaled\":{:.2}}}",
-            ch,
-            v.sum_intensity,
-            v.sum_intensity * bit_max,
-            mean,
-            mean * bit_max,
-            min,
-            min * bit_max,
-            max,
-            max * bit_max,
-        ));
-    }
-    format!("{{{}}}", entries.join(","))
-}
-
-// ---------------------------------------------------------------------------
-// Pre-aggregated colocalization statistics
-// ---------------------------------------------------------------------------
-
-struct ColocStat {
-    source_class: String,
-    target_class: String,
-    n_colocalized: u64,
-    avg_targets_per_object: f64,
-    total_source_objects: u64,
-}
-
-fn compute_coloc_stats(
-    cache: &GlobalPipelineCache,
-    label: &dyn Fn(&ObjectClass) -> String,
-) -> Vec<ColocStat> {
-    let mut total_per_class: HashMap<String, u64> = HashMap::new();
-    for object in cache.object_cache.values() {
-        for class in &object.object_class {
-            *total_per_class.entry(label(class)).or_default() += 1;
-        }
-    }
-
-    let mut agg: HashMap<(String, String), (u64, u64)> = HashMap::new();
-    for object in cache.object_cache.values() {
-        for src_class in &object.object_class {
-            let src = label(src_class);
-            for (tgt_class, ids) in &object.colocalized_with {
-                if ids.is_empty() {
-                    continue;
-                }
-                let tgt = label(tgt_class);
-                let e = agg.entry((src.clone(), tgt)).or_default();
-                e.0 += 1;
-                e.1 += ids.len() as u64;
-            }
-        }
-    }
-
-    agg.into_iter()
-        .map(|((src_class, tgt_class), (n_coloc, sum_targets))| {
-            let total = *total_per_class.get(&src_class).unwrap_or(&1);
-            ColocStat {
-                avg_targets_per_object: sum_targets as f64 / total.max(1) as f64,
-                total_source_objects: total,
-                n_colocalized: n_coloc,
-                source_class: src_class,
-                target_class: tgt_class,
-            }
-        })
-        .collect()
-}
-
 // ---------------------------------------------------------------------------
 // PipelineResultExporter impl
 // ---------------------------------------------------------------------------
 
-impl PipelineResultExporter for DuckDbExporter {
-    fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
-        let start = Instant::now();
-        let object_count = cache.object_cache.len();
-        let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
-        // Objects and their colocalization stats must land together or not at
-        // all - without a transaction, a failure partway through (disk full,
-        // a DuckDB error) could leave one written with no matching rows in
-        // the other. `unchecked_transaction` (rather than `transaction`,
-        // which needs `&mut Connection`) is safe here because `conn` is
-        // already the only handle to this connection, serialized by the
-        // exporter's own Mutex - nothing else can be mid-transaction on it
-        // concurrently. Uncommitted (the `?` early-returns below) rolls back
-        // on drop.
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+impl DuckDbExporter {
+    /// The connection, also after another image's export panicked while
+    /// holding it: every image runs on its own thread, and one panic must
+    /// not fail all others. The panicking export's transaction was rolled
+    /// back when it was dropped, so the connection is consistent.
+    fn lock_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
+    /// The `objects` rows for the next up to `ARROW_BATCH_ROWS` objects
+    /// taken from `objects`, or `None` once it is exhausted. Needs no
+    /// database connection - see `export` for why that matters.
+    fn next_object_batch<'a>(
+        &self,
+        cache: &GlobalPipelineCache,
+        objects: &mut std::iter::Peekable<impl Iterator<Item = &'a Object>>,
+    ) -> Result<Option<RecordBatch>, InternalErrors> {
+        if objects.peek().is_none() {
+            return Ok(None);
+        }
         let px = &cache.image_meta.pixel_sizes;
         let nr_of_bits = cache.image_meta.nr_of_bits;
         // Same implausible-bit-depth guard as image_reader.rs's read path -
         // `nr_of_bits` should already have been rejected there before a
         // cache carrying it could exist, but this shouldn't trust that
-        // blindly: unguarded, `1u64 << nr_of_bits` for nr_of_bits > 63 is a
-        // shift-by-too-large, silently producing a wrong (not NaN/Inf, since
-        // this is only ever used as a multiplier below) scale factor instead
-        // of an error.
-        if !(1..=32).contains(&nr_of_bits) {
+        // blindly (see `max_gray_value`).
+        let Some(bit_max) = max_gray_value(nr_of_bits) else {
             return Err(InternalErrors::Generic(format!(
                 "cannot export {}: implausible bit depth {nr_of_bits} (expected 1-32)",
                 cache.image_rel_path.display()
             )));
-        }
-        let bit_max = ((1u64 << nr_of_bits) - 1) as f64;
+        };
         let px_len = (px.px_size_x * px.px_size_y).sqrt() as f64;
         let pxx = px.px_size_x as f64;
         let pxy = px.px_size_y as f64;
@@ -413,137 +695,172 @@ impl PipelineResultExporter for DuckDbExporter {
         let image_rel = cache.image_rel_path.display().to_string();
         let image_name = image_display_name(&cache.image_rel_path);
 
-        let label = |c: &ObjectClass| self.class_label(c);
+        let mut columns =
+            ObjectColumns::with_capacity(cache.object_cache.len().min(ARROW_BATCH_ROWS));
+        for object in objects.by_ref().take(ARROW_BATCH_ROWS) {
+            // get_perimeter()/get_ellipse() are precomputed at object creation (see
+            // Object::finalize_geometry), so here they are just field reads - which
+            // matters for batches built under the connection lock. We pull each into a local and
+            // derive the dependent metrics (circularity/roundness from the perimeter;
+            // min_feret/aspect_ratio from the ellipse) to build the row from one read.
+            let perimeter_f32 = object.get_perimeter();
+            let perimeter = perimeter_f32 as f64;
+            let ellipse = object.get_ellipse();
+            let centroid = object.get_centroid();
+            let feret = object.get_feret_diameter() as f64;
+            let min_feret = ellipse.minor as f64;
+            let aspect_ratio = if ellipse.minor > 0.0 {
+                (ellipse.major / ellipse.minor) as f64
+            } else {
+                1.0
+            };
 
-        // --- object rows via Appender ---
-        // List columns (object_class_name, object_class_id, children, parent_id)
-        // are stored as VARCHAR JSON strings; the read query casts them back to
-        // typed arrays so the reader code needs no changes.
-        // The Appender flushes its buffer to disk when it is dropped, giving
-        // constant memory usage regardless of how many images are processed.
-        {
+            let object_class_names: Vec<String> = object
+                .object_class
+                .iter()
+                .filter(|c| **c != ObjectClass::Unset)
+                .map(|c| self.class_label(c))
+                .collect();
+            let children_ids: Vec<String> =
+                object.children.iter().map(|id| id.to_string()).collect();
+
+            let centroid_x_px = centroid.0 as f64;
+            let centroid_y_px = centroid.1 as f64;
+            // circularity and roundness use the identical 4π·area/perimeter² formula,
+            // so compute it once from the perimeter local. (get_roundness also guards
+            // perimeter == 0, which object.circularity() does not.)
+            let roundness = object.get_roundness(perimeter_f32) as f64;
+
+            let c = &mut columns;
+            c.image_name.append_value(&image_name);
+            c.image_rel_path.append_value(&image_rel);
+            c.c_stack.append_value(object.plane.c);
+            c.z_stack.append_value(object.plane.z);
+            c.t_stack.append_value(object.plane.t);
+            c.object_id.append_value(object.id.to_string());
+            c.seg_class_name
+                .append_value(object.segmentation_class.to_string());
+            c.seg_class_id
+                .append_value(object.segmentation_class.0 as i32);
+            c.object_class_name
+                .append_value(json_string_array(&object_class_names));
+            for class in &object.object_class {
+                if let ObjectClass::Valid(n) = class {
+                    c.object_class_id.values().append_value(*n as i32);
+                }
+            }
+            c.object_class_id.append(true);
+            c.parent_id
+                .append_option(object.parent_id.as_ref().map(|id| id.to_string()));
+            c.children.append_value(json_string_array(&children_ids));
+            c.track_id.append_value(object.track.id.0);
+            c.f64(F64::CentroidXPx, centroid_x_px);
+            c.f64(F64::CentroidYPx, centroid_y_px);
+            c.f64(F64::CentroidXNm, centroid_x_px * pxx);
+            c.f64(F64::CentroidYNm, centroid_y_px * pxy);
+            for (column, value) in c.bbox_px.iter_mut().zip(object.bbox) {
+                column.append_value(value);
+            }
+            c.f64(F64::BboxXminNm, object.bbox[0] as f64 * pxx);
+            c.f64(F64::BboxYminNm, object.bbox[1] as f64 * pxy);
+            c.f64(F64::BboxXmaxNm, object.bbox[2] as f64 * pxx);
+            c.f64(F64::BboxYmaxNm, object.bbox[3] as f64 * pxy);
+            c.area_px.append_value(object.area as u64);
+            c.f64(F64::AreaNm2, object.area as f64 * pxx * pxy);
+            c.f64(F64::PerimeterPx, perimeter);
+            c.f64(F64::PerimeterNm, perimeter * px_len);
+            c.f64(F64::Circularity, roundness);
+            c.f64(F64::Solidity, object.get_solidity() as f64);
+            c.f64(F64::AspectRatio, aspect_ratio);
+            c.f64(F64::Roundness, roundness);
+            c.f64(
+                F64::Compactness,
+                object.get_compactness(perimeter_f32) as f64,
+            );
+            c.f64(F64::MajorAxisPx, ellipse.major as f64);
+            c.f64(F64::MinorAxisPx, ellipse.minor as f64);
+            c.f64(F64::MajorAxisNm, ellipse.major as f64 * px_len);
+            c.f64(F64::MinorAxisNm, ellipse.minor as f64 * px_len);
+            c.f64(F64::MajorAxisAngle, ellipse.angle as f64);
+            c.f64(F64::Eccentricity, ellipse.eccentricity as f64);
+            c.f64(F64::FeretDiameterPx, feret);
+            c.f64(F64::MinFeretPx, min_feret);
+            c.f64(F64::FeretDiameterNm, feret * px_len);
+            c.f64(F64::MinFeretNm, min_feret * px_len);
+            c.touches_edge.append_value(object.touches_edge);
+            c.f64(F64::PixelSizeXNm, pxx);
+            c.f64(F64::PixelSizeYNm, pxy);
+            c.f64(F64::PixelSizeZNm, px.px_size_z as f64);
+            c.image_bit_depth.append_value(nr_of_bits as u8);
+            c.append_intensities(&object.intensities, bit_max);
+            c.append_coloc(&object.colocalized_with)?;
+        }
+        columns.finish().map(Some)
+    }
+}
+
+impl PipelineResultExporter for DuckDbExporter {
+    fn finish_run(&self, outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
+        let (status, message) = match outcome {
+            Ok(()) => ("finished", None),
+            Err(InternalErrors::Cancelled) => ("cancelled", None),
+            Err(e) => ("failed", Some(e.to_string())),
+        };
+        self.conn
+            .lock()
+            .map_err(|_| InternalErrors::Internal("results database lock poisoned".into()))?
+            .execute(
+                "UPDATE run SET status = ?, message = ?, finished_at = current_timestamp",
+                params![status, message],
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+        let start = Instant::now();
+        let object_count = cache.object_cache.len();
+        let mut objects = cache.object_cache.values().peekable();
+
+        // The first batch - for typical images every object - is built
+        // before taking the connection lock: building the Arrow columns is
+        // about half of the export time and needs no database, so images
+        // finishing at the same time build theirs in parallel and only take
+        // turns for the append and commit. Further batches of a huge image
+        // are built under the lock, as before, so no thread ever holds more
+        // than one batch in memory.
+        let first_batch = self.next_object_batch(cache, &mut objects)?;
+
+        let conn = self.lock_conn();
+        // Objects and their colocalization stats must land together or not at
+        // all - without a transaction, a failure partway through (disk full,
+        // a DuckDB error) could leave one written with no matching rows in
+        // the other. `unchecked_transaction` (rather than `transaction`,
+        // which needs `&mut Connection`) is safe here because `conn` is
+        // already the only handle to this connection, serialized by the
+        // `conn` Mutex - nothing else can be mid-transaction on it
+        // concurrently. Uncommitted (the `?` early-returns below) rolls back
+        // on drop.
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+
+        // --- object rows via the Arrow appender ---
+        // Rows are collected into Arrow columns and appended a batch at a
+        // time: row by row, a 3.8M-object run took ~47 s instead of ~36 s
+        // (and `append_row` can't append the `object_class_id` list at all -
+        // see `ObjectColumns`). The Appender flushes to the database when
+        // dropped.
+        if let Some(batch) = first_batch {
             let mut app = tx
                 .appender("objects")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
-
-            for object in cache.object_cache.values() {
-                // get_perimeter()/get_ellipse() are precomputed at object creation on the
-                // parallel workers (see Object::finalize_geometry), so here on the single
-                // writer thread they are just field reads. We pull each into a local and
-                // derive the dependent metrics (circularity/roundness from the perimeter;
-                // min_feret/aspect_ratio from the ellipse) to build the row from one read.
-                let perimeter_f32 = object.get_perimeter();
-                let perimeter = perimeter_f32 as f64;
-                let ellipse = object.get_ellipse();
-                let centroid = object.get_centroid();
-                let feret = object.get_feret_diameter() as f64;
-                let min_feret = ellipse.minor as f64;
-                let aspect_ratio = if ellipse.minor > 0.0 {
-                    (ellipse.major / ellipse.minor) as f64
-                } else {
-                    1.0
-                };
-
-                let parent_id: Option<String> = object.parent_id.as_ref().map(|id| id.to_string());
-                let track_id: u64 = object.track.id.0;
-
-                let object_class_names: Vec<String> = object
-                    .object_class
-                    .iter()
-                    .filter(|c| **c != ObjectClass::Unset)
-                    .map(|c| label(c))
-                    .collect();
-                let object_class_ids: Vec<i32> = object
-                    .object_class
-                    .iter()
-                    .filter_map(|c| match c {
-                        ObjectClass::Valid(n) => Some(*n as i32),
-                        ObjectClass::Unset => None,
-                    })
-                    .collect();
-                let children_ids: Vec<String> =
-                    object.children.iter().map(|id| id.to_string()).collect();
-
-                let object_class_names_json = json_string_array(&object_class_names);
-                let object_class_ids_json = json_int_array(&object_class_ids);
-                let children_json = json_string_array(&children_ids);
-                let coloc_json = coloc_to_json(&object.colocalized_with);
-                let intensities_json = intensities_to_json(&object.intensities, bit_max);
-
-                let seg_class_name = object.segmentation_class.to_string();
-                let seg_class_id = object.segmentation_class.0 as i32;
-                let object_id = object.id.to_string();
-                let centroid_x_px = centroid.0 as f64;
-                let centroid_y_px = centroid.1 as f64;
-                let perimeter_nm = perimeter * px_len;
-                let area_px = object.area as u64;
-                let area_nm2 = object.area as f64 * pxx * pxy;
-                // circularity and roundness use the identical 4π·area/perimeter² formula,
-                // so compute it once from the perimeter local. (get_roundness also guards
-                // perimeter == 0, which object.circularity() does not.)
-                let roundness = object.get_roundness(perimeter_f32) as f64;
-                let circularity = roundness;
-                let compactness = object.get_compactness(perimeter_f32) as f64;
-                let feret_nm = feret * px_len;
-                let min_feret_nm = min_feret * px_len;
-                let px_size_z = px.px_size_z as f64;
-
-                app.append_row(params![
-                    &image_name,                   // image_name
-                    &image_rel,                    // image_rel_path
-                    object.plane.c,                // c_stack
-                    object.plane.z,                // z_stack
-                    object.plane.t,                // t_stack
-                    &object_id,                    // object_id (VARCHAR → UUID column)
-                    &seg_class_name,               // seg_class_name
-                    seg_class_id,                  // seg_class_id
-                    &object_class_names_json,      // object_class_name (VARCHAR JSON)
-                    &object_class_ids_json,        // object_class_id   (VARCHAR JSON)
-                    &parent_id,                    // parent_id         (VARCHAR)
-                    &children_json,                // children          (VARCHAR JSON)
-                    track_id,                      // track_id
-                    centroid_x_px,                 // centroid_x_px
-                    centroid_y_px,                 // centroid_y_px
-                    centroid_x_px * pxx,           // centroid_x_nm
-                    centroid_y_px * pxy,           // centroid_y_nm
-                    object.bbox[0],                // bbox_xmin_px
-                    object.bbox[1],                // bbox_ymin_px
-                    object.bbox[2],                // bbox_xmax_px
-                    object.bbox[3],                // bbox_ymax_px
-                    object.bbox[0] as f64 * pxx,   // bbox_xmin_nm
-                    object.bbox[1] as f64 * pxy,   // bbox_ymin_nm
-                    object.bbox[2] as f64 * pxx,   // bbox_xmax_nm
-                    object.bbox[3] as f64 * pxy,   // bbox_ymax_nm
-                    area_px,                       // area_px
-                    area_nm2,                      // area_nm2
-                    perimeter,                     // perimeter_px
-                    perimeter_nm,                  // perimeter_nm
-                    circularity,                   // circularity
-                    object.get_solidity() as f64,  // solidity
-                    aspect_ratio,                  // aspect_ratio
-                    roundness,                     // roundness
-                    compactness,                   // compactness
-                    ellipse.major as f64,          // major_axis_px
-                    ellipse.minor as f64,          // minor_axis_px
-                    ellipse.major as f64 * px_len, // major_axis_nm
-                    ellipse.minor as f64 * px_len, // minor_axis_nm
-                    ellipse.angle as f64,          // major_axis_angle
-                    ellipse.eccentricity as f64,   // eccentricity
-                    feret,                         // feret_diameter_px
-                    min_feret,                     // min_feret_px
-                    feret_nm,                      // feret_diameter_nm
-                    min_feret_nm,                  // min_feret_nm
-                    object.touches_edge,           // touches_edge
-                    pxx,                           // pixel_size_x_nm
-                    pxy,                           // pixel_size_y_nm
-                    px_size_z,                     // pixel_size_z_nm
-                    nr_of_bits,                    // image_bit_depth
-                    &intensities_json,             // intensities_json
-                    &coloc_json,                   // coloc_json
-                ])
+            app.append_record_batch(batch)
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            while let Some(batch) = self.next_object_batch(cache, &mut objects)? {
+                app.append_record_batch(batch)
+                    .map_err(|e| InternalErrors::Io(e.to_string()))?;
             }
-            // Appender flushes to disk on drop
         }
 
         tx.commit().map_err(|e| InternalErrors::Io(e.to_string()))?;
@@ -573,10 +890,7 @@ impl PipelineResultExporter for DuckDbExporter {
         nr_t_stacks: u32,
         error: Option<&str>,
     ) -> Result<(), InternalErrors> {
-        let conn = self
-            .conn
-            .lock()
-            .expect("Database connection mutex poisoned");
+        let conn = self.lock_conn();
         let image_rel = image_rel_path.display().to_string();
         let image_name = image_display_name(image_rel_path);
         let successful = error.is_none();
@@ -590,512 +904,337 @@ impl PipelineResultExporter for DuckDbExporter {
     }
 }
 
-// ---------------------------------------------------------------------------
-// DuckDbReader
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::object::{Object, ObjectInit};
+    use bitvec::prelude::*;
+    use std::collections::HashSet;
 
-/// Flat DTO for a row in the `images` table: one per processed image,
-/// regardless of whether it produced any objects.
-#[derive(Debug, Clone)]
-pub struct ImageRow {
-    pub image_name: String,
-    pub image_rel_path: String,
-    /// `true` if every tile/plane for this image exported successfully,
-    /// `false` if it was finalized despite a failure partway through -
-    /// see `error_message` for details, and `DuckDbExporter::finalize_image`
-    /// for why a failed image still gets a row here rather than none at all.
-    pub successful: bool,
-    pub error_message: Option<String>,
-    /// User-toggled via `DuckDbReader::set_image_disabled` - excluded from
-    /// exports by default and shown crossed out in the Matrix view. Not set
-    /// by the analysis pipeline itself (see `successful` for that).
-    pub disabled: bool,
-}
+    fn object_in_classes(id: u128, classes: &[u32]) -> Object {
+        Object::new(ObjectInit {
+            id: ObjectId(id),
+            object_class: classes
+                .iter()
+                .map(|c| ObjectClass::Valid(*c))
+                .collect::<HashSet<_>>(),
+            bbox: [0, 0, 1, 1],
+            mask_data: BitVec::<u64, Lsb0>::repeat(true, 4),
+            area: 4,
+            ..Default::default()
+        })
+    }
 
-/// Flat DTO for a row in the `classes` table: one per registered class in
-/// the project's classification settings at the moment the file was written.
-#[derive(Debug, Clone)]
-pub struct ClassRow {
-    pub class_id: i32,
-    pub name: String,
-}
+    fn run_row(exporter: &DuckDbExporter) -> (String, Option<String>, bool) {
+        exporter
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status, message, finished_at IS NOT NULL FROM run",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap()
+    }
 
-/// Flat DTO for a row in the `objects` table.
-#[derive(Debug, Clone)]
-pub struct ObjectRow {
-    pub image_name: String,
-    pub image_rel_path: String,
-    pub c_stack: Option<i32>,
-    pub z_stack: Option<i32>,
-    pub t_stack: Option<i32>,
-    pub object_id: String,
-    pub seg_class_name: Option<String>,
-    pub seg_class_id: Option<i32>,
-    pub object_class_name: Vec<String>,
-    pub object_class_id: Vec<i32>,
-    pub parent_id: Option<String>,
-    pub children: Vec<String>,
-    pub track_id: u64,
-    pub centroid_x_px: f64,
-    pub centroid_y_px: f64,
-    pub centroid_x_nm: f64,
-    pub centroid_y_nm: f64,
-    pub area_px: u64,
-    pub area_nm2: f64,
-    pub perimeter_px: f64,
-    pub perimeter_nm: f64,
-    pub circularity: f64,
-    pub solidity: f64,
-    pub aspect_ratio: f64,
-    pub roundness: f64,
-    pub compactness: f64,
-    pub major_axis_px: f64,
-    pub minor_axis_px: f64,
-    pub eccentricity: f64,
-    pub touches_edge: bool,
-    pub intensities_json: String,
-    pub coloc_json: String,
-    /// Pixel-space bounding box `[xmin, ymin, xmax, ymax]`, used to highlight the
-    /// object in the editor viewport when its results row is selected.
-    pub bbox_px: [u32; 4],
-}
+    #[test]
+    fn a_run_is_running_until_its_outcome_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        for (outcome, status, message) in [
+            (Ok(()), "finished", None),
+            (Err(InternalErrors::Cancelled), "cancelled", None),
+            (
+                Err(InternalErrors::Internal("disk full".into())),
+                "failed",
+                Some("disk full"),
+            ),
+        ] {
+            let path = dir.path().join(format!("{status}.evadb"));
+            let exporter = DuckDbExporter::new(
+                &path,
+                HashMap::new(),
+                &MetaData {
+                    name: "Experiment name".into(),
+                    short_description: "Short description".into(),
+                    description: "Long description".into(),
+                    authors: vec![],
+                    creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                    category: "Test category".into(),
+                    tags: vec![],
+                    app_version: "v1.0.0".into(),
+                },
+            )
+            .unwrap();
+            assert_eq!(run_row(&exporter), ("running".into(), None, false));
 
-/// Filter criteria for [`DuckDbReader::get_objects`].
-///
-/// For `image_filter`, `class_filter` and `coloc_filter`:
-/// - `None`       → no restriction (return all)
-/// - `Some([])`   → active filter with nothing selected → return 0 rows
-/// - `Some([..])` → return only rows matching these values
-#[derive(Debug, Clone)]
-pub struct ObjectFilter {
-    pub image_filter: Option<Vec<String>>,
-    pub class_filter: Option<Vec<String>>,
-    /// Restricts to rows whose colocalization status label ("Yes"/"No") is in this set.
-    pub coloc_filter: Option<Vec<String>>,
-    /// Restricts to rows whose `object_id` is in this set. Unlike the other
-    /// filters this is typically used *alone* (no image/class/coloc filter set
-    /// alongside it) to fetch an exact, known set of ROIs — e.g. the specific
-    /// colocalization partners referenced by one page of source ROIs — without
-    /// re-deriving or re-checking the source-side filters.
-    pub object_id_filter: Option<Vec<String>>,
-    /// Restricts to ROIs from this single time-frame index, or `None` for
-    /// every frame (today's default behavior).
-    pub t_stack_filter: Option<i32>,
-    /// Restricts to ROIs from this single Z-depth index, or `None` for every
-    /// depth (today's default behavior).
-    pub z_stack_filter: Option<i32>,
-    /// Rows per page; 0 means return all.
-    pub page_size: usize,
-    /// Zero-based page index.
-    pub page: usize,
-    /// When false, `intensities_json` is replaced with an empty string in the
-    /// query result, avoiding JSON parsing cost for hidden channel columns.
-    pub fetch_intensities: bool,
-    /// Results-table column id to sort by (see [`column_order_expr`] for which
-    /// ids are supported). `None` keeps the default `ORDER BY object_id`.
-    pub sort_column: Option<String>,
-    pub sort_ascending: bool,
-}
-
-impl Default for ObjectFilter {
-    fn default() -> Self {
-        Self {
-            image_filter: None,
-            class_filter: None,
-            coloc_filter: None,
-            object_id_filter: None,
-            t_stack_filter: None,
-            z_stack_filter: None,
-            page_size: 500,
-            page: 0,
-            fetch_intensities: true,
-            sort_column: None,
-            sort_ascending: true,
+            exporter.finish_run(&outcome).unwrap();
+            let (got_status, got_message, finished) = run_row(&exporter);
+            assert_eq!(got_status, status);
+            assert_eq!(
+                got_message.is_some_and(|m| m.contains("disk full")),
+                message.is_some()
+            );
+            assert!(finished);
         }
     }
-}
 
-// ---------------------------------------------------------------------------
-// Grouped/aggregated queries (see `DuckDbReader::aggregate_objects`)
-// ---------------------------------------------------------------------------
+    #[test]
+    fn export_writes_object_classes_as_an_integer_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(
+            &path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name 02".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        cache.image_meta.nr_of_bits = 8;
+        cache
+            .object_cache
+            .insert(ObjectId(1), object_in_classes(1, &[4]));
+        cache
+            .object_cache
+            .insert(ObjectId(2), object_in_classes(2, &[1, 3]));
+        cache
+            .object_cache
+            .insert(ObjectId(3), object_in_classes(3, &[]));
 
-/// How to compute each object's grouping key in [`DuckDbReader::aggregate_objects`].
-/// Kept free of `evanalyzer_app` types (`GroupBy`/`GroupConfig`) so the core
-/// crate doesn't depend on the app crate — the app-side orchestration
-/// (`aggregate_objects_sql` in `results_loader.rs`) translates `GroupBy` into one
-/// of these.
-pub enum GroupKeyMode {
-    /// Group by `image_name` directly (covers both `GroupBy::None` and
-    /// `GroupBy::Image` — grouping by image is meaningless when there's no
-    /// grouping at all, but `aggregate_objects` is only ever called when
-    /// `group_by != GroupBy::None`).
-    Image,
-    /// Group by a precomputed `image_rel_path -> key` mapping (`GroupBy::Folder`).
-    /// The caller builds this via [`DuckDbReader::get_distinct_images`] plus
-    /// Rust's own `folder_of()` — `std::path::Path::parent()`'s exact semantics
-    /// (including its `"(root)"` fallback) have no faithful single SQL
-    /// expression, so the directory-splitting logic itself stays in Rust; only
-    /// the resulting small lookup table is pushed into the query as a `CASE`.
-    ImageRelPathMap(HashMap<String, String>),
-    /// Group by a regex applied to `image_name` (`GroupBy::Regex`). `pattern`
-    /// must already be a syntactically valid RE2 pattern (validated by the
-    /// caller via the `regex` crate before calling `aggregate_objects` — DuckDB
-    /// uses RE2 internally too, so a pattern Rust's `regex` crate accepts
-    /// should also be accepted here). `has_capture_group` selects whether the
-    /// grouping key is capture group 1 or the whole match (group 0) — mirrors
-    /// `results_loader.rs`'s `group_key`, which prefers the first capture
-    /// group and falls back to the whole match when the pattern has none.
-    /// Rows whose `image_name` doesn't match `pattern` are dropped entirely.
-    Regex {
-        pattern: String,
-        has_capture_group: bool,
-    },
-}
+        exporter.export(&cache).unwrap();
 
-/// Describes one grouped/aggregated query for [`DuckDbReader::aggregate_objects`].
-pub struct AggregateSpec {
-    pub key_mode: GroupKeyMode,
-    /// Fans each object out into one bucket per class it carries (mirrors
-    /// `results_loader.rs`'s `object_classes`/`GroupConfig::group_by_class`).
-    pub group_by_class: bool,
-    /// Additionally splits each group into a colocalizing and a
-    /// non-colocalizing bucket (mirrors `GroupConfig::split_colocalized`).
-    pub split_colocalized: bool,
-    /// Results-table column ids to aggregate — every id here must be one
-    /// [`column_order_expr`] maps to a scalar SQL expression (callers filter
-    /// via `results_loader.rs`'s `is_numeric_metric` first, which only ever
-    /// admits such ids).
-    pub metric_ids: Vec<String>,
-    /// SQL aggregate function names applied to every metric, e.g. `"MIN"`,
-    /// `"AVG"`, `"MEDIAN"`, `"STDDEV_SAMP"`. One output column per
-    /// `(metric_id, agg_fn)` pair, in that nested order (metric-major).
-    pub agg_fns: Vec<&'static str>,
-}
+        let conn = shared_connection(&path).unwrap();
+        let column_type: String = conn
+            .query_row(
+                "SELECT data_type FROM information_schema.columns \
+                 WHERE table_name = 'objects' AND column_name = 'object_class_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(column_type, "INTEGER[]");
+        let classes: Vec<String> = conn
+            .prepare(
+                "SELECT CAST(list_sort(object_class_id) AS VARCHAR) FROM objects \
+                 ORDER BY len(object_class_id), list_sort(object_class_id)",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(classes, ["[]", "[4]", "[1, 3]"]);
+    }
 
-/// One grouped/aggregated result row from [`DuckDbReader::aggregate_objects`].
-pub struct AggregatedRow {
-    pub group_key: String,
-    /// `Some(_)` iff `AggregateSpec::group_by_class` was set.
-    pub group_class: Option<String>,
-    /// `Some(_)` iff `AggregateSpec::split_colocalized` was set.
-    pub colocalized: Option<bool>,
-    pub count: i64,
-    /// One entry per `(metric_id, agg_fn)` pair in
-    /// `AggregateSpec::metric_ids` × `AggregateSpec::agg_fns` order
-    /// (metric-major). `None` means every contributing object was NULL for that
-    /// metric (e.g. a channel column no object in the bucket has intensity data
-    /// for) — SQL aggregate functions skip NULL inputs the same way
-    /// `results_loader.rs`'s `apply_agg` only ever collects `Some` values, so
-    /// an all-NULL bucket and an all-absent bucket mean the same thing.
-    pub metric_values: Vec<Option<f64>>,
-}
-
-/// SQL expression computing the same display class string used throughout the
-/// results table/filters/export: the joined `object_class_name` list, falling
-/// back to `seg_class_name` when a object carries no object classes.
-fn class_case_expr() -> &'static str {
-    "CASE WHEN json_array_length(object_class_name) = 0 \
-     THEN COALESCE(seg_class_name, '') \
-     ELSE array_to_string(CAST(object_class_name AS VARCHAR[]), ', ') END"
-}
-
-/// SQL expression producing the per-object list of classes to fan out over for
-/// `AggregateSpec::group_by_class` — mirrors `class_case_expr`'s fallback to
-/// `seg_class_name`, but as a one-or-more-element array (via `UNNEST` in the
-/// `FROM` clause) instead of a single comma-joined string, so a multi-class
-/// object contributes to each of its classes' group buckets separately (matching
-/// `results_loader.rs`'s `object_classes`). Always yields at least one element,
-/// even when a object carries no object classes, so the `UNNEST` cross join
-/// never silently drops a row.
-fn class_fanout_expr() -> &'static str {
-    "CASE WHEN json_array_length(object_class_name) = 0 \
-     THEN [COALESCE(seg_class_name, '')] \
-     ELSE CAST(object_class_name AS VARCHAR[]) END"
-}
-
-/// SQL expression for one of `ObjectRow`'s scaled per-channel intensity stats
-/// (`min_scaled` / `max_scaled` / `mean_scaled` / `sum_scaled`, see `intensities_to_json`).
-///
-/// Uses the scalar-path form of `json_extract` (a single string path), not
-/// the bracket/list form (`json_extract(col, ['{ch}'])`) — the list form
-/// returns a JSON array of results (one per requested path) rather than a
-/// scalar, and extracting a field from that array via `->>` throws a
-/// "Malformed JSON" error the moment any row's `intensities_json` is missing
-/// the requested channel key (e.g. a object with no measured intensities at all,
-/// whose `intensities_json` is `"{}"`) — a real crash on sort-by-channel-column
-/// today for any file where even one object lacks that channel's data. The
-/// scalar form instead yields SQL NULL for a missing key, matching how
-/// `parse_intensities`/`metric_value` already treat "channel absent" in Rust.
-fn channel_stat_expr(ch: i32, stat: &str) -> String {
-    format!("CAST(json_extract(intensities_json, '{ch}') ->> '{stat}' AS DOUBLE)")
-}
-
-/// SQL expression for the number of `class`-colocalizing partners a object has —
-/// the same value the `coloc_partner__{class}__count` results-table column shows.
-///
-/// `coloc_json` is stored as a native DuckDB `JSON` column, and the `->`
-/// extraction operator always receives a value the column type already
-/// guarantees is well-formed JSON — no guard needed here (unlike comparing
-/// `coloc_json` to a string literal, which is the actual crash risk; see
-/// `coloc_filter_condition`/`get_coloc_partner_class_names`).
-fn coloc_partner_count_expr(class: &str) -> String {
-    format!(
-        "COALESCE(json_array_length(coloc_json -> '{}'), 0)",
-        class.replace('\'', "''")
-    )
-}
-
-/// Maps a results-table column id to the SQL expression `ORDER BY` should sort
-/// on, or `None` if that column isn't backed by a sortable SQL value (e.g. the
-/// comma-joined `coloc_partner__{class}__ids` text column).
-fn column_order_expr(col_id: &str) -> Option<String> {
-    match col_id {
-        "object_id" => Some("object_id".to_string()),
-        "image" => Some("image_name".to_string()),
-        "class" => Some(class_case_expr().to_string()),
-        "area_px" => Some("area_px".to_string()),
-        "area_nm2" => Some("area_nm2".to_string()),
-        "circularity" => Some("circularity".to_string()),
-        "colocalized" => Some(coloc_is_colocalized_expr().to_string()),
-        id if id.starts_with("coloc_partner__") => {
-            let (class, suffix) = id.strip_prefix("coloc_partner__")?.rsplit_once("__")?;
-            (suffix == "count").then(|| coloc_partner_count_expr(class))
+    fn cache_with_objects(image: &str, count: u128) -> GlobalPipelineCache {
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from(image);
+        cache.image_meta.nr_of_bits = 8;
+        for id in 1..=count {
+            cache
+                .object_cache
+                .insert(ObjectId(id), object_in_classes(id, &[1]));
         }
-        id if id.starts_with("ch") => {
-            let rest = id.strip_prefix("ch")?;
-            let under = rest.find('_')?;
-            let ch: i32 = rest[..under].parse().ok()?;
-            let stat = match &rest[under + 1..] {
-                "min_bit" => "min_scaled",
-                "max_bit" => "max_scaled",
-                "avg_bit" => "mean_scaled",
-                "sum_bit" => "sum_scaled",
-                _ => return None,
-            };
-            Some(channel_stat_expr(ch, stat))
+        cache
+    }
+
+    fn object_count(path: &Path) -> i64 {
+        shared_connection(path)
+            .unwrap()
+            .query_row("SELECT count(*) FROM objects", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn export_writes_every_object_of_an_image_larger_than_one_batch() {
+        // The first batch is built before the connection lock, the rest
+        // under it - none may be lost or written twice at the seam.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(
+            &path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap();
+        let count = ARROW_BATCH_ROWS as u128 * 2 + 1;
+
+        exporter
+            .export(&cache_with_objects("a.tif", count))
+            .unwrap();
+
+        assert_eq!(object_count(&path), count as i64);
+        let distinct: i64 = shared_connection(&path)
+            .unwrap()
+            .query_row("SELECT count(DISTINCT object_id) FROM objects", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(distinct, count as i64);
+    }
+
+    #[test]
+    fn concurrent_exports_of_several_images_write_every_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(
+            &path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap();
+        let caches: Vec<_> = (0..8)
+            .map(|i| cache_with_objects(&format!("{i}.tif"), 500))
+            .collect();
+
+        std::thread::scope(|s| {
+            for cache in &caches {
+                let exporter = &exporter;
+                s.spawn(move || exporter.export(cache).unwrap());
+            }
+        });
+
+        assert_eq!(object_count(&path), 8 * 500);
+    }
+
+    #[test]
+    fn export_still_works_after_another_export_panicked_holding_the_connection() {
+        // Every image exports from its own thread: one panicking while it
+        // holds the connection must not fail the export of all others.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(
+            &path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _conn = exporter.conn.lock().unwrap();
+            panic!("simulated export panic while holding the connection");
+        }));
+        assert!(panicked.is_err());
+        assert!(exporter.conn.is_poisoned());
+
+        exporter.export(&cache_with_objects("a.tif", 3)).unwrap();
+        exporter
+            .finalize_image(Path::new("a.tif"), 1, 1, 1, 1, 1, None)
+            .unwrap();
+
+        assert_eq!(object_count(&path), 3);
+    }
+
+    #[test]
+    fn export_writes_intensities_per_channel_and_coloc_partners_as_a_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.evadb");
+        let exporter = DuckDbExporter::new(
+            &path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        cache.image_meta.nr_of_bits = 8; // gray value = normalized * 255
+        let mut object = object_in_classes(1, &[4]);
+        // Channels 0 and 2 measured, channel 1 not.
+        for (channel, value) in [(0, 0.5), (2, 0.25)] {
+            object.intensities.insert(
+                channel,
+                Intensity {
+                    sum_intensity: value * 4.0,
+                    min_intensity: value / 2.0,
+                    max_intensity: value * 2.0,
+                    avg_intensity: value,
+                    pixel_values: Vec::new(),
+                },
+            );
         }
-        _ => None,
+        object
+            .colocalized_with
+            .insert(ObjectClass::Valid(7), vec![ObjectId(2), ObjectId(3)]);
+        cache.object_cache.insert(ObjectId(1), object);
+        cache
+            .object_cache
+            .insert(ObjectId(2), object_in_classes(2, &[7]));
+
+        exporter.export(&cache).unwrap();
+
+        let conn = shared_connection(&path).unwrap();
+        let row = |sql: &str| -> String {
+            conn.query_row(
+                &format!("SELECT CAST(({sql}) AS VARCHAR) FROM objects ORDER BY object_id LIMIT 1"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(row("intensity_mean_normalized"), "[0.5, NULL, 0.25]");
+        assert_eq!(row("intensity_mean_gray"), "[127.5, NULL, 63.75]");
+        assert_eq!(row("intensity_sum_normalized"), "[2.0, NULL, 1.0]");
+        assert_eq!(row("intensity_min_normalized"), "[0.25, NULL, 0.125]");
+        assert_eq!(row("intensity_max_gray"), "[255.0, NULL, 127.5]");
+        assert_eq!(row("len(coloc_partner_ids[7])"), "2");
+        assert_eq!(
+            row("coloc_partner_ids[7][1]"),
+            ObjectId(2).to_string(),
+            "partner ids are stored as UUIDs"
+        );
+        let without: (String, String) = conn
+            .query_row(
+                "SELECT CAST(intensity_mean_normalized AS VARCHAR), CAST(coloc_partner_ids AS VARCHAR) \
+                 FROM objects ORDER BY object_id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(without, ("[]".to_string(), "{}".to_string()));
     }
-}
-
-fn sql_in_list(items: &[String]) -> String {
-    items
-        .iter()
-        .map(|s| format!("'{}'", s.replace('\'', "''")))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// `(min, max)` of `column` (one of the fixed `"t_stack"`/`"z_stack"`
-/// literals below — never user input), or `None` when there's nothing to
-/// step through: the column is all NULL, or every non-NULL value is the same.
-fn stack_range(conn: &Connection, column: &str) -> Result<Option<(i32, i32)>, InternalErrors> {
-    let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-    let sql = format!(
-        "SELECT MIN({column}), MAX({column}), COUNT(DISTINCT {column}) FROM objects WHERE {column} IS NOT NULL"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(err)?;
-    let (min, max, distinct_count): (Option<i32>, Option<i32>, i64) = stmt
-        .query_row([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-        .map_err(err)?;
-    if distinct_count <= 1 {
-        return Ok(None);
-    }
-    match (min, max) {
-        (Some(min), Some(max)) => Ok(Some((min, max))),
-        _ => Ok(None),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Coloc filter vocabulary
-//
-// `ObjectFilter::coloc_filter` items are one of three kinds of label, matched
-// literally against the value coming back from the GUI's filter popup:
-//   - "No"                          -> object has no colocalization partners
-//   - "Yes (any class)"             -> object colocalizes with at least one class
-//   - "Colocalizes with <class>"    -> object colocalizes with that specific class
-// These helpers are the single source of truth for that vocabulary so the SQL
-// builder below and the GUI (which populates the filter popup) never drift.
-// ---------------------------------------------------------------------------
-
-pub fn coloc_filter_label_no() -> &'static str {
-    "No"
-}
-
-pub fn coloc_filter_label_any() -> &'static str {
-    "Yes (any class)"
-}
-
-pub fn coloc_filter_label_with(class: &str) -> String {
-    format!("Colocalizes with {class}")
-}
-
-fn parse_coloc_filter_with(label: &str) -> Option<&str> {
-    label.strip_prefix("Colocalizes with ")
-}
-
-/// SQL boolean expression for "this object has at least one recorded
-/// colocalization partner".
-///
-/// `coloc_json` is a native DuckDB `JSON` column. Comparing it directly to a
-/// string literal (`coloc_json != ''`) makes DuckDB implicitly cast the
-/// *literal* to JSON to perform the comparison — and casting `''` to JSON is
-/// itself a parse error ("Malformed JSON ... input length is 0"), thrown for
-/// *every row scanned* regardless of that row's own value. This crashed
-/// loading results on Windows (observed there; apparently tolerated by
-/// whatever DuckDB build/version this project used to run on Linux) even
-/// though every stored `coloc_json` value is always well-formed JSON, since
-/// the column type guarantees that at write time. Casting the column to
-/// VARCHAR first forces the safe (JSON → string) cast direction instead.
-fn coloc_is_colocalized_expr() -> &'static str {
-    "(coloc_json IS NOT NULL AND CAST(coloc_json AS VARCHAR) != '' AND CAST(coloc_json AS VARCHAR) != '{}')"
-}
-
-/// Builds the SQL boolean expression for a single selected coloc-filter label.
-fn coloc_filter_condition(label: &str) -> String {
-    if label == coloc_filter_label_no() {
-        "(coloc_json IS NULL OR CAST(coloc_json AS VARCHAR) = '' OR CAST(coloc_json AS VARCHAR) = '{}')".to_string()
-    } else if label == coloc_filter_label_any() {
-        coloc_is_colocalized_expr().to_string()
-    } else if let Some(class) = parse_coloc_filter_with(label) {
-        format!(
-            "COALESCE(json_array_length(coloc_json -> '{}'), 0) > 0",
-            class.replace('\'', "''")
-        )
-    } else {
-        // Unrecognized label (shouldn't happen if the GUI only ever sends labels
-        // produced by the helpers above) -> matches nothing.
-        "FALSE".to_string()
-    }
-}
-
-/// True if any of `filter`'s `Option<Vec<_>>` fields is `Some(&[])` — an active
-/// filter with nothing selected, which always means zero matching rows. Shared
-/// by [`DuckDbReader::get_objects`] and [`DuckDbReader::aggregate_objects`] so both
-/// short-circuit identically instead of hitting the database for a query that
-/// can never return anything.
-fn filter_has_empty_selection(filter: &ObjectFilter) -> bool {
-    filter.image_filter.as_deref().is_some_and(|v| v.is_empty())
-        || filter.class_filter.as_deref().is_some_and(|v| v.is_empty())
-        || filter.coloc_filter.as_deref().is_some_and(|v| v.is_empty())
-        || filter
-            .object_id_filter
-            .as_deref()
-            .is_some_and(|v| v.is_empty())
-}
-
-/// Builds the list of SQL boolean conditions `filter` implies (unjoined).
-/// Shared by [`DuckDbReader::get_objects`] and [`DuckDbReader::aggregate_objects`]
-/// so the two queries can never drift on what a given filter means;
-/// `aggregate_objects` also appends its own `regexp_matches` condition on top of
-/// this list before joining, for `GroupKeyMode::Regex`.
-fn filter_conditions(filter: &ObjectFilter) -> Vec<String> {
-    let mut conditions: Vec<String> = Vec::new();
-
-    if let Some(images) = &filter.image_filter {
-        conditions.push(format!("image_name IN ({})", sql_in_list(images)));
-    }
-    if let Some(classes) = &filter.class_filter {
-        conditions.push(format!(
-            "{} IN ({})",
-            class_case_expr(),
-            sql_in_list(classes)
-        ));
-    }
-    if let Some(labels) = &filter.coloc_filter {
-        // Every entry `Colocalization` ever writes into `colocalized_with` has a non-empty
-        // ID list (see coloc_objects.rs), so `coloc_json` is exactly "{}" / empty iff the object
-        // has no colocalization partner — no need to parse the object to check.
-        let fragments: Vec<String> = labels.iter().map(|l| coloc_filter_condition(l)).collect();
-        conditions.push(format!("({})", fragments.join(" OR ")));
-    }
-    if let Some(ids) = &filter.object_id_filter {
-        // Cast the column rather than the literals, so this reuses `sql_in_list`
-        // unchanged and doesn't depend on DuckDB's UUID-literal coercion rules.
-        conditions.push(format!(
-            "CAST(object_id AS VARCHAR) IN ({})",
-            sql_in_list(ids)
-        ));
-    }
-    if let Some(t) = filter.t_stack_filter {
-        conditions.push(format!("t_stack = {t}"));
-    }
-    if let Some(z) = filter.z_stack_filter {
-        conditions.push(format!("z_stack = {z}"));
-    }
-
-    conditions
-}
-
-/// Builds the `WHERE ...` clause (or `""` if `conditions` is empty) by
-/// joining an already-built condition list with `AND`.
-fn where_clause_from(conditions: &[String]) -> String {
-    if conditions.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", conditions.join(" AND "))
-    }
-}
-
-/// Builds the `WHERE ...` clause (or `""` if `filter` has no active
-/// conditions) for `filter`.
-fn build_where_clause(filter: &ObjectFilter) -> String {
-    where_clause_from(&filter_conditions(filter))
-}
-
-/// Adds the `images.disabled` column to a `.evadb` written before that
-/// column existed. A no-op (DuckDB `ADD COLUMN IF NOT EXISTS` is a cheap
-/// metadata-only check, not a data rewrite) once the column is already
-/// there, which is always true for a file created from the current
-/// `CREATE_TABLES` DDL - so this only ever does real work once per
-/// pre-existing file, the first time it's touched by this feature.
-///
-/// No `NOT NULL` here (unlike `CREATE_TABLES`'s copy of this column) -
-/// DuckDB's `ALTER TABLE ADD COLUMN` doesn't support column constraints,
-/// only `DEFAULT` (confirmed against the pinned duckdb crate version:
-/// `NOT NULL` here fails with "Adding columns with constraints not yet
-/// supported"). The `DEFAULT` alone is enough in practice: it backfills
-/// every existing row and applies to any future insert that omits the
-/// column, so nothing in this codebase ever produces a real `NULL` here -
-/// `get_images()` reading it straight into `bool` (not `Option<bool>`)
-/// relies on that, not on the database enforcing it.
-fn ensure_disabled_column(conn: &Connection) -> Result<(), InternalErrors> {
-    conn.execute_batch(
-        "ALTER TABLE images ADD COLUMN IF NOT EXISTS disabled BOOLEAN DEFAULT false;",
-    )
-    .map_err(|e| InternalErrors::Io(e.to_string()))
-}
-
-/// Migrates a `.evadb` from the old `status VARCHAR` ("ok"/"error") column
-/// to the current `successful BOOLEAN` one: adds `successful` (a no-op if
-/// already there, same reasoning as `ensure_disabled_column`), and - only
-/// the first time, only if the legacy `status` column is still present -
-/// backfills it from `status` and drops `status`. Checking for `status` via
-/// `information_schema.columns` rather than just trying the backfill and
-/// swallowing a "column does not exist" error keeps this from depending on
-/// DuckDB's exact error message wording.
-fn ensure_successful_column(conn: &Connection) -> Result<(), InternalErrors> {
-    let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-    conn.execute_batch(
-        "ALTER TABLE images ADD COLUMN IF NOT EXISTS successful BOOLEAN DEFAULT true;",
-    )
-    .map_err(err)?;
-
-    let has_legacy_status: bool = conn
-        .query_row(
-            "SELECT count(*) > 0 FROM information_schema.columns \
-             WHERE table_name = 'images' AND column_name = 'status'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(err)?;
-    if has_legacy_status {
-        conn.execute_batch(
-            "UPDATE images SET successful = (status = 'ok'); \
-             ALTER TABLE images DROP COLUMN status;",
-        )
-        .map_err(err)?;
-    }
-    Ok(())
 }

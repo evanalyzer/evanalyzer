@@ -11,7 +11,6 @@ use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, Pipeline
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use std::sync::Arc;
 
@@ -19,34 +18,27 @@ use std::sync::Arc;
 ///
 /// This algorithm can perform linear contrast stretching, normalization,
 /// or histogram equalization to improve the dynamic range of an image.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::EnhanceContrast;
-/// let settings = EnhanceContrast {
-///     saturated_pixels: 0.01,   // Clip 1% of outliers
-///     normalize: true,          // Stretch to [0.0, 1.0]
-///     equalize_histogram: false,
-/// };
-/// ```
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct EnhanceContrast {
     /// Percentage of pixels to "clip" from the top and bottom of the histogram.
     ///
-    /// Range: [0.0, 1.0]. A value of 0.01 (1%) helps ignore hot/dead pixels
-    /// that would otherwise prevent effective contrast stretching.
+    /// In percent (0 - 100), split evenly between the darkest and the
+    /// brightest pixels, like ImageJ: 0.35 clips 0.175 % at each end. A small
+    /// value (ImageJ's default is 0.35) ignores hot/dead pixels that would
+    /// otherwise prevent effective contrast stretching.
     pub saturated_pixels: f32,
 
     /// Whether to linearly stretch the remaining pixel intensities to fill
     /// the full [0.0, 1.0] range.
+    #[cmdsmeta(visibility = Advanced)]
     pub normalize: bool,
 
     /// Whether to apply Histogram Equalization.
     ///
     /// This redistributes pixel intensities to achieve a uniform distribution,
     /// which is highly effective for images with low contrast but high noise.
+    #[cmdsmeta(visibility = Advanced)]
     pub equalize_histogram: bool,
 }
 
@@ -104,8 +96,8 @@ impl ImageAlgorithm for EnhanceContrast {
         "Enhance Contrast"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::IMAGEJ]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -123,7 +115,7 @@ impl EnhanceContrast {
     ///
     /// # Arguments
     /// * `img` - A mutable reference to the grayscale image buffer. Modified in-place.
-    fn process_f32_gray(&self, img: &mut Image<f32, 1, CpuAllocator>) {
+    fn process_f32_gray(&self, img: &mut Image<f32, 1>) {
         let slice = img.as_slice_mut();
 
         let hist = compute_f32_histogram(slice);
@@ -151,7 +143,7 @@ impl EnhanceContrast {
     ///
     /// # Arguments
     /// * `img` - A mutable reference to the rgb image buffer. Modified in-place.
-    fn process_f32_rgb(&self, img: &mut Image<f32, 3, CpuAllocator>) {
+    fn process_f32_rgb(&self, img: &mut Image<f32, 3>) {
         let slice = img.as_slice_mut();
 
         // Extract Luminance (Rec. 709 weights)
@@ -332,9 +324,7 @@ mod tests {
             data[i] = 0.2 + (i as f32 / (width * height) as f32) * 0.3;
         }
 
-        let img =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 1>::new(ImageSize { width, height }, data).unwrap();
 
         // 2. Prepare Context
 
@@ -377,9 +367,7 @@ mod tests {
         let height = 2;
         let data = vec![0.1f32; width * height * 3]; // Flat dark gray
 
-        let img =
-            Image::<f32, 3, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 3>::new(ImageSize { width, height }, data).unwrap();
 
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
@@ -430,13 +418,12 @@ mod tests {
     #[test]
     fn test_enhance_contrast_format_mismatch_error() {
         // 1. Create a U32 image (Unsupported type)
-        let img = Image::<u32, 1, CpuAllocator>::from_size_val(
+        let img = Image::<u32, 1>::from_size_val(
             ImageSize {
                 width: 5,
                 height: 5,
             },
             0,
-            CpuAllocator,
         )
         .unwrap();
 
@@ -473,9 +460,7 @@ mod tests {
         let data: Vec<f32> = (0..width * height)
             .map(|i| 0.3 + (i as f32) * 0.01)
             .collect();
-        let img =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 1>::new(ImageSize { width, height }, data).unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
         let mut cache = GlobalPipelineCache::default();
 
@@ -507,9 +492,7 @@ mod tests {
         let height = 4;
         // Deliberately dim (max 0.4) so normalize has visible work to do.
         let data: Vec<f32> = (0..width * height).map(|i| (i as f32) * 0.02).collect();
-        let img =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 1>::new(ImageSize { width, height }, data).unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
         let mut cache = GlobalPipelineCache::default();
 
@@ -543,9 +526,7 @@ mod tests {
             0.2, 0.2, 0.2, // dim pixel
             0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.8, 0.8, 0.8, // bright pixel
         ];
-        let img =
-            Image::<f32, 3, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 3>::new(ImageSize { width, height }, data).unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
         let mut cache = GlobalPipelineCache::default();
 
@@ -584,9 +565,7 @@ mod tests {
         // Both pixels dim (luminance well under 1.0) so the normalize branch
         // (`max_lum > 1e-6 && max_lum < 1.0`) actually fires.
         let data = vec![0.1, 0.1, 0.1, 0.2, 0.2, 0.2];
-        let img =
-            Image::<f32, 3, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 3>::new(ImageSize { width, height }, data).unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
         let mut cache = GlobalPipelineCache::default();
 

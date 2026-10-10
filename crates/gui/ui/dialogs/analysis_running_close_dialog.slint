@@ -1,0 +1,61 @@
+import { BaseDialog } from "dialog_base.slint";
+import { GlobalAppState, DialogType, AnalysisRunningCloseState } from "../state.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
+
+// Asked when the window is closed while an analysis runs.
+export component AnalysisRunningCloseDialog inherits BaseDialog {
+    title-text: "Analysis running";
+    icon: "⚠️";
+    main-height: 230px;
+    main-width: 480px;
+
+    VerticalLayout {
+        spacing: 12px;
+        Text {
+            text: AnalysisRunningCloseState.remote
+                ? (AnalysisRunningCloseState.disconnecting
+                    ? "An analysis is running on the server. It can keep running after you disconnect - EVAnalyzer shows it again the next time you connect."
+                    : "An analysis is running on the server. It can keep running without this window - EVAnalyzer shows it again the next time you connect.")
+                : "An analysis is running on this computer. Closing EVAnalyzer stops it.";
+            wrap: word-wrap;
+            color: Theme.text;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: end;
+
+            AppButton {
+                text: "Back";
+                clicked => {
+                    GlobalAppState.active-dialog = DialogType.none;
+                    AnalysisRunningCloseState.back();
+                }
+            }
+
+            AppButton {
+                text: AnalysisRunningCloseState.remote ? "Cancel analysis" : "Stop analysis and close";
+                danger: true;
+                clicked => {
+                    GlobalAppState.active-dialog = DialogType.none;
+                    AnalysisRunningCloseState.cancel_analysis();
+                }
+            }
+
+            if AnalysisRunningCloseState.remote: AppButton {
+                text: AnalysisRunningCloseState.disconnecting ? "Keep running and disconnect" : "Keep running on server";
+                clicked => {
+                    GlobalAppState.active-dialog = DialogType.none;
+                    AnalysisRunningCloseState.keep_running();
+                }
+            }
+        }
+    }
+}

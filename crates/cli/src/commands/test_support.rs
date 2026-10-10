@@ -41,13 +41,21 @@ impl Drop for TempProjectFile {
     }
 }
 
-/// A row's worth of channel-0 intensity data, in the same JSON shape
-/// `evanalyzer_core::storage::duckdb::intensities_to_json` writes. Mirrors
-/// `evanalyzer_app`'s own `CH0_INTENSITIES_JSON` test fixture
-/// (`crates/app/src/results/test_support.rs`) - duplicated here because that
-/// helper is `pub(crate)` and `#[cfg(test)]`-only there, so it isn't reachable
-/// from this crate.
-const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_raw":1.0,"sum_scaled":255.0,"mean_raw":0.5,"mean_scaled":127.0,"median_raw":0.5,"median_scaled":127.0,"std_raw":0.1,"std_scaled":25.5,"min_raw":0.0,"min_scaled":0.0,"max_raw":1.0,"max_scaled":255.0}}"#;
+/// The `objects` intensity and colocalization columns, in the order
+/// [`intensity_values_sql`] (plus a colocalization map) fills them.
+const INTENSITY_AND_COLOC_COLUMNS: &str = "intensity_sum_normalized, intensity_sum_gray, \
+     intensity_mean_normalized, intensity_mean_gray, intensity_min_normalized, intensity_min_gray, \
+     intensity_max_normalized, intensity_max_gray, coloc_partner_ids";
+
+/// SQL values for the eight `intensity_*` list columns: `n_channels`
+/// channels, each with sum 1.0 (255 gray values), mean 0.5 (127), min 0 and
+/// max 1.0 (255).
+fn intensity_values_sql(n_channels: usize) -> String {
+    let list = |value: f64| format!("[{}]", vec![format!("{value:.1}"); n_channels].join(", "));
+    [1.0, 255.0, 0.5, 127.0, 0.0, 0.0, 1.0, 255.0]
+        .map(list)
+        .join(", ")
+}
 
 fn create_results_schema(conn: &duckdb::Connection) {
     conn.execute_batch(
@@ -56,7 +64,7 @@ fn create_results_schema(conn: &duckdb::Connection) {
             c_stack INTEGER, z_stack INTEGER, t_stack INTEGER,
             object_id UUID NOT NULL,
             seg_class_name VARCHAR, seg_class_id INTEGER,
-            object_class_name VARCHAR, object_class_id VARCHAR,
+            object_class_name VARCHAR, object_class_id INTEGER[],
             parent_id VARCHAR, children VARCHAR, track_id UBIGINT,
             centroid_x_px DOUBLE, centroid_y_px DOUBLE,
             centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
@@ -76,7 +84,11 @@ fn create_results_schema(conn: &duckdb::Connection) {
             touches_edge BOOLEAN,
             pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
             image_bit_depth UTINYINT,
-            intensities_json JSON, coloc_json JSON
+            intensity_sum_normalized DOUBLE[], intensity_sum_gray DOUBLE[],
+            intensity_mean_normalized DOUBLE[], intensity_mean_gray DOUBLE[],
+            intensity_min_normalized DOUBLE[], intensity_min_gray DOUBLE[],
+            intensity_max_normalized DOUBLE[], intensity_max_gray DOUBLE[],
+            coloc_partner_ids MAP(INTEGER, UUID[])
         );
         CREATE TABLE images (
             image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
@@ -112,7 +124,8 @@ pub(crate) fn seed_view_results_db(path: &Path) {
                   t_stack: i32,
                   z_stack: i32| {
         conn.execute(
-            "INSERT INTO objects (
+            &format!(
+                "INSERT INTO objects (
                 image_name, image_rel_path, t_stack, z_stack,
                 object_id, seg_class_name, seg_class_id,
                 object_class_name, object_class_id, track_id,
@@ -123,7 +136,7 @@ pub(crate) fn seed_view_results_db(path: &Path) {
                 circularity, solidity, aspect_ratio, roundness, compactness,
                 major_axis_px, minor_axis_px, eccentricity, touches_edge,
                 pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-                intensities_json, coloc_json
+                {INTENSITY_AND_COLOC_COLUMNS}
             ) VALUES (
                 ?, ?, ?, ?,
                 ?, ?, ?,
@@ -135,8 +148,10 @@ pub(crate) fn seed_view_results_db(path: &Path) {
                 1.0, 1.0, 1.0, 1.0, 1.0,
                 10, 10, 1.0, false,
                 1.0, 1.0, 1.0,
-                ?, '{}'
+                {}, MAP {{}}
             )",
+                intensity_values_sql(1)
+            ),
             duckdb::params![
                 image,
                 image,
@@ -149,7 +164,6 @@ pub(crate) fn seed_view_results_db(path: &Path) {
                 format!("[{class_id}]"),
                 area_px,
                 area_px as f64,
-                CH0_INTENSITIES_JSON,
             ],
         )
         .unwrap_or_else(|e| panic!("insert object {object_id}: {e}"));
@@ -175,7 +189,7 @@ pub(crate) fn seed_view_results_db(path: &Path) {
     );
 
     // Mirrors what `DuckDbExporter::finalize_image` would have written for
-    // these two images: one measured channel (`CH0_INTENSITIES_JSON`), and
+    // these two images: one measured channel (`intensity_values_sql(1)`), and
     // 2 z/t stacks each - matching the two distinct (t_stack, z_stack) planes
     // `insert` above used (img1 @ (0,0), img2 @ (1,1)).
     for image in ["img1.tif", "img2.tif"] {
@@ -196,24 +210,6 @@ pub(crate) fn seed_view_results_db(path: &Path) {
     }
 }
 
-/// Same JSON shape as [`CH0_INTENSITIES_JSON`] but keyed `"0".."n_channels-1"`,
-/// for tests asserting the CLI reports one intensity column group per real
-/// image channel (`evanalyzer_app`'s `ResultsGenerator::get_nr_of_c_stacks`)
-/// rather than a fixed count regardless of how many channels the image
-/// actually has.
-fn intensities_json_for_channels(n_channels: u32) -> String {
-    let entries: Vec<String> = (0..n_channels)
-        .map(|ch| {
-            format!(
-                "\"{ch}\":{{\"sum_raw\":1.0,\"sum_scaled\":255.0,\"mean_raw\":0.5,\"mean_scaled\":127.0,\
-                 \"median_raw\":0.5,\"median_scaled\":127.0,\"std_raw\":0.1,\"std_scaled\":25.5,\
-                 \"min_raw\":0.0,\"min_scaled\":0.0,\"max_raw\":1.0,\"max_scaled\":255.0}}"
-            )
-        })
-        .collect();
-    format!("{{{}}}", entries.join(","))
-}
-
 /// Builds a single-image, single-object results DB whose object carries
 /// intensity data for `n_channels` channels - unlike [`seed_view_results_db`]
 /// (always channel 0 only), for tests that need a specific real channel
@@ -226,7 +222,8 @@ pub(crate) fn seed_multi_channel_results_db(path: &Path, n_channels: u32) {
     create_results_schema(&conn);
 
     conn.execute(
-        "INSERT INTO objects (
+        &format!(
+            "INSERT INTO objects (
             image_name, image_rel_path, t_stack, z_stack,
             object_id, seg_class_name, seg_class_id,
             object_class_name, object_class_id, track_id,
@@ -237,7 +234,7 @@ pub(crate) fn seed_multi_channel_results_db(path: &Path, n_channels: u32) {
             circularity, solidity, aspect_ratio, roundness, compactness,
             major_axis_px, minor_axis_px, eccentricity, touches_edge,
             pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-            intensities_json, coloc_json
+            {INTENSITY_AND_COLOC_COLUMNS}
         ) VALUES (
             'img1.tif', 'img1.tif', 0, 0,
             '00000000-0000-0000-0000-000000000001', 'ClassA', 1,
@@ -249,9 +246,11 @@ pub(crate) fn seed_multi_channel_results_db(path: &Path, n_channels: u32) {
             1.0, 1.0, 1.0, 1.0, 1.0,
             10, 10, 1.0, false,
             1.0, 1.0, 1.0,
-            ?, '{}'
+            {}, MAP {{}}
         )",
-        duckdb::params![intensities_json_for_channels(n_channels)],
+            intensity_values_sql(n_channels as usize)
+        ),
+        [],
     )
     .expect("insert object");
 
