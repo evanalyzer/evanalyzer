@@ -11,6 +11,16 @@ pub mod prelude {
     pub use super::workspace::extensions::*;
 }
 
+/// Where AI inference runs; set once at startup, see
+/// [`configure_ai_devices`](ai::configure_ai_devices).
+pub mod ai {
+    pub use evanalyzer_core::ai_devices::AiDeviceOptions;
+    pub use evanalyzer_core::ai_devices::AiDeviceSelection;
+    pub use evanalyzer_core::ai_devices::DEFAULT_GPU_SLOTS;
+    pub use evanalyzer_core::ai_devices::configure_ai_devices;
+    pub use evanalyzer_core::ai_devices::parse_gpu_slots;
+}
+
 pub mod global {
     pub use crate::workspace::AppHandle;
     pub use crate::workspace::Frontend;

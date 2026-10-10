@@ -142,7 +142,8 @@ only:
 ```
 evanalyzer worker --listen 127.0.0.1:<port> --token <token> \
     --home <user home> --root <allowed folder>... --log-level <log_level> \
-    --idle-timeout <workers.idle_timeout_minutes>
+    --idle-timeout <workers.idle_timeout_minutes> \
+    [--ai-devices <workers.ai_devices>] [--gpu-slots <workers.gpu_slots>]
 ```
 
 Its working directory is the user's home, and its environment is cleared

@@ -60,12 +60,19 @@ pub struct WorkersConfig {
     /// a new one. A running analysis keeps it alive however long it takes.
     /// Default 120.
     pub idle_timeout_minutes: u64,
+    /// Where the workers run AI models: `auto` (every GPU, else the CPU),
+    /// `cpu`, or GPU numbers like `0,2`. Default `auto`.
+    pub ai_devices: Option<String>,
+    /// Parallel AI inferences per GPU, at least 1. Default 1.
+    pub gpu_slots: Option<usize>,
 }
 
 impl Default for WorkersConfig {
     fn default() -> Self {
         Self {
             idle_timeout_minutes: 120,
+            ai_devices: None,
+            gpu_slots: None,
         }
     }
 }
@@ -286,6 +293,22 @@ impl ServerConfig {
         }
         if let Some(log_level) = log_level {
             self.log_level = log_level;
+        }
+        self
+    }
+
+    /// The workers' AI device settings given on the command line replacing
+    /// the file's.
+    pub fn with_worker_ai_overrides(
+        mut self,
+        ai_devices: Option<String>,
+        gpu_slots: Option<usize>,
+    ) -> Self {
+        if let Some(ai_devices) = ai_devices {
+            self.workers.ai_devices = Some(ai_devices);
+        }
+        if let Some(gpu_slots) = gpu_slots {
+            self.workers.gpu_slots = Some(gpu_slots);
         }
         self
     }
@@ -575,6 +598,21 @@ mod tests {
         assert!(!parse("[tls]\nenabled = false").unwrap().tls.enabled);
         let own = parse("[tls]\ncert = \"/c.pem\"\nkey = \"/k.pem\"").unwrap();
         assert_eq!(own.tls.cert, Some(PathBuf::from("/c.pem")));
+    }
+
+    #[test]
+    fn worker_ai_settings_come_from_the_file_or_the_command_line() {
+        let file = parse("[workers]\nai_devices = \"0,1\"\ngpu_slots = 2").unwrap();
+        assert_eq!(file.workers.ai_devices.as_deref(), Some("0,1"));
+
+        let config = file.with_worker_ai_overrides(None, Some(3));
+        assert_eq!(
+            config.workers.ai_devices.as_deref(),
+            Some("0,1"),
+            "not overridden"
+        );
+        assert_eq!(config.workers.gpu_slots, Some(3));
+        assert_eq!(ServerConfig::default().workers.ai_devices, None);
     }
 
     #[test]

@@ -2,6 +2,9 @@ mod args;
 
 use args::{TopCommand, parse_args};
 use env_logger::Builder;
+use evanalyzer_app::ai::{
+    AiDeviceOptions, AiDeviceSelection, DEFAULT_GPU_SLOTS, configure_ai_devices,
+};
 use evanalyzer_app::backends::Backend;
 use evanalyzer_app::backends::local::LocalBackend;
 use evanalyzer_app::backends::remote::TlsTrust;
@@ -28,6 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 listen.clone(),
                 session_store.clone(),
                 args.log_level.clone(),
+                &args.ai_devices,
+                args.gpu_slots,
             )
             .unwrap_or_else(|e| {
                 // `main`'s error return would print it Debug-formatted, which
@@ -42,6 +47,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(config) => &config.log_level,
         None => args.log_level.as_deref().unwrap_or("info"),
     });
+    // A server only forwards these to its workers (see `server_config`);
+    // everywhere else the analysis may run in this process.
+    if server_config.is_none() {
+        configure_ai_devices(AiDeviceOptions {
+            devices: args.ai_devices.clone().unwrap_or_default(),
+            gpu_slots: args.gpu_slots.unwrap_or(DEFAULT_GPU_SLOTS),
+        });
+    }
 
     // The one place that decides where compute runs - front ends only ever
     // see the `Backend` trait.
@@ -203,12 +216,28 @@ fn server_config(
     listen: Option<String>,
     session_store: Option<PathBuf>,
     log_level: Option<String>,
+    ai_devices: &Option<AiDeviceSelection>,
+    gpu_slots: Option<usize>,
 ) -> std::io::Result<ServerConfig> {
     let config = match file {
         Some(file) => ServerConfig::load(file)?,
         None => ServerConfig::default(),
     };
-    Ok(config.with_overrides(listen, session_store, log_level))
+    let config = config
+        .with_overrides(listen, session_store, log_level)
+        .with_worker_ai_overrides(ai_devices.as_ref().map(ToString::to_string), gpu_slots);
+    // Checked here, so a typo in the file fails at startup instead of in
+    // every worker.
+    let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, e);
+    if let Some(devices) = &config.workers.ai_devices {
+        devices
+            .parse::<AiDeviceSelection>()
+            .map_err(|e| invalid(format!("workers.ai_devices: {e}")))?;
+    }
+    if config.workers.gpu_slots == Some(0) {
+        return Err(invalid("workers.gpu_slots must be at least 1".into()));
+    }
+    Ok(config)
 }
 
 /// `evanalyzer hash-password`: the hash goes to stdout alone (prompts go to

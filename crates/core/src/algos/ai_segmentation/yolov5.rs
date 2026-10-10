@@ -15,7 +15,7 @@ use tch::{CModule, Device, IValue, Kind, Tensor};
 
 use crate::{
     ImageContainer,
-    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::torch_session},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::run_with_model},
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -117,49 +117,51 @@ impl ImageAlgorithm for Yolov5 {
         let width = ((tile_width as f64 * scale).round() as usize).max(1);
         let height = ((tile_height as f64 * scale).round() as usize).max(1);
         // All tensor work (resize, inference, decoding the detections and
-        // their masks) happens inside one Torch session (see `torch_session`);
+        // their masks) happens on a device slot of the AI scheduler (see `run_with_model`);
         // the tensors are dropped with it, before the CPU-only rasterizing.
-        let detections = {
-            let mut torch = torch_session();
-            let device = Device::cuda_if_available();
-            let model = torch
-                .model(&self.model_path, device, || {
-                    CModule::load_on_device(&self.model_path, device)
-                })
-                .map_err(|e| {
-                    InternalErrors::Generic(format!(
-                        "Failed to load YOLOv5 model from {}: {e}. The model must be a TorchScript \
+        let detections = run_with_model(
+            &self.model_path,
+            |e| {
+                InternalErrors::Generic(format!(
+                    "Failed to load YOLOv5 model from {}: {e}. The model must be a TorchScript \
                      export (yolov5 export.py --include torchscript), not a training checkpoint.",
-                        self.model_path.display()
-                    ))
-                })?;
+                    self.model_path.display()
+                ))
+            },
+            |model, device| {
+                Ok({
+                    let mut rgb = Self::rgb_planes(&ctx.image)?;
+                    if (width, height) != (tile_width, tile_height) {
+                        rgb = Self::resize_planes(rgb, tile_width, tile_height, width, height)?;
+                    }
 
-            let mut rgb = Self::rgb_planes(&ctx.image)?;
-            if (width, height) != (tile_width, tile_height) {
-                rgb = Self::resize_planes(rgb, tile_width, tile_height, width, height)?;
-            }
-
-            let mut detections = Vec::new();
-            for &y0 in &Self::window_starts(height, self.window_overlap) {
-                for &x0 in &Self::window_starts(width, self.window_overlap) {
-                    let window = Self::window_tensor(&rgb, width, height, x0, y0).to_device(device);
-                    let output = tch::no_grad(|| model.forward_is(&[IValue::Tensor(window)]))
-                        .map_err(|e| {
-                            InternalErrors::Generic(format!("YOLOv5 inference failed: {e}"))
-                        })?;
-                    let (pred, proto) = Self::split_outputs(output)?;
-                    detections.extend(self.decode_window(
-                        &pred,
-                        proto.as_ref(),
-                        x0,
-                        y0,
-                        width,
-                        height,
-                    )?);
-                }
-            }
-            detections
-        };
+                    let mut detections = Vec::new();
+                    for &y0 in &Self::window_starts(height, self.window_overlap) {
+                        for &x0 in &Self::window_starts(width, self.window_overlap) {
+                            let window =
+                                Self::window_tensor(&rgb, width, height, x0, y0).to_device(device);
+                            let output =
+                                tch::no_grad(|| model.forward_is(&[IValue::Tensor(window)]))
+                                    .map_err(|e| {
+                                        InternalErrors::Generic(format!(
+                                            "YOLOv5 inference failed: {e}"
+                                        ))
+                                    })?;
+                            let (pred, proto) = Self::split_outputs(output)?;
+                            detections.extend(self.decode_window(
+                                &pred,
+                                proto.as_ref(),
+                                x0,
+                                y0,
+                                width,
+                                height,
+                            )?);
+                        }
+                    }
+                    detections
+                })
+            },
+        )?;
         let detections = Self::nms(detections, self.iou_threshold);
 
         let min_size = (self.min_object_size.max(0) as f64 * scale * scale).round() as usize;
