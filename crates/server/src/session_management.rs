@@ -76,6 +76,9 @@ pub struct SessionManagement {
     pub worker_log_level: Option<String>,
     /// Passed to every worker as `--idle-timeout`.
     pub worker_idle_timeout_minutes: Option<u64>,
+    /// Passed to every worker as `--ai-devices` / `--gpu-slots`.
+    pub worker_ai_devices: Option<String>,
+    pub worker_gpu_slots: Option<usize>,
     /// At most this many workers at once (`limits.max_workers`).
     pub max_workers: Option<usize>,
     state: Mutex<State>,
@@ -114,6 +117,8 @@ impl SessionManagement {
             worker_command,
             worker_log_level: None,
             worker_idle_timeout_minutes: None,
+            worker_ai_devices: None,
+            worker_gpu_slots: None,
             max_workers: None,
             state: Mutex::new(State {
                 sessions,
@@ -224,6 +229,12 @@ impl SessionManagement {
         }
         if let Some(minutes) = self.worker_idle_timeout_minutes {
             command.arg("--idle-timeout").arg(minutes.to_string());
+        }
+        if let Some(devices) = &self.worker_ai_devices {
+            command.arg("--ai-devices").arg(devices);
+        }
+        if let Some(slots) = self.worker_gpu_slots {
+            command.arg("--gpu-slots").arg(slots.to_string());
         }
         command
             .current_dir(&user.home)
@@ -576,7 +587,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn workers_get_the_idle_timeout() {
+    fn workers_get_the_idle_timeout_and_ai_settings() {
         let dir = tempfile::tempdir().unwrap();
         let mut sessions = SessionManagement::with_store(
             dir.path().join("run/sessions.json"),
@@ -584,6 +595,8 @@ pub(crate) mod tests {
         )
         .unwrap();
         sessions.worker_idle_timeout_minutes = Some(45);
+        sessions.worker_ai_devices = Some("0,1".into());
+        sessions.worker_gpu_slots = Some(2);
         let mut alice = user("alice");
         alice.home = dir.path().to_path_buf();
 
@@ -591,8 +604,10 @@ pub(crate) mod tests {
 
         let args = fs::read_to_string(dir.path().join("args.txt")).unwrap();
         let args: Vec<&str> = args.lines().collect();
-        let at = args.iter().position(|a| *a == "--idle-timeout").unwrap();
-        assert_eq!(args[at + 1], "45");
+        let value_of = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
+        assert_eq!(value_of("--idle-timeout"), "45");
+        assert_eq!(value_of("--ai-devices"), "0,1");
+        assert_eq!(value_of("--gpu-slots"), "2");
         sessions.close_session(&entry.session_token).unwrap();
     }
 

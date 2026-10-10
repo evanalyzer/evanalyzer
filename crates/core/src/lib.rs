@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod ai_devices;
 #[cfg(feature = "ai")]
 pub mod ai_learning;
 mod algos;

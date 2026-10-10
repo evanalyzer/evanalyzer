@@ -6,15 +6,18 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
+use crate::ai_devices::{AiDeviceSelection, ai_device_options};
+use evanalyzer_cfg::core_types::InternalErrors;
+use log::{info, warn};
 use std::{
     cell::RefCell,
     collections::HashMap,
     path::Path,
     path::PathBuf,
-    sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Condvar, LazyLock, Mutex, PoisonError},
     time::SystemTime,
 };
-use tch::{CModule, Device};
+use tch::{CModule, Device, TchError};
 
 use crate::ai_learning::model::SavedClassifier;
 
@@ -46,69 +49,264 @@ fn get_or_insert<V, E>(
     Ok(value)
 }
 
-/// TorchScript models loaded in this process, per device and file.
-type ModelCache = HashMap<Device, HashMap<PathBuf, (Option<SystemTime>, Arc<CModule>)>>;
+type ModelMap = HashMap<PathBuf, (Option<SystemTime>, Arc<CModule>)>;
 
-/// All Torch work in the process goes through this lock (see
-/// [`torch_session`]); it also owns the loaded models.
+/// One device AI models run on, with the models loaded onto it.
+struct TorchDevice {
+    device: Device,
+    /// One copy per model file, shared by all of this device's slots.
+    models: Mutex<ModelMap>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SlotState {
+    /// Inferences this device may run at once.
+    capacity: usize,
+    in_use: usize,
+}
+
+/// Spreads AI inference over every available device - all CUDA GPUs, or
+/// the CPU when there is none.
 ///
-/// Why one lock instead of letting every pipeline worker run its model:
-/// - Each worker used to load its own copy of the model. With ~20 workers
-///   that is ~20 copies on the GPU (a Cellpose-SAM model is ~1.2 GB),
-///   which overflows GPU memory - on Windows the driver then silently pages
-///   into system RAM and inference all but stops.
-/// - Torch runs every CPU op on its own thread pool sized to all cores. ~20
+/// Why not just let every pipeline worker run its model (as before):
+/// - Each worker loaded its own copy of the model. With ~20 workers that is
+///   ~20 copies on one GPU (a Cellpose-SAM model is ~1.2 GB), which
+///   overflows its memory - on Windows the driver then silently pages into
+///   system RAM and inference all but stops.
+/// - Torch runs CPU ops on its own thread pool sized to all cores; ~20
 ///   workers doing that at once start hundreds of busy threads fighting
 ///   over the cores (100% CPU, little progress).
 ///
-/// A GPU runs one model at a time anyway, so serializing inference costs
-/// little; the lock-free parts of the AI steps (mask building, rasterizing)
-/// and all other steps still run in parallel.
-static TORCH: LazyLock<Mutex<ModelCache>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Exclusive access to Torch for one AI step. Hold it for all tensor work -
-/// loading, inference and copying results back to plain Rust data - and drop
-/// it (with the tensors) before the remaining CPU-only work.
-pub(crate) struct TorchSession {
-    models: MutexGuard<'static, ModelCache>,
+/// Instead each device holds one copy of each model and runs at most its
+/// slot count of inferences at once; a worker takes the least busy device or
+/// waits. The CPU gets one slot (Torch already uses every core there), a GPU
+/// [`AiDeviceOptions::gpu_slots`](crate::ai_devices::AiDeviceOptions). Torch's
+/// CPU threads are split between all slots. Configured once per process with
+/// [`configure_ai_devices`](crate::ai_devices::configure_ai_devices).
+pub(crate) struct TorchScheduler {
+    devices: Vec<TorchDevice>,
+    slots: Mutex<Vec<SlotState>>,
+    freed: Condvar,
+    cores: usize,
 }
 
-/// Waits for and returns exclusive access to Torch, see [`TORCH`].
-pub(crate) fn torch_session() -> TorchSession {
-    // A panic inside an earlier session (e.g. a failing model) must not
-    // block every later AI step; the model map stays consistent either way.
-    let models = TORCH.lock().unwrap_or_else(PoisonError::into_inner);
-    TorchSession { models }
+static SCHEDULER: LazyLock<TorchScheduler> = LazyLock::new(TorchScheduler::from_system);
+
+/// Runs `work` with the model at `path` on a free device of the process-wide
+/// [`TorchScheduler`]; see [`TorchScheduler::run`].
+pub(crate) fn run_with_model<T>(
+    path: &Path,
+    load_error: impl Fn(TchError) -> InternalErrors,
+    work: impl Fn(&CModule, Device) -> Result<T, InternalErrors>,
+) -> Result<T, InternalErrors> {
+    SCHEDULER.run(path, load_error, work)
 }
 
-impl TorchSession {
-    /// The model loaded from `path` onto `device`, shared by every worker:
-    /// loaded once per process instead of re-read and re-parsed, and only
-    /// one copy kept on the device. `load` only runs on a cache miss (or
-    /// when the file changed, see [`get_or_insert`]).
-    pub fn model<E>(
-        &mut self,
-        path: &Path,
-        device: Device,
-        load: impl FnOnce() -> Result<CModule, E>,
-    ) -> Result<Arc<CModule>, E> {
-        // Some traced graphs (e.g. Cellpose-SAM's ViT encoder, whose relative-
-        // position-embedding math is a long chain of elementwise adds/unsqueezes)
-        // contain op sequences PyTorch's JIT fuser tries to compile into a single
-        // CUDA kernel via NVRTC on first run. That requires the CUDA *toolkit*'s
-        // `libnvrtc-builtins` to be installed system-wide - most end-user
-        // machines that only have a GPU driver installed don't have it, and the
-        // failure only surfaces the first time that particular fused op pattern
-        // runs. Disabling both JIT fusers trades that (unfused, marginally
-        // slower) elementwise math for never depending on NVRTC being present.
-        // Cheap enough to set unconditionally on every call - whether this flag
-        // is process-global or per-thread isn't documented, and redoing it on a
-        // cache hit costs nothing.
-        tch::jit::set_tensor_expr_fuser_enabled(false);
-        tch::jit::fuser_cuda_set_enabled(false);
-
-        get_or_insert(self.models.entry(device).or_default(), path, load)
+impl TorchScheduler {
+    /// `devices` with their slot counts, sharing `cores` CPU threads.
+    fn new(devices: Vec<(Device, usize)>, cores: usize) -> Self {
+        let slots = devices
+            .iter()
+            .map(|(_, capacity)| SlotState {
+                capacity: (*capacity).max(1),
+                in_use: 0,
+            })
+            .collect();
+        Self {
+            devices: devices
+                .into_iter()
+                .map(|(device, _)| TorchDevice {
+                    device,
+                    models: Mutex::new(HashMap::new()),
+                })
+                .collect(),
+            slots: Mutex::new(slots),
+            freed: Condvar::new(),
+            cores: cores.max(1),
+        }
     }
+
+    fn from_system() -> Self {
+        let options = ai_device_options();
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let gpu_count = if tch::Cuda::is_available() {
+            tch::Cuda::device_count().max(0) as usize
+        } else {
+            0
+        };
+        let gpus = selected_gpus(&options.devices, gpu_count);
+        let devices: Vec<(Device, usize)> = if gpus.is_empty() {
+            vec![(Device::Cpu, 1)]
+        } else {
+            gpus.into_iter()
+                .map(|g| (Device::Cuda(g), options.gpu_slots))
+                .collect()
+        };
+        info!(
+            "AI inference devices (device, parallel inferences): {devices:?} \
+             ({gpu_count} available GPUs, {cores} CPU cores)"
+        );
+        Self::new(devices, cores)
+    }
+
+    /// Runs `work` with the model at `path` loaded on a free device.
+    ///
+    /// Waits while every device is busy. If `work` runs out of memory and
+    /// its device allows more than one inference at once, that device gets
+    /// one slot fewer from then on and `work` is retried - `work` must
+    /// therefore not have side effects before it succeeds.
+    ///
+    /// `work` must not use rayon: a thread waiting inside rayon can pick up
+    /// another tile's task, whose AI step would then wait for the slot this
+    /// thread already holds.
+    pub(crate) fn run<T>(
+        &self,
+        path: &Path,
+        load_error: impl Fn(TchError) -> InternalErrors,
+        work: impl Fn(&CModule, Device) -> Result<T, InternalErrors>,
+    ) -> Result<T, InternalErrors> {
+        loop {
+            let lease = self.acquire();
+            let index = lease.index;
+            let device = self.devices[index].device;
+            // Torch's thread count is per calling thread, so it is set for
+            // every inference (cheap).
+            tch::set_num_threads(self.threads_per_slot());
+            disable_jit_fusers();
+            let model = self.model(index, path).map_err(&load_error)?;
+            match work(&model, device) {
+                Err(e) if is_out_of_memory(&e) => {
+                    drop(model);
+                    drop(lease);
+                    if self.reduce_capacity(index) {
+                        warn!(
+                            "{device:?} ran out of memory; running fewer inferences on it at once"
+                        );
+                        continue;
+                    }
+                    return Err(InternalErrors::Generic(format!(
+                        "{device:?} ran out of memory even running one inference at a time - \
+                         use smaller tiles or a smaller model: {e}"
+                    )));
+                }
+                result => return result,
+            }
+        }
+    }
+
+    fn threads_per_slot(&self) -> i32 {
+        let total: usize = self.lock_slots().iter().map(|s| s.capacity).sum();
+        (self.cores / total.max(1)).max(1) as i32
+    }
+
+    fn lock_slots(&self) -> std::sync::MutexGuard<'_, Vec<SlotState>> {
+        self.slots.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn acquire(&self) -> SlotLease<'_> {
+        let mut slots = self.lock_slots();
+        loop {
+            if let Some(index) = pick_slot(&slots) {
+                slots[index].in_use += 1;
+                return SlotLease {
+                    scheduler: self,
+                    index,
+                };
+            }
+            slots = self
+                .freed
+                .wait(slots)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    fn release(&self, index: usize) {
+        let mut slots = self.lock_slots();
+        slots[index].in_use = slots[index].in_use.saturating_sub(1);
+        self.freed.notify_all();
+    }
+
+    /// One slot fewer on device `index`; `false` if it is already down to one.
+    fn reduce_capacity(&self, index: usize) -> bool {
+        let mut slots = self.lock_slots();
+        if slots[index].capacity > 1 {
+            slots[index].capacity -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The model at `path` on device `index`, loaded once per device.
+    fn model(&self, index: usize, path: &Path) -> Result<Arc<CModule>, TchError> {
+        let TorchDevice { device, models } = &self.devices[index];
+        let mut models = models.lock().unwrap_or_else(PoisonError::into_inner);
+        get_or_insert(&mut models, path, || CModule::load_on_device(path, *device))
+    }
+}
+
+/// A taken inference slot; given back when dropped (also on errors/panics).
+struct SlotLease<'a> {
+    scheduler: &'a TorchScheduler,
+    index: usize,
+}
+
+impl Drop for SlotLease<'_> {
+    fn drop(&mut self) {
+        self.scheduler.release(self.index);
+    }
+}
+
+/// The device with the most free slots (the first on a tie); `None` if all
+/// are busy.
+fn pick_slot(slots: &[SlotState]) -> Option<usize> {
+    let mut best: Option<(usize, usize)> = None;
+    for (index, slot) in slots.iter().enumerate() {
+        let free = slot.capacity.saturating_sub(slot.in_use);
+        if free > 0 && best.is_none_or(|(_, best_free)| free > best_free) {
+            best = Some((index, free));
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
+/// The GPU indexes to use out of `gpu_count`; selected ones that don't
+/// exist are ignored (with a warning).
+fn selected_gpus(selection: &AiDeviceSelection, gpu_count: usize) -> Vec<usize> {
+    match selection {
+        AiDeviceSelection::Auto => (0..gpu_count).collect(),
+        AiDeviceSelection::Cpu => Vec::new(),
+        AiDeviceSelection::Gpus(gpus) => {
+            let (exist, missing): (Vec<usize>, Vec<usize>) =
+                gpus.iter().partition(|&&g| g < gpu_count);
+            if !missing.is_empty() {
+                warn!("GPUs {missing:?} don't exist ({gpu_count} found); ignoring them");
+            }
+            exist
+        }
+    }
+}
+
+/// CUDA ("CUDA out of memory") and CPU allocator out-of-memory errors.
+fn is_out_of_memory(err: &InternalErrors) -> bool {
+    let message = err.to_string().to_ascii_lowercase();
+    message.contains("out of memory") || message.contains("can't allocate memory")
+}
+
+/// Some traced graphs (e.g. Cellpose-SAM's ViT encoder, whose relative-
+/// position-embedding math is a long chain of elementwise adds/unsqueezes)
+/// contain op sequences PyTorch's JIT fuser tries to compile into a single
+/// CUDA kernel via NVRTC on first run. That requires the CUDA *toolkit*'s
+/// `libnvrtc-builtins` to be installed system-wide - most end-user machines
+/// that only have a GPU driver installed don't have it, and the failure only
+/// surfaces the first time that particular fused op pattern runs. Disabling
+/// both JIT fusers trades that (unfused, marginally slower) elementwise math
+/// for never depending on NVRTC being present. Cheap enough to set before
+/// every inference - whether this flag is process-global or per-thread
+/// isn't documented.
+fn disable_jit_fusers() {
+    tch::jit::set_tensor_expr_fuser_enabled(false);
+    tch::jit::fuser_cuda_set_enabled(false);
 }
 
 thread_local! {
@@ -133,45 +331,195 @@ pub fn load_cached_classifier<E>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_cfg::core_types::InternalErrors;
     use std::cell::Cell;
     use std::time::Duration;
 
-    #[test]
-    fn workers_share_one_loaded_model() {
-        // The point of the shared session: many pipeline workers asking for
-        // the same model get one copy, loaded once - not one per thread.
-        use crate::algos::ai_segmentation::test_support::trace_and_save_model;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let (_dir, path) = trace_and_save_model(1, 1, 2, |x| x.shallow_clone());
-        let loads = AtomicUsize::new(0);
-        let models: Vec<Arc<CModule>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..4)
-                .map(|_| {
-                    scope.spawn(|| {
-                        torch_session()
-                            .model(&path, Device::Cpu, || {
-                                loads.fetch_add(1, Ordering::SeqCst);
-                                CModule::load_on_device(&path, Device::Cpu)
-                            })
-                            .unwrap()
-                    })
-                })
-                .collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
+    // -- TorchScheduler ------------------------------------------------------
+
+    use crate::algos::ai_segmentation::test_support::trace_and_save_model;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn test_model() -> (tempfile::TempDir, PathBuf) {
+        trace_and_save_model(1, 1, 2, |x| x.shallow_clone())
+    }
+
+    fn load_error(e: TchError) -> InternalErrors {
+        InternalErrors::Generic(format!("load failed: {e}"))
+    }
+
+    /// CPU devices (stand-ins for GPUs) with these slot counts.
+    fn devices(slots: &[usize], cores: usize) -> TorchScheduler {
+        TorchScheduler::new(slots.iter().map(|&n| (Device::Cpu, n)).collect(), cores)
+    }
+
+    fn capacity(scheduler: &TorchScheduler, index: usize) -> usize {
+        scheduler.lock_slots()[index].capacity
+    }
+
+    /// Runs `threads` inferences at once, each holding its slot ~30 ms, and
+    /// returns how many ran at the same time at most.
+    fn max_concurrency(scheduler: &TorchScheduler, path: &Path, threads: usize) -> usize {
+        let running = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                scope.spawn(|| {
+                    scheduler
+                        .run(path, load_error, |_, _| {
+                            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                            peak.fetch_max(now, Ordering::SeqCst);
+                            std::thread::sleep(std::time::Duration::from_millis(30));
+                            running.fetch_sub(1, Ordering::SeqCst);
+                            Ok(())
+                        })
+                        .unwrap();
+                });
+            }
         });
-        assert_eq!(loads.load(Ordering::SeqCst), 1);
-        assert!(models.iter().all(|m| Arc::ptr_eq(m, &models[0])));
+        peak.load(Ordering::SeqCst)
     }
 
     #[test]
-    fn a_panic_inside_a_session_does_not_block_later_sessions() {
-        let _ = std::thread::spawn(|| {
-            let _session = torch_session();
-            panic!("model failed");
-        })
-        .join();
-        drop(torch_session());
+    fn inferences_are_limited_to_the_free_slots() {
+        let (_dir, path) = test_model();
+        assert_eq!(max_concurrency(&devices(&[1], 8), &path, 4), 1);
+    }
+
+    #[test]
+    fn inferences_spread_over_all_devices() {
+        // Two devices with two slots each: all four run at once.
+        let (_dir, path) = test_model();
+        assert_eq!(max_concurrency(&devices(&[2, 2], 8), &path, 4), 4);
+    }
+
+    #[test]
+    fn each_device_loads_a_model_once() {
+        let (_dir, path) = test_model();
+        let scheduler = devices(&[2, 2], 8);
+        max_concurrency(&scheduler, &path, 8);
+        for device in &scheduler.devices {
+            assert_eq!(device.models.lock().unwrap().len(), 1);
+        }
+        let first = scheduler.model(0, &path).unwrap();
+        assert!(Arc::ptr_eq(&first, &scheduler.model(0, &path).unwrap()));
+        assert!(!Arc::ptr_eq(&first, &scheduler.model(1, &path).unwrap()));
+    }
+
+    #[test]
+    fn out_of_memory_lowers_the_slots_and_retries() {
+        let (_dir, path) = test_model();
+        let scheduler = devices(&[2], 8);
+        let calls = AtomicUsize::new(0);
+        let result = scheduler.run(&path, load_error, |_, _| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(InternalErrors::Generic(
+                    "CUDA out of memory. Tried to allocate 2 GiB".into(),
+                ))
+            } else {
+                Ok(7)
+            }
+        });
+        assert_eq!(result.unwrap(), 7);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(capacity(&scheduler, 0), 1);
+        assert_eq!(scheduler.lock_slots()[0].in_use, 0);
+    }
+
+    #[test]
+    fn out_of_memory_with_one_slot_left_is_an_error() {
+        let (_dir, path) = test_model();
+        let err = devices(&[1], 8)
+            .run(&path, load_error, |_, _| -> Result<(), _> {
+                Err(InternalErrors::Generic("CUDA out of memory".into()))
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("one inference at a time"), "{err}");
+    }
+
+    #[test]
+    fn other_errors_are_not_retried() {
+        let (_dir, path) = test_model();
+        let scheduler = devices(&[2], 8);
+        let calls = AtomicUsize::new(0);
+        let result = scheduler.run(&path, load_error, |_, _| -> Result<(), _> {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(InternalErrors::Generic("bad output shape".into()))
+        });
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(capacity(&scheduler, 0), 2);
+    }
+
+    #[test]
+    fn load_errors_use_the_callers_message_and_free_the_slot() {
+        let scheduler = devices(&[1], 8);
+        let err = scheduler
+            .run(Path::new("/no/such/model.pt"), load_error, |_, _| Ok(()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("load failed"), "{err}");
+        assert_eq!(scheduler.lock_slots()[0].in_use, 0);
+    }
+
+    #[test]
+    fn a_panic_during_inference_frees_the_slot() {
+        let (_dir, path) = test_model();
+        let scheduler = devices(&[1], 8);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = scheduler.run(&path, load_error, |_, _| -> Result<(), _> {
+                panic!("model failed")
+            });
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(scheduler.lock_slots()[0].in_use, 0);
+        scheduler.run(&path, load_error, |_, _| Ok(())).unwrap();
+    }
+
+    #[test]
+    fn cpu_threads_follow_the_current_slots() {
+        assert_eq!(devices(&[1], 16).threads_per_slot(), 16);
+        assert_eq!(devices(&[2, 2], 16).threads_per_slot(), 4);
+        assert_eq!(devices(&[8, 8], 4).threads_per_slot(), 1);
+    }
+
+    #[test]
+    fn pick_slot_prefers_the_least_busy_device() {
+        let s = |capacity, in_use| SlotState { capacity, in_use };
+        assert_eq!(pick_slot(&[s(2, 1), s(2, 0)]), Some(1));
+        assert_eq!(pick_slot(&[s(2, 0), s(2, 0)]), Some(0));
+        assert_eq!(pick_slot(&[s(1, 1), s(2, 2)]), None);
+        // A device whose capacity was lowered below its running inferences.
+        assert_eq!(pick_slot(&[s(1, 2), s(1, 0)]), Some(1));
+    }
+
+    #[test]
+    fn gpu_selection() {
+        assert_eq!(selected_gpus(&AiDeviceSelection::Auto, 3), vec![0, 1, 2]);
+        assert_eq!(
+            selected_gpus(&AiDeviceSelection::Cpu, 2),
+            Vec::<usize>::new()
+        );
+        assert_eq!(
+            selected_gpus(&AiDeviceSelection::Gpus(vec![2, 0, 9]), 3),
+            vec![2, 0]
+        );
+        assert_eq!(
+            selected_gpus(&AiDeviceSelection::Auto, 0),
+            Vec::<usize>::new()
+        );
+    }
+
+    #[test]
+    fn out_of_memory_detection() {
+        let e = |m: &str| InternalErrors::Generic(m.into());
+        assert!(is_out_of_memory(&e(
+            "Cellpose: CUDA out of memory. Tried to allocate"
+        )));
+        assert!(is_out_of_memory(&e(
+            "DefaultCPUAllocator: can't allocate memory"
+        )));
+        assert!(!is_out_of_memory(&e("shape mismatch")));
     }
 
     #[test]

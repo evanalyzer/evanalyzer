@@ -1,5 +1,6 @@
 // main.rs or app/src/args.rs
 use clap::{Parser, Subcommand};
+use evanalyzer_app::ai::{AiDeviceSelection, parse_gpu_slots};
 
 #[derive(Parser)]
 #[command(name = "EVAnalyzer", version, about = "Image processing tool")]
@@ -79,6 +80,19 @@ pub struct Args {
         help_heading = "Remote"
     )]
     pub remote_token: Option<String>,
+
+    /// Where AI models (Cellpose, StarDist, U-Net, YOLOv5) run: `auto`
+    /// (every GPU, else the CPU), `cpu`, or GPU numbers like `0,2`. Applies
+    /// where the analysis runs - this machine, or the workers of a `server`
+    /// started with it; ignored with `--remote`. Default `auto`.
+    #[arg(long, global = true, value_name = "DEVICES", help_heading = "AI")]
+    pub ai_devices: Option<AiDeviceSelection>,
+
+    /// Parallel AI inferences per GPU. Raise it for GPUs with memory to
+    /// spare, so one tile's transfers overlap another's computation; a GPU
+    /// that runs out of memory goes back down by itself. Default 1.
+    #[arg(long, global = true, value_name = "N", value_parser = parse_gpu_slots, help_heading = "AI")]
+    pub gpu_slots: Option<usize>,
 
     #[command(subcommand)]
     pub command: Option<TopCommand>,
@@ -166,10 +180,40 @@ mod tests {
             "\n  server ",
             "\n  worker ",
             "\n  hash-password ",
+            "AI:",
+            "--ai-devices",
+            "--gpu-slots",
         ] {
             assert!(help.contains(shown), "{shown} missing in:\n{help}");
         }
         assert!(!help.contains("[env:"), "no environment variables:\n{help}");
+    }
+
+    #[test]
+    fn ai_device_options_parse_in_every_mode() {
+        let args = Args::try_parse_from(["evanalyzer", "--ai-devices", "0,2", "--gpu-slots", "3"])
+            .unwrap();
+        assert_eq!(args.ai_devices, Some(AiDeviceSelection::Gpus(vec![0, 2])));
+        assert_eq!(args.gpu_slots, Some(3));
+
+        // Global: also after a subcommand.
+        let args = Args::try_parse_from([
+            "evanalyzer",
+            "worker",
+            "--ai-devices",
+            "cpu",
+            "--gpu-slots",
+            "2",
+        ])
+        .unwrap();
+        assert_eq!(args.ai_devices, Some(AiDeviceSelection::Cpu));
+        assert_eq!(args.gpu_slots, Some(2));
+
+        let defaults = Args::try_parse_from(["evanalyzer"]).unwrap();
+        assert_eq!((defaults.ai_devices, defaults.gpu_slots), (None, None));
+
+        assert!(Args::try_parse_from(["evanalyzer", "--ai-devices", "gpu"]).is_err());
+        assert!(Args::try_parse_from(["evanalyzer", "--gpu-slots", "0"]).is_err());
     }
 
     #[test]

@@ -121,6 +121,8 @@ pub fn serve(config: ServerConfig) -> std::io::Result<()> {
     }
     let mut session_management = SessionManagement::new(session_store, config.log_level.clone())?;
     session_management.worker_idle_timeout_minutes = Some(config.workers.idle_timeout_minutes);
+    session_management.worker_ai_devices = config.workers.ai_devices.clone();
+    session_management.worker_gpu_slots = config.workers.gpu_slots.clone();
     session_management.max_workers = config.limits.max_workers;
     Server {
         tls: tls.map(|tls| tls.config),

@@ -92,6 +92,12 @@ enabled = true
 # however long it takes - logging out or losing the connection doesn't stop
 # it. At least 1.
 idle_timeout_minutes = 120
+# Where workers run AI models (Cellpose, StarDist, U-Net, YOLOv5): "auto"
+# (every GPU, else the CPU), "cpu", or GPU numbers like "0,2".
+#ai_devices = "auto"
+# Parallel AI inferences per GPU, at least 1. Raise it for GPUs with memory
+# to spare; a GPU that runs out of memory goes back down by itself.
+#gpu_slots = 1
 
 [limits]
 # Not set: no limit.
