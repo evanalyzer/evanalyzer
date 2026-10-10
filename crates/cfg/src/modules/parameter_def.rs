@@ -36,6 +36,9 @@ pub enum ParamType {
     /// `ImageChannelIdx` displayed as the channel picker (channel name +
     /// color of the open image). `value` is the channel index.
     ImageChannel,
+    /// `String` holding a Rhai script (`#[cmdsmeta(script)]`), edited in the
+    /// script editor dialog instead of a single-line text field.
+    Script,
 }
 
 #[allow(dead_code)]

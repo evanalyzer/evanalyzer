@@ -700,6 +700,9 @@ struct FieldMetadata {
     /// for `PathBuf` fields rendered with a "Browse…" button. Empty/absent
     /// means any file is selectable.
     file_extensions: Option<String>,
+    /// `#[cmdsmeta(script)]` on a `String` field: a Rhai script, edited in
+    /// the script editor (`ParamType::Script`) instead of a text field.
+    script: bool,
 }
 
 /// `#[cmdsmeta(visibility = ...)]` of a setting or a dropdown option.
@@ -752,6 +755,7 @@ impl Default for FieldMetadata {
             optional: false,
             visibility: Visibility::Default,
             file_extensions: None,
+            script: false,
         }
     }
 }
@@ -1320,6 +1324,13 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                 } else if meta.path.is_ident("file_extensions") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     metadata.file_extensions = Some(value.value());
+                } else if meta.path.is_ident("script") {
+                    metadata.script = true;
+                    if let Ok(stream) = meta.value() {
+                        if let Ok(b) = stream.parse::<syn::LitBool>() {
+                            metadata.script = b.value;
+                        }
+                    }
                 }
                 Ok(())
             });
@@ -1737,7 +1748,11 @@ fn leaf_parts(
             0.0_f32,
         ),
         "String" => (
-            "ParamType::Text",
+            if meta.script {
+                "ParamType::Script"
+            } else {
+                "ParamType::Text"
+            },
             format!("{access}.clone()"),
             "vec![]".to_string(),
             0.0_f32,

@@ -1354,10 +1354,34 @@ pub struct SaveImageSettings {
     pub source: MathSaveImageImageSourceSettings,
 }
 
-/// Runs a user-written Rhai script as a pipeline step.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+/// Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.
+///
+/// The script sees the current tile as read-only constants:
+/// `image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.
+/// `print(...)` writes to the log.
+///
+/// # Examples
+///
+/// ```rhai
+/// print(`Hello world from a ${image_width}x${image_height} tile`);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct ScriptSettings {}
+pub struct ScriptSettings {
+    /// Script source code
+    pub source: String,
+}
+
+impl Default for ScriptSettings {
+    fn default() -> Self {
+        Self {
+            source: String::from(
+                "print(`Hello world from a ${image_width}x${image_height} tile`);\n",
+            ),
+        }
+    }
+}
 
 /// Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.
 ///

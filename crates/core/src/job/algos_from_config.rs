@@ -774,7 +774,7 @@ impl From<SaveImageSettings> for SaveImage {
 
 impl From<ScriptSettings> for Script {
     fn from(_s: ScriptSettings) -> Self {
-        Script {}
+        Script { source: _s.source }
     }
 }
 

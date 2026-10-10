@@ -2489,8 +2489,15 @@
       ]
     },
     "ScriptSettings": {
-      "description": "Runs a user-written Rhai script as a pipeline step.",
-      "type": "object"
+      "description": "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.\n\nThe script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log.\n\n# Examples\n\n```rhai\nprint(`Hello world from a ${image_width}x${image_height} tile`);\n```",
+      "type": "object",
+      "properties": {
+        "source": {
+          "description": "Script source code",
+          "type": "string",
+          "default": "print(`Hello world from a ${image_width}x${image_height} tile`);\n"
+        }
+      }
     },
     "SegmentationClass": {
       "type": "integer",

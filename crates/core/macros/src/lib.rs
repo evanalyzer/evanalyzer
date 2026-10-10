@@ -51,6 +51,8 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         // *without* this attribute (ParamType::FilePath, project-relative
         // storage). Optional; an empty/absent filter just allows any file.
         "file_extensions",
+        // `String` field holding a Rhai script - edited in the script editor.
+        "script",
     ];
 
     // Validate struct-level #[cmdsmeta(...)]

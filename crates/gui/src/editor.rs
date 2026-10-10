@@ -31,6 +31,7 @@ pub mod project_controller;
 pub mod project_settings_controller;
 pub mod results_list_controller;
 pub mod results_state_controller;
+pub mod script_editor_controller;
 pub mod template_controller;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -62,6 +63,7 @@ pub struct Editor {
     undo_redo_controller: Arc<UndoRedoController>,
     results_state_controller: Arc<ResultsStateController>,
     connection_controller: Arc<connection_controller::ConnectionController>,
+    script_editor_controller: script_editor_controller::ScriptEditorController,
 }
 
 impl Editor {
@@ -212,8 +214,12 @@ impl Editor {
             project_controller.clone(),
         ));
 
+        let script_editor_controller =
+            script_editor_controller::ScriptEditorController::new(ui.clone());
+
         Self {
             connection_controller,
+            script_editor_controller,
             image_list_controller,
             project_controller,
             histogram_controller,
@@ -253,6 +259,7 @@ impl Editor {
         self.undo_redo_controller.attach_callbacks();
         self.results_state_controller.attach_callbacks();
         self.connection_controller.attach_callbacks();
+        self.script_editor_controller.attach_callbacks();
 
         self.viewport_worker.start_worker();
         self.pipeline_worker.start_worker();

@@ -94,6 +94,13 @@ import {
     ProjectAuthor,
 } from "dialogs/project_template_dialog.slint";
 import { PipelinesPanelState } from "editor/pipelines_panel.slint";
+import {
+    ScriptEditorPanel,
+    ScriptEditorState,
+    ScriptHighlight,
+    ScriptEdit,
+    ScriptDiagnostic,
+} from "editor/script_editor_panel.slint";
 import { PipelineFocusState } from "editor/pipeline_focus.slint";
 import { PreviewRendering } from "dialogs/preview_rendering_dialog.slint";
 import { WarningDialog } from "dialogs/warning_dialog.slint";
@@ -165,6 +172,10 @@ export {
     ToolState,
     ViewportObjectState,
     PipelinesPanelState,
+    ScriptEditorState,
+    ScriptHighlight,
+    ScriptEdit,
+    ScriptDiagnostic,
     PipelineFocusState,
     CommandPickerState,
     CommandDef,
@@ -403,6 +414,10 @@ export component AppWindow inherits Window {
                 import-bioimageio => {
                     CommandPickerState.import-bioimageio();
                 }
+            }
+            if (GlobalAppState.active_dialog == DialogType.script-editor): ScriptEditorPanel {
+                width: 100%;
+                height: 100%;
             }
             if (GlobalAppState.active_dialog == DialogType.pipeline-edit): PipelineEditDialog {
                 width: 100%;
