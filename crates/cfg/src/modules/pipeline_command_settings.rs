@@ -1354,21 +1354,32 @@ pub struct SaveImageSettings {
     pub source: MathSaveImageImageSourceSettings,
 }
 
+fn _serde_default_script_classes() -> Vec<ObjectClass> {
+    vec![]
+}
 /// Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.
 ///
 /// The script sees the current tile as read-only constants:
 /// `image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.
-/// `print(...)` writes to the log.
+/// `print(...)` writes to the log. `run(command, #{ params })` runs a
+/// pipeline command on the current image, with the parameter names of the
+/// step settings.
 ///
 /// # Examples
 ///
 /// ```rhai
 /// print(`Hello world from a ${image_width}x${image_height} tile`);
+/// run("gaussian_blur", #{ kernel_size: 5 });
 /// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptSettings {
+    /// Object classes the script creates or uses. Commands the script runs
+    /// may only use these classes, so the pipeline knows them without
+    /// running the script.
+    #[serde(default = "_serde_default_script_classes")]
+    pub classes: Vec<ObjectClass>,
     /// Script source code
     pub source: String,
 }
@@ -1376,6 +1387,7 @@ pub struct ScriptSettings {
 impl Default for ScriptSettings {
     fn default() -> Self {
         Self {
+            classes: vec![],
             source: String::from(
                 "print(`Hello world from a ${image_width}x${image_height} tile`);\n",
             ),

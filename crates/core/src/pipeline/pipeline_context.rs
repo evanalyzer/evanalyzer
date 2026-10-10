@@ -90,6 +90,37 @@ impl PipelineContext {
         })
     }
 
+    /// Moves the whole context out, leaving a 1x1 placeholder behind - for
+    /// code that must own the context for a while (the script step lends it
+    /// to the script engine) and puts it back afterwards. The placeholder has
+    /// its own buffers, so the moved-out `Arc`s stay unshared and in-place
+    /// writes on them don't trigger copy-on-write.
+    pub(crate) fn take(&mut self) -> PipelineContext {
+        let placeholder = || {
+            Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: Image::new(
+                    ImageSize {
+                        width: 1,
+                        height: 1,
+                    },
+                    vec![0.0],
+                )
+                .expect("1x1 image with 1 pixel is valid"),
+                tile_offset: Point2d::default(),
+                plane: None,
+            }))
+        };
+        let empty = PipelineContext {
+            output_path: None,
+            image_meta: self.image_meta.clone(),
+            image: placeholder(),
+            scratch_pad: placeholder(),
+            instance_map: None,
+            segmentation_map: None,
+        };
+        std::mem::replace(self, empty)
+    }
+
     /// Swaps the scratch pad and the main image. Since both are `Arc`-wrapped,
     /// this only exchanges two handles - it never touches (or clones) the
     /// underlying pixel data.

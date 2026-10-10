@@ -1032,3 +1032,20 @@ fn apply_param_change_text_and_path_fields_accept_arbitrary_strings() {
     cmd.apply_param_change("model_path", "/models/cellpose.pt");
     assert_eq!(param_value(&cmd, "model_path"), "/models/cellpose.pt");
 }
+
+/// Scripts name commands by `PipelineCommand::key()`; it must round-trip and
+/// be exactly the serialized `type` tag, lower-cased - otherwise a script
+/// and a saved project would name the same command differently.
+#[test]
+fn every_command_key_round_trips_and_matches_its_serialized_tag() {
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    assert_eq!(PipelineCommand::KEYS.len(), all_command_meta().len());
+    for key in PipelineCommand::KEYS {
+        let cmd = PipelineCommand::default_for_key(key)
+            .unwrap_or_else(|| panic!("no command for key `{key}`"));
+        assert_eq!(cmd.key(), *key);
+        let json = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(json["type"], key.to_uppercase(), "tag of `{key}`");
+    }
+    assert!(PipelineCommand::default_for_key("no_such_command").is_none());
+}

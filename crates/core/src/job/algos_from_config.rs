@@ -774,7 +774,10 @@ impl From<SaveImageSettings> for SaveImage {
 
 impl From<ScriptSettings> for Script {
     fn from(_s: ScriptSettings) -> Self {
-        Script { source: _s.source }
+        Script {
+            classes: _s.classes.into_iter().map(|v| v.into()).collect(),
+            source: _s.source,
+        }
     }
 }
 

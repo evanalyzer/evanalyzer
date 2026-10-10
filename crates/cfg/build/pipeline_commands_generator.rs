@@ -1467,8 +1467,22 @@ fn validated_key(key: &str) -> String {
 fn command_key(cmd: &CommandInfo) -> String {
     match &cmd.struct_meta.key {
         Some(key) => key.clone(),
-        None => pascal_to_snake_case(&cmd.struct_name),
+        None => serde_snake_case(&cmd.struct_name),
     }
+}
+
+/// serde's `rename_all = "snake_case"` for a variant name: `_` before every
+/// uppercase letter but the first (`UNet` -> `u_net`). Must match serde
+/// exactly - the upper-cased result is the serialized `type` tag.
+fn serde_snake_case(variant: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in variant.char_indices() {
+        if i > 0 && c.is_uppercase() {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
 }
 
 /// [`command_key`] in PascalCase, the form [`serde_variant_alias_attr`] expects.
@@ -2891,6 +2905,38 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     // --- impl PipelineCommand ---
     out.push_str("#[allow(dead_code)]\n");
     out.push_str("impl PipelineCommand {\n");
+
+    // KEYS / key() / default_for_key(): stable snake_case names, used by scripts.
+    out.push_str("    /// Stable snake_case name of every command, as used by scripts; the\n");
+    out.push_str("    /// serialized `type` tag is the same name upper-cased.\n");
+    out.push_str("    pub const KEYS: &'static [&'static str] = &[\n");
+    for cmd in &algo_commands {
+        out.push_str(&format!("        \"{}\",\n", command_key(cmd)));
+    }
+    out.push_str("    ];\n\n");
+    out.push_str("    /// This command's entry in [`Self::KEYS`].\n");
+    out.push_str("    pub fn key(&self) -> &'static str {\n        match self {\n");
+    for cmd in &algo_commands {
+        out.push_str(&format!(
+            "            Self::{}(_) => \"{}\",\n",
+            cmd.struct_name,
+            command_key(cmd)
+        ));
+    }
+    out.push_str("        }\n    }\n\n");
+    out.push_str("    /// The command named `key` (see [`Self::KEYS`]) with default settings.\n");
+    out.push_str(
+        "    pub fn default_for_key(key: &str) -> Option<PipelineCommand> {\n        match key {\n",
+    );
+    for cmd in &algo_commands {
+        out.push_str(&format!(
+            "            \"{}\" => Some(Self::{}({}Settings::default())),\n",
+            command_key(cmd),
+            cmd.struct_name,
+            cmd.struct_name
+        ));
+    }
+    out.push_str("            _ => None,\n        }\n    }\n\n");
 
     // name()
     out.push_str("    pub fn name(&self) -> &str {\n");

@@ -6,8 +6,15 @@
 //! `pure` and re-run whenever the editor text changes. Cursor positions are
 //! UTF-8 byte offsets, as Slint's `TextInput` reports them.
 
-use crate::{AppWindow, ScriptDiagnostic, ScriptEdit, ScriptEditorState, ScriptHighlight};
-use slint::{ComponentHandle, SharedString};
+use crate::{
+    AppWindow, ScriptCommandDoc, ScriptDiagnostic, ScriptEdit, ScriptEditorState, ScriptHighlight,
+};
+use evanalyzer_cfg::settings::parameter_def::{ParamType, ParameterDef};
+use evanalyzer_cfg::settings::pipeline_command::{
+    CommandCategory, PipelineCommand, all_command_meta,
+};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use std::rc::Rc;
 
 const INDENT: &str = "    ";
 const INDENT_WIDTH: usize = INDENT.len();
@@ -44,6 +51,27 @@ impl ScriptEditorController {
         state.on_close_bracket(|text, cursor, bracket| {
             let bracket = bracket.chars().next().unwrap_or('}');
             close_bracket(&text, to_offset(&text, cursor), bracket).into()
+        });
+
+        let docs = Rc::new(command_docs());
+        state.on_filter_commands(move |query| {
+            let shown: Vec<ScriptCommandDoc> = docs
+                .iter()
+                .filter(|d| d.matches(&query))
+                .map(ScriptCommandDoc::from)
+                .collect();
+            ModelRc::new(VecModel::from(shown))
+        });
+        state.on_insert_command(|text, cursor, key| {
+            let cursor = to_offset(&text, cursor);
+            match run_snippet(&key, &text[line_start(&text, cursor)..cursor]) {
+                Some(snippet) => insert(&text, cursor, &snippet, snippet.len()).into(),
+                None => Edit {
+                    text: text.to_string(),
+                    cursor,
+                }
+                .into(),
+            }
         });
     }
 }
@@ -189,7 +217,10 @@ fn quoted_end(src: &str, start: usize, quote: char, multi_line: bool) -> usize {
 fn number_end(src: &str, start: usize) -> usize {
     let bytes = src.as_bytes();
     let is_radix = bytes.get(start) == Some(&b'0')
-        && matches!(bytes.get(start + 1), Some(b'x' | b'X' | b'b' | b'B' | b'o' | b'O'));
+        && matches!(
+            bytes.get(start + 1),
+            Some(b'x' | b'X' | b'b' | b'B' | b'o' | b'O')
+        );
     let mut i = start;
     while i < bytes.len() {
         let b = bytes[i];
@@ -348,15 +379,18 @@ fn format_script(src: &str) -> String {
         while token_idx < tokens.len() && tokens[token_idx].end <= line_start {
             token_idx += 1;
         }
-        let inside_token = tokens
-            .get(token_idx)
-            .is_some_and(|t| t.start < line_start && matches!(t.kind, TokenKind::Comment | TokenKind::String));
+        let inside_token = tokens.get(token_idx).is_some_and(|t| {
+            t.start < line_start && matches!(t.kind, TokenKind::Comment | TokenKind::String)
+        });
 
         // Bracket depth change on this line, and closers leading it.
         let mut leading_closers = 0;
         let mut seen_other = false;
         let mut delta: isize = 0;
-        for t in tokens[token_idx..].iter().take_while(|t| t.start < line_end) {
+        for t in tokens[token_idx..]
+            .iter()
+            .take_while(|t| t.start < line_end)
+        {
             if t.start < line_start {
                 continue;
             }
@@ -409,6 +443,187 @@ fn format_script(src: &str) -> String {
 }
 
 // ----------------------------------------------------------------------------
+// Command reference
+
+/// One command a script can `run`, for the editor's command list.
+#[derive(Debug, Clone, PartialEq)]
+struct CommandDoc {
+    key: &'static str,
+    name: String,
+    /// Summary plus one line per parameter.
+    doc: String,
+}
+
+impl CommandDoc {
+    /// Case-insensitive match on display name or key.
+    fn matches(&self, query: &str) -> bool {
+        let query = query.trim().to_lowercase();
+        query.is_empty()
+            || self.name.to_lowercase().contains(&query)
+            || self.key.contains(&query.replace(' ', "_"))
+    }
+}
+
+impl From<&CommandDoc> for ScriptCommandDoc {
+    fn from(d: &CommandDoc) -> Self {
+        Self {
+            key: d.key.into(),
+            name: d.name.as_str().into(),
+            doc: d.doc.as_str().into(),
+        }
+    }
+}
+
+/// Every command a script step can run: all but the script itself and the
+/// Object category, whose commands work on the whole image's objects (core
+/// tests that this category is exactly those commands).
+fn command_docs() -> Vec<CommandDoc> {
+    let meta = all_command_meta();
+    let mut docs: Vec<CommandDoc> = PipelineCommand::KEYS
+        .iter()
+        .filter(|key| **key != "script")
+        .filter_map(|key| {
+            let cmd = PipelineCommand::default_for_key(key)?;
+            if matches!(cmd.category(), CommandCategory::Object) {
+                return None;
+            }
+            let summary = meta
+                .iter()
+                .find(|m| m.name == cmd.name())
+                .map_or("", |m| m.summary);
+            let mut doc = String::new();
+            if !summary.is_empty() {
+                doc.push_str(summary);
+                doc.push_str("\n\n");
+            }
+            for (name, def) in snippet_params(&cmd) {
+                doc.push_str(&format!("{name}: {}", param_type_doc(&def)));
+                if !def.description.is_empty() {
+                    let first = def.description.lines().next().unwrap_or("");
+                    doc.push_str(&format!("\n    {first}"));
+                }
+                doc.push('\n');
+            }
+            Some(CommandDoc {
+                key,
+                name: cmd.name().to_string(),
+                doc: doc.trim_end().to_string(),
+            })
+        })
+        .collect();
+    docs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    docs
+}
+
+/// The settable parameters of `cmd` by full name, as a script writes them.
+/// An empty list parameter gets one default entry so its fields show up.
+fn snippet_params(cmd: &PipelineCommand) -> Vec<(String, ParameterDef)> {
+    let mut cmd = cmd.clone();
+    for p in cmd.to_parameters() {
+        if p.param_type == ParamType::Group && p.groups.is_empty() {
+            cmd.add_group_item(&p.name);
+        }
+    }
+    fn walk(params: &[ParameterDef], prefix: &str, out: &mut Vec<(String, ParameterDef)>) {
+        for p in params {
+            let name = format!("{prefix}{}", p.name);
+            match p.param_type {
+                ParamType::Group => {
+                    for (i, item) in p.groups.iter().enumerate() {
+                        walk(item, &format!("{name}.{i}."), out);
+                    }
+                }
+                ParamType::Label | ParamType::Script => {}
+                _ => out.push((name, p.clone())),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&cmd.to_parameters(), "", &mut out);
+    out
+}
+
+fn param_type_doc(def: &ParameterDef) -> String {
+    let default = &def.default_value;
+    match def.param_type {
+        ParamType::Number | ParamType::Spinner | ParamType::Slider if def.max > def.min => {
+            format!("number {}..={} (default {default})", def.min, def.max)
+        }
+        ParamType::Number | ParamType::Spinner | ParamType::Slider => {
+            format!("number (default {default})")
+        }
+        ParamType::Toggle => format!("true/false (default {default})"),
+        ParamType::Dropdown | ParamType::PixelUnits | ParamType::SizeUnits => {
+            format!("one of {} (default {default})", def.options.join(", "))
+        }
+        ParamType::ObjClass => "object class id, -1 = none".into(),
+        ParamType::SegClass => "segmentation class id".into(),
+        ParamType::MultiObjClass | ParamType::MultiSegClass => {
+            "list of class ids, e.g. [1, 2]".into()
+        }
+        ParamType::ImageChannel => "channel index".into(),
+        ParamType::ImageAddress => "\"channel:N\", \"memory:N\" or \"scratchpad\"".into(),
+        ParamType::Text | ParamType::FilePath => "text".into(),
+        ParamType::Group | ParamType::Label | ParamType::Script => String::new(),
+    }
+}
+
+/// `run("key", #{ ... });` with every parameter at its default, indented
+/// for a cursor after `line_prefix`. `None` for an unknown key.
+fn run_snippet(key: &str, line_prefix: &str) -> Option<String> {
+    let cmd = PipelineCommand::default_for_key(key)?;
+    let params = snippet_params(&cmd);
+    if params.is_empty() {
+        return Some(format!("run(\"{key}\");"));
+    }
+    let base: String = line_prefix
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+    let mut out = format!("run(\"{key}\", #{{\n");
+    for (name, def) in &params {
+        let name = if name.contains('.') {
+            format!("\"{name}\"")
+        } else {
+            name.clone()
+        };
+        out.push_str(&format!("{base}{INDENT}{name}: {},\n", script_literal(def)));
+    }
+    out.push_str(&format!("{base}}});"));
+    Some(out)
+}
+
+/// A parameter's current value as a script literal.
+fn script_literal(def: &ParameterDef) -> String {
+    let value = def.value.as_str();
+    let quoted = || format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
+    match def.param_type {
+        ParamType::Number
+        | ParamType::Spinner
+        | ParamType::Slider
+        | ParamType::ObjClass
+        | ParamType::SegClass
+        | ParamType::ImageChannel => {
+            if value.parse::<f64>().is_ok() {
+                value.to_string()
+            } else {
+                "0".to_string()
+            }
+        }
+        ParamType::Toggle => if value == "true" { "true" } else { "false" }.to_string(),
+        ParamType::MultiObjClass | ParamType::MultiSegClass => {
+            let ids: Vec<&str> = value
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .collect();
+            format!("[{}]", ids.join(", "))
+        }
+        _ => quoted(),
+    }
+}
+
+// ----------------------------------------------------------------------------
 // Editing helpers
 
 #[derive(Debug, PartialEq)]
@@ -454,7 +669,10 @@ fn indent(text: &str, cursor: usize) -> Edit {
 fn newline(text: &str, cursor: usize) -> Edit {
     let start = line_start(text, cursor);
     let before = &text[start..cursor];
-    let base: String = before.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+    let base: String = before
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
     let opener = before.trim_end().chars().last();
     let opens = matches!(opener, Some('{' | '(' | '['));
     if !opens {
@@ -571,7 +789,13 @@ mod tests {
     fn highlight_layers_keep_the_layout() {
         let src = "let a = \"ä\";\n\tprint(a); // hi";
         let h = highlight(src);
-        for layer in [&h.keywords, &h.functions, &h.strings, &h.numbers, &h.comments] {
+        for layer in [
+            &h.keywords,
+            &h.functions,
+            &h.strings,
+            &h.numbers,
+            &h.comments,
+        ] {
             assert_eq!(layer.chars().count(), src.chars().count());
             assert_eq!(layer.matches('\n').count(), 1);
             assert_eq!(layer.matches('\t').count(), 1);
@@ -688,6 +912,53 @@ mod tests {
                 cursor: 4
             }
         );
+    }
+
+    #[test]
+    fn command_docs_offer_tile_commands_only() {
+        let docs = command_docs();
+        let keys: Vec<&str> = docs.iter().map(|d| d.key).collect();
+        assert!(keys.contains(&"gaussian_blur"));
+        assert!(keys.contains(&"threshold"));
+        assert!(!keys.contains(&"voronoi"), "whole-image command offered");
+        assert!(!keys.contains(&"script"));
+        let blur = docs.iter().find(|d| d.key == "gaussian_blur").unwrap();
+        assert!(blur.doc.contains("kernel_size: number"), "{}", blur.doc);
+    }
+
+    #[test]
+    fn command_search_matches_name_and_key() {
+        let docs = command_docs();
+        let blur = docs.iter().find(|d| d.key == "gaussian_blur").unwrap();
+        assert!(blur.matches("gauss"));
+        assert!(blur.matches("GAUSSIAN BLUR"));
+        assert!(blur.matches(""));
+        assert!(!blur.matches("watershed"));
+    }
+
+    #[test]
+    fn every_snippet_is_valid_rhai() {
+        for doc in command_docs() {
+            let snippet = run_snippet(doc.key, "    ").unwrap();
+            let d = check_syntax(&snippet);
+            assert!(d.ok, "{}: {}\n{snippet}", doc.key, d.message);
+        }
+    }
+
+    #[test]
+    fn snippet_lists_defaults_and_list_entries() {
+        let blur = run_snippet("gaussian_blur", "").unwrap();
+        assert!(
+            blur.starts_with("run(\"gaussian_blur\", #{\n    kernel_size: 3,\n"),
+            "{blur}"
+        );
+        assert!(blur.ends_with("});"), "{blur}");
+        let threshold = run_snippet("threshold", "").unwrap();
+        assert!(
+            threshold.contains("\"thresholds.0.method\": \"Manual\""),
+            "{threshold}"
+        );
+        assert!(run_snippet("no_such_command", "").is_none());
     }
 
     #[test]

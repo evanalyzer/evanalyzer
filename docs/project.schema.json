@@ -2908,9 +2908,17 @@
       ]
     },
     "ScriptSettings": {
-      "description": "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.\n\nThe script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log.\n\n# Examples\n\n```rhai\nprint(`Hello world from a ${image_width}x${image_height} tile`);\n```",
+      "description": "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.\n\nThe script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.\n\n# Examples\n\n```rhai\nprint(`Hello world from a ${image_width}x${image_height} tile`);\nrun(\"gaussian_blur\", #{ kernel_size: 5 });\n```",
       "type": "object",
       "properties": {
+        "classes": {
+          "description": "Object classes the script creates or uses. Commands the script runs\nmay only use these classes, so the pipeline knows them without\nrunning the script.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
         "source": {
           "description": "Script source code",
           "type": "string",

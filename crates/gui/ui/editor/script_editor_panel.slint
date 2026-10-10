@@ -8,6 +8,7 @@
 // `TextInput` underneath. The layers come from Rust (`highlight`), as do
 // formatting, syntax check and the Tab/Enter/"}" editing helpers.
 
+import { LineEdit, ListView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 // Embedded so the editor is monospace on every system - the highlight layers
 // only line up with the text when every character has the same width.
@@ -28,6 +29,14 @@ export struct ScriptHighlight {
 export struct ScriptEdit {
     text: string,
     cursor: int,
+}
+
+// A command a script can `run`, for the command list.
+export struct ScriptCommandDoc {
+    key: string,
+    name: string,
+    // Summary plus one line per parameter.
+    doc: string,
 }
 
 export struct ScriptDiagnostic {
@@ -65,6 +74,10 @@ export global ScriptEditorState {
     pure callback newline(string, int) -> ScriptEdit;
     // "}" / ")" / "]" typed on a blank line: dedent one level first.
     pure callback close-bracket(string, int, string) -> ScriptEdit;
+    // Commands matching the search text (name or key).
+    pure callback filter-commands(string) -> [ScriptCommandDoc];
+    // Inserts `run("key", #{ defaults })` at the cursor.
+    pure callback insert-command(string, int, string) -> ScriptEdit;
 
     public function open(title: string, text: string, token: int) {
         self.title = title;
@@ -106,6 +119,14 @@ export component ScriptEditorPanel inherits Rectangle {
 
     property <ScriptHighlight> hl: ScriptEditorState.highlight(editor.text);
     property <ScriptDiagnostic> diag: ScriptEditorState.check(editor.text);
+    property <[ScriptCommandDoc]> commands: ScriptEditorState.filter-commands(search.text);
+    property <string> selected-key;
+    property <string> selected-doc;
+
+    function insert-command(key: string) {
+        root.set-edit(ScriptEditorState.insert-command(editor.text, editor.cursor-position-byte-offset, key));
+        editor.focus();
+    }
 
     function set-edit(edit: ScriptEdit) {
         editor.text = edit.text;
@@ -170,9 +191,13 @@ export component ScriptEditorPanel inherits Rectangle {
                 }
             }
 
+            HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 12px;
+
             // -- Code area --
             Rectangle {
-                vertical-stretch: 1;
+                horizontal-stretch: 1;
                 background: Theme.bg;
                 border-radius: 6px;
                 border-width: 1px;
@@ -324,6 +349,90 @@ export component ScriptEditorPanel inherits Rectangle {
                         }
                     }
                 }
+            }
+
+            // -- Command reference --
+            VerticalLayout {
+                width: 280px;
+                spacing: 6px;
+
+                search := LineEdit {
+                    placeholder-text: "Search commands";
+                    font-size: 11px;
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    clip: true;
+
+                    ListView {
+                        for cmd in root.commands: Rectangle {
+                            height: 34px;
+                            background: cmd.key == root.selected-key ? Theme.accent.with-alpha(0.18) : (cmd-ta.has-hover ? Theme.raised : transparent);
+                            VerticalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                alignment: center;
+                                Text {
+                                    text: cmd.name;
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    overflow: elide;
+                                }
+
+                                Text {
+                                    text: cmd.key;
+                                    font-size: 10px;
+                                    font-family: ScriptFont.family;
+                                    color: Theme.text-mute;
+                                    overflow: elide;
+                                }
+                            }
+
+                            cmd-ta := TouchArea {
+                                clicked => {
+                                    root.selected-key = cmd.key;
+                                    root.selected-doc = cmd.doc;
+                                }
+                                double-clicked => {
+                                    root.insert-command(cmd.key);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 180px;
+                    border-radius: 6px;
+                    background: Theme.raised;
+                    clip: true;
+                    Flickable {
+                        content-height: max(self.height, doc-text.preferred-height + 16px);
+                        doc-text := Text {
+                            x: 8px;
+                            y: 8px;
+                            width: parent.width - 16px;
+                            text: root.selected-key == "" ? "Select a command to see its parameters. Double-click or Insert adds it at the cursor." : root.selected-doc;
+                            font-size: 10px;
+                            color: Theme.text-dim;
+                            wrap: word-wrap;
+                            vertical-alignment: top;
+                        }
+                    }
+                }
+
+                AppButton {
+                    text: "Insert at cursor";
+                    enabled: root.selected-key != "";
+                    clicked => {
+                        root.insert-command(root.selected-key);
+                    }
+                }
+            }
             }
 
             // -- Syntax check --

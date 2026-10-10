@@ -72,6 +72,8 @@ impl PipelineCommand {
                 classes.extend([s.input_class, s.other_class, s.output_class]);
                 classes.extend(&s.other_filter_classes);
             }
+            // Declared on the step; enforced when the script runs commands.
+            PipelineCommand::Script(s) => classes.extend(&s.classes),
             PipelineCommand::TransformObjects(s) => {
                 classes.extend([s.input_class, s.output_class]);
             }
@@ -104,8 +106,6 @@ impl PipelineCommand {
             | PipelineCommand::RankFilter(_)
             | PipelineCommand::RollingBall(_)
             | PipelineCommand::SaveImage(_)
-            // TODO: report the script's declared output classes once it has settings.
-            | PipelineCommand::Script(_)
             | PipelineCommand::StructureTensor(_)
             | PipelineCommand::Watershed(_)
             | PipelineCommand::WeightedDeviation(_) => {}

@@ -443,7 +443,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
             name: "Script",
             category: CommandCategory::Preprocess,
             summary: "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.",
-            description: "The script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log.\n\n# Examples\n\n```rhai\nprint(`Hello world from a ${image_width}x${image_height} tile`);\n```",
+            description: "The script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.\n\n# Examples\n\n```rhai\nprint(`Hello world from a ${image_width}x${image_height} tile`);\nrun(\"gaussian_blur\", #{ kernel_size: 5 });\n```",
         },
         CommandMeta {
             id: 30,
@@ -601,6 +601,165 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
 
 #[allow(dead_code)]
 impl PipelineCommand {
+    /// Stable snake_case name of every command, as used by scripts; the
+    /// serialized `type` tag is the same name upper-cased.
+    pub const KEYS: &'static [&'static str] = &[
+        "ai_object_classifier",
+        "blur",
+        "cellpose",
+        "classify_objects",
+        "colocalization",
+        "color_filter_command",
+        "connected_components",
+        "distance_transform",
+        "edge_detection_canny",
+        "edge_detection_sobel",
+        "enhance_contrast",
+        "extract_objects",
+        "fill_holes",
+        "fill_object_holes",
+        "gaussian_blur",
+        "hessian",
+        "illumination_correction",
+        "image_cache",
+        "image_math",
+        "intensity_transformation",
+        "laplacian",
+        "load_annotated_objects",
+        "median_subtract",
+        "morphological_command",
+        "object_math",
+        "pixel_classifier",
+        "rank_filter",
+        "rolling_ball",
+        "save_image",
+        "script",
+        "stardist",
+        "structure_tensor",
+        "threshold",
+        "transform_objects",
+        "u_net",
+        "voronoi",
+        "watershed",
+        "weighted_deviation",
+        "yolov5",
+    ];
+
+    /// This command's entry in [`Self::KEYS`].
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::AiObjectClassifier(_) => "ai_object_classifier",
+            Self::Blur(_) => "blur",
+            Self::Cellpose(_) => "cellpose",
+            Self::ClassifyObjects(_) => "classify_objects",
+            Self::Colocalization(_) => "colocalization",
+            Self::ColorFilterCommand(_) => "color_filter_command",
+            Self::ConnectedComponents(_) => "connected_components",
+            Self::DistanceTransform(_) => "distance_transform",
+            Self::EdgeDetectionCanny(_) => "edge_detection_canny",
+            Self::EdgeDetectionSobel(_) => "edge_detection_sobel",
+            Self::EnhanceContrast(_) => "enhance_contrast",
+            Self::ExtractObjects(_) => "extract_objects",
+            Self::FillHoles(_) => "fill_holes",
+            Self::FillObjectHoles(_) => "fill_object_holes",
+            Self::GaussianBlur(_) => "gaussian_blur",
+            Self::Hessian(_) => "hessian",
+            Self::IlluminationCorrection(_) => "illumination_correction",
+            Self::ImageCache(_) => "image_cache",
+            Self::ImageMath(_) => "image_math",
+            Self::IntensityTransformation(_) => "intensity_transformation",
+            Self::Laplacian(_) => "laplacian",
+            Self::LoadAnnotatedObjects(_) => "load_annotated_objects",
+            Self::MedianSubtract(_) => "median_subtract",
+            Self::MorphologicalCommand(_) => "morphological_command",
+            Self::ObjectMath(_) => "object_math",
+            Self::PixelClassifier(_) => "pixel_classifier",
+            Self::RankFilter(_) => "rank_filter",
+            Self::RollingBall(_) => "rolling_ball",
+            Self::SaveImage(_) => "save_image",
+            Self::Script(_) => "script",
+            Self::Stardist(_) => "stardist",
+            Self::StructureTensor(_) => "structure_tensor",
+            Self::Threshold(_) => "threshold",
+            Self::TransformObjects(_) => "transform_objects",
+            Self::UNet(_) => "u_net",
+            Self::Voronoi(_) => "voronoi",
+            Self::Watershed(_) => "watershed",
+            Self::WeightedDeviation(_) => "weighted_deviation",
+            Self::Yolov5(_) => "yolov5",
+        }
+    }
+
+    /// The command named `key` (see [`Self::KEYS`]) with default settings.
+    pub fn default_for_key(key: &str) -> Option<PipelineCommand> {
+        match key {
+            "ai_object_classifier" => Some(Self::AiObjectClassifier(
+                AiObjectClassifierSettings::default(),
+            )),
+            "blur" => Some(Self::Blur(BlurSettings::default())),
+            "cellpose" => Some(Self::Cellpose(CellposeSettings::default())),
+            "classify_objects" => Some(Self::ClassifyObjects(ClassifyObjectsSettings::default())),
+            "colocalization" => Some(Self::Colocalization(ColocalizationSettings::default())),
+            "color_filter_command" => Some(Self::ColorFilterCommand(
+                ColorFilterCommandSettings::default(),
+            )),
+            "connected_components" => Some(Self::ConnectedComponents(
+                ConnectedComponentsSettings::default(),
+            )),
+            "distance_transform" => {
+                Some(Self::DistanceTransform(DistanceTransformSettings::default()))
+            }
+            "edge_detection_canny" => Some(Self::EdgeDetectionCanny(
+                EdgeDetectionCannySettings::default(),
+            )),
+            "edge_detection_sobel" => Some(Self::EdgeDetectionSobel(
+                EdgeDetectionSobelSettings::default(),
+            )),
+            "enhance_contrast" => Some(Self::EnhanceContrast(EnhanceContrastSettings::default())),
+            "extract_objects" => Some(Self::ExtractObjects(ExtractObjectsSettings::default())),
+            "fill_holes" => Some(Self::FillHoles(FillHolesSettings::default())),
+            "fill_object_holes" => Some(Self::FillObjectHoles(FillObjectHolesSettings::default())),
+            "gaussian_blur" => Some(Self::GaussianBlur(GaussianBlurSettings::default())),
+            "hessian" => Some(Self::Hessian(HessianSettings::default())),
+            "illumination_correction" => Some(Self::IlluminationCorrection(
+                IlluminationCorrectionSettings::default(),
+            )),
+            "image_cache" => Some(Self::ImageCache(ImageCacheSettings::default())),
+            "image_math" => Some(Self::ImageMath(ImageMathSettings::default())),
+            "intensity_transformation" => Some(Self::IntensityTransformation(
+                IntensityTransformationSettings::default(),
+            )),
+            "laplacian" => Some(Self::Laplacian(LaplacianSettings::default())),
+            "load_annotated_objects" => Some(Self::LoadAnnotatedObjects(
+                LoadAnnotatedObjectsSettings::default(),
+            )),
+            "median_subtract" => Some(Self::MedianSubtract(MedianSubtractSettings::default())),
+            "morphological_command" => Some(Self::MorphologicalCommand(
+                MorphologicalCommandSettings::default(),
+            )),
+            "object_math" => Some(Self::ObjectMath(ObjectMathSettings::default())),
+            "pixel_classifier" => Some(Self::PixelClassifier(PixelClassifierSettings::default())),
+            "rank_filter" => Some(Self::RankFilter(RankFilterSettings::default())),
+            "rolling_ball" => Some(Self::RollingBall(RollingBallSettings::default())),
+            "save_image" => Some(Self::SaveImage(SaveImageSettings::default())),
+            "script" => Some(Self::Script(ScriptSettings::default())),
+            "stardist" => Some(Self::Stardist(StardistSettings::default())),
+            "structure_tensor" => Some(Self::StructureTensor(StructureTensorSettings::default())),
+            "threshold" => Some(Self::Threshold(ThresholdSettings::default())),
+            "transform_objects" => {
+                Some(Self::TransformObjects(TransformObjectsSettings::default()))
+            }
+            "u_net" => Some(Self::UNet(UNetSettings::default())),
+            "voronoi" => Some(Self::Voronoi(VoronoiSettings::default())),
+            "watershed" => Some(Self::Watershed(WatershedSettings::default())),
+            "weighted_deviation" => {
+                Some(Self::WeightedDeviation(WeightedDeviationSettings::default()))
+            }
+            "yolov5" => Some(Self::Yolov5(Yolov5Settings::default())),
+            _ => None,
+        }
+    }
+
     pub fn name(&self) -> &str {
         match self {
             Self::AiObjectClassifier(_) => "AI Object Classifier",
@@ -780,7 +939,7 @@ impl PipelineCommand {
             Self::RankFilter(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The circular radius of the neighborhood to consider.\n\nA radius of 1.0 roughly corresponds to a 3x3 square, while larger\nvalues increase the effect's strength and computational cost.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f64::default())), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "filter_type".to_string(), display_name: "Filter Type".to_string(), description: "The specific ranking algorithm to apply to the neighborhood.".to_string(), value: match _s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, param_type: ParamType::Dropdown, options: vec!["Median".to_string(), "Min".to_string(), "Max".to_string(), "Mean".to_string(), "Outliers".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersRankFilterRankFilterTypeSettings::default()) { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false] }], match &_s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => vec![], FiltersRankFilterRankFilterTypeSettings::Min => vec![], FiltersRankFilterRankFilterTypeSettings::Max => vec![], FiltersRankFilterRankFilterTypeSettings::Mean => vec![], FiltersRankFilterRankFilterTypeSettings::Outliers(__inner) => vec![ParameterDef { name: "filter_type.0".to_string(), display_name: "Outliers".to_string(), description: "Replaces a pixel only if it deviates from the neighborhood median\nby more than the specified threshold.".to_string(), value: format!("{}", __inner), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![] }] }].concat(),
             Self::RollingBall(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the ball or paraboloid in pixels.\n\nThis should be at least as large as the radius of the largest\nobject in the image that is not part of the background.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 64.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (4.0f64)), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "ball_type".to_string(), display_name: "Ball Type".to_string(), description: "The geometric shape of the rolling structural element.".to_string(), value: match _s.ball_type { FiltersRollingBallBallTypeSettings::Ball => "Ball".to_string(), FiltersRollingBallBallTypeSettings::Paraboloid => "Paraboloid".to_string() }, param_type: ParamType::Dropdown, options: vec!["Ball".to_string(), "Paraboloid".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersRollingBallBallTypeSettings::default()) { FiltersRollingBallBallTypeSettings::Ball => "Ball".to_string(), FiltersRollingBallBallTypeSettings::Paraboloid => "Paraboloid".to_string() }, advanced: false, option_advanced: vec![false, false] }], vec![ParameterDef { name: "pre_smooth".to_string(), display_name: "Pre Smooth".to_string(), description: "".to_string(), value: format!("{}", _s.pre_smooth), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![] }]].concat(),
             Self::SaveImage(_s) => [vec![ParameterDef { name: "name".to_string(), display_name: "Name".to_string(), description: "Name the image should be stord under".to_string(), value: _s.name.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Which image from the pipeline should be stored".to_string(), value: match _s.source { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "Instance Map".to_string(), "Segmentation Mask".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSaveImageImageSourceSettings::default()) { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, advanced: false, option_advanced: vec![false, false, false] }]].concat(),
-            Self::Script(_s) => vec![ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Script source code".to_string(), value: _s.source.clone(), param_type: ParamType::Script, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String :: from ("print(`Hello world from a ${image_width}x${image_height} tile`);\n")).clone(), advanced: false, option_advanced: vec![] }],
+            Self::Script(_s) => [vec![ParameterDef { name: "classes".to_string(), display_name: "Classes".to_string(), description: "Object classes the script creates or uses. Commands the script runs\nmay only use these classes, so the pipeline knows them without\nrunning the script.".to_string(), value: _s.classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Script source code".to_string(), value: _s.source.clone(), param_type: ParamType::Script, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String :: from ("print(`Hello world from a ${image_width}x${image_height} tile`);\n")).clone(), advanced: false, option_advanced: vec![] }]].concat(),
             Self::Stardist(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass (1)).as_u32()), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Probability above which a grid cell is considered a candidate object center.".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "nms_threshold".to_string(), display_name: "Nms Threshold".to_string(), description: "Pixel-overlap ratio (intersection / union) above which a lower-scoring\ncandidate polygon is suppressed in favor of an overlapping higher-scoring one.".to_string(), value: format!("{}", _s.nms_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.3f32)), advanced: true, option_advanced: vec![] }]].concat(),
             Self::StructureTensor(_s) => [vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "The mathematical output to be produced by the algorithm.".to_string(), value: match _s.mode { FiltersStructureTensorTensorModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersStructureTensorTensorModeSettings::EigenvaluesY => "Eigenvalues Y".to_string(), FiltersStructureTensorTensorModeSettings::Coherence => "Coherence".to_string() }, param_type: ParamType::Dropdown, options: vec!["Eigenvalues X".to_string(), "Eigenvalues Y".to_string(), "Coherence".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersStructureTensorTensorModeSettings::default()) { FiltersStructureTensorTensorModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersStructureTensorTensorModeSettings::EigenvaluesY => "Eigenvalues Y".to_string(), FiltersStructureTensorTensorModeSettings::Coherence => "Coherence".to_string() }, advanced: false, option_advanced: vec![false, false, false] }], vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the integration window used to average the local gradients.\n\nLarger windows provide more stability against noise but reduce\nspatial resolution.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The standard deviation for the Gaussian weighting of the integration window.\n\nControls the spatial \"reach\" of the neighborhood analysis.".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: true, option_advanced: vec![] }]].concat(),
             Self::Threshold(_s) => vec![ParameterDef { name: "thresholds".to_string(), display_name: "Thresholds".to_string(), description: "A list of thresholding layers. Overlapping ranges are resolved\nby the order of the vector (last-in priority).".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.thresholds.iter().map(|__item| [vec![ParameterDef { name: "method".to_string(), display_name: "Method".to_string(), description: "The algorithm to use (Manual or Automatic).".to_string(), value: match __item.method { SegmentationThresholdThresholdMethodSettings::None => "None".to_string(), SegmentationThresholdThresholdMethodSettings::Manual => "Manual".to_string(), SegmentationThresholdThresholdMethodSettings::Li => "Li".to_string(), SegmentationThresholdThresholdMethodSettings::MinError => "Min Error".to_string(), SegmentationThresholdThresholdMethodSettings::Triangle => "Triangle".to_string(), SegmentationThresholdThresholdMethodSettings::Moments => "Moments".to_string(), SegmentationThresholdThresholdMethodSettings::Huang => "Huang".to_string(), SegmentationThresholdThresholdMethodSettings::Intermodes => "Intermodes".to_string(), SegmentationThresholdThresholdMethodSettings::IsoData => "Iso Data".to_string(), SegmentationThresholdThresholdMethodSettings::MaxEntropy => "Max Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Mean => "Mean".to_string(), SegmentationThresholdThresholdMethodSettings::Minimum => "Minimum".to_string(), SegmentationThresholdThresholdMethodSettings::Otsu { .. } => "Otsu".to_string(), SegmentationThresholdThresholdMethodSettings::Percentile => "Percentile".to_string(), SegmentationThresholdThresholdMethodSettings::RenyiEntropy => "Renyi Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Shanbhag => "Shanbhag".to_string(), SegmentationThresholdThresholdMethodSettings::Yen => "Yen".to_string(), SegmentationThresholdThresholdMethodSettings::RobustBackground { .. } => "Robust Background".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Manual".to_string(), "Li".to_string(), "Min Error".to_string(), "Triangle".to_string(), "Moments".to_string(), "Huang".to_string(), "Intermodes".to_string(), "Iso Data".to_string(), "Max Entropy".to_string(), "Mean".to_string(), "Minimum".to_string(), "Otsu".to_string(), "Percentile".to_string(), "Renyi Entropy".to_string(), "Shanbhag".to_string(), "Yen".to_string(), "Robust Background".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdThresholdMethodSettings :: Manual) { SegmentationThresholdThresholdMethodSettings::None => "None".to_string(), SegmentationThresholdThresholdMethodSettings::Manual => "Manual".to_string(), SegmentationThresholdThresholdMethodSettings::Li => "Li".to_string(), SegmentationThresholdThresholdMethodSettings::MinError => "Min Error".to_string(), SegmentationThresholdThresholdMethodSettings::Triangle => "Triangle".to_string(), SegmentationThresholdThresholdMethodSettings::Moments => "Moments".to_string(), SegmentationThresholdThresholdMethodSettings::Huang => "Huang".to_string(), SegmentationThresholdThresholdMethodSettings::Intermodes => "Intermodes".to_string(), SegmentationThresholdThresholdMethodSettings::IsoData => "Iso Data".to_string(), SegmentationThresholdThresholdMethodSettings::MaxEntropy => "Max Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Mean => "Mean".to_string(), SegmentationThresholdThresholdMethodSettings::Minimum => "Minimum".to_string(), SegmentationThresholdThresholdMethodSettings::Otsu { .. } => "Otsu".to_string(), SegmentationThresholdThresholdMethodSettings::Percentile => "Percentile".to_string(), SegmentationThresholdThresholdMethodSettings::RenyiEntropy => "Renyi Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Shanbhag => "Shanbhag".to_string(), SegmentationThresholdThresholdMethodSettings::Yen => "Yen".to_string(), SegmentationThresholdThresholdMethodSettings::RobustBackground { .. } => "Robust Background".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false] }], match &__item.method { SegmentationThresholdThresholdMethodSettings::None => vec![], SegmentationThresholdThresholdMethodSettings::Manual => vec![], SegmentationThresholdThresholdMethodSettings::Li => vec![], SegmentationThresholdThresholdMethodSettings::MinError => vec![], SegmentationThresholdThresholdMethodSettings::Triangle => vec![], SegmentationThresholdThresholdMethodSettings::Moments => vec![], SegmentationThresholdThresholdMethodSettings::Huang => vec![], SegmentationThresholdThresholdMethodSettings::Intermodes => vec![], SegmentationThresholdThresholdMethodSettings::IsoData => vec![], SegmentationThresholdThresholdMethodSettings::MaxEntropy => vec![], SegmentationThresholdThresholdMethodSettings::Mean => vec![], SegmentationThresholdThresholdMethodSettings::Minimum => vec![], SegmentationThresholdThresholdMethodSettings::Otsu { classes } => [vec![ParameterDef { name: "method.classes".to_string(), display_name: "Classes".to_string(), description: "".to_string(), value: match classes { SegmentationThresholdOtsuClassesSettings::Two => "Two".to_string(), SegmentationThresholdOtsuClassesSettings::Three { .. } => "Three".to_string() }, param_type: ParamType::Dropdown, options: vec!["Two".to_string(), "Three".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdOtsuClassesSettings :: Two) { SegmentationThresholdOtsuClassesSettings::Two => "Two".to_string(), SegmentationThresholdOtsuClassesSettings::Three { .. } => "Three".to_string() }, advanced: false, option_advanced: vec![false, false] }], match &classes { SegmentationThresholdOtsuClassesSettings::Two => vec![], SegmentationThresholdOtsuClassesSettings::Three { middle_class } => vec![ParameterDef { name: "method.classes.middle_class".to_string(), display_name: "Middle Class".to_string(), description: "".to_string(), value: match middle_class { SegmentationThresholdOtsuMiddleClassSettings::Foreground => "Foreground".to_string(), SegmentationThresholdOtsuMiddleClassSettings::Background => "Background".to_string() }, param_type: ParamType::Dropdown, options: vec!["Foreground".to_string(), "Background".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdOtsuMiddleClassSettings :: Background) { SegmentationThresholdOtsuMiddleClassSettings::Foreground => "Foreground".to_string(), SegmentationThresholdOtsuMiddleClassSettings::Background => "Background".to_string() }, advanced: false, option_advanced: vec![false, false] }] }].concat(), SegmentationThresholdThresholdMethodSettings::Percentile => vec![], SegmentationThresholdThresholdMethodSettings::RenyiEntropy => vec![], SegmentationThresholdThresholdMethodSettings::Shanbhag => vec![], SegmentationThresholdThresholdMethodSettings::Yen => vec![], SegmentationThresholdThresholdMethodSettings::RobustBackground { lower_outlier_fraction, upper_outlier_fraction, averaging_method, deviations_above_average } => [vec![ParameterDef { name: "method.lower_outlier_fraction".to_string(), display_name: "Lower Outlier Fraction".to_string(), description: "".to_string(), value: format!("{}", lower_outlier_fraction), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.05f32)), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "method.upper_outlier_fraction".to_string(), display_name: "Upper Outlier Fraction".to_string(), description: "".to_string(), value: format!("{}", upper_outlier_fraction), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.05f32)), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "method.averaging_method".to_string(), display_name: "Averaging Method".to_string(), description: "".to_string(), value: match averaging_method { SegmentationThresholdAveragingSettings::Mean => "Mean".to_string(), SegmentationThresholdAveragingSettings::Median => "Median".to_string() }, param_type: ParamType::Dropdown, options: vec!["Mean".to_string(), "Median".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdAveragingSettings :: Mean) { SegmentationThresholdAveragingSettings::Mean => "Mean".to_string(), SegmentationThresholdAveragingSettings::Median => "Median".to_string() }, advanced: false, option_advanced: vec![false, false] }], vec![ParameterDef { name: "method.deviations_above_average".to_string(), display_name: "Deviations Above Average".to_string(), description: "".to_string(), value: format!("{}", deviations_above_average), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (2.0f32)), advanced: false, option_advanced: vec![] }]].concat() }, vec![ParameterDef { name: "min_threshold".to_string(), display_name: "Min Threshold".to_string(), description: "The lower intensity bound. Used directly in `Manual` mode, or as a\nfloor for auto-methods.".to_string(), value: format!("{}", __item.min_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (0.0f32)), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "max_threshold".to_string(), display_name: "Max Threshold".to_string(), description: "The upper intensity bound. Used directly in `Manual` mode, or as a\nceiling for auto-methods.".to_string(), value: format!("{}", __item.max_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (65535.0f32)), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit used for the threshold value.\n\nbit: 0 - 255/65535\n%: 0 - 100.0\nrel: 0 - 1.0".to_string(), value: match __item.unit { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, param_type: ParamType::PixelUnits, options: vec!["bit".to_string(), "%".to_string(), "rel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (PixelUnits :: Bit) { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, advanced: true, option_advanced: vec![] }], vec![ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The classification ID assigned to pixels falling within this threshold range.".to_string(), value: format!("{}", __item.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass::default()).as_u32()), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "value_source".to_string(), display_name: "Value Source".to_string(), description: "Defines which image should be taken for calculating the threhold value.\n\nThis is the source which is used to calculate the threshold value.\nThe value itself is applied to the actual image the pipeline stands.".to_string(), value: match __item.value_source { SegmentationThresholdThresholdValueSourceSettings::ActualImage => "Actual Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::RawImage => "Raw Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::Memory(_) => "Memory".to_string() }, param_type: ParamType::Dropdown, options: vec!["Actual Image".to_string(), "Raw Image".to_string(), "Memory".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SegmentationThresholdThresholdValueSourceSettings :: ActualImage) { SegmentationThresholdThresholdValueSourceSettings::ActualImage => "Actual Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::RawImage => "Raw Image".to_string(), SegmentationThresholdThresholdValueSourceSettings::Memory(_) => "Memory".to_string() }, advanced: true, option_advanced: vec![false, false, false] }], match &__item.value_source { SegmentationThresholdThresholdValueSourceSettings::ActualImage => vec![], SegmentationThresholdThresholdValueSourceSettings::RawImage => vec![], SegmentationThresholdThresholdValueSourceSettings::Memory(__inner) => vec![] }].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![] }],
@@ -1752,6 +1911,28 @@ impl PipelineCommand {
                 }
             }
             Self::Script(s) => {
+                if param_name == "classes" {
+                    if let Some(id) = value
+                        .strip_prefix("toggle:")
+                        .and_then(|x| x.trim().parse::<u32>().ok())
+                    {
+                        if s.classes
+                            .iter()
+                            .any(|c| c.to_u32().map_or(false, |v| v == id))
+                        {
+                            s.classes.retain(|c| c.to_u32().map_or(true, |v| v != id));
+                        } else {
+                            s.classes.push(ObjectClass::Valid(id));
+                        }
+                    } else {
+                        s.classes = value
+                            .split(',')
+                            .filter(|x| !x.is_empty())
+                            .filter_map(|x| x.trim().parse::<u32>().ok())
+                            .map(|v| ObjectClass::Valid(v))
+                            .collect();
+                    }
+                }
                 if param_name == "source" {
                     s.source = value.to_string();
                 }
