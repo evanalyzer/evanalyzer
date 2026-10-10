@@ -355,7 +355,7 @@ fn command_category_suggested_next_advances_and_terminates_at_object() {
 #[test]
 fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
-    let expected: [(&str, &[CommandCategory]); 35] = [
+    let expected: [(&str, &[CommandCategory]); 39] = [
         ("AI Object Classifier", &[Object]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Measure]),
@@ -374,6 +374,9 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         // ExtractObjects expect instance IDs from ConnectedComponents/
         // Watershed, which haven't run yet right after FillHoles.
         ("FillHoles", &[InstanceSegmentation]),
+        // After filling, only Extract Objects (Measure) makes sense - object
+        // commands need extracted objects.
+        ("FillObjectHoles", &[Measure]),
         ("GaussianBlur", &[Segment, Preprocess]),
         ("Hessian", &[Segment, Preprocess]),
         ("IlluminationCorrection", &[Segment, Preprocess]),
@@ -381,6 +384,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("ImageMath", &[Segment, Preprocess]),
         ("IntensityTransformation", &[Segment, Preprocess]),
         ("Laplacian", &[Segment, Preprocess]),
+        ("LoadAnnotatedObjects", &[Object]),
         ("MedianSubtract", &[Segment, Preprocess]),
         ("MorphologicalCommand", &[Segment, Preprocess]),
         ("ObjectMath", &[Object]),
@@ -388,6 +392,11 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("RankFilter", &[Segment, Preprocess]),
         ("Rolling Ball", &[Segment, Preprocess]),
         ("SaveImage", &[Segment, Preprocess]),
+        // A script can sit at any stage, so every stage may follow it.
+        (
+            "Script",
+            &[Preprocess, Segment, InstanceSegmentation, Measure, Object],
+        ),
         ("AI Stardist Segmentation", &[Measure]),
         ("StructureTensor", &[Segment, Preprocess]),
         // Pinned to `[InstanceSegmentation]` (same as the default for
@@ -396,6 +405,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("Threshold", &[InstanceSegmentation]),
         ("TransformObjects", &[Object]),
         ("AI UNet Segmentation", &[InstanceSegmentation]),
+        ("AI YOLOv5 Segmentation", &[Measure]),
         ("Voronoi", &[Object]),
         ("Watershed", &[Measure]),
         ("WeightedDeviation", &[Segment, Preprocess]),
@@ -563,6 +573,22 @@ fn apply_param_change_unit_fields_toggle_both_variants() {
             .groups[0];
         let value = &nested.iter().find(|p| p.name == "unit").unwrap().value;
         assert_eq!(value, unit);
+    }
+}
+
+#[test]
+fn colocalization_size_unit_also_offers_percent() {
+    // `size_unit` is a SizeUnitsRel: nm / px like SizeUnits, plus "%".
+    let mut cmd = default_command(id_of("Colocalization")).unwrap();
+    let def = cmd
+        .to_parameters()
+        .into_iter()
+        .find(|p| p.name == "size_unit")
+        .expect("size_unit is exposed as a parameter");
+    assert_eq!(def.options, ["nm", "px", "%"]);
+    for unit in ["%", "nm", "px", "%"] {
+        cmd.apply_param_change("size_unit", unit);
+        assert_eq!(param_value(&cmd, "size_unit"), unit);
     }
 }
 
@@ -1005,4 +1031,21 @@ fn apply_param_change_text_and_path_fields_accept_arbitrary_strings() {
     let mut cmd = default_command(id_of("AI Cellpose Segmentation")).unwrap(); // model_path: FilePath
     cmd.apply_param_change("model_path", "/models/cellpose.pt");
     assert_eq!(param_value(&cmd, "model_path"), "/models/cellpose.pt");
+}
+
+/// Scripts name commands by `PipelineCommand::key()`; it must round-trip and
+/// be exactly the serialized `type` tag, lower-cased - otherwise a script
+/// and a saved project would name the same command differently.
+#[test]
+fn every_command_key_round_trips_and_matches_its_serialized_tag() {
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    assert_eq!(PipelineCommand::KEYS.len(), all_command_meta().len());
+    for key in PipelineCommand::KEYS {
+        let cmd = PipelineCommand::default_for_key(key)
+            .unwrap_or_else(|| panic!("no command for key `{key}`"));
+        assert_eq!(cmd.key(), *key);
+        let json = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(json["type"], key.to_uppercase(), "tag of `{key}`");
+    }
+    assert!(PipelineCommand::default_for_key("no_such_command").is_none());
 }

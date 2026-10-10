@@ -30,6 +30,9 @@ pub struct ImageEntry {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalImageSettings {
+    pub selected_series: Option<i32>,
+    #[serde(default)]
+    pub grayscale: bool,
     pub selected_channel: Option<i32>,
     pub channels: BTreeMap<i32, ChannelSettings>, // Key is the channel
     pub pixel_sizes: Option<PixelSizeSettings>,
@@ -98,7 +101,7 @@ pub struct HistogramSettings {
 #[serde(rename_all = "camelCase")]
 pub struct ChannelSettings {
     pub name: String,
-    pub emission_wave_length: f32,
+    pub emission_wave_length: Option<f32>,
     pub visible: Option<bool>,
     pub histogram: Option<HistogramSettings>,
 }

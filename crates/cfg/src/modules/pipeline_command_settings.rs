@@ -1,6 +1,6 @@
 // @generated - do not edit by hand
 use crate::{
-    core_types::{ImageAddress, MemoryId, PixelUnits, SizeUnits},
+    core_types::{ImageAddress, ImageChannelIdx, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel},
     types::classes::{ObjectClass, SegmentationClass},
 };
 use schemars::JsonSchema;
@@ -246,6 +246,43 @@ pub enum MathSaveImageImageSourceSettings {
         alias = "segmentation_mask"
     )]
     SegmentationMask,
+}
+
+/// How an [`IntensityFilter`] compares the object's metric with its threshold.
+/// Both comparisons are strict: an object exactly at the threshold matches
+/// neither.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectClassifyObjectsIntensityComparisonSettings {
+    /// The metric must be greater than the threshold.
+    #[default]
+    #[serde(alias = "above")]
+    Above,
+    /// The metric must be less than the threshold.
+    #[serde(alias = "below")]
+    Below,
+}
+
+/// Which per-channel intensity statistic of an object an [`IntensityFilter`]
+/// compares. All are measured on the raw image channel when the objects are
+/// extracted (see `Object::intensities`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObjectClassifyObjectsIntensityMetricSettings {
+    /// Mean pixel intensity inside the object.
+    #[default]
+    #[serde(alias = "avg")]
+    Avg,
+    /// Sum of all pixel intensities inside the object (integrated density) -
+    /// grows with the object's size, unlike the other metrics.
+    #[serde(alias = "sum")]
+    Sum,
+    /// Darkest pixel inside the object.
+    #[serde(alias = "min")]
+    Min,
+    /// Brightest pixel inside the object.
+    #[serde(alias = "max")]
+    Max,
 }
 
 /// Specifies how intensity adjustments are calculated.
@@ -893,24 +930,15 @@ pub struct EdgeDetectionSobelSettings {
 ///
 /// This algorithm can perform linear contrast stretching, normalization,
 /// or histogram equalization to improve the dynamic range of an image.
-///
-/// # Examples
-///
-/// ```
-/// # use imagec::backend::algos::EnhanceContrast;
-/// let settings = EnhanceContrast {
-/// saturated_pixels: 0.01,   // Clip 1% of outliers
-/// normalize: true,          // Stretch to [0.0, 1.0]
-/// equalize_histogram: false,
-/// };
-/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EnhanceContrastSettings {
     /// Percentage of pixels to "clip" from the top and bottom of the histogram.
     ///
-    /// Range: [0.0, 1.0]. A value of 0.01 (1%) helps ignore hot/dead pixels
-    /// that would otherwise prevent effective contrast stretching.
+    /// In percent (0 - 100), split evenly between the darkest and the
+    /// brightest pixels, like ImageJ: 0.35 clips 0.175 % at each end. A small
+    /// value (ImageJ's default is 0.35) ignores hot/dead pixels that would
+    /// otherwise prevent effective contrast stretching.
     pub saturated_pixels: f32,
     /// Whether to linearly stretch the remaining pixel intensities to fill
     /// the full [0.0, 1.0] range.
@@ -1326,6 +1354,47 @@ pub struct SaveImageSettings {
     pub source: MathSaveImageImageSourceSettings,
 }
 
+fn _serde_default_script_classes() -> Vec<ObjectClass> {
+    vec![]
+}
+/// Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.
+///
+/// The script sees the current tile as read-only constants:
+/// `image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.
+/// `print(...)` writes to the log. `run(command, #{ params })` runs a
+/// pipeline command on the current image, with the parameter names of the
+/// step settings.
+///
+/// # Examples
+///
+/// ```rhai
+/// print(`Hello world from a ${image_width}x${image_height} tile`);
+/// run("gaussian_blur", #{ kernel_size: 5 });
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptSettings {
+    /// Object classes the script creates or uses. Commands the script runs
+    /// may only use these classes, so the pipeline knows them without
+    /// running the script.
+    #[serde(default = "_serde_default_script_classes")]
+    pub classes: Vec<ObjectClass>,
+    /// Script source code
+    pub source: String,
+}
+
+impl Default for ScriptSettings {
+    fn default() -> Self {
+        Self {
+            classes: vec![],
+            source: String::from(
+                "print(`Hello world from a ${image_width}x${image_height} tile`);\n",
+            ),
+        }
+    }
+}
+
 /// Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.
 ///
 /// This algorithm summarizes the predominant directions of the image gradient within a local
@@ -1399,6 +1468,18 @@ pub struct WeightedDeviationSettings {
 
 // ============ SEGMENTATION ============
 
+fn _serde_default_cellpose_max_resize() -> i32 {
+    0i32
+}
+fn _serde_default_cellpose_flow_threshold() -> f32 {
+    0.4f32
+}
+fn _serde_default_cellpose_cellpose_postprocessing() -> bool {
+    true
+}
+fn _serde_default_cellpose_replicate_gray_channel() -> bool {
+    true
+}
 /// Instance segmentation using a Cellpose-SAM model exported as TorchScript
 ///
 /// [AI Cellpose Segmentation] -> [Extract Objects]
@@ -1445,6 +1526,35 @@ pub struct CellposeSettings {
     /// than this is removed (its pixels become background). `0` disables the filter.
     #[schemars(range(min = 0, max = 100000))]
     pub min_object_size: i32,
+    /// Longest image side, in pixels, the image is scaled down to before
+    /// segmentation; the masks are scaled back up to the original size
+    /// afterwards. Smaller values make large cells look like the cell sizes
+    /// the model was trained on and are faster. The scale is taken from the
+    /// full image, so every tile is scaled the same. `0` keeps the full
+    /// resolution (the Cellpose web demo uses `1000`).
+    #[schemars(range(min = 0, max = 100000))]
+    #[serde(default = "_serde_default_cellpose_max_resize")]
+    pub max_resize: i32,
+    /// Flow error threshold: an object whose shape doesn't match the flows
+    /// the model predicted (mean squared error above this value) is removed.
+    /// Increase to keep more objects, decrease to keep only clean ones. `0`
+    /// disables the check (Cellpose's default is `0.4`).
+    #[schemars(range(min = 0, max = 10))]
+    #[serde(default = "_serde_default_cellpose_flow_threshold")]
+    pub flow_threshold: f32,
+    /// Build the objects from the flows exactly like Cellpose does: pixels
+    /// follow the interpolated flows, an object only starts where more than
+    /// 10 pixels end up together, and pixels that reach no such spot become
+    /// background. Off, every spot any pixel ends up at starts an object,
+    /// which can join touching cells. Cellpose also fills the holes inside
+    /// each object - add a Fill Object Holes step after this one for that.
+    #[serde(default = "_serde_default_cellpose_cellpose_postprocessing")]
+    pub cellpose_postprocessing: bool,
+    /// Copy the gray image into every input channel instead of filling the
+    /// extra channels with zeros. With `input_channels = 3` this matches
+    /// Cellpose run on an RGB image whose channels are (nearly) equal.
+    #[serde(default = "_serde_default_cellpose_replicate_gray_channel")]
+    pub replicate_gray_channel: bool,
 }
 
 impl Default for CellposeSettings {
@@ -1456,6 +1566,10 @@ impl Default for CellposeSettings {
             probability_threshold: 0.5f32,
             flow_iterations: 200i32,
             min_object_size: 15i32,
+            max_resize: 0i32,
+            flow_threshold: 0.4f32,
+            cellpose_postprocessing: true,
+            replicate_gray_channel: true,
         }
     }
 }
@@ -1619,6 +1733,11 @@ impl Default for ThresholdEntrySettings {
 /// foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU
 /// automatically if CUDA is available in the linked libtorch build, otherwise
 /// falls back to CPU.
+///
+/// Any tile size works: the tile is mirror-padded to a multiple of 16 (U-Nets
+/// halve the image 4 times and fail otherwise) plus a 16 px border (context
+/// for the pixels at the tile edge, the "halo" bioimage.io models declare),
+/// and the prediction is cropped back to the tile.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
@@ -1676,6 +1795,97 @@ impl Default for UNetSettings {
             foreground_channel: 1i32,
             boundary_channel: -1i32,
             boundary_threshold: 0.5f32,
+        }
+    }
+}
+
+/// Which project segmentation class the objects of one model class get.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct YoloClassMappingSettings {
+    /// Index of the class in the model (`0` = its first class).
+    #[schemars(range(min = 0, max = 1000))]
+    pub model_class: i32,
+    /// The project's segmentation class objects of `model_class` are written as.
+    pub segmentation_class: SegmentationClass,
+}
+
+impl Default for YoloClassMappingSettings {
+    fn default() -> Self {
+        Self {
+            model_class: 0i32,
+            segmentation_class: SegmentationClass(1),
+        }
+    }
+}
+
+fn _serde_default_yolov5_image_scale() -> f32 {
+    1.0f32
+}
+/// Instance segmentation (or detection) with a YOLOv5 model exported as TorchScript.
+///
+/// [AI YOLOv5 Segmentation] -> [Extract Objects]
+///
+/// Takes a YOLOv5 TorchScript export (`export.py --include torchscript`) with
+/// a fixed 640x640 input. Segmentation models (`yolov5*-seg`) give every
+/// object its mask; plain detection models give filled boxes. Any number of
+/// model classes is supported.
+///
+/// Tiles larger than 640 px are analyzed in overlapping 640x640 windows at
+/// full resolution (small tiles are padded), so small objects stay
+/// detectable; objects seen by several windows are merged. Gray images are
+/// given to the model as RGB with equal channels.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct Yolov5Settings {
+    /// Path to a YOLOv5 model exported as TorchScript.
+    pub model_path: PathBuf,
+    /// Maps the model's classes to this project's segmentation classes;
+    /// objects of classes not listed are dropped. Leave empty to write model
+    /// class `i` as segmentation class `i + 1`, for every class.
+    pub class_mapping: Vec<YoloClassMappingSettings>,
+    /// Minimum confidence (objectness x class score) of a detection.
+    #[schemars(range(min = 0, max = 1))]
+    pub confidence_threshold: f32,
+    /// Detections of the same class overlapping more than this (box
+    /// intersection over union) are merged into the more confident one.
+    #[schemars(range(min = 0, max = 1))]
+    pub iou_threshold: f32,
+    /// Mask probability above which a pixel belongs to its object
+    /// (segmentation models only).
+    #[schemars(range(min = 0, max = 1))]
+    pub mask_threshold: f32,
+    /// Factor the image is scaled by before it is given to the model, the
+    /// masks are scaled back afterwards. Use it when the model was trained on
+    /// downscaled images: `640 / training image size`, e.g. `0.3125` for
+    /// 2048 px images YOLOv5 shrank to 640. `1` = full resolution.
+    #[schemars(range(min = 0.05, max = 4))]
+    #[serde(default = "_serde_default_yolov5_image_scale")]
+    pub image_scale: f32,
+    /// Overlap of neighboring 640x640 windows, in pixels. Must be larger
+    /// than the biggest object, so every object lies completely inside some
+    /// window.
+    #[schemars(range(min = 0, max = 512))]
+    pub window_overlap: i32,
+    /// Objects with fewer pixels than this (after overlapping objects were
+    /// resolved) are removed. `0` keeps every object.
+    #[schemars(range(min = 0, max = 100000))]
+    pub min_object_size: i32,
+}
+
+impl Default for Yolov5Settings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            class_mapping: vec![],
+            confidence_threshold: 0.25f32,
+            iou_threshold: 0.45f32,
+            mask_threshold: 0.5f32,
+            image_scale: 1.0f32,
+            window_overlap: 128i32,
+            min_object_size: 15i32,
         }
     }
 }
@@ -1849,6 +2059,23 @@ impl Default for ExtractObjectsSettings {
     }
 }
 
+/// Fills the holes inside every object, one object at a time.
+///
+/// [AI Cellpose / StarDist Segmentation | Watershed | Connected Components] -> [Fill Object Holes] -> [Extract Objects]
+///
+/// Works on the objects (instance map), so it has to come after a step that
+/// creates objects and before Extract Objects. A pixel becomes part of an
+/// object when it is enclosed by that object alone; a gap enclosed by several
+/// touching objects together is left as it is. An object lying completely
+/// inside another object's hole becomes part of the enclosing object. Filled
+/// pixels get the class of the object they now belong to.
+///
+/// Use Fill Holes instead to fill holes in the segmentation map before the
+/// objects are created (e.g. right after a Threshold).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FillObjectHolesSettings {}
+
 // ============ OBJECT ============
 
 /// An object classifier trained via the app's AI training dialog (an
@@ -1920,6 +2147,9 @@ pub struct ClassificationMappingSettings {
     pub output_class: ObjectClass,
 }
 
+fn _serde_default_classifyobjects_intensity_filters() -> Vec<IntensityFilterSettings> {
+    vec![]
+}
 /// Classifies ROIs based on morphological and intensity features.
 ///
 /// This command applies rule-based classification logic to assign object classes
@@ -2064,6 +2294,14 @@ pub struct ClassifyObjectsSettings {
     pub max_feret: f32,
     /// Whether object can touch image edge
     pub allow_edge_touching: bool,
+    /// Intensity criteria, e.g. "average in channel 1 brighter than 1200"
+    ///
+    /// All filters must match (logical AND), like every other criterion of
+    /// this command. Combine an `Above` and a `Below` filter on the same
+    /// channel and metric to select an intensity range. Empty: no intensity
+    /// criterion.
+    #[serde(default = "_serde_default_classifyobjects_intensity_filters")]
+    pub intensity_filters: Vec<IntensityFilterSettings>,
 }
 
 impl Default for ClassifyObjectsSettings {
@@ -2090,6 +2328,7 @@ impl Default for ClassifyObjectsSettings {
             min_feret: 0.0f32,
             max_feret: 2147483648.0f32,
             allow_edge_touching: true,
+            intensity_filters: vec![],
         }
     }
 }
@@ -2120,7 +2359,7 @@ pub struct ColocalizationSettings {
     /// How many partners an object may coloc with at once.
     pub multiplicity: ObjectColocObjectsColocMultiplicitySettings,
     /// Size unit for the minimum coloc area size
-    pub size_unit: SizeUnits,
+    pub size_unit: SizeUnitsRel,
     /// Minimum overlapping area size to count objects as coloc
     pub min_coloc_area: f32,
     /// Classes an object must NOT overlap to be considered colocalized.
@@ -2143,9 +2382,83 @@ impl Default for ColocalizationSettings {
             filter_classes: vec![],
             class_for_overlapping_areas: ObjectClass::default(),
             multiplicity: ObjectColocObjectsColocMultiplicitySettings::OneToOne,
-            size_unit: SizeUnits::Pixels,
+            size_unit: SizeUnitsRel::Pixels,
             min_coloc_area: 0.0f32,
             exclude_classes: vec![],
+        }
+    }
+}
+
+/// One intensity criterion of [`ClassifyObjects`], e.g. "average intensity
+/// in channel 1 brighter than 1200".
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct IntensityFilterSettings {
+    /// Image channel whose intensity is compared (0-based)
+    ///
+    /// An object without a measurement for this channel (the image has no
+    /// such channel) never matches.
+    #[schemars(range(min = 0, max = 10))]
+    pub channel: ImageChannelIdx,
+    /// Intensity statistic of the object to compare
+    pub metric: ObjectClassifyObjectsIntensityMetricSettings,
+    /// Whether the object must be brighter or darker than the threshold
+    pub comparison: ObjectClassifyObjectsIntensityComparisonSettings,
+    /// Intensity threshold, in `unit`
+    ///
+    /// For `Sum` this is the summed intensity of all object pixels, so it
+    /// scales with the object's area.
+    #[schemars(range(min = 0, max = 2147483600))]
+    pub threshold: f32,
+    /// Unit of `threshold`
+    ///
+    /// bit: gray value, 0 - 255/65535 (as in ImageJ/Fiji)
+    /// %: 0 - 100.0
+    /// rel: 0 - 1.0
+    pub unit: PixelUnits,
+}
+
+impl Default for IntensityFilterSettings {
+    fn default() -> Self {
+        Self {
+            channel: ImageChannelIdx(0),
+            metric: ObjectClassifyObjectsIntensityMetricSettings::Avg,
+            comparison: ObjectClassifyObjectsIntensityComparisonSettings::Above,
+            threshold: 0.0f32,
+            unit: PixelUnits::Bit,
+        }
+    }
+}
+
+/// Loads the hand-annotated objects of the image into the pipeline.
+///
+/// Every loaded object gets a new object id, is marked as manually annotated
+/// and has its intensities measured on every channel - from there on it is
+/// handled like any segmented object.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadAnnotatedObjectsSettings {
+    /// Only load annotations carrying at least one of these classes.
+    ///
+    /// Leave empty to load every annotated object of the image.
+    pub input_classes: Vec<ObjectClass>,
+    /// Class added to every loaded object, so later steps can select them.
+    /// Set to `Unset` to add none.
+    pub output_class: ObjectClass,
+    /// Keep the classes the objects were given while annotating.
+    ///
+    /// Turn off to start from `output_class` alone.
+    pub keep_annotated_classes: bool,
+}
+
+impl Default for LoadAnnotatedObjectsSettings {
+    fn default() -> Self {
+        Self {
+            input_classes: vec![],
+            output_class: ObjectClass::default(),
+            keep_annotated_classes: false,
         }
     }
 }

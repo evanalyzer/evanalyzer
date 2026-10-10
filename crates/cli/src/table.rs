@@ -1,7 +1,7 @@
 //! Minimal ASCII table printer for the `view` command - no extra dependency
 //! for what is just a quick terminal preview (full data goes through `export`).
 use crate::commands::common::cell_text;
-use evanalyzer_app::result::DatabaseResult;
+use evanalyzer_app::results::DatabaseResult;
 use std::io::Write;
 
 const MAX_COL_WIDTH: usize = 28;

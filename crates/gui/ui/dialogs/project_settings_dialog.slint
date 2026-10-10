@@ -17,16 +17,16 @@ export struct ProjectSettingsSlint {
     project_name: string,
     author_name: string,
     organization_name: string,
+    // 0 Auto, 1 Custom regex, 2 Folder (`GroupingMode`).
     grouping_mode: int,
     custom_regex: string,
-    well_size_index: int,
+    // Index into `ProjectSettingsState.plate-size-labels` (`PlateSize::ALL`,
+    // 0 = Auto) - the same list as the results window's PLATE SIZE.
+    plate_size_index: int,
+    // Well size fitted to the images (true) or `well_rows` x `well_columns`.
+    well_auto: bool,
+    // For a fixed well size: the image number at each position, row by row.
     well_values: [int],
-    // Raw plate dimensions (number of wells), derived from well_size_index -
-    // informational only, set by Rust and read by the Matrix view to size its
-    // grid; editing plate size still goes through the well_size_index preset
-    // dropdown, not these fields directly.
-    plate_rows: int,
-    plate_cols: int,
     // Cross-tile object merging (docs/tile_merge_plan.md). On by default -
     // a user has no reason to know or care about tiles, they just expect
     // objects to be detected correctly. `enabled: false` fully restores the
@@ -50,18 +50,51 @@ export global ProjectSettingsState {
         author_name: "",
         organization_name: "",
         custom_regex: "",
-        well_size_index: 0,
-        well_values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-        plate_rows: 1,
-        plate_cols: 1,
+        plate_size_index: 0,
+        well_auto: true,
+        well_values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
         tile_merge_enabled: true,
         tile_merge_classes_to_not_merge_flags: [
-            "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
-            "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
         ],
         tile_merge_connectivity: 1,
         tile_merge_max_fragments_per_group: 10000,
     };
+
+    // Every plate size choice, set from Rust (`PlateSize::label`).
+    in property <[string]> plate-size-labels: ["Auto"];
 
     callback project_settings_changed(ProjectSettingsSlint);
     callback project_settings_canceled();
@@ -223,172 +256,6 @@ export component ProjectSettingsDialog inherits Rectangle {
                         VerticalLayout {
                             spacing: 12px;
                             Text {
-                                text: "Analyze settings";
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 600;
-                            }
-
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Grouping:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                group_mode := ComboBox {
-                                    model: [
-                                        "No grouping",
-                                        "Foldername [group_name/image_01.tif]",
-                                        "Filename [group_name_03.tif]",
-                                        "Filename well [image_B99_01.tif]",
-                                        "Custom regex"
-                                    ];
-                                    current-index <=> ProjectSettingsState.settings.grouping_mode;
-                                }
-                            }
-
-                            if (group_mode.current-index == 4): HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Regex:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                LineEdit {
-                                    placeholder-text: "(.)([0-9]+))_([0-9]+)";
-                                    text <=> ProjectSettingsState.settings.custom_regex;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Plate size:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                ComboBox {
-                                    model: [
-                                        "1 Well (1 x 1)",
-                                        "6 Well (2 x 3)",
-                                        "8 Well (2 x 4)",
-                                        "12 Well (2 x 6)",
-                                        "12 Well (3 x 4)",
-                                        "15 Well (3 x 5)",
-                                        "18 Well (3 x 6)",
-                                        "24 Well (4 x 6)",
-                                        "48 Well (6 x 8)",
-                                        "96 Well (8 x 12)",
-                                        "384 Well (16 x 24)",
-                                        "1536 Well (32 x 48)",
-                                        "3456 Well (48 x 72)"
-                                    ];
-                                    current-index <=> ProjectSettingsState.settings.well_size_index;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Well Rows/Cols:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                SpinBox {
-                                    value: ProjectSettingsState.settings.well_rows;
-                                    minimum: 0;
-                                    maximum: 8;
-                                    edited => {
-                                        ProjectSettingsState.settings.well_rows = self.value;
-                                        ProjectSettingsState.well_dims_changed(self.value, ProjectSettingsState.settings.well_columns);
-                                    }
-                                }
-
-                                SpinBox {
-                                    value: ProjectSettingsState.settings.well_columns;
-                                    minimum: 0;
-                                    maximum: 8;
-                                    edited => {
-                                        ProjectSettingsState.settings.well_columns = self.value;
-                                        ProjectSettingsState.well_dims_changed(ProjectSettingsState.settings.well_rows, self.value);
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
-
-                        VerticalLayout {
-                            spacing: 12px;
-                            Text {
-                                text: "Images in well";
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 600;
-                            }
-
-                            Text {
-                                text: "Define the image acquisition order within each well (press Enter to confirm a change).";
-                                color: Theme.text-dim;
-                                font-size: 10px;
-                                wrap: word-wrap;
-                            }
-
-                            GridLayout {
-                                spacing: 2px;
-                                for val[i] in ProjectSettingsState.settings.well_values: Rectangle {
-                                    row: i / ProjectSettingsState.settings.well_columns;
-                                    col: mod(i, ProjectSettingsState.settings.well_columns);
-                                    width: root.well_size;
-                                    height: root.well_size * 0.8;
-                                    background: Theme.panel;
-                                    border-width: 1px;
-                                    border-color: Theme.border-soft;
-                                    border-radius: 3px;
-
-                                    TextInput {
-                                        text: val;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
-                                        color: Theme.text;
-                                        font-size: 11px;
-                                        accepted => {
-                                            ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
-                                        }
-                                        edited => {
-                                            ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
-
-                        VerticalLayout {
-                            spacing: 12px;
-                            Text {
                                 text: "Cross-tile object merging";
                                 color: Theme.text;
                                 font-size: 12px;
@@ -462,6 +329,175 @@ export component ProjectSettingsDialog inherits Rectangle {
                                         maximum: 1000000;
                                         edited => {
                                             ProjectSettingsState.settings.tile_merge_max_fragments_per_group = self.value;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        VerticalLayout {
+                            spacing: 12px;
+                            Text {
+                                text: "Analyze settings";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Grouping:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                group_mode := ComboBox {
+                                    model: [
+                                        "Auto (detect the well from the file name)",
+                                        "Custom regex",
+                                        "Folder [well/image_01.tif]"
+                                    ];
+                                    current-index <=> ProjectSettingsState.settings.grouping_mode;
+                                }
+                            }
+
+                            if (group_mode.current-index == 1): HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Regex:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                LineEdit {
+                                    placeholder-text: "^(([A-H])([0-9]+))_([0-9]+)";
+                                    text <=> ProjectSettingsState.settings.custom_regex;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Plate size:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                ComboBox {
+                                    model: ProjectSettingsState.plate-size-labels;
+                                    current-index <=> ProjectSettingsState.settings.plate_size_index;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Well size:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                ComboBox {
+                                    model: ["Auto (fitted to the images)", "Custom"];
+                                    current-index: ProjectSettingsState.settings.well_auto ? 0 : 1;
+                                    selected => {
+                                        ProjectSettingsState.settings.well_auto = self.current-index == 0;
+                                    }
+                                }
+                            }
+
+                            if !ProjectSettingsState.settings.well_auto: HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Well Rows/Cols:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                SpinBox {
+                                    value: ProjectSettingsState.settings.well_rows;
+                                    minimum: 1;
+                                    maximum: 8;
+                                    edited => {
+                                        ProjectSettingsState.settings.well_rows = self.value;
+                                        ProjectSettingsState.well_dims_changed(self.value, ProjectSettingsState.settings.well_columns);
+                                    }
+                                }
+
+                                SpinBox {
+                                    value: ProjectSettingsState.settings.well_columns;
+                                    minimum: 1;
+                                    maximum: 8;
+                                    edited => {
+                                        ProjectSettingsState.settings.well_columns = self.value;
+                                        ProjectSettingsState.well_dims_changed(ProjectSettingsState.settings.well_rows, self.value);
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        if !ProjectSettingsState.settings.well_auto: VerticalLayout {
+                            spacing: 12px;
+                            Text {
+                                text: "Images in well";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            Text {
+                                text: "Which image number is shown at each position of the well (press Enter to confirm a change).";
+                                color: Theme.text-dim;
+                                font-size: 10px;
+                                wrap: word-wrap;
+                            }
+
+                            GridLayout {
+                                spacing: 2px;
+                                for val[i] in ProjectSettingsState.settings.well_values: Rectangle {
+                                    row: i / ProjectSettingsState.settings.well_columns;
+                                    col: mod(i, ProjectSettingsState.settings.well_columns);
+                                    width: root.well_size;
+                                    height: root.well_size * 0.8;
+                                    background: Theme.panel;
+                                    border-width: 1px;
+                                    border-color: Theme.border-soft;
+                                    border-radius: 3px;
+
+                                    TextInput {
+                                        text: val;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        width: 100%;
+                                        height: 100%;
+                                        color: Theme.text;
+                                        font-size: 11px;
+                                        accepted => {
+                                            ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
+                                        }
+                                        edited => {
+                                            ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
                                         }
                                     }
                                 }

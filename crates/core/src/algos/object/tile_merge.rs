@@ -219,8 +219,8 @@ impl ImageAlgorithm for TileMerge {
         "Tile Merge"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "rosenfeld1966sequential",
             title: "Sequential Operations in Digital Picture Processing",
             authors: &["Azriel Rosenfeld", "John L. Pfaltz"],
@@ -229,7 +229,7 @@ impl ImageAlgorithm for TileMerge {
             doi: Some("10.1145/321356.321357"),
             url: Some("https://doi.org/10.1145/321356.321357"),
             pages: Some("471-494"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -465,8 +465,8 @@ fn merge_intensities(objects: &[&Object], merged_area: usize) -> IndexMap<i32, I
         for (&channel, intensity) in &o.intensities {
             let acc = merged.entry(channel).or_insert_with(|| Intensity {
                 sum_intensity: 0.0,
-                min_intensity: f32::MAX,
-                max_intensity: f32::MIN,
+                min_intensity: f64::MAX,
+                max_intensity: f64::MIN,
                 avg_intensity: 0.0,
                 pixel_values: Vec::new(),
             });
@@ -477,7 +477,7 @@ fn merge_intensities(objects: &[&Object], merged_area: usize) -> IndexMap<i32, I
     }
     let n = merged_area.max(1) as f64;
     for intensity in merged.values_mut() {
-        intensity.avg_intensity = (intensity.sum_intensity / n) as f32;
+        intensity.avg_intensity = (intensity.sum_intensity / n);
     }
     merged
 }
@@ -545,13 +545,12 @@ mod tests {
 
     fn dummy_ctx() -> crate::pipeline::pipeline_context::PipelineContext {
         crate::pipeline::pipeline_context::PipelineContext::new_from_image_test(
-            kornia_image::Image::<f32, 1, kornia_tensor::CpuAllocator>::new(
+            kornia_image::Image::<f32, 1>::new(
                 kornia_image::ImageSize {
                     width: 1,
                     height: 1,
                 },
                 vec![0.0f32],
-                kornia_tensor::CpuAllocator,
             )
             .unwrap(),
         )

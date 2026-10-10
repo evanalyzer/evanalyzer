@@ -14,13 +14,14 @@
 //! to regions of interest based on configurable criteria and machine learning models.
 
 use crate::{
+    ImageChannel,
     algos::{ExecutionScope, ImageAlgorithm},
     image::PixelSizes,
-    object::Object, // ... other imports
+    object::Object,
     spatial_grid::BboxGrid,
 };
 use evanalyzer_cfg::core_types::{
-    CitationMetadata, InternalErrors,
+    CitationMetadata, ImageChannelIdx, InternalErrors,
     ObjectClass::{self, Unset},
     ObjectId, PixelUnits, SegmentationClass, SizeUnits,
 };
@@ -29,22 +30,22 @@ use macros::CommandsMeta;
 
 #[derive(CommandsMeta)]
 pub enum ClassifyMatchHandling {
-    #[cmdsmeta(display_name = "Add class on match")]
+    #[cmdsmeta(display_name = "Add class on match", visibility = Advanced)]
     AddOutputClassIfMatch,
-    #[cmdsmeta(display_name = "Add class on mismatch")]
+    #[cmdsmeta(display_name = "Add class on mismatch", visibility = Advanced)]
     AddOutputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove class on match", visible = false)]
+    #[cmdsmeta(display_name = "Remove class on match", visibility = Hidden)]
     RemoveInputClassIfMatch,
-    #[cmdsmeta(display_name = "Remove class on mismatch", visible = false)]
+    #[cmdsmeta(display_name = "Remove class on mismatch", visibility = Hidden)]
     RemoveInputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove output class on match")]
+    #[cmdsmeta(display_name = "Remove output class on match", visibility = Advanced)]
     RemoveOutputClassIfMatch,
-    #[cmdsmeta(display_name = "Remove output class on mismatch")]
+    #[cmdsmeta(display_name = "Remove output class on mismatch", visibility = Advanced)]
     RemoveOutputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove objects matching criteria")]
+    #[cmdsmeta(display_name = "Remove objects matching criteria", visibility = Advanced)]
     RemoveAllClassesIfMatch,
     #[cmdsmeta(display_name = "Keep objects matching criteria")]
     RemoveAllClassesIfNotMatch,
@@ -53,6 +54,97 @@ pub enum ClassifyMatchHandling {
     ReclassifyIfMatch,
     #[cmdsmeta(display_name = "Reclassify on mismatch")]
     ReclassifyIfNotMatch,
+}
+
+/// Which per-channel intensity statistic of an object an [`IntensityFilter`]
+/// compares. All are measured on the raw image channel when the objects are
+/// extracted (see `Object::intensities`).
+#[derive(CommandsMeta)]
+pub enum IntensityMetric {
+    /// Mean pixel intensity inside the object.
+    #[cmdsmeta(display_name = "Average")]
+    Avg,
+    /// Sum of all pixel intensities inside the object (integrated density) -
+    /// grows with the object's size, unlike the other metrics.
+    #[cmdsmeta(display_name = "Sum")]
+    Sum,
+    /// Darkest pixel inside the object.
+    #[cmdsmeta(display_name = "Minimum")]
+    Min,
+    /// Brightest pixel inside the object.
+    #[cmdsmeta(display_name = "Maximum")]
+    Max,
+}
+
+/// How an [`IntensityFilter`] compares the object's metric with its threshold.
+/// Both comparisons are strict: an object exactly at the threshold matches
+/// neither.
+#[derive(CommandsMeta)]
+pub enum IntensityComparison {
+    /// The metric must be greater than the threshold.
+    #[cmdsmeta(display_name = "Brighter than")]
+    Above,
+    /// The metric must be less than the threshold.
+    #[cmdsmeta(display_name = "Darker than")]
+    Below,
+}
+
+/// One intensity criterion of [`ClassifyObjects`], e.g. "average intensity
+/// in channel 1 brighter than 1200".
+#[derive(CommandsMeta)]
+pub struct IntensityFilter {
+    /// Image channel whose intensity is compared (0-based)
+    ///
+    /// An object without a measurement for this channel (the image has no
+    /// such channel) never matches.
+    #[cmdsmeta(default = ImageChannelIdx(0), min = 0, max = 10, step = 1)]
+    pub channel: ImageChannelIdx,
+
+    /// Intensity statistic of the object to compare
+    #[cmdsmeta(default = IntensityMetric::Avg)]
+    pub metric: IntensityMetric,
+
+    /// Whether the object must be brighter or darker than the threshold
+    #[cmdsmeta(default = IntensityComparison::Above)]
+    pub comparison: IntensityComparison,
+
+    /// Intensity threshold, in `unit`
+    ///
+    /// For `Sum` this is the summed intensity of all object pixels, so it
+    /// scales with the object's area.
+    #[cmdsmeta(default = 0, min = 0, max = 2147483648.0, step = 1)]
+    pub threshold: f32,
+
+    /// Unit of `threshold`
+    ///
+    /// bit: gray value, 0 - 255/65535 (as in ImageJ/Fiji)
+    /// %: 0 - 100.0
+    /// rel: 0 - 1.0
+    #[cmdsmeta(default = PixelUnits::Bit, visibility = Advanced)]
+    pub unit: PixelUnits,
+}
+
+impl IntensityFilter {
+    /// Whether `object` passes this filter. `nr_of_bits` is the image's bit
+    /// depth, needed to convert a `Bit` threshold into the normalized [0, 1]
+    /// space the object intensities are stored in.
+    fn matches(&self, object: &Object, nr_of_bits: u16) -> bool {
+        // Intensities are keyed by the raw `i32` channel index.
+        let Some(intensity) = object.intensities.get(&(self.channel.0 as i32)) else {
+            return false;
+        };
+        let value = match self.metric {
+            IntensityMetric::Avg => intensity.avg_intensity,
+            IntensityMetric::Sum => intensity.sum_intensity,
+            IntensityMetric::Min => intensity.min_intensity,
+            IntensityMetric::Max => intensity.max_intensity,
+        };
+        let threshold = self.unit.to_relative(self.threshold, nr_of_bits) as f64;
+        match self.comparison {
+            IntensityComparison::Above => value > threshold,
+            IntensityComparison::Below => value < threshold,
+        }
+    }
 }
 
 /// Classifies ROIs based on morphological and intensity features.
@@ -68,7 +160,7 @@ pub struct ClassifyObjects {
     /// The segmentation class value is assigned to each pixel in the image
     /// after a Threshold, Pixel classifier or AI classifier.
     /// If no seg class is selected the criteria are applied to all objects.
-    #[cmdsmeta(visible = false)]
+    #[cmdsmeta(visibility = Advanced)]
     pub origin_segmentation: Vec<SegmentationClass>,
 
     /// Restrict classification to objects that already carry one of these classes
@@ -106,13 +198,13 @@ pub struct ClassifyObjects {
     /// class by at least `min_intersection_area`. Combine with e.g.
     /// `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
     /// or `AddOutputClassIfMatch` to tag objects that do.
-    #[cmdsmeta(default = ObjectClass::Unset, display_name = "Intersecting With")]
+    #[cmdsmeta(default = ObjectClass::Unset, display_name = "Intersecting With", visibility = Advanced)]
     pub overlapping_with: ObjectClass,
 
     /// Minimum intersection area with an `overlapping_with` object, in `size_unit`
     ///
     /// Has no effect while `overlapping_with` is Unset.
-    #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = false)]
+    #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = false, visibility = Advanced)]
     pub min_intersection_area: f32,
 
     /// Unit to use for object extraction
@@ -157,7 +249,7 @@ pub struct ClassifyObjects {
     ///
     /// Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.
     /// Solidity < 1.0: The object has irregular boundaries, deep "bays," protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = false)]
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = false, visibility = Advanced)]
     pub min_solidity: f32,
 
     /// Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex
@@ -168,14 +260,14 @@ pub struct ClassifyObjects {
     ///
     /// Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.
     /// Solidity < 1.0: The object has irregular boundaries, deep "bays," protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.
-    #[cmdsmeta(default = 1.0, min = 0.0, max = 1.0, step = 0.1, summary = false)]
+    #[cmdsmeta(default = 1.0, min = 0.0, max = 1.0, step = 0.1, summary = false, visibility = Advanced)]
     pub max_solidity: f32,
 
     /// Minimum proportional relationship between an object's width and its height
     ///
     /// This value is calculated by the object bounding box with and height and is defined with `a = with/height`.
     /// The value is without unit in the range of 0 to MAX_F32
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 2147483648.0, summary = false)]
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 2147483648.0, summary = false, visibility = Advanced)]
     pub min_aspect_ratio: f32,
 
     /// Maximum proportional relationship between an object's width and its height
@@ -189,6 +281,7 @@ pub struct ClassifyObjects {
         step = 1.0,
         summary = false
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub max_aspect_ratio: f32,
 
     /// Eccentricity: 0 = perfect circle, 1 = line
@@ -196,7 +289,7 @@ pub struct ClassifyObjects {
     /// Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.
     /// It imagines the shape as an ellipse and measures how far apart its focal points are.
     /// It is calculated with `sqrt(1-(b/a)^2)`
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = true)]
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = true, visibility = Advanced)]
     pub min_eccentricity: f32,
 
     /// Eccentricity: 0 = perfect circle, 1 = line
@@ -204,7 +297,7 @@ pub struct ClassifyObjects {
     /// Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.
     /// It imagines the shape as an ellipse and measures how far apart its focal points are.
     /// It is calculated with `sqrt(1-(b/a)^2)`
-    #[cmdsmeta(default = 1.0, min = 0.0, max = 1.0, step = 0.1, summary = true)]
+    #[cmdsmeta(default = 1.0, min = 0.0, max = 1.0, step = 0.1, summary = true, visibility = Advanced)]
     pub max_eccentricity: f32,
 
     /// Feret diameter threshold
@@ -215,7 +308,7 @@ pub struct ClassifyObjects {
     /// In image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.
     /// It mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.
     /// When analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.
-    #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = false, step = 1)]
+    #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = false, step = 1, visibility = Advanced)]
     pub min_feret: f32,
 
     /// Maximum feret diameter threshold in selected unit (px or nm)
@@ -233,11 +326,22 @@ pub struct ClassifyObjects {
         summary = false,
         step = 1
     )]
+    #[cmdsmeta(visibility = Advanced)]
     pub max_feret: f32,
 
     /// Whether object can touch image edge
     #[cmdsmeta(default = true, summary = true)]
     pub allow_edge_touching: bool,
+
+    /// Intensity criteria, e.g. "average in channel 1 brighter than 1200"
+    ///
+    /// All filters must match (logical AND), like every other criterion of
+    /// this command. Combine an `Above` and a `Below` filter on the same
+    /// channel and metric to select an intensity range. Empty: no intensity
+    /// criterion.
+    // `optional`: projects saved before this setting existed still load.
+    #[cmdsmeta(default = vec![], optional = true)]
+    pub intensity_filters: Vec<IntensityFilter>,
 }
 
 impl Default for ClassifyObjects {
@@ -263,6 +367,7 @@ impl Default for ClassifyObjects {
             min_intersection_area: 0.0,
             input_classes: vec![],
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
+            intensity_filters: vec![],
         }
     }
 }
@@ -297,14 +402,40 @@ impl ImageAlgorithm for ClassifyObjects {
         // `overlap_candidates` list to a small candidate set - see `BboxGrid` docs.
         let overlap_grid = BboxGrid::build(&overlap_candidates, cache);
 
+        // A filter on a channel no object was measured in silently fails
+        // every object - most likely a wrong channel index, so say so.
+        let nr_of_bits = ctx.image_meta.nr_of_bits;
+        for filter in &self.intensity_filters {
+            let measured = cache
+                .object_cache
+                .values()
+                .any(|object| object.intensities.contains_key(&(filter.channel.0 as i32)));
+            if !measured && !cache.object_cache.is_empty() {
+                warn!(
+                    "Classify objects: intensity filter on channel {} matches no object - \
+                     no object has an intensity measured in that channel",
+                    filter.channel
+                );
+            }
+        }
+
         let evaluations: Vec<(ObjectId, bool)> = cache
             .object_cache
             .values()
             .filter(|object| {
-                self.input_classes.is_empty() || object.has_object_classes(&self.input_classes)
+                (self.origin_segmentation.is_empty()
+                    || self
+                        .origin_segmentation
+                        .contains(&object.segmentation_class))
+                    && (self.input_classes.is_empty()
+                        || object.has_any_object_class(&self.input_classes))
             })
             .map(|object| {
                 let matches = self.matches_criteria(object, px_size)
+                    && self
+                        .intensity_filters
+                        .iter()
+                        .all(|filter| filter.matches(object, nr_of_bits))
                     && self.matches_overlap(object, cache, &overlap_grid, min_intersection_px);
                 (object.id.clone(), matches)
             })
@@ -381,8 +512,8 @@ impl ImageAlgorithm for ClassifyObjects {
         "Classify Objects"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -488,6 +619,7 @@ mod tests {
     use bitvec::vec;
 
     use super::*;
+    use crate::image::Point2d;
     use crate::{
         ImageContainer, ImagePlane, ManagedImage,
         image::PixelSizes,
@@ -498,9 +630,7 @@ mod tests {
         },
     };
     use bitvec::prelude::*;
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
     use std::path::PathBuf;
 
     #[test]
@@ -518,7 +648,7 @@ mod tests {
             width: 1,
             height: 1,
         };
-        let img = Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32], CpuAllocator).unwrap();
+        let img = Image::<f32, 1>::new(size, vec![0.0f32]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -745,6 +875,68 @@ mod tests {
         );
     }
 
+    /// `input_classes` selects objects carrying at least one of the listed
+    /// classes (not all of them).
+    #[test]
+    fn input_classes_select_objects_carrying_any_of_them() {
+        const CLASS_C: ObjectClass = ObjectClass::Valid(3);
+        const CLASS_OUT: ObjectClass = ObjectClass::Valid(9);
+        let cmd = ClassifyObjects {
+            input_classes: vec![CLASS_A, CLASS_B],
+            output_class: CLASS_OUT,
+            match_handling: ClassifyMatchHandling::AddOutputClassIfMatch,
+            ..Default::default()
+        };
+        let mut cache = GlobalPipelineCache::default();
+        for (id, class) in [(ID_A, CLASS_A), (ID_B, CLASS_B), (300_000, CLASS_C)] {
+            cache
+                .object_cache
+                .insert(ObjectId(id), make_filled_object(id, [0, 0, 4, 4], class));
+        }
+        run(&cmd, &mut cache);
+
+        let classified = |id| {
+            cache
+                .object_cache
+                .get(&ObjectId(id))
+                .unwrap()
+                .has_object_class(&CLASS_OUT)
+        };
+        assert!(classified(ID_A), "carries one listed class (A)");
+        assert!(classified(ID_B), "carries the other listed class (B)");
+        assert!(!classified(300_000), "carries none of them");
+    }
+
+    /// `origin_segmentation` restricts the objects evaluated, like in the AI
+    /// object classifier.
+    #[test]
+    fn origin_segmentation_restricts_the_classified_objects() {
+        const CLASS_OUT: ObjectClass = ObjectClass::Valid(9);
+        let cmd = ClassifyObjects {
+            origin_segmentation: vec![SegmentationClass(2)],
+            output_class: CLASS_OUT,
+            match_handling: ClassifyMatchHandling::AddOutputClassIfMatch,
+            ..Default::default()
+        };
+        let mut cache = GlobalPipelineCache::default();
+        for (id, seg) in [(ID_A, 1), (ID_B, 2)] {
+            let mut object = make_filled_object(id, [0, 0, 4, 4], CLASS_A);
+            object.segmentation_class = SegmentationClass(seg);
+            cache.object_cache.insert(ObjectId(id), object);
+        }
+        run(&cmd, &mut cache);
+
+        let classified = |id| {
+            cache
+                .object_cache
+                .get(&ObjectId(id))
+                .unwrap()
+                .has_object_class(&CLASS_OUT)
+        };
+        assert!(!classified(ID_A), "segmentation class 1 is not selected");
+        assert!(classified(ID_B), "segmentation class 2 is");
+    }
+
     #[test]
     fn remove_input_class_if_match_strips_listed_input_classes_only() {
         let cmd = ClassifyObjects {
@@ -902,6 +1094,149 @@ mod tests {
         let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(!object.has_object_class(&CLASS_A));
         assert!(object.has_object_class(&CLASS_B));
+    }
+
+    // -- intensity_filters. `make_ctx` is an 8-bit image, so a `Bit`
+    // threshold of 51 is 0.2 normalized.
+
+    /// Lone CLASS_A object whose channel-1 intensity has the given
+    /// normalized average, and sum = 10 * average.
+    fn object_with_avg_intensity(avg: f64) -> GlobalPipelineCache {
+        let mut object = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
+        object.intensities.insert(
+            1,
+            crate::object::Intensity {
+                avg_intensity: avg,
+                sum_intensity: avg * 10.0,
+                ..Default::default()
+            },
+        );
+        let mut cache = GlobalPipelineCache::default();
+        cache.object_cache.insert(ObjectId(ID_A), object);
+        cache
+    }
+
+    fn intensity_filter(
+        channel: u32,
+        metric: IntensityMetric,
+        comparison: IntensityComparison,
+        threshold: f32,
+    ) -> IntensityFilter {
+        IntensityFilter {
+            channel: ImageChannelIdx(channel),
+            metric,
+            comparison,
+            threshold,
+            unit: PixelUnits::Bit,
+        }
+    }
+
+    fn keeps_class_with(filters: Vec<IntensityFilter>, avg: f64) -> bool {
+        let cmd = ClassifyObjects {
+            intensity_filters: filters,
+            match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
+            ..Default::default()
+        };
+        let mut cache = object_with_avg_intensity(avg);
+        run(&cmd, &mut cache);
+        cache
+            .object_cache
+            .get(&ObjectId(ID_A))
+            .unwrap()
+            .has_object_class(&CLASS_A)
+    }
+
+    #[test]
+    fn intensity_filter_above_keeps_only_brighter_objects() {
+        let brighter_than_51 = || {
+            vec![intensity_filter(
+                1,
+                IntensityMetric::Avg,
+                IntensityComparison::Above,
+                51.0,
+            )]
+        };
+        assert!(keeps_class_with(brighter_than_51(), 0.3));
+        assert!(!keeps_class_with(brighter_than_51(), 0.1));
+    }
+
+    #[test]
+    fn intensity_filter_below_keeps_only_darker_objects() {
+        let darker_than_51 = || {
+            vec![intensity_filter(
+                1,
+                IntensityMetric::Avg,
+                IntensityComparison::Below,
+                51.0,
+            )]
+        };
+        assert!(keeps_class_with(darker_than_51(), 0.1));
+        assert!(!keeps_class_with(darker_than_51(), 0.3));
+    }
+
+    #[test]
+    fn intensity_filter_comparison_is_strict_at_the_threshold() {
+        // 0.25 is exact in binary, so the object sits exactly on the
+        // threshold: neither brighter nor darker than it.
+        for comparison in [IntensityComparison::Above, IntensityComparison::Below] {
+            let filter = IntensityFilter {
+                threshold: 0.25,
+                unit: PixelUnits::Relative,
+                ..intensity_filter(1, IntensityMetric::Avg, comparison, 0.0)
+            };
+            assert!(!keeps_class_with(vec![filter], 0.25));
+        }
+    }
+
+    #[test]
+    fn intensity_filter_compares_the_selected_metric() {
+        // avg 0.1 (25.5 gray), sum 1.0 (255 gray): only the sum is above 100.
+        let above_100 = |metric| {
+            vec![intensity_filter(
+                1,
+                metric,
+                IntensityComparison::Above,
+                100.0,
+            )]
+        };
+        assert!(keeps_class_with(above_100(IntensityMetric::Sum), 0.1));
+        assert!(!keeps_class_with(above_100(IntensityMetric::Avg), 0.1));
+    }
+
+    #[test]
+    fn intensity_filter_threshold_honors_the_unit() {
+        let mut filter =
+            intensity_filter(1, IntensityMetric::Avg, IntensityComparison::Above, 20.0);
+        filter.unit = PixelUnits::Percent; // 20 % = 0.2
+        let filter_rel = IntensityFilter {
+            threshold: 0.2,
+            unit: PixelUnits::Relative,
+            ..intensity_filter(1, IntensityMetric::Avg, IntensityComparison::Above, 0.0)
+        };
+        assert!(keeps_class_with(vec![filter], 0.25));
+        assert!(!keeps_class_with(vec![filter_rel], 0.15));
+    }
+
+    #[test]
+    fn intensity_filters_must_all_match_to_select_a_range() {
+        let range = || {
+            vec![
+                intensity_filter(1, IntensityMetric::Avg, IntensityComparison::Above, 51.0),
+                intensity_filter(1, IntensityMetric::Avg, IntensityComparison::Below, 102.0),
+            ]
+        };
+        assert!(keeps_class_with(range(), 0.3), "inside (51, 102)");
+        assert!(!keeps_class_with(range(), 0.1), "below the range");
+        assert!(!keeps_class_with(range(), 0.5), "above the range");
+    }
+
+    #[test]
+    fn intensity_filter_on_an_unmeasured_channel_never_matches() {
+        // Both comparisons fail: a missing measurement isn't "0 intensity".
+        for comparison in [IntensityComparison::Above, IntensityComparison::Below] {
+            let filters = vec![intensity_filter(7, IntensityMetric::Avg, comparison, 51.0)];
+            assert!(!keeps_class_with(filters, 0.3));
+        }
     }
 
     #[test]

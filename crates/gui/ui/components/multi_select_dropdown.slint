@@ -149,7 +149,7 @@ export component MultiSelectDropdown inherits Rectangle {
     // scroll position, which is what made scrolling/opening this dropdown
     // janky. Below renders a small fixed WINDOW of rows positioned at
     // their real `y` (index * row-pitch) instead, sliding the window as
-    // `popup-scroll.viewport-y` changes - full row count is preserved for
+    // `popup-scroll.content-y` changes - full row count is preserved for
     // scrollbar/flick purposes by an explicitly-sized spacer, so this
     // looks and scrolls identically to a full render, just without ever
     // materializing more than WINDOW rows at once.
@@ -168,7 +168,7 @@ export component MultiSelectDropdown inherits Rectangle {
     property <int> window-size: 20;
     // `first-visible-index` itself has to live on `popup-scroll` below (see
     // its own comment) - a `PopupWindow`'s internal state (its
-    // `viewport-y`) can't be read from a property declared on the
+    // `content-y`) can't be read from a property declared on the
     // *enclosing* component the way `root.toggle()` etc. can be called the
     // other way around.
 
@@ -364,7 +364,7 @@ export component MultiSelectDropdown inherits Rectangle {
                     vertical-stretch: 1;
 
                     property <int> max-first-visible-index: max(0, root.items.length - root.window-size);
-                    // The window's starting index: `-viewport-y` grows as
+                    // The window's starting index: `-content-y` grows as
                     // the user scrolls down (see std-widgets' own
                     // `StandardListViewBase.first-visible-item()`, which
                     // computes visibility the same way), so dividing by
@@ -374,7 +374,7 @@ export component MultiSelectDropdown inherits Rectangle {
                     // scrolls into view instead of popping in.
                     property <int> first-visible-index: max(0, min(
                         self.max-first-visible-index,
-                        floor(-self.viewport-y / root.row-pitch) - 4,
+                        floor(-self.content-y / root.row-pitch) - 4,
                     ));
 
                     VerticalLayout {

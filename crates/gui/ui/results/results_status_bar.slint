@@ -1,0 +1,32 @@
+// results_status_bar.slint — the results window's footer, built like the
+// main window's `StatusBar` (status_bar.slint) so both windows look the same:
+// where the work happens, "Busy"/"Ready" and the open results file.
+//
+// Always takes its space, so database work starting or ending (which can be
+// a few milliseconds) never shifts the rest of the window.
+
+import { HorizontalBox } from "std-widgets.slint";
+import { ConnectionBadge } from "../status_bar.slint";
+import { ResultsState } from "results_state.slint";
+
+export component ResultsStatusBar inherits Rectangle {
+    height: 38px;
+
+    HorizontalBox {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+
+        ConnectionBadge { }
+
+        Text {
+            text: (ResultsState.loading ? "Busy" : "Ready")
+                + (ResultsState.database-name == "" ? "" : " / " + ResultsState.database-name);
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+
+        // Flex Spacer
+        Rectangle { }
+    }
+}

@@ -9,7 +9,7 @@
 //! (mask, per-pixel intensities - the expensive, large part) to stay
 //! resident in RAM at once. Building it costs one full read-and-deserialize
 //! pass over every tile's scratch file - unavoidable with the flat per-tile
-//! bincode format, there's no way to read just the metadata - but the
+//! postcard format, there's no way to read just the metadata - but the
 //! result discards each object's mask/intensities immediately after
 //! extracting what's needed here, so the index itself stays cheap in
 //! memory afterward. Retrieving an object's *full* data again later is a

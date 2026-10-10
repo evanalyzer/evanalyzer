@@ -1,6 +1,7 @@
 use crate::Object;
 use crate::ai_learning::model::SavedClassifier;
-use crate::ai_learning::training_job::{self, TrainingProgressEvent};
+use crate::ai_learning::training_job;
+use evanalyzer_cfg::core_types::TrainingProgressEvent;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::ai_learning_object_settings::{
     AiLearningObjectFeatureSettings, ObjectMetric,
@@ -46,23 +47,23 @@ pub fn compute_object_features(
             ObjectMetric::IntensitySum(channel) => object
                 .intensities
                 .get(channel)
-                .map(|i| i.sum_intensity as f32)
-                .unwrap_or(0.0),
+                .map(|i| i.sum_intensity)
+                .unwrap_or(0.0) as f32,
             ObjectMetric::IntensityMin(channel) => object
                 .intensities
                 .get(channel)
                 .map(|i| i.min_intensity)
-                .unwrap_or(0.0),
+                .unwrap_or(0.0) as f32,
             ObjectMetric::IntensityMax(channel) => object
                 .intensities
                 .get(channel)
                 .map(|i| i.max_intensity)
-                .unwrap_or(0.0),
+                .unwrap_or(0.0) as f32,
             ObjectMetric::IntensityAvg(channel) => object
                 .intensities
                 .get(channel)
                 .map(|i| i.avg_intensity)
-                .unwrap_or(0.0),
+                .unwrap_or(0.0) as f32,
         })
         .collect()
 }
@@ -350,6 +351,7 @@ mod tests {
         let mut job = object_job(vec![]);
         job.settings.classifier = AiLearningClassifierSettings::Pixel {
             feature_spec: AiLearningPixelFeatureSettings { channels: vec![] },
+            input_color: Default::default(),
             class_labels: vec![PixelClassLabel {
                 class: evanalyzer_cfg::core_types::SegmentationClass(1),
                 name: "X".into(),

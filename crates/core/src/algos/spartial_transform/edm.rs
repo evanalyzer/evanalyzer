@@ -13,7 +13,6 @@ use crate::{
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use std::i32;
 
@@ -30,6 +29,7 @@ pub struct DistanceTransform {
     /// Values less than or equal to this are treated as background (distance = 0).
     pub threshold: f32,
     /// If true, the pixels outside the image boundary are treated as background.
+    #[cmdsmeta(visibility = Advanced)]
     pub edges_are_background: bool,
 }
 
@@ -139,8 +139,8 @@ impl ImageAlgorithm for DistanceTransform {
         "Distance Transform"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "rosenfeld1966sequential",
             title: "Sequential Operations in Digital Picture Processing",
             authors: &["Azriel Rosenfeld", "John L. Pfaltz"],
@@ -149,7 +149,7 @@ impl ImageAlgorithm for DistanceTransform {
             doi: Some("10.1145/321356.321357"),
             url: Some("https://doi.org/10.1145/321356.321357"),
             pages: Some("471-494"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -198,8 +198,8 @@ impl DistanceTransform {
 
     /// Processes a single line with two passes: left-to-right and right-to-left.
     fn edm_line(
-        input: &Image<f32, 1, CpuAllocator>,
-        fp: &mut Image<f32, 1, CpuAllocator>,
+        input: &Image<f32, 1>,
+        fp: &mut Image<f32, 1>,
         point_bufs: &mut [Vec<i32>; 2],
         y: usize,
         threshold: f32,
@@ -301,7 +301,7 @@ mod tests {
         };
         let mut data = vec![1.0f32; 25];
         data[2 * 5 + 2] = 0.0; // The "seed" point
-        let img = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?;
+        let img = Image::<f32, 1>::new(size, data)?;
 
         let mut ctx = PipelineContext::new_from_image_test(img)?;
         let mut cache = GlobalPipelineCache::default();
@@ -375,7 +375,7 @@ mod tests {
         for &p in &[1 * 4 + 1, 1 * 4 + 2, 2 * 4 + 1, 2 * 4 + 2] {
             data[p] = 1.0;
         }
-        let img = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?;
+        let img = Image::<f32, 1>::new(size, data)?;
 
         let mut ctx = PipelineContext::new_from_image_test(img)?;
         let mut cache = GlobalPipelineCache::default();
@@ -384,7 +384,7 @@ mod tests {
         // container type and size, but full of non-zero garbage instead of
         // freshly-zeroed memory.
         ctx.scratch_pad = Arc::new(ImageContainer::F32Gray(crate::image::ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::new(size, vec![123.456f32; 16], CpuAllocator)?,
+            data: Image::<f32, 1>::new(size, vec![123.456f32; 16])?,
             tile_offset: ctx.scratch_pad.tile_offset(),
             plane: ctx.scratch_pad.plane(),
         }));
@@ -462,8 +462,7 @@ mod tests {
             1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ];
 
-        let img =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
+        let img = Image::<f32, 1>::new(ImageSize { width, height }, data)?;
         let mut ctx = PipelineContext::new_from_image_test(img)?;
         let mut cache = GlobalPipelineCache::default();
 

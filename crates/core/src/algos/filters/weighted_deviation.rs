@@ -15,7 +15,6 @@ use crate::{
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_imgproc::filter::gaussian_blur;
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
@@ -57,6 +56,7 @@ pub struct WeightedDeviation {
     ///
     /// Defines the "softness" of the neighborhood boundaries. A larger
     /// sigma includes more of the surrounding context in the deviation calculation.
+    #[cmdsmeta(visibility = Advanced)]
     pub sigma: f32,
 }
 
@@ -108,12 +108,8 @@ impl ImageAlgorithm for WeightedDeviation {
         // Prepare meanSq (E[X^2])
         // We calculate grayF * grayF into a temporary image
         let mut mean_sq = if let ImageContainer::F32Gray(input) = ctx.image.as_ref() {
-            let mut ms = Image::<f32, 1, CpuAllocator>::new(
-                size,
-                vec![0.0; size.width * size.height],
-                CpuAllocator,
-            )
-            .map_err(InternalErrors::from_kornia)?;
+            let mut ms = Image::<f32, 1>::new(size, vec![0.0; size.width * size.height])
+                .map_err(InternalErrors::from_kornia)?;
             ms.as_slice_mut()
                 .par_iter_mut()
                 .zip(input.as_slice().par_iter())
@@ -138,12 +134,8 @@ impl ImageAlgorithm for WeightedDeviation {
         // Compute E[X] (mean)
         // Now we need to blur the original image.
         // We'll use the scratchpad for this and store the result in 'mean'
-        let mut mean = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![0.0; size.width * size.height],
-            CpuAllocator,
-        )
-        .map_err(InternalErrors::from_kornia)?;
+        let mut mean = Image::<f32, 1>::new(size, vec![0.0; size.width * size.height])
+            .map_err(InternalErrors::from_kornia)?;
         if let (ImageContainer::F32Gray(input), ImageContainer::F32Gray(scratch)) =
             (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad))
         {
@@ -179,8 +171,8 @@ impl ImageAlgorithm for WeightedDeviation {
         "Weighted Deviation"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -194,7 +186,6 @@ impl ImageAlgorithm for WeightedDeviation {
 mod tests {
     use super::*;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     #[test]
     fn test_weighted_deviation_repro_stale_rgb_scratch() -> Result<(), Box<dyn std::error::Error>> {
@@ -202,14 +193,14 @@ mod tests {
             width: 4,
             height: 4,
         };
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, vec![5.0f32; 16], CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, vec![5.0f32; 16])?;
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
 
         // Simulate a scratch_pad left over as F32Rgb from an earlier pipeline
         // step (e.g. right after ColorFilterCommand, which swaps the
         // original RGB image into the scratch slot).
         ctx.scratch_pad = Arc::new(ImageContainer::F32Rgb(crate::image::ManagedImage {
-            data: Image::<f32, 3, CpuAllocator>::new(size, vec![9.0f32; 48], CpuAllocator)?,
+            data: Image::<f32, 3>::new(size, vec![9.0f32; 48])?,
             tile_offset: ctx.scratch_pad.tile_offset(),
             plane: ctx.scratch_pad.plane(),
         }));
@@ -254,7 +245,7 @@ mod tests {
             }
         }
 
-        let input_img = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?;
+        let input_img = Image::<f32, 1>::new(size, data)?;
 
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
 
@@ -301,13 +292,12 @@ mod tests {
 
     #[test]
     fn execute_returns_format_mismatch_when_ctx_image_is_not_f32_gray() {
-        let img = Image::<u32, 1, CpuAllocator>::from_size_val(
+        let img = Image::<u32, 1>::from_size_val(
             ImageSize {
                 width: 4,
                 height: 4,
             },
             0,
-            CpuAllocator,
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();
@@ -334,7 +324,7 @@ mod tests {
             sigma: 1.0,
         };
         assert_eq!(algo.name(), "Weighted Deviation");
-        assert!(algo.cite().is_none());
+        assert_eq!(algo.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 }

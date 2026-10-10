@@ -265,7 +265,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     // Header - only config/serde imports, no core
     out.push_str("// @generated - do not edit by hand\n");
     // out.push_str("use indexmap::IndexMap;\n");
-    out.push_str("use crate::{core_types::{ImageAddress,MemoryId,PixelUnits, SizeUnits}, types::classes::{ObjectClass, SegmentationClass}};\n");
+    out.push_str("use crate::{core_types::{ImageAddress,ImageChannelIdx,MemoryId,PixelUnits, SizeUnits, SizeUnitsRel}, types::classes::{ObjectClass, SegmentationClass}};\n");
     out.push_str("use std::path::PathBuf;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
@@ -326,6 +326,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                             range_parts.join(", ")
                         ));
                     }
+                    out.push_str(&serde_field_rename_attr(&field.meta, "        "));
                     let field_type = map_to_settings_type(&field.ty, enums, commands);
                     out.push_str(&format!("        {}: {},\n", field.name, field_type));
                 }
@@ -457,6 +458,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                         out.push_str(&format!("    #[serde(default = \"{}\")]\n", fn_name));
                     }
 
+                    out.push_str(&serde_field_rename_attr(meta, "    "));
                     let field_type = map_to_settings_type(&field.ty, enums, commands);
                     out.push_str(&format!("    pub {}: {},\n", field.name, field_type));
                 }
@@ -685,17 +687,56 @@ struct FieldMetadata {
     default: Option<f64>,
     default_expr: Option<String>,
     step: Option<f32>,
-    custom_name: Option<String>,
+    /// Stable serialized name from #[cmdsmeta(key = "...")] (snake_case), so
+    /// the Rust field can be renamed without breaking saved projects/scripts.
+    key: Option<String>,
     unit: Option<String>,
     regex: Option<String>,
     display_name: Option<String>,
     summary: bool,
     optional: bool,
-    visible: bool,
+    visibility: Visibility,
     /// Comma-separated list of file extensions (no leading dot, e.g. "pt,pth")
     /// for `PathBuf` fields rendered with a "Browse…" button. Empty/absent
     /// means any file is selectable.
     file_extensions: Option<String>,
+    /// `#[cmdsmeta(script)]` on a `String` field: a Rhai script, edited in
+    /// the script editor (`ParamType::Script`) instead of a text field.
+    script: bool,
+}
+
+/// `#[cmdsmeta(visibility = ...)]` of a setting or a dropdown option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Visibility {
+    /// Always shown (also when no `visibility` is given).
+    #[default]
+    Default,
+    /// Shown only while the step's advanced settings are expanded.
+    Advanced,
+    /// Never shown in the UI.
+    Hidden,
+}
+
+impl Visibility {
+    fn is_hidden(self) -> bool {
+        self == Visibility::Hidden
+    }
+    fn is_advanced(self) -> bool {
+        self == Visibility::Advanced
+    }
+}
+
+/// Parses the value of `visibility = Default | Advanced | Hidden`.
+fn parse_visibility(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Visibility> {
+    let value: syn::Ident = meta.value()?.parse()?;
+    match value.to_string().as_str() {
+        "Default" => Ok(Visibility::Default),
+        "Advanced" => Ok(Visibility::Advanced),
+        "Hidden" => Ok(Visibility::Hidden),
+        other => {
+            panic!("cmdsmeta: unknown visibility `{other}` - use `Default`, `Advanced` or `Hidden`")
+        }
+    }
 }
 
 impl Default for FieldMetadata {
@@ -706,14 +747,15 @@ impl Default for FieldMetadata {
             default: None,
             default_expr: None,
             step: None,
-            custom_name: None,
+            key: None,
             unit: None,
             regex: None,
             display_name: None,
             summary: false,
             optional: false,
-            visible: true,
+            visibility: Visibility::Default,
             file_extensions: None,
+            script: false,
         }
     }
 }
@@ -732,6 +774,10 @@ struct StructMetadata {
     /// StarDist/Cellpose live in `segment` for grouping but flow straight to
     /// `measure`, while U-Net (also `segment`) flows to `object`.
     next: Option<Vec<String>>,
+    /// Stable serialized/script name from #[cmdsmeta(key = "...")] (snake_case).
+    /// `None` keeps deriving it from the struct name; set it before renaming a
+    /// struct so saved projects and scripts keep working.
+    key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -812,6 +858,8 @@ struct EnumVariant {
     named_fields: Vec<FieldInfo>,
     doc_comments: Vec<String>,
     display_name: Option<String>,
+    /// `#[cmdsmeta(visibility = ...)]` of this dropdown option.
+    visibility: Visibility,
 }
 
 impl EnumVariant {
@@ -985,6 +1033,9 @@ fn parse_struct_meta(attrs: &[syn::Attribute]) -> StructMetadata {
                 } else if m.path.is_ident("display_name") {
                     let value: syn::LitStr = m.value()?.parse()?;
                     meta.display_name = Some(value.value());
+                } else if m.path.is_ident("key") {
+                    let value: syn::LitStr = m.value()?.parse()?;
+                    meta.key = Some(validated_key(&value.value()));
                 } else if m.path.is_ident("next") {
                     let value: syn::LitStr = m.value()?.parse()?;
                     meta.next = Some(
@@ -1070,6 +1121,7 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
         .map(|v| {
             let mut doc_comments = Vec::new();
             let mut display_name: Option<String> = None;
+            let mut visibility = Visibility::Default;
             for attr in &v.attrs {
                 if attr.path().is_ident("doc") {
                     if let syn::Meta::NameValue(nv) = &attr.meta {
@@ -1087,6 +1139,13 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
                         if meta.path.is_ident("display_name") {
                             let value: syn::LitStr = meta.value()?.parse()?;
                             display_name = Some(value.value());
+                        } else if meta.path.is_ident("visibility") {
+                            visibility = parse_visibility(&meta)?;
+                        } else if meta.path.is_ident("visible") {
+                            panic!(
+                                "cmdsmeta: `visible` was replaced by \
+                                 `visibility = Default | Advanced | Hidden`"
+                            );
                         } else if meta.input.peek(syn::Token![=]) {
                             let _: syn::Expr = meta.value()?.parse()?;
                         }
@@ -1122,6 +1181,7 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
                 named_fields,
                 doc_comments,
                 display_name,
+                visibility,
             }
         })
         .collect()
@@ -1208,10 +1268,9 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                     } else {
                         stream.parse::<syn::LitInt>()?.base10_parse::<f32>()?
                     });
-                } else if meta.path.is_ident("rename") {
+                } else if meta.path.is_ident("key") {
                     let value: syn::LitStr = meta.value()?.parse()?;
-                    let raw_name = value.value();
-                    metadata.custom_name = Some(to_camel_case(&raw_name));
+                    metadata.key = Some(validated_key(&value.value()));
                 } else if meta.path.is_ident("unit") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     metadata.unit = Some(value.value());
@@ -1255,16 +1314,23 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                             metadata.optional = b.value;
                         }
                     }
+                } else if meta.path.is_ident("visibility") {
+                    metadata.visibility = parse_visibility(&meta)?;
                 } else if meta.path.is_ident("visible") {
-                    metadata.visible = true;
-                    if let Ok(stream) = meta.value() {
-                        if let Ok(b) = stream.parse::<syn::LitBool>() {
-                            metadata.visible = b.value;
-                        }
-                    }
+                    panic!(
+                        "cmdsmeta: `visible` was replaced by \
+                         `visibility = Default | Advanced | Hidden`"
+                    );
                 } else if meta.path.is_ident("file_extensions") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     metadata.file_extensions = Some(value.value());
+                } else if meta.path.is_ident("script") {
+                    metadata.script = true;
+                    if let Ok(stream) = meta.value() {
+                        if let Ok(b) = stream.parse::<syn::LitBool>() {
+                            metadata.script = b.value;
+                        }
+                    }
                 }
                 Ok(())
             });
@@ -1383,6 +1449,72 @@ fn serde_variant_alias_attr(variant_name: &str) -> String {
     format!("    #[serde({attrs})]\n")
 }
 
+/// Validates a `#[cmdsmeta(key = "...")]` value: non-empty snake_case
+/// (`[a-z0-9_]`, starting with a letter). Panics (= build error) otherwise.
+fn validated_key(key: &str) -> String {
+    let valid = key.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if !valid {
+        panic!("cmdsmeta: key `{key}` must be snake_case, e.g. `gaussian_blur`");
+    }
+    key.to_string()
+}
+
+/// Stable snake_case name of a command - its serialized `type` tag (upper-cased)
+/// and its name in scripts: the explicit `key`, else derived from the struct name.
+fn command_key(cmd: &CommandInfo) -> String {
+    match &cmd.struct_meta.key {
+        Some(key) => key.clone(),
+        None => serde_snake_case(&cmd.struct_name),
+    }
+}
+
+/// serde's `rename_all = "snake_case"` for a variant name: `_` before every
+/// uppercase letter but the first (`UNet` -> `u_net`). Must match serde
+/// exactly - the upper-cased result is the serialized `type` tag.
+fn serde_snake_case(variant: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in variant.char_indices() {
+        if i > 0 && c.is_uppercase() {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
+/// [`command_key`] in PascalCase, the form [`serde_variant_alias_attr`] expects.
+fn command_pascal_name(cmd: &CommandInfo) -> String {
+    match &cmd.struct_meta.key {
+        Some(key) => to_pascal_case(key),
+        None => cmd.struct_name.clone(),
+    }
+}
+
+/// Panics (= build error) if two commands would share a serialized tag.
+fn check_unique_command_keys(cmds: &[&CommandInfo]) {
+    let mut seen: HashMap<String, &str> = HashMap::new();
+    for cmd in cmds {
+        let tag = command_key(cmd).to_ascii_uppercase();
+        if let Some(other) = seen.insert(tag.clone(), &cmd.struct_name) {
+            panic!(
+                "cmdsmeta: `{}` and `{other}` both serialize as `{tag}` - give one an explicit `key`",
+                cmd.struct_name
+            );
+        }
+    }
+}
+
+/// `#[serde(rename = "...")]` for a field with an explicit `key`, else `""`.
+fn serde_field_rename_attr(meta: &FieldMetadata, indent: &str) -> String {
+    match &meta.key {
+        Some(key) => format!("{indent}#[serde(rename = \"{}\")]\n", to_camel_case(key)),
+        None => String::new(),
+    }
+}
+
 fn is_user_enum(ty: &str, all_enums: &[EnumInfo]) -> bool {
     if ty.starts_with("Vec<")
         || ty.starts_with("Option<")
@@ -1482,8 +1614,12 @@ fn concat_param_vecs(parts: &[String]) -> String {
 ///
 /// `access` is the Rust expression that reads the field's current value — `"_s.kernel_size"`
 /// for an ordinary struct field, or just the bound identifier (e.g. `"factor"`) when called for
-/// a field bound out of a rich enum variant's pattern. Returns `None` for unrecognized types
-/// (e.g. `ImageAddress`), which are silently skipped, same as today.
+/// a field bound out of a rich enum variant's pattern. Returns `None` for unrecognized types,
+/// which are silently skipped.
+///
+/// `default_access` is the field's default value expression: rendered like the value
+/// itself, it becomes `default_value` (the UI tells changed settings by it); `None`
+/// leaves it empty.
 fn leaf_param_def_literal(
     ty: &str,
     meta: &FieldMetadata,
@@ -1492,7 +1628,34 @@ fn leaf_param_def_literal(
     display_label: &str,
     description: &str,
     enums: &[EnumInfo],
+    default_access: Option<&str>,
 ) -> Option<String> {
+    let (param_type, value_expr, options_expr, option_advanced_expr, min, max) =
+        leaf_parts(ty, meta, access, enums)?;
+    let default_expr = default_access
+        .and_then(|d| leaf_parts(ty, meta, &format!("({d})"), enums))
+        .map(|parts| parts.1)
+        .unwrap_or_else(|| "String::new()".to_string());
+    let step = if param_type == "ParamType::Spinner" {
+        meta.step.unwrap_or(1.0)
+    } else {
+        1.0_f32
+    };
+    let advanced = meta.visibility.is_advanced();
+    Some(format!(
+        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: {option_advanced_expr} }}",
+    ))
+}
+
+/// The type-dependent parts of a leaf `ParameterDef`: param type, value expression,
+/// options expression, per-option "advanced" flags expression, min, max.
+fn leaf_parts(
+    ty: &str,
+    meta: &FieldMetadata,
+    access: &str,
+    enums: &[EnumInfo],
+) -> Option<(&'static str, String, String, String, f32, f32)> {
+    let no_flags = || "vec![]".to_string();
     let (param_type, value_expr, options_expr, min, max) = match ty {
         "f32" | "f64" => {
             if meta.step.is_some() {
@@ -1527,8 +1690,13 @@ fn leaf_param_def_literal(
             // min == max → read-only label; value is shown but not editable.
             if let (Some(min_v), Some(max_v)) = (meta.min, meta.max) {
                 if (min_v - max_v).abs() < f32::EPSILON {
-                    return Some(format!(
-                        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: format!(\"{{}}\", {access}), param_type: ParamType::Label, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}"
+                    return Some((
+                        "ParamType::Label",
+                        format!("format!(\"{{}}\", {access})"),
+                        "vec![]".to_string(),
+                        no_flags(),
+                        0.0,
+                        0.0,
                     ));
                 }
             }
@@ -1594,7 +1762,11 @@ fn leaf_param_def_literal(
             0.0_f32,
         ),
         "String" => (
-            "ParamType::Text",
+            if meta.script {
+                "ParamType::Script"
+            } else {
+                "ParamType::Text"
+            },
             format!("{access}.clone()"),
             "vec![]".to_string(),
             0.0_f32,
@@ -1645,6 +1817,22 @@ fn leaf_param_def_literal(
             0.0_f32,
             0.0_f32,
         ),
+        "ImageChannelIdx" => (
+            "ParamType::ImageChannel",
+            format!("{access}.to_string()"),
+            "vec![]".to_string(),
+            0.0_f32,
+            0.0_f32,
+        ),
+        "ImageAddress" => (
+            "ParamType::ImageAddress",
+            format!("{access}.to_param_value()"),
+            format!(
+                "{{ let (kind, nr) = {access}.param_parts(); vec![kind.to_string(), nr.to_string()] }}"
+            ),
+            0.0_f32,
+            0.0_f32,
+        ),
         "PixelUnits" => (
             "ParamType::PixelUnits",
             format!(
@@ -1660,6 +1848,18 @@ fn leaf_param_def_literal(
                 "match {access} {{ SizeUnits::NanoMeter => \"nm\".to_string(), SizeUnits::Pixels => \"px\".to_string() }}"
             ),
             "vec![\"nm\".to_string(), \"px\".to_string()]".to_string(),
+            0.0_f32,
+            0.0_f32,
+        ),
+        // A size unit that may also be relative ("%"), e.g. coloc's minimum
+        // overlap as a share of the smaller object. Same widget as SizeUnits,
+        // one more option.
+        "SizeUnitsRel" => (
+            "ParamType::SizeUnits",
+            format!(
+                "match {access} {{ SizeUnitsRel::NanoMeter => \"nm\".to_string(), SizeUnitsRel::Pixels => \"px\".to_string(), SizeUnitsRel::Percent => \"%\".to_string() }}"
+            ),
+            "vec![\"nm\".to_string(), \"px\".to_string(), \"%\".to_string()]".to_string(),
             0.0_f32,
             0.0_f32,
         ),
@@ -1681,10 +1881,22 @@ fn leaf_param_def_literal(
                         (v.name.clone(), label)
                     })
                     .collect();
-                let options: Vec<String> = display_map
+                // Hidden options never reach the dropdown; advanced ones are flagged.
+                let shown: Vec<(&EnumVariant, &(String, String))> = enum_info
+                    .variants
                     .iter()
-                    .map(|(_, d)| format!("\"{}\".to_string()", d))
+                    .zip(display_map.iter())
+                    .filter(|(v, _)| !v.visibility.is_hidden())
                     .collect();
+                let options: Vec<String> = shown
+                    .iter()
+                    .map(|(_, (_, d))| format!("\"{}\".to_string()", d))
+                    .collect();
+                let flags: Vec<String> = shown
+                    .iter()
+                    .map(|(v, _)| v.visibility.is_advanced().to_string())
+                    .collect();
+                let flags_expr = format!("vec![{}]", flags.join(", "));
                 let match_arms: String = enum_info
                     .variants
                     .iter()
@@ -1708,29 +1920,22 @@ fn leaf_param_def_literal(
                     .collect::<Vec<_>>()
                     .join(", ");
                 let value_expr = format!("match {access} {{ {match_arms} }}");
-                (
+                return Some((
                     "ParamType::Dropdown",
                     value_expr,
                     format!("vec![{}]", options.join(", ")),
+                    flags_expr,
                     0.0_f32,
                     0.0_f32,
-                )
+                ));
             } else {
-                // Unknown type (ImageAddress, etc.) - skip
+                // Unknown type - skip
                 return None;
             }
         }
     };
 
-    let step = if param_type == "ParamType::Spinner" {
-        meta.step.unwrap_or(1.0)
-    } else {
-        1.0_f32
-    };
-
-    Some(format!(
-        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![] }}",
-    ))
+    Some((param_type, value_expr, options_expr, no_flags(), min, max))
 }
 
 /// Builds the additional ParameterDefs contributed by an enum field's *currently active*
@@ -1770,7 +1975,7 @@ fn enum_variant_param_defs(
                 let field_exprs: Vec<String> = v
                     .named_fields
                     .iter()
-                    .filter(|f| f.meta.visible)
+                    .filter(|f| !f.meta.visibility.is_hidden())
                     .flat_map(|f| {
                         let routing_name = format!("{routing_prefix}.{}", f.name);
                         let display_label = f
@@ -1790,6 +1995,7 @@ fn enum_variant_param_defs(
                                     &display_label,
                                     &description,
                                     enums,
+                                    Some(&field_default_expr(f, enums, &[])),
                                 )
                                 .expect("enum dropdown literal is always Some");
                                 let nested_fields = enum_variant_param_defs(
@@ -1809,6 +2015,7 @@ fn enum_variant_param_defs(
                             &display_label,
                             &description,
                             enums,
+                            Some(&field_default_expr(f, enums, &[])),
                         )
                         .map(|lit| vec![format!("vec![{lit}]")])
                         .unwrap_or_default()
@@ -1855,6 +2062,10 @@ fn tuple_variant_param_def_literal(
     description: &str,
     enums: &[EnumInfo],
 ) -> Option<String> {
+    // A tuple variant's payload has no settings field (and so no default value or
+    // visibility) of its own.
+    let default_expr = "String::new()";
+    let advanced = false;
     // Vec<ObjectClass> / Vec<SegmentationClass> → multi-select class picker, mirroring
     // the struct-field handling in `field_to_param_def` (a tuple variant's payload has
     // no field name to flatten a nested user struct through, so only these two
@@ -1867,7 +2078,7 @@ fn tuple_variant_param_def_literal(
             "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
         );
         return Some(format!(
-            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}"
+            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}"
         ));
     }
     if ty == "Vec<SegmentationClass>" {
@@ -1878,7 +2089,7 @@ fn tuple_variant_param_def_literal(
             "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
         );
         return Some(format!(
-            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}"
+            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}"
         ));
     }
     let meta = FieldMetadata::default();
@@ -1890,6 +2101,7 @@ fn tuple_variant_param_def_literal(
         display_label,
         description,
         enums,
+        None,
     )
 }
 
@@ -1910,7 +2122,7 @@ fn field_to_param_def(
     let name = &field.name;
     let meta = &field.meta;
 
-    if !meta.visible {
+    if meta.visibility.is_hidden() {
         return vec![];
     }
 
@@ -1923,9 +2135,17 @@ fn field_to_param_def(
     let description = escape_doc_comments(&field.doc_comments);
     let access = format!("{var}.{name}");
 
+    let advanced = meta.visibility.is_advanced();
+
     // Vec<UserStruct> → Group param
     if ty.starts_with("Vec<") && ty.ends_with('>') {
         let inner_ty = &ty[4..ty.len() - 1];
+        // The class list's default, rendered like its value (an empty `vec![]`
+        // needs its element type spelled out to compile on its own).
+        let default_list = match field_default_expr(field, enums, commands) {
+            expr if expr == "vec![]" => format!("Vec::<{inner_ty}>::new()"),
+            expr => expr,
+        };
         if let Some(inner_cmd) = commands.iter().find(|c| c.struct_name == inner_ty) {
             let inner_parts: Vec<String> = inner_cmd
                 .fields
@@ -1936,7 +2156,7 @@ fn field_to_param_def(
                 .collect();
             let inner_expr = concat_param_vecs(&inner_parts);
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: {access}.iter().map(|__item| {inner_expr}).collect() }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: {access}.iter().map(|__item| {inner_expr}).collect(), default_value: String::new(), advanced: {advanced}, option_advanced: vec![] }}]"
             )];
         }
         // Vec<ObjectClass> / Vec<SegmentationClass> → multi-select class picker.
@@ -1946,22 +2166,24 @@ fn field_to_param_def(
             let value_expr = format!(
                 "{access}.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(\",\")"
             );
+            let default_expr = value_expr.replace(&access, &format!("({default_list})"));
             let flags_expr = format!(
                 "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
             );
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}]"
             )];
         }
         if inner_ty == "SegmentationClass" {
             let value_expr = format!(
                 "{access}.iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(\",\")"
             );
+            let default_expr = value_expr.replace(&access, &format!("({default_list})"));
             let flags_expr = format!(
                 "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
             );
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}]"
             )];
         }
 
@@ -2000,6 +2222,7 @@ fn field_to_param_def(
                 &display_label,
                 &description,
                 enums,
+                Some(&field_default_expr(field, enums, commands)),
             )
             .expect("enum dropdown literal is always Some");
             let variant_fields = enum_variant_param_defs(enum_info, &access, &routing_name, enums);
@@ -2015,6 +2238,7 @@ fn field_to_param_def(
         &display_label,
         &description,
         enums,
+        Some(&field_default_expr(field, enums, commands)),
     ) {
         Some(literal) => vec![format!("vec![{literal}]")],
         None => vec![],
@@ -2033,7 +2257,7 @@ fn collect_summary_exprs(
     let name = &field.name;
     let meta = &field.meta;
 
-    if !meta.visible {
+    if meta.visibility.is_hidden() {
         return vec![];
     }
 
@@ -2115,7 +2339,7 @@ fn field_to_apply_change(
     let name = &field.name;
     let display_name = format!("{}{}", name_prefix, name);
 
-    if !field.meta.visible {
+    if field.meta.visibility.is_hidden() {
         return vec![];
     }
 
@@ -2265,11 +2489,20 @@ fn leaf_apply_change_branch(
         "SegmentationClass" => {
             format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = SegmentationClass(v); }}")
         }
+        "ImageAddress" => {
+            format!("if let Some(v) = ImageAddress::from_param_value(value) {{ {assign} = v; }}")
+        }
+        "ImageChannelIdx" => {
+            format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = ImageChannelIdx(v); }}")
+        }
         "PixelUnits" => format!(
             "{assign} = match value {{ \"bit\" => PixelUnits::Bit, \"%\" => PixelUnits::Percent, _ => PixelUnits::Relative }};"
         ),
         "SizeUnits" => format!(
             "{assign} = match value {{ \"nm\" => SizeUnits::NanoMeter, _ => SizeUnits::Pixels }};"
+        ),
+        "SizeUnitsRel" => format!(
+            "{assign} = match value {{ \"nm\" => SizeUnitsRel::NanoMeter, \"%\" => SizeUnitsRel::Percent, _ => SizeUnitsRel::Pixels }};"
         ),
         _ => {
             if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty) {
@@ -2381,7 +2614,7 @@ fn enum_variant_apply_change(
             let inner: Vec<String> = v
                 .named_fields
                 .iter()
-                .filter(|f| f.meta.visible)
+                .filter(|f| !f.meta.visibility.is_hidden())
                 .filter_map(|f| {
                     let condition = format!("{display_name}.{}", f.name);
                     let assign = format!("*{}", f.name);
@@ -2539,7 +2772,9 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("use crate::modules::pipeline_command_settings::*;\n");
     out.push_str("use crate::modules::parameter_def::{ParamType, ParameterDef};\n");
     out.push_str("use crate::types::classes::{ObjectClass, SegmentationClass};\n");
-    out.push_str("use crate::core_types::{MemoryId, PixelUnits, SizeUnits};\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::core_types::{ImageAddress, ImageChannelIdx, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel};\n");
+    // Default values of `PathBuf` settings (`ParameterDef::default_value`).
+    out.push_str("#[allow(unused_imports)]\nuse std::path::PathBuf;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
 
@@ -2599,9 +2834,16 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]\n");
     out.push_str("#[serde(tag = \"type\", rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
     out.push_str("pub enum PipelineCommand {\n");
+    check_unique_command_keys(&algo_commands);
     for cmd in &algo_commands {
         let settings_name = format!("{}Settings", cmd.struct_name);
-        out.push_str(&serde_variant_alias_attr(&cmd.struct_name));
+        if cmd.struct_meta.key.is_some() {
+            out.push_str(&format!(
+                "    #[serde(rename = \"{}\")]\n",
+                command_key(cmd).to_ascii_uppercase()
+            ));
+        }
+        out.push_str(&serde_variant_alias_attr(&command_pascal_name(cmd)));
         out.push_str(&format!("    {}({}),\n", cmd.struct_name, settings_name));
     }
     out.push_str("}\n\n");
@@ -2663,6 +2905,38 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     // --- impl PipelineCommand ---
     out.push_str("#[allow(dead_code)]\n");
     out.push_str("impl PipelineCommand {\n");
+
+    // KEYS / key() / default_for_key(): stable snake_case names, used by scripts.
+    out.push_str("    /// Stable snake_case name of every command, as used by scripts; the\n");
+    out.push_str("    /// serialized `type` tag is the same name upper-cased.\n");
+    out.push_str("    pub const KEYS: &'static [&'static str] = &[\n");
+    for cmd in &algo_commands {
+        out.push_str(&format!("        \"{}\",\n", command_key(cmd)));
+    }
+    out.push_str("    ];\n\n");
+    out.push_str("    /// This command's entry in [`Self::KEYS`].\n");
+    out.push_str("    pub fn key(&self) -> &'static str {\n        match self {\n");
+    for cmd in &algo_commands {
+        out.push_str(&format!(
+            "            Self::{}(_) => \"{}\",\n",
+            cmd.struct_name,
+            command_key(cmd)
+        ));
+    }
+    out.push_str("        }\n    }\n\n");
+    out.push_str("    /// The command named `key` (see [`Self::KEYS`]) with default settings.\n");
+    out.push_str(
+        "    pub fn default_for_key(key: &str) -> Option<PipelineCommand> {\n        match key {\n",
+    );
+    for cmd in &algo_commands {
+        out.push_str(&format!(
+            "            \"{}\" => Some(Self::{}({}Settings::default())),\n",
+            command_key(cmd),
+            cmd.struct_name,
+            cmd.struct_name
+        ));
+    }
+    out.push_str("            _ => None,\n        }\n    }\n\n");
 
     // name()
     out.push_str("    pub fn name(&self) -> &str {\n");

@@ -7,13 +7,11 @@ license = { workspace = true }
 publish = { workspace = true }
 
 [dependencies]
-evanalyzer_core = { workspace = true }
 evanalyzer_app = { workspace = true }
 evanalyzer_cfg = { workspace = true }
 evanalyzer_gui_slint = { path = "ui" }
 
-rfd = { workspace = true }
-copypasta = { workspace = true }
+slint = { workspace = true }
 log = { workspace = true }
 rayon = { workspace = true }
 kornia-image = { workspace = true }
@@ -24,28 +22,14 @@ bitvec = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-
-
-
-# For Linux/macOS: Use Skia
-[target.'cfg(not(target_os = "windows"))'.dependencies.slint]
-version = "1.17"
-features = ["renderer-skia"]
-
-# For Windows: Use Software Renderer (No Skia/VC++ requirement)
-[target.'cfg(target_os = "windows")'.dependencies.slint]
-version = "1.17"
-default-features = false
-features = [
-    "std",
-    "compat-1-2",
-    "renderer-software",
-    "backend-winit",
-]
+rhai = { workspace = true }
 
 [dev-dependencies]
-kornia-apriltag = { workspace = true }
-i-slint-backend-testing = "=1.17.1"
+tungstenite = { workspace = true }
+rustls = { workspace = true }
+rcgen = { workspace = true }
+ring = { workspace = true }
+i-slint-backend-testing = "=1.18.1"
 duckdb = { workspace = true, features = ["bundled"] }
 tempfile = { workspace = true }
 

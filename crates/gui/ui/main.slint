@@ -46,7 +46,7 @@ import {
 
 import {
     ConfirmAutoAddClassesDialog,
-}from "dialogs/classification_confirm_auto_add_dialog.slint";
+} from "dialogs/classification_confirm_auto_add_dialog.slint";
 
 import {
     ClassEditDialog,
@@ -69,6 +69,7 @@ import {
     CommandSelectionDialog,
     CommandPickerState,
     CommandDef,
+    CommandAuthor,
     DefaultParamPreview,
 } from "dialogs/command_selection_dialog.slint";
 import {
@@ -90,13 +91,32 @@ import {
     ProjectTemplateDialog,
     ProjectTemplateState,
     ProjectTemplateDef,
+    ProjectAuthor,
 } from "dialogs/project_template_dialog.slint";
 import { PipelinesPanelState } from "editor/pipelines_panel.slint";
+import {
+    ScriptEditorPanel,
+    ScriptEditorState,
+    ScriptHighlight,
+    ScriptEdit,
+    ScriptDiagnostic,
+    ScriptCommandDoc,
+} from "editor/script_editor_panel.slint";
+import { PipelineFocusState } from "editor/pipeline_focus.slint";
 import { PreviewRendering } from "dialogs/preview_rendering_dialog.slint";
 import { WarningDialog } from "dialogs/warning_dialog.slint";
-import { WarningState } from "state.slint";
+import { WarningState, ConnectionState } from "state.slint";
 import { UnsavedChangesDialog } from "dialogs/unsaved_changes_dialog.slint";
-import { UnsavedChangesState } from "state.slint";
+import {
+    AnalysisRunningCloseDialog,
+} from "dialogs/analysis_running_close_dialog.slint";
+import { ConnectDialog } from "dialogs/connect_dialog.slint";
+import {
+    UnsavedChangesState,
+    AnalysisRunningCloseState,
+    ConnectState,
+    RecentServerRow,
+} from "state.slint";
 import {
     AiLearningDialog,
     AiLearningState,
@@ -117,6 +137,18 @@ import {
 import { ResultsListState } from "editor/results_list_panel.slint";
 import { ResultsState } from "results/results_state.slint";
 import { ExportDialogState } from "results/export_dialog.slint";
+import {
+    FileBrowserDialog,
+    FileBrowserState,
+    FileBrowserMode,
+    FileBrowserPlace,
+    FileBrowserCrumb,
+    FileBrowserEntry,
+} from "dialogs/file_browser_dialog.slint";
+import { ClassSelectDialog } from "dialogs/classification_select_dialog.slint";
+import {
+    ConfirmDeleteManualAnnotatedObjectDialog,
+} from "dialogs/object_list_confirm_delete_manual_annotated_dialog.slint";
 
 export {
     GlobalAppState,
@@ -141,8 +173,15 @@ export {
     ToolState,
     ViewportObjectState,
     PipelinesPanelState,
+    ScriptEditorState,
+    ScriptHighlight,
+    ScriptEdit,
+    ScriptDiagnostic,
+    ScriptCommandDoc,
+    PipelineFocusState,
     CommandPickerState,
     CommandDef,
+    CommandAuthor,
     DefaultParamPreview,
     PipelineEditState,
     PipelineDeleteConfirmState,
@@ -151,10 +190,15 @@ export {
     TemplateMetaSlint,
     ProjectTemplateState,
     ProjectTemplateDef,
+    ProjectAuthor,
     ResultsListState,
     WarningState,
+    ConnectionState,
     AppInfoState,
     UnsavedChangesState,
+    AnalysisRunningCloseState,
+    ConnectState,
+    RecentServerRow,
     RunAnalysisState,
     ResultsWindow,
     Appearance,
@@ -167,6 +211,11 @@ export {
     TrainingObjectRowSlint,
     ResultsState,
     ExportDialogState,
+    FileBrowserState,
+    FileBrowserMode,
+    FileBrowserPlace,
+    FileBrowserCrumb,
+    FileBrowserEntry,
 }
 export component AppWindow inherits Window {
     // A literal binding on the inherited `title` property isn't settable
@@ -213,6 +262,47 @@ export component AppWindow inherits Window {
             Rectangle {
                 height: 1px;
                 background: Theme.border;
+            }
+
+            // Can't be missed: everything that needs the server fails until
+            // the connection is back, and this is the only place that says why.
+            if ConnectionState.remote && !ConnectionState.connected: Rectangle {
+                height: 34px;
+                background: Theme.warn;
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 12px;
+                    Text {
+                        text: "⚠  Connection to " + ConnectionState.label + " lost - " + ConnectionState.lost-message;
+                        color: #000000;
+                        font-size: 12px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    if ConnectionState.can-reconnect: Rectangle {
+                        y: (parent.height - self.height) / 2;
+                        height: 22px;
+                        width: reconnect-label.preferred-width + 16px;
+                        border-radius: 4px;
+                        border-width: 1px;
+                        border-color: #000000;
+                        background: reconnect-touch.has-hover ? #00000020 : transparent;
+                        reconnect-label := Text {
+                            text: "Reconnect now";
+                            color: #000000;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+
+                        reconnect-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ConnectionState.reconnect-now();
+                            }
+                        }
+                    }
+                }
             }
 
             HorizontalBox {
@@ -279,6 +369,8 @@ export component AppWindow inherits Window {
             if (GlobalAppState.active_dialog == DialogType.classification_confirm_auto_add_dialog): ConfirmAutoAddClassesDialog { }
             if (GlobalAppState.active_dialog == DialogType.classification-edit-class-dialog): ClassEditDialog { }
             if (GlobalAppState.active_dialog == DialogType.object-confirm-delete): ConfirmDeleteObjectDialog { }
+            if (GlobalAppState.active_dialog == DialogType.object-confirm-delete-manual-annotated): ConfirmDeleteManualAnnotatedObjectDialog { }
+
             if (GlobalAppState.active_dialog == DialogType.command-selection-dialog): CommandSelectionDialog {
                 width: 100%;
                 height: 100%;
@@ -325,6 +417,10 @@ export component AppWindow inherits Window {
                     CommandPickerState.import-bioimageio();
                 }
             }
+            if (GlobalAppState.active_dialog == DialogType.script-editor): ScriptEditorPanel {
+                width: 100%;
+                height: 100%;
+            }
             if (GlobalAppState.active_dialog == DialogType.pipeline-edit): PipelineEditDialog {
                 width: 100%;
                 height: 100%;
@@ -353,6 +449,14 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
             }
+            if (GlobalAppState.active_dialog == DialogType.analysis-running-close): AnalysisRunningCloseDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.connect-server): ConnectDialog {
+                width: 100%;
+                height: 100%;
+            }
             if (GlobalAppState.active_dialog == DialogType.run-analysis-confirm): RunAnalysisDialog {
                 width: 100%;
                 height: 100%;
@@ -361,6 +465,17 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
             }
+            if (GlobalAppState.active_dialog == DialogType.classification-selection-dialog): ClassSelectDialog {
+                width: 100%;
+                height: 100%;
+            }
         }
+    }
+
+    // The file browser sits above every other overlay: some dialogs (e.g.
+    // AI learning) open it while they are themselves still open.
+    if FileBrowserState.visible: FileBrowserDialog {
+        width: 100%;
+        height: 100%;
     }
 }

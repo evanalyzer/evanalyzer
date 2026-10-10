@@ -1,7 +1,16 @@
+pub use evanalyzer_cfg::core_types::{ImagePlane, ImageTile};
+
+/// Pixel position in an image - e.g. a tile's top-left corner within the
+/// full image (`ManagedImage::tile_offset`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Point2d {
+    pub x: usize,
+    pub y: usize,
+}
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct ChannelInfo {
     pub id: String,
     pub name: String,
@@ -9,7 +18,7 @@ pub struct ChannelInfo {
     pub contrast_method: String,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct PyramidInfo {
     pub nr_bits: u16,
     pub color_channels: u8, // Is either 1, 3 or 4
@@ -22,14 +31,14 @@ pub struct PyramidInfo {
     pub is_little_endian: bool,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct PixelSizes {
     pub px_size_x: f32, // Pixel x size in nm
     pub px_size_y: f32, // Pixel y size in nm
     pub px_size_z: f32, // Pixel z size in nm
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct ImageInfo {
     pub nr_c_stacks: i32,
     pub nr_z_stacks: i32,
@@ -39,33 +48,16 @@ pub struct ImageInfo {
     pub channels: BTreeMap<i32, ChannelInfo>, // Contains the channel information <channelIdx | channelinfo>
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Objective {
     pub manufacturer: String,
     pub model: String,
     pub magnification: f32,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct ImageMeta {
     pub name: String,
     pub objective: Objective,
     pub series: BTreeMap<i32, ImageInfo>, // Image series
-}
-
-#[derive(Default, Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ImagePlane {
-    pub z: i32,
-    pub c: i32,
-    pub t: i32,
-}
-
-#[derive(
-    Default, Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd,
-)]
-pub struct ImageTile {
-    pub offset_x: usize,
-    pub offset_y: usize,
-    pub width: usize,
-    pub height: usize,
 }

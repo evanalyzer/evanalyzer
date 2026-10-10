@@ -23,12 +23,13 @@
 // way to enumerate "every branch below" automatically) - it only stays
 // accurate if every new shortcut updates both places.
 
-import { GlobalAppState, DialogType, UnsavedChangesState } from "state.slint";
+import { GlobalAppState, DialogType, UnsavedChangesState, AnalysisRunningCloseState, ConnectState } from "state.slint";
 import { ToolbarState } from "toolbar.slint";
 import { ToolState, ViewportObjectState } from "editor/viewport_state.slint";
 import { ImagesListState } from "editor/images_list_panel.slint";
 import { ObjectListState } from "editor/object_list_panel.slint";
 import { PipelinesPanelState } from "editor/pipelines_panel.slint";
+import { PipelineFocusState } from "editor/pipeline_focus.slint";
 import {
     PipelineEditState,
     PipelineDeleteConfirmState,
@@ -114,6 +115,14 @@ export component GlobalShortcuts inherits FocusScope {
         // toggling Auto Preview on/off).
         if (e.text == Key.F5) {
             PipelinesPanelState.dry-run();
+            return accept;
+        }
+
+        // Focus on the selected pipeline (again: show everything) - the
+        // keyboard twin of Alt+click on a pipeline. Plain "f": Ctrl+F is the
+        // image search below.
+        if (!e.modifiers.control && !e.modifiers.alt && e.text == "f") {
+            PipelineFocusState.toggle-pipeline-focus(PipelinesPanelState.active-pipeline-id);
             return accept;
         }
 
@@ -247,6 +256,10 @@ export component DialogShortcuts inherits FocusScope {
             TemplateMetaState.cancel();
         } else if (GlobalAppState.active_dialog == DialogType.unsaved_changes_confirm) {
             UnsavedChangesState.cancel();
+        } else if (GlobalAppState.active_dialog == DialogType.analysis_running_close) {
+            AnalysisRunningCloseState.back();
+        } else if (GlobalAppState.active_dialog == DialogType.connect_server) {
+            ConnectState.cancel();
         } else if (GlobalAppState.active_dialog == DialogType.run_analysis_confirm) {
             RunAnalysisState.cancel();
         } else if (GlobalAppState.active_dialog == DialogType.ai_learning) {
@@ -305,6 +318,9 @@ export global ShortcutsDoc {
             title: "Pipeline",
             rows: [
                 { combo: "F5", label: "Refresh the preview" },
+                { combo: "F", label: "Focus on the selected pipeline (again: show all)" },
+                { combo: "Alt+click", label: "Focus on a pipeline (again: show all)" },
+                { combo: "Double-click", label: "Edit a pipeline's name and image source" },
             ],
         },
         {

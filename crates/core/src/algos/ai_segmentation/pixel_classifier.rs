@@ -1,14 +1,16 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
-use evanalyzer_cfg::settings::ai_learning_settings::AiLearningClassifierSettings;
+use evanalyzer_cfg::settings::ai_learning_settings::{
+    AiLearningClassifierSettings, PixelInputColor,
+};
 use macros::CommandsMeta;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::{
     ai_learning::model::load_from_file,
     ai_learning::training::pixel::compute_pixel_features,
     algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_classifier},
+    image::ImageContainer,
     pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -62,6 +64,7 @@ impl ImageAlgorithm for PixelClassifier {
 
         let AiLearningClassifierSettings::Pixel {
             feature_spec,
+            input_color,
             class_labels,
         } = &saved.settings.classifier
         else {
@@ -70,6 +73,7 @@ impl ImageAlgorithm for PixelClassifier {
                 self.model_path.display()
             )));
         };
+        check_input_color(*input_color, ctx.image.as_ref(), &self.model_path)?;
 
         // Immutable borrow of `ctx` to compute features and run inference -
         // `bank`/`predicted` own their data, so this ends before the mutable
@@ -92,7 +96,7 @@ impl ImageAlgorithm for PixelClassifier {
             .map(|m| (m.segmentation_class, m.object_class_id.as_u32()))
             .collect();
 
-        let (_, segmentation_map) = ctx.get_f32_gray_and_segmentation_mask_mut()?;
+        let segmentation_map = ctx.get_segmentation_map_mut()?;
         write_predictions(
             &predicted,
             class_labels,
@@ -107,12 +111,39 @@ impl ImageAlgorithm for PixelClassifier {
         "Pixel Classifier"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    /// Nothing: the learning backend (random forest, KNN, MLP) is only known
+    /// from the model file, and citing the wrong method would mislead.
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        Vec::new()
     }
 
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::Tile
+    }
+}
+
+/// Refuses to apply a model to the other image kind than it was trained on:
+/// greyscale and colour images produce feature vectors of different length
+/// and meaning (see `compute_pixel_features`), so the result would be wrong
+/// or the backend would fail with an unhelpful dimension error.
+fn check_input_color(
+    model_color: PixelInputColor,
+    image: &ImageContainer,
+    model_path: &Path,
+) -> Result<(), InternalErrors> {
+    let image_is_rgb = matches!(image, ImageContainer::F32Rgb(_));
+    match (model_color, image_is_rgb) {
+        (PixelInputColor::Gray, true) => Err(InternalErrors::InvalidArgument(format!(
+            "The pixel classifier '{}' was trained on greyscale images; this image is in \
+             colour. Retrain the model on colour images to use it here.",
+            model_path.display()
+        ))),
+        (PixelInputColor::Rgb, false) => Err(InternalErrors::InvalidArgument(format!(
+            "The pixel classifier '{}' was trained on colour images; this image is \
+             greyscale. Retrain the model on greyscale images to use it here.",
+            model_path.display()
+        ))),
+        _ => Ok(()),
     }
 }
 
@@ -149,16 +180,13 @@ mod tests {
     use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
     use evanalyzer_cfg::settings::ai_learning_settings::{
         AiLearningBackendSettings, AiLearningClassifierSettings, AiLearningSettings,
-        PixelClassLabel, RandomForestSettings,
+        PixelClassLabel, PixelInputColor, RandomForestSettings,
     };
     use evanalyzer_cfg::settings::meta_data::MetaData;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     fn gray_ctx(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
-        let img =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, values, CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 1>::new(ImageSize { width, height }, values).unwrap();
         PipelineContext::new_from_image_test(img).unwrap()
     }
 
@@ -202,6 +230,7 @@ mod tests {
                     feature_spec: AiLearningPixelFeatureSettings {
                         channels: vec![vec![]],
                     },
+                    input_color: PixelInputColor::Gray,
                     class_labels,
                 },
             },
@@ -361,5 +390,131 @@ mod tests {
             vec![0, 0],
             "unmapped predictions must reset stale buffer values, not preserve them"
         );
+    }
+
+    // -- colour (RGB) models and images -----------------------------------------
+
+    fn rgb_ctx(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
+        let img = Image::<f32, 3>::new(ImageSize { width, height }, values).unwrap();
+        PipelineContext::new_from_image_test_rgb(img).unwrap()
+    }
+
+    /// A colour model telling red (label 0) from cyan (label 1) pixels -
+    /// one raw recipe entry, so three features (R, G, B) per pixel. The
+    /// classes differ in every colour, so whichever feature a random
+    /// forest split happens to pick separates them.
+    fn saved_rgb_pixel_classifier() -> SavedClassifier {
+        let mut rows = Vec::new();
+        let mut labels = Vec::new();
+        for i in 0..15 {
+            let jitter = (i % 3) as f32 * 0.1;
+            rows.push(vec![10.0 + jitter, 0.0, 0.0]);
+            labels.push(0);
+            rows.push(vec![0.0, 10.0 + jitter, 10.0 + jitter]);
+            labels.push(1);
+        }
+        let classifier = fit_random_forest(&rows, &labels, &reliable_rf_settings()).unwrap();
+        let mut saved = saved_pixel_classifier(vec![
+            PixelClassLabel {
+                class: SegmentationClass(5),
+                name: "Red".into(),
+            },
+            PixelClassLabel {
+                class: SegmentationClass(6),
+                name: "Cyan".into(),
+            },
+        ]);
+        saved.classifier = classifier;
+        if let AiLearningClassifierSettings::Pixel { input_color, .. } =
+            &mut saved.settings.classifier
+        {
+            *input_color = PixelInputColor::Rgb;
+        }
+        saved
+    }
+
+    fn command_for(saved: &SavedClassifier, dir: &tempfile::TempDir) -> PixelClassifier {
+        let path = dir.path().join("model.evamodel");
+        save_to_file(saved, &path).unwrap();
+        PixelClassifier {
+            model_path: path,
+            segmentation_mapping: vec![
+                SegmentationMapping {
+                    segmentation_class: SegmentationClass(5),
+                    object_class_id: SegmentationClass(41),
+                },
+                SegmentationMapping {
+                    segmentation_class: SegmentationClass(6),
+                    object_class_id: SegmentationClass(42),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn execute_applies_a_colour_model_to_a_colour_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = command_for(&saved_rgb_pixel_classifier(), &dir);
+        let mut ctx = rgb_ctx(2, 1, vec![10.05, 0.0, 0.0, 0.0, 10.05, 10.05]);
+        let mut cache = GlobalPipelineCache::default();
+
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let seg = ctx.get_segmentation_map().unwrap();
+        assert_eq!(seg.as_slice(), &[41u32, 42u32]);
+    }
+
+    #[test]
+    fn execute_refuses_a_greyscale_model_on_a_colour_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = command_for(&saved_pixel_classifier(vec![]), &dir);
+        let mut ctx = rgb_ctx(1, 1, vec![0.0, 0.0, 0.0]);
+        let mut cache = GlobalPipelineCache::default();
+
+        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
+
+        let InternalErrors::InvalidArgument(message) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(
+            message.contains("was trained on greyscale images; this image is in colour"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn execute_refuses_a_colour_model_on_a_greyscale_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = command_for(&saved_rgb_pixel_classifier(), &dir);
+        let mut ctx = gray_ctx(1, 1, vec![0.0]);
+        let mut cache = GlobalPipelineCache::default();
+
+        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
+
+        let InternalErrors::InvalidArgument(message) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(
+            message.contains("was trained on colour images; this image is greyscale"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_model_file_without_input_color_loads_as_greyscale() {
+        // Model files written before `input_color` existed.
+        let mut json = serde_json::to_value(saved_pixel_classifier(vec![]).settings).unwrap();
+        json["classifier"]["PIXEL"]
+            .as_object_mut()
+            .unwrap()
+            .remove("input_color")
+            .expect("field should be serialized under this name");
+
+        let settings: AiLearningSettings = serde_json::from_value(json).unwrap();
+
+        let AiLearningClassifierSettings::Pixel { input_color, .. } = settings.classifier else {
+            panic!("expected a Pixel classifier");
+        };
+        assert_eq!(input_color, PixelInputColor::Gray);
     }
 }

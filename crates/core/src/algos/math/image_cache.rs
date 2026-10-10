@@ -106,8 +106,8 @@ impl ImageAlgorithm for ImageCache {
         "Image Cache"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -129,7 +129,6 @@ mod tests {
     };
     use evanalyzer_cfg::core_types::{MemoryId, MemorySlot};
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     #[test]
     fn test_image_cache_store_and_load() -> Result<(), Box<dyn std::error::Error>> {
@@ -139,7 +138,7 @@ mod tests {
             height: 2,
         };
         let data = vec![1.0f32, 2.0, 3.0, 4.0];
-        let test_image = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?;
+        let test_image = Image::<f32, 1>::new(size, data)?;
 
         // 2. Setup: Context and Cache
         // Assuming PipelineContext has an 'image' and 'scratch_pad'
@@ -190,9 +189,7 @@ mod tests {
         // 4. Modify context image so we can prove 'Load' actually changes it
         let empty_data = vec![0.0f32; 4];
         ctx.image = Arc::new(ImageContainer::new_f32_gray_from_image_test(Image::new(
-            size,
-            empty_data,
-            CpuAllocator,
+            size, empty_data,
         )?));
 
         // 5. Test LOAD mode
@@ -226,8 +223,7 @@ mod tests {
             width: 2,
             height: 2,
         };
-        let test_image =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![1.0f32, 2.0, 3.0, 4.0], CpuAllocator)?;
+        let test_image = Image::<f32, 1>::new(size, vec![1.0f32, 2.0, 3.0, 4.0])?;
         let mut ctx = PipelineContext::new_test::<F32Gray>(size)?;
         ctx.image = Arc::new(ImageContainer::new_f32_gray_from_image_test(test_image));
         let mut cache = GlobalPipelineCache::default();
@@ -242,7 +238,6 @@ mod tests {
         ctx.image = Arc::new(ImageContainer::new_f32_gray_from_image_test(Image::new(
             size,
             vec![0.0f32; 4],
-            CpuAllocator,
         )?));
         ImageCache {
             address: ImageAddress::Scratchpad,
@@ -265,8 +260,7 @@ mod tests {
             width: 2,
             height: 2,
         };
-        let test_image =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![1.0f32, 2.0, 3.0, 4.0], CpuAllocator)?;
+        let test_image = Image::<f32, 1>::new(size, vec![1.0f32, 2.0, 3.0, 4.0])?;
         let mut ctx = PipelineContext::new_test::<F32Gray>(size)?;
         ctx.image = Arc::new(ImageContainer::new_f32_gray_from_image_test(test_image));
         let mut cache = GlobalPipelineCache::default();
@@ -285,7 +279,6 @@ mod tests {
         ctx.image = Arc::new(ImageContainer::new_f32_gray_from_image_test(Image::new(
             size,
             vec![0.0f32; 4],
-            CpuAllocator,
         )?));
         ImageCache {
             address,
@@ -332,7 +325,7 @@ mod tests {
             address: ImageAddress::Memory(MemoryId::PipelineContext(1)),
         };
         assert_eq!(algo.name(), "Image Cache");
-        assert!(algo.cite().is_none());
+        assert_eq!(algo.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 }

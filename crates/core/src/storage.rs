@@ -46,4 +46,11 @@ pub trait PipelineResultExporter: Send + Sync {
     ) -> Result<(), InternalErrors> {
         Ok(())
     }
+
+    /// Called once when the run is over, with how it ended - so storage can
+    /// tell a complete run from a cancelled, failed or interrupted one
+    /// (a crash or a killed process never gets here). Default no-op.
+    fn finish_run(&self, _outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
+        Ok(())
+    }
 }

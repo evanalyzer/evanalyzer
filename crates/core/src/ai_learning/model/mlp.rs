@@ -1,5 +1,4 @@
 use crate::ai_learning::model::Classifier;
-use crate::ai_learning::training_job::{TrainingProgressEvent, TrainingStats};
 use crate::ai_learning::utils::validate_training_data;
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
@@ -12,6 +11,7 @@ use burn::record::{BinBytesRecorder, FullPrecisionSettings, Recorder};
 use burn::tensor::activation::{relu, sigmoid, tanh};
 use burn::tensor::{Int, Tensor, TensorData};
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{TrainingProgressEvent, TrainingStats};
 use evanalyzer_cfg::settings::ai_learning_settings::{MlpActivation, MlpSettings};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

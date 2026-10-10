@@ -1,0 +1,30 @@
+[package]
+name = "evanalyzer_server"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+
+[dependencies]
+log = { workspace = true }
+tungstenite = { workspace = true }
+rustls = { workspace = true }
+rcgen = { workspace = true }
+ring = { workspace = true }
+yescrypt = { workspace = true }
+sha-crypt = { workspace = true }
+bcrypt = { workspace = true }
+argon2 = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+getrandom = { workspace = true }
+sysinfo = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+dirs = { workspace = true }

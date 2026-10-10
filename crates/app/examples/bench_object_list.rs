@@ -26,7 +26,11 @@
 // Usage: cargo run --release -p evanalyzer_app --example bench_object_list -- [path.evadb] [--iters N] [--pages N] [--page-size N]
 
 use duckdb::Connection;
-use evanalyzer_app::result::{Column, ListFilter, Pagination, PlaneFilter, ResultsGenerator};
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ListFilter;
+use evanalyzer_app::results::LocalResultsGenerator;
+use evanalyzer_app::results::Pagination;
+use evanalyzer_app::results::PlaneFilter;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -164,7 +168,7 @@ fn main() {
         "db: {path}\nplane: z={z_stack} t={t_stack}  ({total_objects} objects)  page size: {page_size}"
     );
 
-    let generator = ResultsGenerator::open_database(PathBuf::from(&path)).expect("open db");
+    let generator = LocalResultsGenerator::open_database(PathBuf::from(&path)).expect("open db");
     let columns = vec![
         Column::ObjectId,
         Column::ImageName,
@@ -192,6 +196,7 @@ fn main() {
                     limit: page_size,
                     after: after.clone(),
                 },
+                transpond_table: false,
             };
             let start = Instant::now();
             let result = generator.get_object_list(&filter).unwrap();

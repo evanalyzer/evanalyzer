@@ -4,16 +4,19 @@ use crate::PointSlint;
 use crate::ToolState;
 use crate::UiState;
 use crate::ViewportObjectState;
+use crate::editor::classification_controller::ClassificationController;
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_cache::ViewportCache;
 use crate::editor::viewport_controller::ViewportController;
+use crate::editor::viewport_controller::{ZOrder, is_object_drawn};
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
-use evanalyzer_app::extensions::object_ext::ObjectExt;
-use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_core::{ImageContainer, Object};
-use kornia_image::ImageSize;
+use evanalyzer_app::images::ImageContainer;
+use evanalyzer_app::images::object_from_mask;
+use evanalyzer_app::project::ObjectExt;
+use evanalyzer_app::project::ProjectExt;
+use evanalyzer_cfg::core_types::ObjectClass;
 use log::warn;
 use slint::ComponentHandle;
 use slint::Model;
@@ -38,6 +41,7 @@ pub struct ViewPortObjectController {
     pub(crate) viewport_cache: Arc<ViewportCache>,
     pub(crate) image_list_controller: Arc<ImagesListController>,
     pub(crate) object_list_controller: Arc<ObjectListController>,
+    pub(crate) classification_controller: Arc<ClassificationController>,
 }
 
 impl ViewPortObjectController {
@@ -48,6 +52,7 @@ impl ViewPortObjectController {
         viewport_cache: Arc<ViewportCache>,
         image_list_controller: Arc<ImagesListController>,
         object_list_controller: Arc<ObjectListController>,
+        classification_controller: Arc<ClassificationController>,
     ) -> Self {
         Self {
             ui,
@@ -56,6 +61,7 @@ impl ViewPortObjectController {
             viewport_cache,
             image_list_controller,
             object_list_controller,
+            classification_controller,
         }
     }
 
@@ -79,6 +85,9 @@ impl ViewPortObjectController {
                     manager.viewport_controller.trigger_image_redraw_objects();
                     manager.image_list_controller.sync_image_list_to_slint();
                     manager.object_list_controller.sync_objects_to_slint();
+                    manager
+                        .classification_controller
+                        .sync_classification_to_slint();
                 },
             );
 
@@ -229,30 +238,46 @@ impl ViewPortObjectController {
     }
 
     pub fn find_object_from_clicked_coordinates(&self, click_x: f32, click_y: f32) {
-        let view_port_state = self
+        let vp = self
             .viewport_controller
             .viewport_state
             .read()
             .expect("Poisoned")
             .clone();
-        let x1 = ((click_x - view_port_state.offset_x) / (view_port_state.zoom)) as u32;
-        let y1 = ((click_y - view_port_state.offset_y) / (view_port_state.zoom)) as u32;
+        let fx = (click_x - vp.offset_x) / vp.zoom;
+        let fy = (click_y - vp.offset_y) / vp.zoom;
 
-        let clicked_object_id = {
+        // `as u32` saturates negatives to 0, which would pick objects at the image
+        // origin when clicking outside the image on the left/top.
+        let clicked_object_id = if fx < 0.0 || fy < 0.0 {
+            None
+        } else {
+            let (x1, y1) = (fx as u32, fy as u32);
             let project = self.app_state.get_project();
-            let objects = project.get_objects();
-            let preview_objects = project.get_preview_objects();
+            let z = ZOrder::new(&*project);
+            let hide_unclassified = project.hide_unclassified_objects();
 
-            let mut found_id = None;
-            if let Some(objects_some) = objects {
-                for object in objects_some.iter().chain(preview_objects) {
-                    if object.is_part_of(x1, y1) {
-                        found_id = Some(object.id.clone());
-                        break;
+            // Highest z-key wins; on equal keys the later object wins, because
+            // later objects are painted on top. Objects that aren't drawn
+            // (hidden class, hidden unclassified) can't be picked.
+            let mut best: Option<(u32, _)> = None;
+            if let Some(objects) = project.get_objects() {
+                for object in objects.iter().chain(project.get_preview_objects()) {
+                    if !object.is_part_of(x1, y1)
+                        || !is_object_drawn(&*project, hide_unclassified, &object.object_class)
+                    {
+                        continue;
+                    }
+                    // Selected-object boost is deliberately NOT applied for picking,
+                    // otherwise an already selected object could never be clicked
+                    // away from in favour of the one underneath.
+                    let key = z.key(&object.object_class, false);
+                    if best.as_ref().is_none_or(|(k, _)| key >= *k) {
+                        best = Some((key, object.id.clone()));
                     }
                 }
             }
-            found_id
+            best.map(|(_, id)| id)
         };
 
         let mut project = self.app_state.get_project_write();
@@ -448,21 +473,22 @@ impl ViewPortObjectController {
             )
         };
 
+        if object_class == ObjectClass::Unset {
+            // Tell the user to select an object class
+            return;
+        }
+
         if let Some((_, selected_channel)) = data_tmp.get(idx as usize) {
-            let object = Object::from_mask(
-                &ImageSize {
-                    width: read_context.full_image_w,
-                    height: read_context.full_image_h,
-                },
+            let object = object_from_mask(
+                read_context.full_image_w,
+                read_context.full_image_h,
                 mask_data,
                 bbox,
                 selected_channel,
                 data_tmp.as_slice(),
                 object_class,
             );
-            self.app_state
-                .get_project_write()
-                .add_object(&object.to_object_settings());
+            self.app_state.get_project_write().add_object(&object);
             self.app_state.mark_dirty();
         }
     }
@@ -476,12 +502,14 @@ mod tests {
     use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project};
     use crate::editor::viewport_cache::{ReadContext, ViewportCache};
     use bitvec::prelude::*;
+    use evanalyzer_app::images::ImageChannel;
+    use evanalyzer_app::images::ManagedImage;
+    use evanalyzer_app::images::Point2d;
+    use evanalyzer_app::prelude::classification_ext::ClassificationExt;
     use evanalyzer_cfg::core_types::ObjectId;
+    use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
-    use evanalyzer_core::{ImageChannel, ManagedImage};
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::Image;
-    use kornia_image::allocator::CpuAllocator;
 
     fn make_controller() -> (
         Arc<UiState>,
@@ -489,41 +517,63 @@ mod tests {
         Arc<ViewportCache>,
     ) {
         let ui_state = test_ui_state_with_project(project_with_one_image());
-        let viewport_controller = Arc::new(ViewportController::new(
-            slint::Weak::default(),
-            ui_state.clone(),
-        ));
+        let (controller, viewport_cache) = controller_for(slint::Weak::default(), &ui_state);
+        (ui_state, controller, viewport_cache)
+    }
+
+    /// A controller with all its collaborators, on `ui` (`Weak::default()`
+    /// for none).
+    fn controller_for(
+        ui: slint::Weak<AppWindow>,
+        ui_state: &Arc<UiState>,
+    ) -> (Arc<ViewPortObjectController>, Arc<ViewportCache>) {
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
         let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
         let object_list_controller = Arc::new(ObjectListController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             viewport_controller.clone(),
         ));
         let image_list_controller = Arc::new(ImagesListController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             viewport_controller.clone(),
             Arc::new(HistogramController::new(
-                slint::Weak::default(),
+                ui.clone(),
                 ui_state.clone(),
                 viewport_controller.clone(),
             )),
             Arc::new(ImageMetaController::new(
-                slint::Weak::default(),
+                ui.clone(),
                 ui_state.clone(),
                 viewport_controller.clone(),
             )),
             object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    ui.clone(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
+        ));
+        let classification_controller = Arc::new(ClassificationController::new(
+            ui.clone(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
         ));
         let controller = Arc::new(ViewPortObjectController::new(
-            slint::Weak::default(),
+            ui,
             ui_state.clone(),
             viewport_controller,
             viewport_cache.clone(),
             image_list_controller,
             object_list_controller,
+            classification_controller,
         ));
-        (ui_state, controller, viewport_cache)
+        (controller, viewport_cache)
     }
 
     // -- find_object_from_clicked_coordinates --------------------------------------
@@ -544,6 +594,8 @@ mod tests {
         let (ui_state, controller, _) = make_controller();
         {
             let mut project = ui_state.get_project_write();
+            // Unclassified objects are hidden (and so not pickable) by default.
+            project.toggle_hide_unclassified_objects();
             project.add_object(&object_with_bbox(1, [10, 10, 15, 15]));
         }
         // Default viewport state: zoom=1.0, offset=(0,0) - click coordinates
@@ -571,6 +623,99 @@ mod tests {
         assert_eq!(ui_state.get_project().get_selected_object_id(), None);
     }
 
+    /// Two registered classes - the first in the list is drawn (and picked)
+    /// on top - and two objects of them overlapping at (12, 12): `1` of the
+    /// top class `a`, `2` of class `b`, added after it.
+    fn two_overlapping_classified_objects(ui_state: &Arc<UiState>) -> (ObjectClass, ObjectClass) {
+        let mut project = ui_state.get_project_write();
+        let mut class = |name: &str| {
+            project.classification.add_class(Class {
+                id: ObjectClass::Valid(0),
+                color: 0xff0000,
+                name: name.into(),
+                notes: String::new(),
+            })
+        };
+        let (a, b) = (class("a"), class("b"));
+        let mut top = object_with_bbox(1, [10, 10, 15, 15]);
+        top.object_class.insert(a);
+        let mut below = object_with_bbox(2, [11, 11, 16, 16]);
+        below.object_class.insert(b);
+        project.add_object(&top);
+        project.add_object(&below);
+        (a, b)
+    }
+
+    #[test]
+    fn clicking_overlapping_objects_selects_the_one_drawn_on_top() {
+        let (ui_state, controller, _) = make_controller();
+        two_overlapping_classified_objects(&ui_state);
+
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(1)),
+            "the first class in the list is on top, although its object came first"
+        );
+    }
+
+    #[test]
+    fn clicking_overlapping_objects_prefers_the_selected_class() {
+        let (ui_state, controller, _) = make_controller();
+        let (_, b) = two_overlapping_classified_objects(&ui_state);
+        ui_state.get_project_write().set_selected_object_class(b);
+
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(2))
+        );
+    }
+
+    /// An object that isn't drawn must not take the click from the visible
+    /// one underneath.
+    #[test]
+    fn clicking_never_selects_an_object_of_a_hidden_class() {
+        let (ui_state, controller, _) = make_controller();
+        let (a, _) = two_overlapping_classified_objects(&ui_state);
+        ui_state.get_project_write().toggle_class_visibility(a);
+
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(2)),
+            "the visible object underneath is selected"
+        );
+
+        // Only the hidden object at (10, 10): nothing to select.
+        controller.find_object_from_clicked_coordinates(10.0, 10.0);
+        assert_eq!(ui_state.get_project().get_selected_object_id(), None);
+    }
+
+    #[test]
+    fn clicking_never_selects_a_hidden_unclassified_object() {
+        let (ui_state, controller, _) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            assert!(project.hide_unclassified_objects(), "the default");
+            project.add_object(&object_with_bbox(1, [10, 10, 15, 15]));
+        }
+
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+        assert_eq!(ui_state.get_project().get_selected_object_id(), None);
+
+        ui_state
+            .get_project_write()
+            .toggle_hide_unclassified_objects();
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(1))
+        );
+    }
+
     // -- add_object_from_rect ------------------------------------------------------
 
     fn points(pairs: &[(f32, f32)]) -> ModelRc<PointSlint> {
@@ -587,8 +732,7 @@ mod tests {
             width: 20,
             height: 20,
         };
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![0.5f32; 20 * 20], CpuAllocator).unwrap();
+        let image = Image::<f32, 1>::new(size, vec![0.5f32; 20 * 20]).unwrap();
         let container = ImageContainer::F32Gray(ManagedImage {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -617,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn add_object_from_rect_creates_an_object_spanning_the_two_corner_points() {
+    fn add_object_from_rect_with_no_selected_class() {
         let (ui_state, controller, viewport_cache) = make_controller();
         seed_image_cache(&viewport_cache);
 
@@ -627,10 +771,86 @@ mod tests {
         let objects = project
             .get_objects()
             .expect("current series must have objects");
+        // No class was selected, we do not allow object creation without class
+        assert_eq!(objects.len(), 0);
+    }
+
+    #[test]
+    fn add_object_from_rect_creates_an_object_spanning_the_two_corner_points() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        let new_class = controller
+            .app_state
+            .get_project_write()
+            .classification
+            .add_class(Class {
+                id: ObjectClass::Valid(1),
+                color: 0xff0000,
+                name: "cl1".into(),
+                notes: "note".into(),
+            });
+
+        controller
+            .app_state
+            .get_project_write()
+            .set_selected_object_class(new_class);
+
+        controller.add_object_from_rect(&points(&[(2.0, 2.0), (5.0, 5.0)]));
+
+        let project = ui_state.get_project();
+        let objects = project
+            .get_objects()
+            .expect("current series must have objects");
         assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].object_class.contains(&new_class), true);
+        assert_eq!(objects[0].object_class.len(), 1);
         assert_eq!(objects[0].bbox, [2, 2, 5, 5]);
         // A rectangle mask fills every pixel in its bbox.
         assert_eq!(objects[0].area, 4 * 4);
+    }
+
+    #[test]
+    fn painting_an_annotation_updates_the_class_counts_right_away() {
+        use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+        use crate::helper::ui_thread::drain_ui_queue;
+        use crate::{ClassificationState, ToolState, ViewportObjectState};
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, project_with_one_image());
+        let nuclei = {
+            use evanalyzer_app::prelude::classification_ext::ClassificationExt;
+            let mut project = ui_state.get_project_write();
+            let id = project.classification.add_class(
+                evanalyzer_cfg::settings::classification_settings::Class {
+                    name: "Nuclei".into(),
+                    ..Default::default()
+                },
+            );
+            project.set_selected_object_class(id);
+            id
+        };
+        assert!(matches!(
+            nuclei,
+            evanalyzer_cfg::core_types::ObjectClass::Valid(_)
+        ));
+        let (controller, viewport_cache) = controller_for(ui.as_weak(), &ui_state);
+        seed_image_cache(&viewport_cache);
+        controller.attach_callbacks();
+        let total = || {
+            ui.global::<ClassificationState>()
+                .get_total_visible_objects()
+        };
+        assert_eq!(total(), 0);
+
+        ui.global::<ViewportObjectState>()
+            .invoke_object_paint_finished(
+                points(&[(2.0, 2.0), (5.0, 5.0)]),
+                ToolState::PaintRectangle,
+                0,
+            );
+        drain_ui_queue();
+
+        assert_eq!(total(), 1, "counted without switching tabs");
     }
 
     #[test]
@@ -693,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn add_polygon_from_rect_creates_an_object_covering_the_triangle_bbox() {
+    fn add_polygon_without_object_class_must_fail() {
         let (ui_state, controller, viewport_cache) = make_controller();
         seed_image_cache(&viewport_cache);
 
@@ -703,8 +923,40 @@ mod tests {
         let objects = project
             .get_objects()
             .expect("current series must have objects");
+        assert_eq!(objects.len(), 0);
+    }
+
+    #[test]
+    fn add_polygon_from_rect_creates_an_object_covering_the_triangle_bbox() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        let new_class = controller
+            .app_state
+            .get_project_write()
+            .classification
+            .add_class(Class {
+                id: ObjectClass::Valid(1),
+                color: 0xff0000,
+                name: "cl1".into(),
+                notes: "note".into(),
+            });
+
+        controller
+            .app_state
+            .get_project_write()
+            .set_selected_object_class(new_class);
+
+        controller.add_polygon_from_rect(&points(&[(2.0, 2.0), (10.0, 2.0), (6.0, 10.0)]), 3);
+
+        let project = ui_state.get_project();
+        let objects = project
+            .get_objects()
+            .expect("current series must have objects");
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].bbox, [2, 2, 10, 10]);
+        assert_eq!(objects[0].object_class.contains(&new_class), true);
+        assert_eq!(objects[0].object_class.len(), 1);
         assert!(objects[0].area > 0, "the triangle interior must be filled");
     }
 }

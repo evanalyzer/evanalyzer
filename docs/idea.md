@@ -80,10 +80,11 @@ Both computed pairwise across every channel pair over the image.
 
 ### Storage
 
-Give this its own JSON field (e.g. `pixel_coloc_json`) rather than reusing
-`coloc_json` — that field's current shape is
-`object class → [colocalized object ids]` (spatial overlap between segmented
-objects), semantically different from a numeric per-channel-pair coefficient.
+Give this its own column (e.g. `pixel_coloc`) rather than reusing
+`coloc_partner_ids` — that column's shape is
+`MAP(object class → [colocalized object ids])` (spatial overlap between
+segmented objects), semantically different from a numeric per-channel-pair
+coefficient.
 
 ## Display
 

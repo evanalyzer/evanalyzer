@@ -1,7 +1,7 @@
 use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{AppWindow, HistogramState};
-use evanalyzer_app::extensions::project_ext::ProjectExt;
+use evanalyzer_app::project::ProjectExt;
 use log::warn;
 use slint::ComponentHandle;
 use std::sync::Arc;
@@ -121,7 +121,7 @@ impl HistogramController {
             .get_histograms_from_selected_channel()
             .cloned();
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let Some(task) = histogram_settings else {
                     warn!(

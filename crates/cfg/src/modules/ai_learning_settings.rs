@@ -193,11 +193,31 @@ pub struct ObjectClassLabel {
     pub name: String,
 }
 
+/// Which kind of image a pixel classifier was trained on, and therefore
+/// the only kind it can be applied to: a greyscale model expects one value
+/// per feature recipe entry, a colour model three (R, G, B - see
+/// `compute_pixel_features`), so the feature vectors aren't interchangeable.
+///
+/// SERIALIZATION-CRITICAL: part of the saved model artifact. Model files
+/// written before this existed carry no value and load as `Gray`, which is
+/// all training supported back then.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PixelInputColor {
+    #[default]
+    Gray,
+    Rgb,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AiLearningClassifierSettings {
     Pixel {
         feature_spec: AiLearningPixelFeatureSettings,
+        /// Set by training from the training images; never configured by
+        /// the user.
+        #[serde(default)]
+        input_color: PixelInputColor,
         /// Classes this model predicts, in the exact order its output
         /// indices refer to (predicted index 0 = class_labels[0], etc.) -
         /// order is load-bearing (it's what an MLP's output layer is

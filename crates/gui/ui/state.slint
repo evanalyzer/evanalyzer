@@ -9,7 +9,9 @@ export enum DialogType {
     classification_confirm_delete,
     classification_confirm_auto_add_dialog,
     classification_edit_class_dialog,
+    classification_selection_dialog,
     object_confirm_delete,
+    object_confirm_delete_manual_annotated,
     command_selection_dialog,
     pipeline_edit,
     pipeline_delete_confirm,
@@ -19,10 +21,34 @@ export enum DialogType {
     template_meta,
     project_template,
     unsaved_changes_confirm,
+    analysis_running_close,
+    connect_server,
     run_analysis_confirm,
     ai_learning,
-    shortcuts_help }
+    shortcuts_help,
+    script_editor }
 
+
+/// Where the work happens - this computer or a server. Shown in the status
+/// bar at all times, plus a banner once a server connection is lost.
+export global ConnectionState {
+    /// Working on a server (`--remote`) instead of this computer.
+    in property <bool> remote: false;
+    /// Turns `false` for good when the server connection drops.
+    in property <bool> connected: true;
+    /// "alice @ workstation:7400", or "This computer".
+    in property <string> label: "This computer";
+    /// The connection to the server is encrypted (`wss://`).
+    in property <bool> encrypted: true;
+    /// The server's certificate was checked - `false` with
+    /// `--no-tls-verification`.
+    in property <bool> verified: true;
+    /// While disconnected: what the reconnecting is up to.
+    in property <string> lost-message: "";
+    /// Reconnecting is still possible (the user's worker may still run).
+    in property <bool> can-reconnect: true;
+        callback reconnect-now();
+    }
 
 export global GlobalAppState {
     // Global internal state
@@ -47,11 +73,11 @@ export global GlobalAppState {
 // by exact text, not just SPDX id - copyright lines differ crate to crate,
 // so e.g. "MIT" covers many distinct `text_paragraphs` groups).
 export struct ThirdPartyLicense {
-    id: string,
-    name: string,
-    crates: string,          // pre-joined, sorted "name version, name version, ..."
+        id: string,
+        name: string,
+        crates: string,          // pre-joined, sorted "name version, name version, ..."
     text_paragraphs: [string],
-}
+    }
 
 //
 // Static/host info shown in the About dialog. Set once from Rust at
@@ -63,13 +89,21 @@ export global AppInfoState {
         in-out property <int> cpu_cores: 1;
         in-out property <string> ram_total: "-";
         in-out property <bool> cuda_available: false;
+    // The machine the numbers above describe - where the work runs: "This
+    // computer", or the worker in remote mode. Filled by
+    // `refresh_system_info`, which the About dialog calls whenever it opens.
+    in-out property <string> system_source: "This computer";
+        in-out property <string> system_os: "-";
+        in-out property <bool> system_loading: false;
+        in-out property <string> system_error: "";
+        callback refresh_system_info();
     // Split into paragraphs (rather than one giant string) so each Text
     // element stays small - a single Text with the ~34KB full license blew
     // past a size limit in the software-rendering fallback and rendered
     // garbled/mis-scrolled content instead of an error.
     in-out property <[string]> license_paragraphs: [];
-    in-out property <[ThirdPartyLicense]> third_party_licenses: [];
-    in-out property <int> third_party_package_count: 0;
+        in-out property <[ThirdPartyLicense]> third_party_licenses: [];
+        in-out property <int> third_party_package_count: 0;
     }
 
 //
@@ -95,6 +129,50 @@ export global UnsavedChangesState {
         callback save();
         callback discard();
         callback cancel();
+    }
+
+//
+// "File > Connect to server" - see connect_dialog.slint.
+//
+export struct RecentServerRow {
+        url: string,
+        user: string,
+    }
+
+export global ConnectState {
+        in-out property <string> url;
+        in-out property <string> user;
+        in-out property <string> password;
+        in property <[RecentServerRow]> recent;
+        in property <bool> busy: false;
+        in property <string> error;
+        /// 0: address/user/password; 1: confirm a new server's certificate;
+        /// 2: the certificate differs from the one confirmed before.
+        in property <int> step: 0;
+        in property <string> fingerprint;
+        in property <string> known-fingerprint;
+        /// The dialog is about to show: fill in the recent servers.
+        callback opened();
+        callback connect();
+        callback trust();
+        callback back();
+        callback cancel();
+        callback pick-recent(int);
+    }
+
+//
+// Closing the window while an analysis runs. Rust shows it (switch
+// GlobalAppState.active_dialog to DialogType.analysis_running_close) and
+// reacts to the answer. On a server the analysis can keep running without
+// the window; locally it ends with the process.
+//
+export global AnalysisRunningCloseState {
+        in property <bool> remote: false;
+        /// Asked for "Disconnect" instead of closing the window.
+        in property <bool> disconnecting: false;
+        callback keep_running();
+        callback cancel_analysis();
+        callback back();
     }
 
 
@@ -138,18 +216,21 @@ export global HistogramState {
 //
 export enum IntensityProjection { single_stack, all_stacks, max, min, avg, sum, middle }
 
-export struct ChannelInfo { name: string, color: color, active: bool, idx: int, emission_wave_length: float }
+// `wavelength_overridden`: the project sets this channel's emission
+// wavelength itself (instead of taking the image's own) - shown as "edited".
+export struct ChannelInfo {
+        name: string,
+        color: color,
+        active: bool,
+        idx: int,
+        emission_wave_length: float,
+        wavelength_overridden: bool
+    }
 
 export global ChannelState {
 
-        in-out property <[ChannelInfo]> channels: [
-            { name: "CH0", color: #FF0000, active: true, idx: 0, emission_wave_length: 0 },
-            { name: "CH1", color: #FF0000, active: true, idx: 1, emission_wave_length: 0 },
-            { name: "CH2", color: #FF0000, active: true, idx: 2, emission_wave_length: 0 },
-            { name: "CH3", color: #FF0000, active: true, idx: 3, emission_wave_length: 0 },
-            { name: "CH4", color: #FF0000, active: true, idx: 4, emission_wave_length: 0 },
-            { name: "CH5", color: #FF0000, active: true, idx: 5, emission_wave_length: 0 },
-        ];
+        // Filled by Rust once an image is open - empty until then.
+        in-out property <[ChannelInfo]> channels: [];
 
         in-out property <int> selected_series: 0;
         in-out property <int> selected_z_stack: 0;
@@ -158,6 +239,11 @@ export global ChannelState {
         in-out property <int> play_back_speed_hz: 1;
         in-out property <IntensityProjection> intensity_projection: IntensityProjection.single-stack;
         in-out property <int> selected_channel_index: 0;
+        // How many channels are visible - kept by Rust (Slint can't count).
+        in-out property <int> active_count: 0;
+        // All channels in gray, one visible at a time.
+        in-out property <bool> grayscale: false;
+        callback grayscale_toggled(bool);
 
         // Callback sends the updated array to Rust
     callback channel_state_changed([ChannelInfo], int, int, int, IntensityProjection, int, int);

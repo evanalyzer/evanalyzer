@@ -1,5 +1,7 @@
+use crate::AnalysisRunningCloseState;
 use crate::AppWindow;
 use crate::DialogType;
+use crate::FileRequest;
 use crate::GlobalAppState;
 use crate::ImagesListState;
 use crate::PipelinesPanelState;
@@ -16,20 +18,23 @@ use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_list_controller::ResultsListController;
 use crate::editor::template_controller::TemplateController;
-use evanalyzer_app::exporter;
-use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_app::extensions::project_ext::SaveProjectActions;
-use evanalyzer_app::templates::{load_project_template_from_file, load_project_templates};
+use evanalyzer_app::backends::Backend;
+use evanalyzer_app::exporter::cite_project;
+use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::SaveProjectActions;
+use evanalyzer_app::templates::load_project_template_from_file;
+use evanalyzer_app::templates::load_project_templates;
 use evanalyzer_cfg::LEGACY_PROJECT_FILE_EXTENSION;
 use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
 use evanalyzer_cfg::PROJECT_FILE_TEMPLATE_EXTENSIONS;
 use evanalyzer_cfg::settings::templates::ProjectTemplate;
-use evanalyzer_core::SUPPORTED_IMAGE_FORMATS;
+use evanalyzer_gui_slint::ProjectAuthor;
 use log::{info, warn};
 use slint::ComponentHandle;
 use slint::{ModelRc, SharedString, VecModel};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 /// Sentinel shown as the first entry of the category `ComboBox`; selecting it
@@ -54,6 +59,17 @@ enum PendingAction {
     ImportLegacy(PathBuf),
     OpenProjectTemplate(PathBuf),
     Quit,
+    /// Show the "Connect to server" dialog (connecting closes the project).
+    OpenConnectDialog,
+    /// Back to this computer (closes the project).
+    Disconnect,
+}
+
+/// What the "Analysis running" dialog was asked for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AfterAnalysisQuestion {
+    Quit,
+    Disconnect,
 }
 
 pub struct ProjectController {
@@ -74,6 +90,8 @@ pub struct ProjectController {
     /// The open/import/quit action waiting on the unsaved-changes dialog's
     /// answer, if any (see [`PendingAction`]).
     pending_action: Mutex<Option<PendingAction>>,
+    /// What the "Analysis running" dialog's answer leads to.
+    after_analysis_question: Mutex<AfterAnalysisQuestion>,
 }
 
 impl ProjectController {
@@ -99,6 +117,7 @@ impl ProjectController {
             project_templates: Mutex::new(Vec::new()),
             template_filter: Mutex::new(TemplateFilter::default()),
             pending_action: Mutex::new(None),
+            after_analysis_question: Mutex::new(AfterAnalysisQuestion::Quit),
         }
     }
 
@@ -119,7 +138,6 @@ impl ProjectController {
     /// no reason.
     pub fn create_new_project(self: Arc<Self>) {
         self.app_state.new_project();
-
         self.image_list_controller.sync_image_list_to_slint();
         self.project_settings_controller
             .sync_project_settings_to_slint();
@@ -132,7 +150,7 @@ impl ProjectController {
         self.app_state.clear_dirty();
 
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ImagesListState>()
@@ -187,7 +205,7 @@ impl ProjectController {
 
         let ui_weak = self.ui.clone();
         let image_root_dir_str = image_root_dir.to_string_lossy().into_owned();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ImagesListState>()
@@ -198,6 +216,8 @@ impl ProjectController {
         // Special handling. We set the image root dir to check if the images exist, else a root dir selection dialof will be opened
         self.image_list_controller
             .set_new_image_root(&image_root_dir);
+        // Opening wrote to the project above - nothing of that to undo.
+        self.app_state.clear_undo_history();
         info!("Project opened!")
     }
 
@@ -236,8 +256,10 @@ impl ProjectController {
         if let Some(root) = &image_root_dir {
             // Scan off-lock (see `images_list_controller::scan_image_root_for_images`
             // for why) - only the fast in-memory apply below needs the write guard.
-            let found_images =
-                evanalyzer_app::extensions::project_ext::collect_images_at_root(root);
+            let found_images = evanalyzer_app::project::collect_images_at_root(
+                self.app_state.backend().as_ref(),
+                root,
+            );
             let mut project = self.app_state.get_project_write();
             project.images.root = Some(root.clone());
             project.apply_scanned_images(found_images);
@@ -255,7 +277,7 @@ impl ProjectController {
         if let Some(root) = image_root_dir {
             let ui_weak = self.ui.clone();
             let image_root_dir_str = root.to_string_lossy().into_owned();
-            slint::invoke_from_event_loop(move || {
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui_ready) = ui_weak.upgrade() {
                     ui_ready
                         .global::<ImagesListState>()
@@ -282,7 +304,8 @@ impl ProjectController {
     /// current project, same as confirming it in the "New from Project
     /// Template" picker would.
     pub fn open_project_template_file(self: Arc<Self>, path: &PathBuf) {
-        let template = match load_project_template_from_file(path) {
+        let template = match load_project_template_from_file(self.app_state.backend().files(), path)
+        {
             Ok(template) => template,
             Err(e) => {
                 warn!("Could not load project template {:?}: {}", path, e);
@@ -295,7 +318,7 @@ impl ProjectController {
         };
 
         let manager = self.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             manager.apply_project_template_value(&template);
         })
         .ok();
@@ -315,7 +338,7 @@ impl ProjectController {
         let title = title.to_owned();
         let message = message.to_owned();
         let ui_weak = self.ui.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let warning = ui.global::<WarningState>();
                 warning.set_info(info);
@@ -456,7 +479,7 @@ impl ProjectController {
 
             // Open website in the system browser
             ui.global::<ToolbarState>().on_open_website(|| {
-                std::thread::spawn(|| {
+                crate::helper::ui_thread::spawn(|| {
                     #[cfg(target_os = "linux")]
                     let _ = std::process::Command::new("xdg-open")
                         .arg("https://evanalyzer.org")
@@ -518,15 +541,50 @@ impl ProjectController {
             // Save/Discard/Cancel guard as opening another project - the
             // default behaviour (silently hide the window) would otherwise
             // discard unsaved work with no confirmation.
+            // A running analysis is asked about first (keep it running on
+            // the server, or cancel it), then unsaved changes.
             let manager = Arc::clone(self);
             ui.window().on_close_requested(move || {
-                if manager.app_state.is_dirty() {
+                if manager
+                    .pipelines_controller
+                    .analysis_running
+                    .load(Ordering::SeqCst)
+                {
+                    manager.ask_about_running_analysis(AfterAnalysisQuestion::Quit);
+                    slint::CloseRequestResponse::KeepWindowShown
+                } else if manager.app_state.is_dirty() {
                     manager.guard_discard(PendingAction::Quit);
                     slint::CloseRequestResponse::KeepWindowShown
                 } else {
                     slint::CloseRequestResponse::HideWindow
                 }
             });
+
+            let manager = Arc::clone(self);
+            ui.global::<AnalysisRunningCloseState>()
+                .on_keep_running(move || manager.after_analysis_question());
+            let manager = Arc::clone(self);
+            ui.global::<AnalysisRunningCloseState>()
+                .on_cancel_analysis(move || {
+                    if let Some(cancel) = manager
+                        .pipelines_controller
+                        .pipeline_cancel_flag
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                    {
+                        cancel.cancel();
+                    }
+                    manager.after_analysis_question();
+                });
+            ui.global::<AnalysisRunningCloseState>().on_back(|| {});
+
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>()
+                .on_connect_clicked(move || manager.request_connect());
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>()
+                .on_disconnect_clicked(move || manager.request_disconnect());
         }
     }
 
@@ -545,25 +603,29 @@ impl ProjectController {
     /// type, it may spawn background threads for heavy I/O (e.g., loading large
     /// project manifests or decoding high-resolution images).
     fn open_file_handler(self: &Arc<Self>) {
-        let mut allowed_files = SUPPORTED_IMAGE_FORMATS.to_vec();
+        // The backend's formats - in remote mode the worker's.
+        let image_formats = self.app_state.backend().image_formats();
+        let image_formats: Vec<&str> = image_formats.iter().map(String::as_str).collect();
+        let mut allowed_files = image_formats.clone();
         allowed_files.push(PROJECT_FILE_EXTENSIONS);
         allowed_files.push(LEGACY_PROJECT_FILE_EXTENSION);
         allowed_files.push(PROJECT_FILE_TEMPLATE_EXTENSIONS);
 
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Supported Files", &allowed_files)
-            .add_filter("Image Files", &SUPPORTED_IMAGE_FORMATS)
-            .add_filter("Project Files", &[PROJECT_FILE_EXTENSIONS])
-            .add_filter("Legacy Project Files", &[LEGACY_PROJECT_FILE_EXTENSION])
-            .add_filter(
-                "Project Template Files",
+        let request = FileRequest::open_file("Open")
+            .filter("Supported files", &allowed_files)
+            .filter("Image files", &image_formats)
+            .filter("Project files", &[PROJECT_FILE_EXTENSIONS])
+            .filter("Legacy project files", &[LEGACY_PROJECT_FILE_EXTENSION])
+            .filter(
+                "Project template files",
                 &[PROJECT_FILE_TEMPLATE_EXTENSIONS],
-            )
-            .pick_file()
-        {
-            let manager = Arc::clone(self);
-
-            std::thread::spawn(move || {
+            );
+        let manager = Arc::clone(self);
+        self.app_state.file_browser.open(request, move |path| {
+            let Some(path) = path else {
+                return;
+            };
+            crate::helper::ui_thread::spawn(move || {
                 let ext = path.extension().and_then(|ext| ext.to_str());
 
                 if ext == Some(PROJECT_FILE_EXTENSIONS) {
@@ -576,7 +638,7 @@ impl ProjectController {
                     manager.image_list_controller.open_new_image(&path);
                 }
             });
-        }
+        });
     }
 
     /// Serializes the current project state and persists it to the filesystem.
@@ -596,34 +658,55 @@ impl ProjectController {
     /// in the event of a power failure or crash during the write process.
     /// Always shows a Save As dialog, regardless of whether a project path exists.
     fn save_project_as_handler(self: &Arc<Self>) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Project files", &[PROJECT_FILE_EXTENSIONS])
-            .save_file()
-        {
-            let in_thread = self.clone();
-            std::thread::spawn(move || {
-                // Bind to an owned `Result` first so the write guard from
-                // `get_project_write()` is dropped at this `let` (not kept
-                // alive across the match arms below, which - as a `match`
-                // scrutinee temporary - it otherwise would be). `clear_dirty()`
-                // calls `set_window_title()`, which takes a *read* lock on the
-                // same project `RwLock`; still holding the write guard there
-                // deadlocks the thread against itself.
-                let result = in_thread
-                    .app_state
-                    .get_project_write()
-                    .save_project_as(&path);
-                match result {
-                    Ok(_) => {
-                        info!("Project saved as: {}", path.display());
-                        in_thread.app_state.clear_dirty();
+        let in_thread = self.clone();
+        self.app_state
+            .file_browser
+            .open(self.save_project_request(), move |path| {
+                let Some(path) = path else {
+                    return;
+                };
+                crate::helper::ui_thread::spawn(move || {
+                    // Bind to an owned `Result` first so the write guard from
+                    // `get_project_write()` is dropped at this `let` (not kept
+                    // alive across the match arms below, which - as a `match`
+                    // scrutinee temporary - it otherwise would be). `clear_dirty()`
+                    // calls `set_window_title()`, which takes a *read* lock on the
+                    // same project `RwLock`; still holding the write guard there
+                    // deadlocks the thread against itself.
+                    let result = in_thread
+                        .app_state
+                        .get_project_write()
+                        .save_project_as(in_thread.app_state.backend().files(), &path);
+                    match result {
+                        Ok(_) => {
+                            info!("Project saved as: {}", path.display());
+                            in_thread.app_state.clear_dirty();
+                        }
+                        Err(msg) => {
+                            warn!("Project not saved: {}", msg);
+                        }
                     }
-                    Err(msg) => {
-                        warn!("Project not saved: {}", msg);
-                    }
-                }
+                });
             });
+    }
+
+    /// "Save project" dialog, starting next to the current project file.
+    fn save_project_request(&self) -> FileRequest {
+        let current = self
+            .app_state
+            .get_project()
+            .tmp_settings
+            .current_project
+            .clone();
+        let mut request = FileRequest::save_file("Save project")
+            .filter("Project files", &[PROJECT_FILE_EXTENSIONS]);
+        if let Some(current) = current {
+            if let Some(name) = current.file_name() {
+                request = request.file_name(&name.to_string_lossy());
+            }
+            request = request.start_in(current);
         }
+        request
     }
 
     fn save_project(self: &Arc<Self>) {
@@ -631,14 +714,21 @@ impl ProjectController {
     }
 
     fn export_project_cite(self: &Arc<Self>) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Markdown files", &["md"])
-            .save_file()
-        {
-            let in_thread = self.clone();
-            std::thread::spawn(move || {
+        let request = FileRequest::save_file("Export citation")
+            .filter("Markdown files", &["md"])
+            .file_name("citation.md");
+        let in_thread = self.clone();
+        self.app_state.file_browser.open(request, move |path| {
+            let Some(path) = path else {
+                return;
+            };
+            crate::helper::ui_thread::spawn(move || {
                 let project_settings = &in_thread.app_state.get_project().settings;
-                let result = exporter::cite_project(project_settings, &path);
+                let result = cite_project(
+                    in_thread.app_state.backend().files(),
+                    project_settings,
+                    &path,
+                );
                 match result {
                     Ok(_) => {
                         info!("Project cite saved as: {}", path.display());
@@ -649,7 +739,7 @@ impl ProjectController {
                     }
                 }
             });
-        }
+        });
     }
 
     /// Saves the project (prompting for a path first if none is set yet,
@@ -673,45 +763,49 @@ impl ProjectController {
             .is_some();
 
         if !has_path {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("Project files", &[PROJECT_FILE_EXTENSIONS])
-                .save_file()
-            {
-                let in_thread = self.clone();
-                std::thread::spawn(move || {
-                    // See the comment in `save_project_as_handler` above -
-                    // same fix: drop the write guard at this `let` instead of
-                    // holding it across the match arms, where `clear_dirty()`
-                    // would deadlock trying to re-acquire it for reading.
-                    let result = in_thread
-                        .app_state
-                        .get_project_write()
-                        .save_project_as(&path);
-                    let ok = result.is_ok();
-                    match result {
-                        Ok(_) => {
-                            info!("Project saved: {}", path.display());
-                            in_thread.app_state.clear_dirty();
+            let in_thread = self.clone();
+            self.app_state
+                .file_browser
+                .open(self.save_project_request(), move |path| {
+                    let Some(path) = path else {
+                        on_done(false);
+                        return;
+                    };
+                    crate::helper::ui_thread::spawn(move || {
+                        // See the comment in `save_project_as_handler` above -
+                        // same fix: drop the write guard at this `let` instead of
+                        // holding it across the match arms, where `clear_dirty()`
+                        // would deadlock trying to re-acquire it for reading.
+                        let result = in_thread
+                            .app_state
+                            .get_project_write()
+                            .save_project_as(in_thread.app_state.backend().files(), &path);
+                        let ok = result.is_ok();
+                        match result {
+                            Ok(_) => {
+                                info!("Project saved: {}", path.display());
+                                in_thread.app_state.clear_dirty();
+                            }
+                            Err(msg) => {
+                                warn!("Project not saved: {}", msg);
+                            }
                         }
-                        Err(msg) => {
-                            warn!("Project not saved: {}", msg);
-                        }
-                    }
-                    on_done(ok);
+                        on_done(ok);
+                    });
                 });
-            } else {
-                on_done(false);
-            }
             return;
         }
 
         let in_thread = self.clone();
-        std::thread::spawn(move || {
+        crate::helper::ui_thread::spawn(move || {
             // Same deadlock-avoidance shape as above: `result` is an owned
             // value, so the write guard from `get_project_write()` is
             // dropped at this `let`, before `clear_dirty()` (which takes a
             // read lock) runs in the match arm below.
-            let result = in_thread.app_state.get_project_write().save_project();
+            let result = in_thread
+                .app_state
+                .get_project_write()
+                .save_project(in_thread.app_state.backend().files());
             let ok = result == SaveProjectActions::Success;
             match result {
                 SaveProjectActions::Success => {
@@ -740,13 +834,122 @@ impl ProjectController {
         }
         *self.pending_action.lock().expect("Poisoned") = Some(action);
         let ui_weak = self.ui.clone();
-        slint::invoke_from_event_loop(move || {
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.global::<GlobalAppState>()
                     .set_active_dialog(DialogType::UnsavedChangesConfirm);
             }
         })
         .ok();
+    }
+
+    /// Asks what to do with the running analysis before `then` - see
+    /// [`Self::after_analysis_question`] for the answer.
+    fn ask_about_running_analysis(&self, then: AfterAnalysisQuestion) {
+        *self.after_analysis_question.lock().unwrap() = then;
+        let remote = self.app_state.backend().is_remote();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<AnalysisRunningCloseState>();
+                state.set_remote(remote);
+                state.set_disconnecting(then == AfterAnalysisQuestion::Disconnect);
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::AnalysisRunningClose);
+            }
+        })
+        .ok();
+    }
+
+    /// The running analysis has been dealt with (kept running on the
+    /// server, or cancelled): go on with what the question was for.
+    fn after_analysis_question(self: &Arc<Self>) {
+        let then = *self.after_analysis_question.lock().unwrap();
+        match then {
+            AfterAnalysisQuestion::Quit => self.quit_unless_unsaved(),
+            AfterAnalysisQuestion::Disconnect => self.guard_discard(PendingAction::Disconnect),
+        }
+    }
+
+    /// "File > Connect to server": the dialog - after unsaved changes are
+    /// dealt with, since connecting closes the project. Not while an
+    /// analysis runs on this computer (it would end with the switch).
+    pub(crate) fn request_connect(self: &Arc<Self>) {
+        let local = !self.app_state.backend().is_remote();
+        if local
+            && self
+                .pipelines_controller
+                .analysis_running
+                .load(Ordering::SeqCst)
+        {
+            self.show_warning(
+                "An analysis is running",
+                "Connecting to a server ends the analysis running on this computer. \
+                 Wait for it to finish, or cancel it first.",
+            );
+            return;
+        }
+        self.guard_discard(PendingAction::OpenConnectDialog);
+    }
+
+    /// "File > Disconnect": back to this computer. An analysis running on
+    /// the server is asked about first (it can keep running there).
+    pub(crate) fn request_disconnect(self: &Arc<Self>) {
+        if !self.app_state.backend().is_remote() {
+            return;
+        }
+        if self
+            .pipelines_controller
+            .analysis_running
+            .load(Ordering::SeqCst)
+        {
+            self.ask_about_running_analysis(AfterAnalysisQuestion::Disconnect);
+        } else {
+            self.guard_discard(PendingAction::Disconnect);
+        }
+    }
+
+    /// Moves the window to `backend` - a server, or back to this computer:
+    /// closes the open project (its paths mean the old backend's files),
+    /// points the file dialogs there, takes on that user's preferences,
+    /// closes the results window, and follows an analysis running on a
+    /// server. The old backend's connection is closed.
+    pub(crate) fn switch_backend(self: &Arc<Self>, backend: Arc<dyn Backend>) {
+        info!("Working on {} from now on", backend.description());
+        let old = self.app_state.app.switch_backend(Arc::clone(&backend));
+        old.disconnect();
+        self.app_state
+            .file_browser
+            .set_backend(Arc::clone(&backend));
+        self.app_state
+            .results_file_browser
+            .set_backend(Arc::clone(&backend));
+        self.app_state.reload_app_settings();
+        Arc::clone(self).create_new_project();
+        self.app_state.set_window_title(false);
+
+        let manager = Arc::clone(self);
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let (Some(ui), Some(results_ui)) = (
+                manager.ui.upgrade(),
+                manager.app_state.results_ui_handle.upgrade(),
+            ) else {
+                return;
+            };
+            crate::apply_appearance(&ui, &results_ui, &manager.app_state);
+            let _ = results_ui.hide();
+        })
+        .ok();
+        self.pipelines_controller.follow_server_analyses();
+    }
+
+    /// Closes the window - through the unsaved-changes dialog if needed.
+    fn quit_unless_unsaved(self: &Arc<Self>) {
+        if self.app_state.is_dirty() {
+            self.guard_discard(PendingAction::Quit);
+        } else {
+            self.run_pending_action(PendingAction::Quit);
+        }
     }
 
     /// Executes a [`PendingAction`], safe to call from either the UI thread
@@ -756,23 +959,38 @@ impl ProjectController {
         match action {
             PendingAction::New => {
                 let manager = self.clone();
-                std::thread::spawn(move || manager.create_new_project());
+                crate::helper::ui_thread::spawn(move || manager.create_new_project());
             }
             PendingAction::OpenProject(path) => {
                 let manager = self.clone();
-                std::thread::spawn(move || manager.open_new_project(&path));
+                crate::helper::ui_thread::spawn(move || manager.open_new_project(&path));
             }
             PendingAction::ImportLegacy(path) => {
                 let manager = self.clone();
-                std::thread::spawn(move || manager.import_legacy_project_file(&path));
+                crate::helper::ui_thread::spawn(move || manager.import_legacy_project_file(&path));
             }
             PendingAction::OpenProjectTemplate(path) => {
                 let manager = self.clone();
-                std::thread::spawn(move || manager.open_project_template_file(&path));
+                crate::helper::ui_thread::spawn(move || manager.open_project_template_file(&path));
+            }
+            PendingAction::OpenConnectDialog => {
+                let ui_weak = self.ui.clone();
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.global::<crate::ConnectState>().invoke_opened();
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::ConnectServer);
+                    }
+                })
+                .ok();
+            }
+            PendingAction::Disconnect => {
+                let local = self.app_state.local_backend();
+                self.switch_backend(local);
             }
             PendingAction::Quit => {
                 let ui_weak = self.ui.clone();
-                slint::invoke_from_event_loop(move || {
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
                         let _ = ui.window().hide();
                     }
@@ -805,14 +1023,15 @@ impl ProjectController {
             ui.global::<GlobalAppState>()
                 .set_active_dialog(DialogType::ProjectTemplate);
         }
-        std::thread::spawn(move || {
-            let templates: Vec<ProjectTemplate> = load_project_templates()
-                .into_iter()
-                .map(|(_path, template)| template)
-                .collect();
+        crate::helper::ui_thread::spawn(move || {
+            let templates: Vec<ProjectTemplate> =
+                load_project_templates(manager.app_state.backend().as_ref())
+                    .into_iter()
+                    .map(|(_path, template)| template)
+                    .collect();
             *manager.project_templates.lock().expect("Poisoned") = templates;
 
-            if let Err(e) = slint::invoke_from_event_loop(move || {
+            if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 let Some(ui) = manager.ui.upgrade() else {
                     return;
                 };
@@ -936,7 +1155,7 @@ impl ProjectController {
                 self.pipelines_controller
                     .sync_steps_of_selected_pipeline_to_slint(pid, true);
                 let ui_weak = self.ui.clone();
-                slint::invoke_from_event_loop(move || {
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
                         ui.global::<PipelinesPanelState>()
                             .set_active_pipeline_id(pid.0 as i32);
@@ -946,7 +1165,7 @@ impl ProjectController {
             }
             None => {
                 let ui_weak = self.ui.clone();
-                slint::invoke_from_event_loop(move || {
+                crate::helper::ui_thread::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
                         let ps = ui.global::<PipelinesPanelState>();
                         ps.set_active_pipeline_id(0);
@@ -964,8 +1183,16 @@ impl ProjectController {
 /// Builds the `ProjectTemplateDef` shown in the "New from Project Template"
 /// dialog for a loaded `ProjectTemplate`.
 fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTemplateDef {
-    let author = template.meta.authors.first().cloned().unwrap_or_default();
-    let co_authors = template.meta.authors.get(1..).unwrap_or(&[]).join(", ");
+    let authors: Vec<ProjectAuthor> = template
+        .meta
+        .authors
+        .clone()
+        .into_iter()
+        .map(|x| ProjectAuthor {
+            full_name: x.full_name.into(),
+            organization: x.organization.into(),
+        })
+        .collect();
 
     let tags: Vec<SharedString> = template
         .meta
@@ -980,9 +1207,7 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
         name: template.meta.name.clone().into(),
         short_description: template.meta.short_description.clone().into(),
         description: template.meta.description.clone().into(),
-        author: author.into(),
-        co_authors: co_authors.into(),
-        organization: template.meta.author_organization.clone().into(),
+        authors: ModelRc::new(VecModel::from(authors)),
         creation_time: template
             .meta
             .creation_time
@@ -996,11 +1221,11 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
     use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
-    use evanalyzer_cfg::settings::meta_data::MetaData;
+    use evanalyzer_cfg::settings::meta_data::{AuthorInformation, MetaData};
     use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
     use evanalyzer_cfg::settings::plate_settings::PlateSettings;
     use slint::Model;
@@ -1036,37 +1261,54 @@ mod tests {
     #[test]
     fn project_template_to_def_uses_the_first_author_as_the_primary_author() {
         let meta = MetaData {
-            authors: vec!["Ada Lovelace".into()],
+            authors: vec![AuthorInformation {
+                full_name: "Ada Lovelace".into(),
+                organization: "Org 01".into(),
+            }],
             ..Default::default()
         };
         let def = project_template_to_def(0, &template_with_meta(meta, 0));
 
-        assert_eq!(def.author.as_str(), "Ada Lovelace");
-        assert_eq!(def.co_authors.as_str(), "");
+        assert_eq!(def.authors.row_data(0).unwrap().full_name, "Ada Lovelace");
+        assert_eq!(def.authors.row_data(0).unwrap().organization, "Org 01");
     }
 
     #[test]
     fn project_template_to_def_joins_remaining_authors_as_co_authors() {
         let meta = MetaData {
             authors: vec![
-                "Ada Lovelace".into(),
-                "Alan Turing".into(),
-                "Grace Hopper".into(),
+                AuthorInformation {
+                    full_name: "Ada Lovelace".into(),
+                    organization: "Org 01".into(),
+                },
+                AuthorInformation {
+                    full_name: "Alan Turing".into(),
+                    organization: "Org 02".into(),
+                },
+                AuthorInformation {
+                    full_name: "Grace Hopper".into(),
+                    organization: "Org 03".into(),
+                },
             ],
             ..Default::default()
         };
         let def = project_template_to_def(0, &template_with_meta(meta, 0));
 
-        assert_eq!(def.author.as_str(), "Ada Lovelace");
-        assert_eq!(def.co_authors.as_str(), "Alan Turing, Grace Hopper");
+        assert_eq!(def.authors.row_data(0).unwrap().full_name, "Ada Lovelace");
+        assert_eq!(def.authors.row_data(0).unwrap().organization, "Org 01");
+
+        assert_eq!(def.authors.row_data(1).unwrap().full_name, "Alan Turing");
+        assert_eq!(def.authors.row_data(1).unwrap().organization, "Org 02");
+
+        assert_eq!(def.authors.row_data(2).unwrap().full_name, "Grace Hopper");
+        assert_eq!(def.authors.row_data(2).unwrap().organization, "Org 03");
     }
 
     #[test]
     fn project_template_to_def_leaves_author_empty_when_no_authors_are_set() {
         let def = project_template_to_def(0, &template_with_meta(MetaData::default(), 0));
 
-        assert_eq!(def.author.as_str(), "");
-        assert_eq!(def.co_authors.as_str(), "");
+        assert_eq!(def.authors.row_count(), 0);
     }
 
     #[test]
@@ -1104,66 +1346,87 @@ mod tests {
     use crate::editor::viewport_controller::ViewportController;
 
     fn make_controller() -> (Arc<UiState>, Arc<ProjectController>) {
-        let ui_state = test_ui_state();
-        let viewport_controller = Arc::new(ViewportController::new(
+        make_controller_on(
             slint::Weak::default(),
-            ui_state.clone(),
-        ));
+            slint::Weak::default(),
+            test_ui_state(),
+        )
+    }
+
+    /// All controllers wired to `ui` (a dead `Weak` for project-state-only
+    /// tests, a real window for UI tests).
+    pub(crate) fn make_controller_on(
+        ui: slint::Weak<AppWindow>,
+        results_ui: slint::Weak<crate::ResultsWindow>,
+        ui_state: Arc<UiState>,
+    ) -> (Arc<UiState>, Arc<ProjectController>) {
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
         let object_list_controller = Arc::new(ObjectListController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             viewport_controller.clone(),
         ));
         let image_list_controller = Arc::new(ImagesListController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             viewport_controller.clone(),
             Arc::new(HistogramController::new(
-                slint::Weak::default(),
+                ui.clone(),
                 ui_state.clone(),
                 viewport_controller.clone(),
             )),
             Arc::new(ImageMetaController::new(
-                slint::Weak::default(),
+                ui.clone(),
                 ui_state.clone(),
                 viewport_controller.clone(),
             )),
             object_list_controller.clone(),
+            Arc::new(
+                crate::editor::classification_controller::ClassificationController::new(
+                    ui.clone(),
+                    ui_state.clone(),
+                    object_list_controller.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
         ));
         let project_settings_controller = Arc::new(ProjectSettingsController::new(
-            slint::Weak::default(),
-            slint::Weak::default(),
+            ui.clone(),
+            results_ui.clone(),
             ui_state.clone(),
         ));
         let classification_controller = Arc::new(ClassificationController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             object_list_controller.clone(),
             viewport_controller.clone(),
         ));
-        let template_controller = Arc::new(TemplateController::new(
-            slint::Weak::default(),
-            ui_state.clone(),
-        ));
+        let template_controller = Arc::new(TemplateController::new(ui.clone(), ui_state.clone()));
         let pipelines_controller = Arc::new(PipelinesController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             object_list_controller.clone(),
             viewport_controller.clone(),
             template_controller.clone(),
+            crate::editor::test_support::test_focus_controller(
+                ui.clone(),
+                &ui_state,
+                &object_list_controller,
+                &viewport_controller,
+            ),
         ));
         let results_table_controller = Arc::new(ResultsStateController::new(
-            slint::Weak::default(),
+            results_ui.clone(),
             ui_state.clone(),
             image_list_controller.clone(),
         ));
         let results_list_controller = Arc::new(ResultsListController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             results_table_controller,
         ));
         let controller = Arc::new(ProjectController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             image_list_controller,
             project_settings_controller,
@@ -1173,6 +1436,80 @@ mod tests {
             template_controller,
         ));
         (ui_state, controller)
+    }
+
+    /// A worker on a free port serving this machine, and a client of it.
+    fn remote_backend() -> Arc<dyn Backend> {
+        use evanalyzer_app::backends::remote::{RemoteBackend, Worker};
+        let worker = Worker::bind("127.0.0.1:0", "t".into()).unwrap();
+        let url = format!("ws://{}", worker.local_addr().unwrap());
+        std::thread::spawn(move || {
+            worker.run(Arc::new(
+                evanalyzer_app::backends::local::LocalBackend::default(),
+            ))
+        });
+        Arc::new(RemoteBackend::connect(&url, "t").unwrap())
+    }
+
+    #[test]
+    fn switching_to_a_server_closes_the_project_and_disconnecting_comes_back() {
+        let (ui_state, controller) = make_controller();
+        let local = ui_state.backend();
+        {
+            let mut project = ui_state.get_project_write();
+            project.meta.name = "Local project".to_string();
+        }
+        ui_state.mark_dirty();
+
+        let remote = remote_backend();
+        controller.switch_backend(Arc::clone(&remote));
+        assert!(ui_state.backend().is_remote());
+        assert!(
+            ui_state.get_project().meta.name.is_empty(),
+            "project closed"
+        );
+        assert!(!ui_state.is_dirty());
+
+        controller.run_pending_action(PendingAction::Disconnect);
+        assert!(!ui_state.backend().is_remote());
+        assert!(
+            Arc::ptr_eq(&ui_state.backend(), &local),
+            "this computer's backend"
+        );
+        for _ in 0..200 {
+            if !remote.is_connected() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!remote.is_connected(), "the server connection is closed");
+    }
+
+    #[test]
+    fn connecting_is_refused_while_an_analysis_runs_on_this_computer() {
+        let (ui_state, controller) = make_controller();
+        ui_state.mark_dirty();
+        controller
+            .pipelines_controller
+            .analysis_running
+            .store(true, Ordering::SeqCst);
+
+        controller.request_connect();
+
+        assert!(
+            controller.pending_action.lock().unwrap().is_none(),
+            "not even asked about unsaved changes"
+        );
+        assert!(!ui_state.backend().is_remote());
+    }
+
+    #[test]
+    fn disconnecting_locally_does_nothing() {
+        let (ui_state, controller) = make_controller();
+        ui_state.mark_dirty();
+        controller.request_disconnect();
+        assert!(controller.pending_action.lock().unwrap().is_none());
+        assert!(ui_state.is_dirty());
     }
 
     #[test]
@@ -1239,6 +1576,71 @@ mod tests {
             ui_state.get_project().meta.name,
             "should not be overwritten"
         );
+    }
+
+    #[test]
+    fn opening_a_project_shows_its_images_in_the_list() {
+        // What `--project` does at startup, too.
+        use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+        use crate::helper::ui_thread::drain_ui_queue;
+        use slint::Model;
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        let (_, controller) =
+            make_controller_on(ui.as_weak(), results_ui.as_weak(), ui_state.clone());
+        let image = crate::editor::test_support::fixture_image_path();
+        let mut settings = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
+        settings.images.root = Some(image.parent().unwrap().to_path_buf());
+        let name = std::path::PathBuf::from(image.file_name().unwrap());
+        settings.images.list.insert(
+            name.clone(),
+            evanalyzer_cfg::settings::images_settings::ImageEntry {
+                rel_path: name,
+                ..Default::default()
+            },
+        );
+        let path = temp_project_file(&settings);
+
+        controller.clone().open_new_project(&path);
+        drain_ui_queue();
+
+        assert_eq!(
+            ui.global::<crate::ImagesListState>()
+                .get_images_list()
+                .row_count(),
+            1
+        );
+        assert_eq!(
+            ui_state.get_project().tmp_settings.current_project.as_ref(),
+            Some(&path)
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn after_opening_another_project_there_is_nothing_to_undo() {
+        let (ui_state, controller) = make_controller();
+        ui_state.get_project_write().meta.name = "Project A".to_string();
+        let mut settings = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
+        settings.meta.name = "Project B".to_string();
+        let path = temp_project_file(&settings);
+
+        controller.clone().open_new_project(&path);
+
+        assert!(!ui_state.undo(), "Project A's steps are gone");
+        assert_eq!(ui_state.get_project().meta.name, "Project B");
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_new_project_starts_without_undo_steps() {
+        let (ui_state, controller) = make_controller();
+        ui_state.get_project_write().meta.name = "Project A".to_string();
+
+        controller.clone().create_new_project();
+
+        assert!(!ui_state.undo());
+        assert!(ui_state.get_project().meta.name.is_empty());
     }
 
     #[test]
@@ -1397,5 +1799,420 @@ mod tests {
         assert!(path.exists());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // -- toolbar and dialogs, with a window ---------------------------------
+
+    use crate::editor::test_support::{choose_file, test_ui_windows, ui_state_with_windows};
+    use crate::helper::ui_thread::drain_ui_queue;
+    use evanalyzer_app::project::ProjectWithRuntime;
+
+    struct Window {
+        ui: AppWindow,
+        _results_ui: crate::ResultsWindow,
+        ui_state: Arc<UiState>,
+        controller: Arc<ProjectController>,
+        dir: tempfile::TempDir,
+    }
+
+    fn with_window(project: ProjectWithRuntime) -> Window {
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, project);
+        let (ui_state, controller) =
+            make_controller_on(ui.as_weak(), results_ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        controller.template_controller.attach_callbacks();
+        Window {
+            ui,
+            _results_ui: results_ui,
+            ui_state,
+            controller,
+            dir: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    fn pipeline(id: u32, name: &str) -> PipelineSettings {
+        PipelineSettings {
+            id: PipelineId(id),
+            name: name.into(),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![],
+        }
+    }
+
+    fn project_with_pipeline(name: &str) -> ProjectWithRuntime {
+        let mut project = ProjectWithRuntime::default();
+        project.add_pipeline(pipeline(1, name));
+        project
+    }
+
+    impl Window {
+        fn dialog(&self) -> DialogType {
+            self.ui.global::<GlobalAppState>().get_active_dialog()
+        }
+
+        fn toolbar(&self) -> ToolbarState<'_> {
+            self.ui.global::<ToolbarState>()
+        }
+
+        fn pipeline_names(&self) -> Vec<String> {
+            self.ui_state
+                .get_project()
+                .pipelines
+                .iter()
+                .map(|p| p.name.clone())
+                .collect()
+        }
+
+        /// Writes `project` as an `.evaproj` into the temp dir.
+        fn saved_project(&self, name: &str, project: &ProjectWithRuntime) -> PathBuf {
+            let path = self.dir.path().join(name);
+            std::fs::write(
+                &path,
+                serde_json::to_string_pretty(&project.settings).unwrap(),
+            )
+            .unwrap();
+            path
+        }
+    }
+
+    #[test]
+    fn new_file_on_a_clean_project_starts_a_blank_one() {
+        let w = with_window(project_with_pipeline("Old"));
+        w.ui.global::<ImagesListState>()
+            .set_act_image_root_dir("/old".into());
+        w.toolbar().invoke_new_file_clicked();
+        drain_ui_queue();
+        assert!(w.pipeline_names().is_empty());
+        assert_eq!(
+            w.ui.global::<ImagesListState>().get_act_image_root_dir(),
+            ""
+        );
+        assert!(!w.ui_state.is_dirty());
+    }
+
+    #[test]
+    fn unsaved_changes_ask_first_and_cancel_keeps_the_project() {
+        let w = with_window(project_with_pipeline("Mine"));
+        w.ui_state.mark_dirty();
+        w.toolbar().invoke_new_file_clicked();
+        drain_ui_queue();
+        assert_eq!(w.dialog(), DialogType::UnsavedChangesConfirm);
+        w.ui.global::<UnsavedChangesState>().invoke_cancel();
+        drain_ui_queue();
+        assert_eq!(w.pipeline_names(), ["Mine"]);
+        assert!(w.controller.pending_action.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn discarding_unsaved_changes_runs_the_waiting_action() {
+        let w = with_window(project_with_pipeline("Mine"));
+        w.ui_state.mark_dirty();
+        w.toolbar().invoke_new_file_clicked();
+        w.ui.global::<UnsavedChangesState>().invoke_discard();
+        drain_ui_queue();
+        assert!(w.pipeline_names().is_empty());
+    }
+
+    #[test]
+    fn saving_from_the_unsaved_changes_dialog_saves_then_runs_the_action() {
+        let w = with_window(project_with_pipeline("Mine"));
+        let path = w.dir.path().join("mine.evaproj");
+        w.ui_state.get_project_write().tmp_settings.current_project = Some(path.clone());
+        w.ui_state.mark_dirty();
+        w.toolbar().invoke_new_file_clicked();
+        w.ui.global::<UnsavedChangesState>().invoke_save();
+        drain_ui_queue();
+        assert!(path.exists(), "saved first");
+        assert!(w.pipeline_names().is_empty(), "then the new project");
+    }
+
+    #[test]
+    fn saving_without_a_path_asks_for_one() {
+        let w = with_window(project_with_pipeline("Mine"));
+        w.ui_state.mark_dirty();
+        w.toolbar().invoke_save_file_clicked();
+        let path = w.dir.path().join("picked.evaproj");
+        choose_file(&w.ui, &path);
+        assert!(path.exists());
+        assert!(!w.ui_state.is_dirty());
+        assert_eq!(
+            w.ui_state.get_project().tmp_settings.current_project,
+            Some(path)
+        );
+    }
+
+    #[test]
+    fn cancelling_the_save_dialog_keeps_the_pending_action() {
+        let w = with_window(project_with_pipeline("Mine"));
+        w.ui_state.mark_dirty();
+        w.toolbar().invoke_new_file_clicked();
+        w.ui.global::<UnsavedChangesState>().invoke_save();
+        drain_ui_queue();
+        w.ui.global::<crate::FileBrowserState>().invoke_cancel();
+        drain_ui_queue();
+        assert_eq!(w.pipeline_names(), ["Mine"]);
+        assert!(w.controller.pending_action.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn save_as_writes_to_the_chosen_file_and_starts_next_to_the_current_one() {
+        let w = with_window(project_with_pipeline("Mine"));
+        let first = w.dir.path().join("first.evaproj");
+        w.ui_state.get_project_write().tmp_settings.current_project = Some(first.clone());
+        w.ui_state.mark_dirty();
+        w.toolbar().invoke_save_as_file_clicked();
+        drain_ui_queue();
+        let browser = w.ui.global::<crate::FileBrowserState>();
+        assert_eq!(browser.get_file_name(), "first.evaproj", "prefilled");
+        let second = w.dir.path().join("second.evaproj");
+        choose_file(&w.ui, &second);
+        assert!(second.exists());
+        assert!(!w.ui_state.is_dirty());
+    }
+
+    #[test]
+    fn opening_a_project_file_loads_it() {
+        let w = with_window(ProjectWithRuntime::default());
+        let path = w.saved_project("other.evaproj", &project_with_pipeline("From disk"));
+        w.toolbar().invoke_open_file_clicked();
+        choose_file(&w.ui, &path);
+        assert_eq!(w.pipeline_names(), ["From disk"]);
+        assert!(!w.ui_state.is_dirty());
+        let pipelines = w.ui.global::<PipelinesPanelState>().get_pipelines();
+        assert_eq!(
+            slint::Model::row_count(&pipelines),
+            1,
+            "pipelines panel synced"
+        );
+    }
+
+    #[test]
+    fn opening_a_broken_project_file_shows_a_warning() {
+        let w = with_window(project_with_pipeline("Mine"));
+        let path = w.dir.path().join("broken.evaproj");
+        std::fs::write(&path, "not json").unwrap();
+        w.toolbar().invoke_open_file_clicked();
+        choose_file(&w.ui, &path);
+        assert_eq!(w.dialog(), DialogType::Warning);
+        assert_eq!(
+            w.ui.global::<WarningState>().get_title(),
+            "Cannot open project"
+        );
+        assert_eq!(w.pipeline_names(), ["Mine"]);
+    }
+
+    #[test]
+    fn opening_a_legacy_project_imports_it_and_reports_caveats() {
+        let w = with_window(ProjectWithRuntime::default());
+        let path = w
+            .dir
+            .path()
+            .join(format!("old.{LEGACY_PROJECT_FILE_EXTENSION}"));
+        std::fs::write(
+            &path,
+            r#"{
+                "meta": { "name": "X" },
+                "projectSettings": { "classification": { "classes": [] }, "plate": {} },
+                "imageSetup": {},
+                "pipelines": [ {
+                    "meta": { "name": "Legacy pipeline" },
+                    "pipelineSetup": { "source": "FromMemory", "defaultClassId": "1" },
+                    "pipelineSteps": [
+                        { "$blur": { "mode": "GaussianBlur", "kernelSize": 7, "repeat": 1 } }
+                    ]
+                } ]
+            }"#,
+        )
+        .unwrap();
+        w.toolbar().invoke_open_file_clicked();
+        choose_file(&w.ui, &path);
+        assert_eq!(w.pipeline_names(), ["Legacy pipeline"]);
+        assert!(w.ui_state.is_dirty(), "imported, not yet saved");
+        assert_eq!(w.dialog(), DialogType::Warning);
+        let warning = w.ui.global::<WarningState>();
+        assert!(warning.get_info());
+        assert!(warning.get_message().contains("estimated sigma"));
+    }
+
+    #[test]
+    fn opening_a_broken_legacy_project_shows_a_warning() {
+        let w = with_window(ProjectWithRuntime::default());
+        let path = w
+            .dir
+            .path()
+            .join(format!("old.{LEGACY_PROJECT_FILE_EXTENSION}"));
+        std::fs::write(&path, "{").unwrap();
+        w.toolbar().invoke_open_file_clicked();
+        choose_file(&w.ui, &path);
+        assert_eq!(
+            w.ui.global::<WarningState>().get_title(),
+            "Cannot import legacy project"
+        );
+    }
+
+    fn template(
+        name: &str,
+        category: &str,
+        tags: &[&str],
+        pipelines: Vec<PipelineSettings>,
+    ) -> ProjectTemplate {
+        ProjectTemplate {
+            schema_version: 0,
+            meta: MetaData {
+                name: name.into(),
+                category: category.into(),
+                tags: tags.iter().map(|t| t.to_string()).collect(),
+                ..Default::default()
+            },
+            classification: Default::default(),
+            plate: Default::default(),
+            pipelines,
+        }
+    }
+
+    #[test]
+    fn opening_a_project_template_file_applies_its_pipelines() {
+        let w = with_window(project_with_pipeline("Old"));
+        let path = w
+            .dir
+            .path()
+            .join(format!("t.{PROJECT_FILE_TEMPLATE_EXTENSIONS}"));
+        let t = template("T", "", &[], vec![pipeline(4, "From template")]);
+        std::fs::write(&path, serde_json::to_string(&t).unwrap()).unwrap();
+        w.toolbar().invoke_open_file_clicked();
+        choose_file(&w.ui, &path);
+        assert_eq!(w.pipeline_names(), ["From template"]);
+        assert_eq!(
+            w.ui.global::<PipelinesPanelState>()
+                .get_active_pipeline_id(),
+            4
+        );
+        assert!(w.ui_state.is_dirty());
+
+        // Broken template file (project clean, so no unsaved-changes prompt).
+        w.ui_state.clear_dirty();
+        std::fs::write(&path, "nope").unwrap();
+        w.toolbar().invoke_open_file_clicked();
+        choose_file(&w.ui, &path);
+        assert_eq!(
+            w.ui.global::<WarningState>().get_title(),
+            "Cannot open project template"
+        );
+    }
+
+    #[test]
+    fn opening_an_image_file_opens_it_in_the_viewer() {
+        let w = with_window(ProjectWithRuntime::default());
+        let image = crate::editor::test_support::fixture_image_path();
+        w.toolbar().invoke_open_file_clicked();
+        choose_file(&w.ui, &image);
+        let project = w.ui_state.get_project();
+        assert_eq!(project.get_current_image_path_cloned(), Some(image));
+    }
+
+    #[test]
+    fn project_template_picker_filters_selects_and_applies() {
+        let w = with_window(project_with_pipeline("Old"));
+        w.toolbar().invoke_new_from_project_template_clicked();
+        drain_ui_queue();
+        assert_eq!(w.dialog(), DialogType::ProjectTemplate);
+
+        *w.controller.project_templates.lock().unwrap() = vec![
+            template(
+                "Cells",
+                "Segmentation",
+                &["cells"],
+                vec![pipeline(2, "Cells")],
+            ),
+            template("Empty", "Other", &["misc", "cells"], vec![]),
+        ];
+        let picker = w.ui.global::<ProjectTemplateState>();
+        picker.invoke_select_category(ALL_CATEGORIES.into());
+        let shown = |p: &ProjectTemplateState| slint::Model::row_count(&p.get_templates());
+        assert_eq!(shown(&picker), 2);
+        assert_eq!(slint::Model::row_count(&picker.get_categories()), 3);
+        assert_eq!(slint::Model::row_count(&picker.get_tag_chips()), 2);
+        assert!(!picker.get_filters_active());
+
+        picker.invoke_select_category("Segmentation".into());
+        assert_eq!(shown(&picker), 1);
+        assert!(picker.get_filters_active());
+        picker.invoke_select_category(ALL_CATEGORIES.into());
+        picker.invoke_toggle_tag("misc".into());
+        assert_eq!(shown(&picker), 1);
+        picker.invoke_toggle_tag("misc".into());
+        assert_eq!(shown(&picker), 2);
+
+        picker.invoke_select(0);
+        assert!(picker.get_has_detail());
+        assert_eq!(picker.get_detail().name, "Cells");
+        picker.invoke_select(9);
+
+        picker.invoke_confirm(0);
+        drain_ui_queue();
+        assert_eq!(w.pipeline_names(), ["Cells"]);
+        assert_eq!(w.dialog(), DialogType::None);
+
+        // A template without pipelines clears the pipeline editor.
+        picker.invoke_confirm(1);
+        drain_ui_queue();
+        assert!(w.pipeline_names().is_empty());
+        assert_eq!(
+            w.ui.global::<PipelinesPanelState>()
+                .get_active_pipeline_id(),
+            0
+        );
+
+        picker.invoke_confirm(42); // unknown: ignored
+        w.ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::ProjectTemplate);
+        picker.invoke_cancel();
+        assert_eq!(w.dialog(), DialogType::None);
+    }
+
+    #[test]
+    fn save_project_as_template_opens_the_metadata_dialog_with_the_project_name() {
+        let mut project = project_with_pipeline("P");
+        project.meta.name = "My study".into();
+        let w = with_window(project);
+        w.toolbar().invoke_save_project_as_template_clicked();
+        assert_eq!(w.dialog(), DialogType::TemplateMeta);
+        assert_eq!(
+            w.ui.global::<crate::TemplateMetaState>().get_meta().name,
+            "My study"
+        );
+    }
+
+    #[test]
+    fn citation_export_writes_the_chosen_markdown_file() {
+        let w = with_window(project_with_pipeline("P"));
+        w.toolbar().invoke_cite_project_clicked();
+        let path = w.dir.path().join("citation.md");
+        choose_file(&w.ui, &path);
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn closing_the_window_with_unsaved_changes_asks_first() {
+        let w = with_window(project_with_pipeline("P"));
+        w.ui_state.mark_dirty();
+        w.ui.window()
+            .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+        drain_ui_queue();
+        assert_eq!(w.dialog(), DialogType::UnsavedChangesConfirm);
+        // Discarding then quits (hides the window).
+        w.ui.global::<UnsavedChangesState>().invoke_discard();
+        drain_ui_queue();
+        assert!(w.controller.pending_action.lock().unwrap().is_none());
+
+        let clean = with_window(project_with_pipeline("P"));
+        clean
+            .ui
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+        assert_eq!(clean.dialog(), DialogType::None);
     }
 }

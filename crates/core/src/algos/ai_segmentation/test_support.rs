@@ -18,6 +18,12 @@
 //! `[1, C, H, W]` tensor), but not the "output wrapped in a tuple/list of
 //! several tensors" convention some real exports use - that branch stays
 //! covered only by manual review, not a test.
+//!
+//! A second pitfall: a tensor *created* inside the traced closure (e.g.
+//! `Tensor::from_slice(&[...])`) is saved as zeros - its values are not part
+//! of the trace. Build constant outputs from the input with plain numbers
+//! instead (`x.mean(..) * 0.0 + v`), which the trace keeps (see
+//! `yolov5`'s `centre_box_model`).
 
 #![cfg(test)]
 

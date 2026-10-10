@@ -1,0 +1,53 @@
+# EVAnalyzer users file - complete example, for users.source = "file":
+#
+#   [users]
+#   source = "file"
+#   [users.file]
+#   path = "/etc/evanalyzer/users.toml"
+#
+# One [[user]] table per account. These accounts exist only for EVAnalyzer -
+# they don't need a system account; their workers run as the server's
+# account, confined to their allowed_dirs. Keep this file readable by the
+# server only (chmod 600 - the server warns otherwise). Changes apply on
+# restart. Parsed by the server's tests, so it always matches the code.
+#
+# The example passwords are all "correct horse" - replace every hash.
+
+[[user]]
+# Identifies the account inside EVAnalyzer, unique in this file. Any
+# non-empty string; never change or reuse it - a changed id is a new user.
+id = "1"
+# Login name, unique in this file. Only used to log in, so it can be
+# changed freely (the account keeps its id, and with it its session).
+name = "alice"
+# The password, hashed: create one with `evanalyzer hash-password` (Argon2id).
+# Other formats: see "Passwords" in docs/server.md.
+password = "$argon2id$v=19$m=19456,t=2,p=1$ZXZhZG9jc2V4YW1wbGU$FS5z8oxaPKUzPmSh8U9nWlwdVYAS8MueODWNEJ386UM"
+# Absolute home folder: the worker's working directory, where it keeps the
+# user's settings and templates.
+home = "/srv/evanalyzer/alice"
+# Folders the worker may read and write ({home} = home above). Optional -
+# default: users.default_allowed_dirs from the server config.
+allowed_dirs = ["{home}", "/data/microscopy/shared"]
+
+[[user]]
+id = "2"
+name = "bob"
+# bcrypt, e.g. from `htpasswd -nbBC 12 "" '<password>'`.
+password = "$2b$12$SudwnoGK/MamRACwE78vGecr7Nl64d/hqRGom.QaA4Q2eleG/quV2"
+home = "/srv/evanalyzer/bob"
+
+[[user]]
+id = "3"
+name = "carol"
+# sha512-crypt, from `openssl passwd -6`.
+password = "$6$LhnY5eqgddU5Y3Eh$2U/PMoBMCFxE1oy1tChDRVAiOyk.EfIIAO2.q2Y3l0VHoU9R68.58b7c380cZhxQF8fK7T3/E41XLcqhnvjJj."
+home = "/srv/evanalyzer/carol"
+allowed_dirs = ["{home}"]
+
+# Plain text is accepted for testing (the server warns at startup):
+# [[user]]
+# id = "test"
+# name = "test"
+# password = "plain:correct horse"
+# home = "/tmp/evanalyzer-test"

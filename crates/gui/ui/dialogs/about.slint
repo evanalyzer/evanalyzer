@@ -241,6 +241,12 @@ export component AboutDialog inherits Rectangle {
     // state - the underlying model never changes, only what's shown expanded.
     property <int> expanded-third-party-index: -1;
 
+    // Fresh every time the dialog opens: in remote mode the numbers come
+    // from the worker, whose connection may have changed since startup.
+    init => {
+        AppInfoState.refresh_system_info();
+    }
+
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
@@ -456,27 +462,47 @@ export component AboutDialog inherits Rectangle {
                     }
                 }
 
-                // -- System: 3-column stat grid -----------------------------------
+                // -- System: where the work runs + 4-column stat grid ---------------
                 if (root.current-tab == 2): VerticalLayout {
                     alignment: start;
+                    spacing: 10px;
+
+                    Text {
+                        text: "Computing on: " + AppInfoState.system_source;
+                        font-size: 11px;
+                        color: Theme.text-mute;
+                        wrap: word-wrap;
+                    }
+
+                    if AppInfoState.system_error != "": Text {
+                        text: AppInfoState.system_error;
+                        font-size: 11px;
+                        color: Theme.warn;
+                        wrap: word-wrap;
+                    }
 
                     HorizontalLayout {
                         spacing: 10px;
 
                         InfoStat {
+                            label: "OPERATING SYSTEM";
+                            value: AppInfoState.system_loading ? "…" : AppInfoState.system_os;
+                        }
+
+                        InfoStat {
                             label: "CPU CORES";
-                            value: "\{AppInfoState.cpu_cores}";
+                            value: AppInfoState.system_loading ? "…" : "\{AppInfoState.cpu_cores}";
                         }
 
                         InfoStat {
                             label: "AVAILABLE RAM";
-                            value: AppInfoState.ram_total;
+                            value: AppInfoState.system_loading ? "…" : AppInfoState.ram_total;
                         }
 
                         InfoStat {
                             label: "CUDA (GPU)";
-                            value: AppInfoState.cuda_available ? "Available" : "Not available";
-                            value_color: AppInfoState.cuda_available ? Theme.ok : Theme.text-mute;
+                            value: AppInfoState.system_loading ? "Checking…" : (AppInfoState.cuda_available ? "Available" : "Not available");
+                            value_color: AppInfoState.cuda_available && !AppInfoState.system_loading ? Theme.ok : Theme.text-mute;
                         }
                     }
                 }

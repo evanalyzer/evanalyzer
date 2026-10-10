@@ -108,14 +108,17 @@ pub struct IlluminationCorrection {
     pub block_size: usize,
 
     /// Smoothing applied to the block-reduced field to remove blockiness.
+    #[cmdsmeta(visibility = Advanced)]
     pub smoothing: SmoothingMethod,
 
     /// How the field is combined with the original image.
+    #[cmdsmeta(visibility = Advanced)]
     pub apply_method: ApplyMethod,
 
     /// Stretch the corrected image's intensities to fill the full
     /// `[0.0, 1.0]` range afterward - guards against `Divide` pushing
     /// previously-dim regions above `1.0`.
+    #[cmdsmeta(visibility = Advanced)]
     pub rescale: bool,
 }
 
@@ -195,8 +198,8 @@ impl ImageAlgorithm for IlluminationCorrection {
         "Illumination Correction"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::CELLPROFILER]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -568,13 +571,10 @@ mod tests {
     use super::*;
     use crate::{ImageContainer, image::PixelSizes, pipeline::pipeline::PipelineImageMeta};
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
     use std::path::PathBuf;
 
     fn ctx_from_gray(width: usize, height: usize, data: Vec<f32>) -> PipelineContext {
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
-                .unwrap();
+        let image = Image::<f32, 1>::new(ImageSize { width, height }, data).unwrap();
         PipelineContext::new_from_image(
             PathBuf::default(),
             PipelineImageMeta {
@@ -668,9 +668,7 @@ mod tests {
             }
         }
 
-        let image =
-            Image::<f32, 3, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
-                .unwrap();
+        let image = Image::<f32, 3>::new(ImageSize { width, height }, data).unwrap();
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
             PipelineImageMeta {

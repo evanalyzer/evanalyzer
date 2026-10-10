@@ -7,6 +7,7 @@ mod filters;
 mod math;
 mod morphology;
 mod object;
+mod script;
 mod segmentation;
 mod spartial_transform;
 
@@ -22,6 +23,11 @@ pub use self::ai_segmentation::stardist::Stardist;
 pub use self::ai_segmentation::unet::UNet;
 #[cfg(feature = "ai")]
 pub use self::ai_segmentation::unet::UNetOutputMode;
+#[cfg(feature = "ai")]
+pub use self::ai_segmentation::yolov5::YoloClassMapping;
+#[cfg(feature = "ai")]
+pub use self::ai_segmentation::yolov5::Yolov5;
+
 pub use self::filters::blur::Blur;
 pub use self::filters::blur_gaussian::GaussianBlur;
 pub use self::filters::color_filter::ColorFilterCommand;
@@ -53,6 +59,7 @@ pub use self::math::median_subtract::MedianSubtract;
 pub use self::math::save_image::ImageSource;
 pub use self::math::save_image::SaveImage;
 pub use self::morphology::fill_holes::FillHoles;
+pub use self::morphology::fill_object_holes::FillObjectHoles;
 pub use self::morphology::morphological_transformation::KernelShapes;
 pub use self::morphology::morphological_transformation::MorphOps;
 pub use self::morphology::morphological_transformation::MorphologicalCommand;
@@ -64,15 +71,20 @@ pub use self::object::ai_object_classifier::AiObjectClassifier;
 pub use self::object::ai_object_classifier::ClassificationMapping;
 pub use self::object::classify_objects::ClassifyMatchHandling;
 pub use self::object::classify_objects::ClassifyObjects;
+pub use self::object::classify_objects::IntensityComparison;
+pub use self::object::classify_objects::IntensityFilter;
+pub use self::object::classify_objects::IntensityMetric;
 pub use self::object::coloc_objects::ColocMultiplicity;
 pub use self::object::coloc_objects::Colocalization;
 pub use self::object::extract_objects::ExtractObjects;
+pub use self::object::load_annotaed_objects::LoadAnnotatedObjects;
 pub use self::object::object_math::ObjectMath;
 pub use self::object::object_math::ObjectSetOperation;
 pub(crate) use self::object::tile_merge::{Connectivity, TileMerge, touches_tile_edge};
 pub use self::object::transform_objects::TransformFunction;
 pub use self::object::transform_objects::TransformObjects;
 pub use self::object::voronoi::Voronoi;
+pub use self::script::script_executor::Script;
 pub use self::segmentation::connected_components::ConnectedComponents;
 pub use self::segmentation::threshold::Averaging;
 pub use self::segmentation::threshold::OtsuClasses;
@@ -104,7 +116,7 @@ pub trait ImageAlgorithm: Send + Sync {
         cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors>;
     fn name(&self) -> &'static str;
-    fn cite(&self) -> Option<&'static CitationMetadata>;
+    fn cite(&self) -> Vec<&'static CitationMetadata>;
     fn execution_scope(&self) -> ExecutionScope;
 
     /// Override to `false` only for the rare command that reads `scratch_pad`
@@ -113,6 +125,14 @@ pub trait ImageAlgorithm: Send + Sync {
     /// time would destroy the data it's about to read.
     fn scratch_is_workspace(&self) -> bool {
         true
+    }
+
+    /// `true` for commands that read `GlobalPipelineCache::annotated_objects`
+    /// (the user's hand-annotated objects). The executor only fills that, and
+    /// only runs the whole-image phase without any segmented objects, when a
+    /// job contains such a command.
+    fn uses_annotated_objects(&self) -> bool {
+        false
     }
 
     /// Entry point pipeline dispatchers should call instead of [`Self::execute`]

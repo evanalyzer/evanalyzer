@@ -206,6 +206,108 @@ Then run the `evanalyzer` binary as for the CPU build. A matching NVIDIA driver
 
 ---
 
+## Running an EVAnalyzer server
+
+`evanalyzer server` lets EVAnalyzer on other computers log in and work on this
+machine: projects, images and results stay here, and the analysis runs here
+(e.g. on a GPU workstation). Each user gets their own worker process, confined
+to the folders they may use. Connections are encrypted (TLS) out of the box.
+Users, folders, encryption and limits are configured in one TOML file - see
+[docs/server.md](docs/server.md) and the commented example
+[docs/server.toml](docs/server.toml).
+
+Clients connect with
+
+```sh
+evanalyzer --remote wss://<server>:7400 --user <name> --remote-fingerprint <SHA256>
+```
+
+where the fingerprint is the one the server logs at startup
+(`Clients connect with wss:// - certificate fingerprint …`).
+
+### As a systemd service (Linux)
+
+1. **Install** the release archive, e.g. to `/opt/evanalyzer` (the bundled
+   libraries must stay next to the binary):
+
+   ```sh
+   sudo mkdir -p /opt/evanalyzer
+   sudo tar xzf evanalyzer-linux-x86_64.tar.gz -C /opt/evanalyzer
+   ```
+
+2. **Configure** `/etc/evanalyzer/server.toml` - start from
+   [docs/server.toml](docs/server.toml). Set at least `listen = "0.0.0.0:7400"`
+   and the users (`[users]`). For the paths used by the unit below, also set
+
+   ```toml
+   session_store = "/run/evanalyzer/sessions.json"
+
+   [tls]
+   self_signed_dir = "/var/lib/evanalyzer/tls"
+   ```
+
+   Create password hashes with `/opt/evanalyzer/evanalyzer hash-password`.
+
+3. **Create** `/etc/systemd/system/evanalyzer.service`:
+
+   ```ini
+   [Unit]
+   Description=EVAnalyzer server
+   Wants=network-online.target
+   After=network-online.target
+
+   [Service]
+   ExecStart=/opt/evanalyzer/evanalyzer server --config /etc/evanalyzer/server.toml
+   # Runs as its own account - right for users.source = "single" or "file".
+   # For users.source = "linux" (log in with system accounts, each worker
+   # running as its user) remove these two lines: that needs root.
+   User=evanalyzer
+   Group=evanalyzer
+   # /run/evanalyzer (session file) and /var/lib/evanalyzer (TLS certificate),
+   # owned by the service account.
+   RuntimeDirectory=evanalyzer
+   RuntimeDirectoryMode=0700
+   StateDirectory=evanalyzer
+   StateDirectoryMode=0700
+   # Workers - and the analyses running in them - must survive a restart of
+   # the server: stop only the server process, and keep the session file the
+   # restarted server finds them by (/run is emptied on reboot anyway).
+   KillMode=process
+   RuntimeDirectoryPreserve=yes
+   Restart=on-failure
+   RestartSec=5
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+4. **Start** it:
+
+   ```sh
+   sudo useradd --system --no-create-home --shell /usr/sbin/nologin evanalyzer  # not for "linux" users
+   sudo chown -R root:evanalyzer /etc/evanalyzer && sudo chmod 640 /etc/evanalyzer/*.toml
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now evanalyzer
+   journalctl -u evanalyzer -f        # the log - including the TLS fingerprint
+   ```
+
+   Open port 7400/tcp in the firewall (e.g. `sudo ufw allow 7400/tcp`).
+
+**Notes**
+
+- With `User=evanalyzer`, workers run as that account: it needs read/write
+  access to the users' home folders and `allowed_dirs`.
+- `systemctl restart evanalyzer` (or stop + start) keeps running workers and
+  analyses (`KillMode=process`): the server finds them again. Idle workers end
+  by themselves after `workers.idle_timeout_minutes`. To stop everything at
+  once, e.g. before an update of the binary:
+  `sudo systemctl kill --signal=SIGTERM evanalyzer` (stops workers too, and
+  with them any running analysis).
+- On a reboot `/run` is emptied and all workers are gone anyway; users simply
+  log in again.
+
+---
+
 ## Command-Line Interface (CLI)
 
 Besides the GUI, the `evanalyzer` binary has a headless batch mode for scripting,
@@ -290,6 +392,8 @@ All `export` and `view` subcommands accept `--image <name>`, `--class <name>`
 | `export chart histogram/scatter/heatmap` | Render a results database to a chart PNG |
 | `view` | Print a quick summary and a page of rows from a results database |
 | `columns` | List the column ids available for `--group-by` / chart axes |
+| `jobs` | List the analyses on the `--remote` server (running and recently ended) |
+| `attach` | Follow an analysis on the `--remote` server again, e.g. after the connection dropped |
 
 ---
 

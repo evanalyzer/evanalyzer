@@ -78,7 +78,9 @@ component ChannelRow inherits Rectangle {
                     height: 14px;
                     border-radius: 3px;
                     background: active ? root.channel-color(idx) : transparent;
-                    border-width: active ? 0 : 1.5px;
+                    // A thin edge when active, so a white swatch (grayscale
+                    // mode, channels without colour) shows on a light panel.
+                    border-width: active ? 1px : 1.5px;
                     border-color: Theme.border;
                     TouchArea {
                         clicked => {
@@ -148,7 +150,7 @@ component ChannelRow inherits Rectangle {
 // ---------- Channel list ----------
 export component ChannelList inherits ScrollView {
     height: Math.min(180px, layout.preferred-height + 4px);
-    viewport-height: layout.preferred-height;
+    content-height: layout.preferred-height;
 
     layout := VerticalLayout {
         spacing: 2px;
@@ -504,17 +506,39 @@ export component ImageControlPanel inherits Rectangle {
         VerticalLayout {
             spacing: 8px;
             HorizontalLayout {
-                alignment: space-between;
+                spacing: 16px;
                 SectionTitle {
                     text: "CHANNELS";
+                    font-size: 10.5px;
+                    font-weight: 600;
+                    letter-spacing: 0.8px;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
                 }
 
                 Text {
-                    text: "\{root.active-channel-count()}/\{ChannelState.channels.length}";
+                    text: "\{ChannelState.active_count}/\{ChannelState.channels.length}";
                     font-size: 10.5px;
                     font-family: Theme.font-mono;
                     color: Theme.text-mute;
                     vertical-alignment: center;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    Button {
+                        text: "Grayscale";
+                        height: 22px;
+                        primary: ChannelState.grayscale ? true : false;
+                        clicked => {
+                            ChannelState.grayscale = !ChannelState.grayscale;
+                            ChannelState.grayscale_toggled(ChannelState.grayscale);
+                        }
+                    }
                 }
             }
 
@@ -530,13 +554,5 @@ export component ImageControlPanel inherits Rectangle {
         VideoControls {
             t-frame-count: ImageMetaData.nr_t_stacks;
         }
-    }
-
-    // The host should expose this as an in property for accuracy across the
-    // whole pipeline; this stub keeps the file self-contained.
-    pure function active-channel-count() -> int {
-        // Returns 0 by default. Replace with an `in property <int> active-channel-count;`
-        // computed in your Rust/C++ model and bound from the parent.
-        return 0;
     }
 }

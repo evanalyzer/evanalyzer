@@ -75,8 +75,17 @@ impl ImageAlgorithm for EdgeDetectionSobel {
         "Edge Detection Sobel"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
+            cite_key: "sobel1968isotropic",
+            title: "A 3x3 Isotropic Gradient Operator for Image Processing",
+            authors: &["Irwin Sobel", "Gary Feldman"],
+            year: 1968,
+            container: Some("Talk at the Stanford Artificial Intelligence Project"),
+            doi: None,
+            url: None,
+            pages: None,
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -91,7 +100,6 @@ mod tests {
     use super::*;
     use kornia_image::Image;
     use kornia_image::ImageSize;
-    use kornia_tensor::CpuAllocator;
 
     #[test]
     fn test_sobel_vertical_edge() {
@@ -108,7 +116,7 @@ mod tests {
             }
         }
 
-        let input_img = Image::new(size, data, CpuAllocator).unwrap();
+        let input_img = Image::new(size, data).unwrap();
         let sobel_algo = EdgeDetectionSobel { kernel_size: 3 };
 
         // Mock context
@@ -141,13 +149,12 @@ mod tests {
     fn test_sobel_format_mismatch_error() {
         // 1. Create a 5x5 RGB image (Unsupported input type for Sobel)
         let image_data = vec![0.0f32; 25 * 3];
-        let input_img = Image::<f32, 3, CpuAllocator>::from_size_slice(
+        let input_img = Image::<f32, 3>::from_size_slice(
             ImageSize {
                 width: 5,
                 height: 5,
             },
             &image_data,
-            CpuAllocator,
         )
         .expect("Failed to create RGB test image");
 
@@ -176,7 +183,7 @@ mod tests {
         let extractor = EdgeDetectionSobel { kernel_size: 3 };
         let name = extractor.name();
         assert_eq!(name, "Edge Detection Sobel");
-        assert!(extractor.cite().is_none());
+        assert_eq!(extractor.cite()[0].cite_key, "sobel1968isotropic");
         assert!(matches!(extractor.execution_scope(), ExecutionScope::Tile));
     }
 }

@@ -8,7 +8,10 @@
 //     [--images N] [--objects-per-image N] [--mode xlsx|csv]
 
 use duckdb::{Connection, params};
-use evanalyzer_app::result::{Column, ExportFormat, ResultExport, ResultsGenerator};
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ExportFormat;
+use evanalyzer_app::results::LocalResultsGenerator;
+use evanalyzer_app::results::ResultExport;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -50,7 +53,7 @@ const CREATE_TABLES: &str = "
         c_stack               INTEGER, z_stack INTEGER, t_stack INTEGER,
         object_id             UUID NOT NULL,
         seg_class_name        VARCHAR, seg_class_id INTEGER,
-        object_class_name     VARCHAR, object_class_id VARCHAR,
+        object_class_name     VARCHAR, object_class_id INTEGER[],
         parent_id              VARCHAR, children VARCHAR, track_id UBIGINT,
         centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
         bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
@@ -63,7 +66,11 @@ const CREATE_TABLES: &str = "
         touches_edge BOOLEAN,
         pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
         image_bit_depth UTINYINT,
-        intensities_json JSON, coloc_json JSON
+        intensity_sum_normalized DOUBLE[], intensity_sum_gray DOUBLE[],
+        intensity_mean_normalized DOUBLE[], intensity_mean_gray DOUBLE[],
+        intensity_min_normalized DOUBLE[], intensity_min_gray DOUBLE[],
+        intensity_max_normalized DOUBLE[], intensity_max_gray DOUBLE[],
+        coloc_partner_ids MAP(INTEGER, UUID[])
     );
     CREATE TABLE images (
         image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
@@ -212,8 +219,15 @@ fn seed_object(app: &mut duckdb::Appender, name: &str, idx: u64, i: usize) {
         1.0,
         1.0,
         8u8,
-        "{}",
-        "{}",
+        "[]", // intensity_* (no channels measured)
+        "[]",
+        "[]",
+        "[]",
+        "[]",
+        "[]",
+        "[]",
+        "[]",
+        "{}", // coloc_partner_ids
     ])
     .expect("append row");
 }
@@ -249,7 +263,7 @@ fn main() {
         start.elapsed().as_secs_f64(),
     );
 
-    let database = ResultsGenerator::open_database(db_path.clone()).expect("open database");
+    let database = LocalResultsGenerator::open_database(db_path.clone()).expect("open database");
     let columns = vec![
         Column::AreaSizePx,
         Column::PerimeterPx,

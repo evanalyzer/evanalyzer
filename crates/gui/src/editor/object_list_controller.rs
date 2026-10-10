@@ -2,9 +2,9 @@ use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::color_generators::get_colors_from_class;
 use crate::{AppWindow, ObjectItemDataSlint, ObjectListState};
-use evanalyzer_app::ProjectWithRuntime;
-use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, SegmentationClass};
+use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::ProjectWithRuntime;
+use evanalyzer_cfg::core_types::{ObjectId, SegmentationClass, max_gray_value};
 use evanalyzer_cfg::settings::images_settings::PixelSizeSettings;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use log::warn;
@@ -14,6 +14,7 @@ use slint::{ModelRc, SharedString};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+
 struct ObjectModalBridge {
     app_state: Arc<UiState>,
     notify: ModelNotify,
@@ -26,6 +27,9 @@ struct ObjectModalBridge {
     /// existing selection/edit callbacks (which index into the unfiltered list) keep
     /// working unchanged.
     visible_rows: Vec<usize>,
+    /// Bit depth of the current image - precomputed at bridge creation so
+    /// `row_data` doesn't look up the image metadata once per row.
+    nr_of_bits: Option<u16>,
 }
 
 /// Resolves a Slint 1-based `object_id` (as sent by every `ObjectListState`
@@ -35,7 +39,7 @@ struct ObjectModalBridge {
 /// the *combined* (manual ++ preview) list, not the manual list alone, so
 /// every callback must resolve it this way rather than indexing straight
 /// into `get_objects()`.
-fn resolve_object_id(project: &ProjectWithRuntime, object_id: i32) -> Option<ObjectId> {
+pub(crate) fn resolve_object_id(project: &ProjectWithRuntime, object_id: i32) -> Option<ObjectId> {
     if object_id <= 0 {
         return None;
     }
@@ -87,49 +91,6 @@ impl ObjectListController {
                     manager.sync_selected_object_to_slint(false);
                     manager.viewport_controller.trigger_image_redraw_objects();
                 });
-
-            // Add class to object
-            let manager = self.clone();
-            ui.global::<ObjectListState>()
-                .on_object_add_class(move |object_id| {
-                    let mut project = manager.app_state.get_project_write();
-                    if let Some(id) = resolve_object_id(&project, object_id) {
-                        let class_id = project.get_selected_object_class();
-                        project.add_class_to_object(id, class_id);
-                    }
-                    manager.sync_selected_object_to_slint(false);
-                    manager.sync_objects_to_slint();
-                    manager.viewport_controller.trigger_image_redraw_objects();
-                });
-
-            // Remove class from object
-            let manager = self.clone();
-            ui.global::<ObjectListState>()
-                .on_object_remove_class(move |object_id, class_id| {
-                    let mut project = manager.app_state.get_project_write();
-                    if let Some(id) = resolve_object_id(&project, object_id) {
-                        let class_id = ObjectClass::Valid(class_id as u32);
-                        project.remove_class_from_object(id, &class_id);
-                    }
-                    manager.sync_selected_object_to_slint(false);
-                    manager.sync_objects_to_slint();
-                    manager.viewport_controller.trigger_image_redraw_objects();
-                });
-
-            // Delete object
-            let manager = self.clone();
-            ui.global::<ObjectListState>()
-                .on_object_delete(move |object_id| {
-                    let mut project = manager.app_state.get_project_write();
-                    if let Some(id) = resolve_object_id(&project, object_id) {
-                        project.delete_object(id);
-                    }
-                    project.set_selected_object(None);
-                    drop(project);
-                    manager.app_state.mark_dirty();
-                    manager.sync_objects_to_slint();
-                    manager.viewport_controller.trigger_image_redraw_objects();
-                });
         }
     }
 
@@ -137,15 +98,17 @@ impl ObjectListController {
         let ui_weak = self.ui.clone();
         let bridge_ptr = self.clone();
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let label_counts = precompute_label_counts(&bridge_ptr.app_state);
                 let visible_rows = compute_visible_rows(&bridge_ptr.app_state);
+                let nr_of_bits = current_image_nr_of_bits(&bridge_ptr.app_state);
                 let bridge = Rc::new(ObjectModalBridge {
                     app_state: bridge_ptr.app_state.clone(),
                     notify: ModelNotify::default(),
                     label_counts,
                     visible_rows,
+                    nr_of_bits,
                 });
                 let model_rc = ModelRc::new(bridge);
                 ui.global::<ObjectListState>().set_object_list(model_rc);
@@ -158,9 +121,11 @@ impl ObjectListController {
     pub fn sync_selected_object_to_slint(self: &Arc<Self>, scroll_to: bool) {
         let ui_weak = self.ui.clone();
         let bridge_ptr = self.clone();
-        if let Err(e) = slint::invoke_from_event_loop(move || {
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let class_state = ui.global::<ObjectListState>();
+                // Before taking the project lock - this takes it itself.
+                let nr_of_bits = current_image_nr_of_bits(&bridge_ptr.app_state);
                 let project = bridge_ptr.app_state.get_project();
                 if let Some(object) = project.get_selected_object() {
                     let preview_objects = project.get_preview_objects();
@@ -196,6 +161,7 @@ impl ObjectListController {
                         label_count,
                         true,
                         index,
+                        nr_of_bits,
                     ));
                     if scroll_to {
                         class_state.set_scroll_to_object_index(index);
@@ -233,7 +199,14 @@ impl Model for ObjectModalBridge {
                     .label_counts
                     .get(&object.segmentation_class)
                     .unwrap_or(&0);
-                object_rust_to_object_slint(object, &project, count, false, underlying_row as i32)
+                object_rust_to_object_slint(
+                    object,
+                    &project,
+                    count,
+                    false,
+                    underlying_row as i32,
+                    self.nr_of_bits,
+                )
             })
         } else {
             let preview_objects = project.get_preview_objects();
@@ -250,6 +223,7 @@ impl Model for ObjectModalBridge {
                         count,
                         false,
                         underlying_row as i32,
+                        self.nr_of_bits,
                     )
                 })
         }
@@ -309,9 +283,36 @@ fn format_circularity(object: &ObjectMetricSettings) -> SharedString {
     format!("{:.2}", c.min(1.0)).into()
 }
 
+/// Bit depth of the current image's selected series (resolution 0) - the
+/// same value the pipeline normalized the object intensities with.
+/// `None` when no image is open or its metadata can't be read.
+fn current_image_nr_of_bits(app_state: &UiState) -> Option<u16> {
+    let (path, series) = {
+        let project = app_state.get_project();
+        (
+            project.get_current_image_path_cloned()?,
+            project.get_selected_series_idx(),
+        )
+    };
+    let source = app_state.get_image_source(&path).ok()?;
+    source
+        .meta()
+        .series
+        .get(&series)?
+        .resolutions
+        .get(&0)
+        .map(|pyramid| pyramid.nr_bits)
+}
+
+/// Per-channel sum and average intensity as gray values (normalized value
+/// times the bit depth's max, as in ImageJ/Fiji). Channels with data show
+/// "-" when the bit depth is unknown or implausible, rather than a
+/// misleading normalized number.
 fn format_intensities_per_channel(
     object: &ObjectMetricSettings,
+    nr_of_bits: Option<u16>,
 ) -> (Vec<SharedString>, Vec<SharedString>) {
+    let bit_max = nr_of_bits.and_then(max_gray_value);
     let Some(&max_ch) = object.intensities.keys().max() else {
         return (Vec::new(), Vec::new());
     };
@@ -322,9 +323,14 @@ fn format_intensities_per_channel(
     for (channel_id, intensities) in &object.intensities {
         if *channel_id >= 0 {
             let i = *channel_id as usize;
-            sums[i] = format!("{:.1}", intensities.sum_intensity).into();
+            let Some(bit_max) = bit_max else {
+                sums[i] = "-".into();
+                avgs[i] = "-".into();
+                continue;
+            };
+            sums[i] = format!("{:.1}", intensities.sum_intensity * bit_max).into();
             if area > 0.0 {
-                avgs[i] = format!("{:.1}", intensities.sum_intensity / area).into();
+                avgs[i] = format!("{:.1}", intensities.avg_intensity * bit_max).into();
             }
         }
     }
@@ -348,6 +354,7 @@ fn object_rust_to_object_slint(
     label_count: i32,
     full_metrics: bool,
     row_index: i32,
+    nr_of_bits: Option<u16>,
 ) -> ObjectItemDataSlint {
     let mut class_names_vec: Vec<SharedString> = Vec::new();
     let mut class_colors_vec: Vec<Color> = Vec::new();
@@ -399,7 +406,7 @@ fn object_rust_to_object_slint(
         },
         intensities: {
             let (sums, _) = if full_metrics {
-                format_intensities_per_channel(object)
+                format_intensities_per_channel(object, nr_of_bits)
             } else {
                 (Vec::new(), Vec::new())
             };
@@ -407,7 +414,7 @@ fn object_rust_to_object_slint(
         },
         intensity_avgs: {
             let (_, avgs) = if full_metrics {
-                format_intensities_per_channel(object)
+                format_intensities_per_channel(object, nr_of_bits)
             } else {
                 (Vec::new(), Vec::new())
             };
@@ -424,6 +431,7 @@ fn object_rust_to_object_slint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_cfg::core_types::ObjectClass;
     use evanalyzer_cfg::settings::object_settings::IntensitySettings;
     use indexmap::IndexMap;
 
@@ -476,7 +484,7 @@ mod tests {
     #[test]
     fn format_intensities_per_channel_is_empty_with_no_channel_data() {
         let object = ObjectMetricSettings::default();
-        let (sums, avgs) = format_intensities_per_channel(&object);
+        let (sums, avgs) = format_intensities_per_channel(&object, Some(16));
         assert!(sums.is_empty());
         assert!(avgs.is_empty());
     }
@@ -491,31 +499,81 @@ mod tests {
         intensities.insert(
             0,
             IntensitySettings {
-                sum_intensity: 100.0,
+                sum_intensity: 2.0,
+                avg_intensity: 0.2,
                 ..Default::default()
             },
         );
         intensities.insert(
             2,
             IntensitySettings {
-                sum_intensity: 50.0,
+                sum_intensity: 1.0,
+                avg_intensity: 0.1,
                 ..Default::default()
             },
         );
         object.intensities = intensities;
 
-        let (sums, avgs) = format_intensities_per_channel(&object);
+        let (sums, avgs) = format_intensities_per_channel(&object, Some(8));
         // max channel id is 2, so the vecs must be length 3 (0, 1, 2).
         assert_eq!(sums.len(), 3);
         assert_eq!(avgs.len(), 3);
-        assert_eq!(sums[0], "100.0");
+        assert_eq!(sums[0], "510.0"); // 2.0 * 255
         assert_eq!(
             sums[1], "",
             "no data for channel 1 - left as the default empty string"
         );
-        assert_eq!(sums[2], "50.0");
-        assert_eq!(avgs[0], "10.0"); // 100 / area(10)
-        assert_eq!(avgs[2], "5.0"); // 50 / area(10)
+        assert_eq!(sums[2], "255.0");
+        assert_eq!(avgs[0], "51.0"); // 0.2 * 255
+        assert_eq!(avgs[2], "25.5");
+    }
+
+    #[test]
+    fn format_intensities_per_channel_scales_by_the_bit_depths_max() {
+        let mut object = ObjectMetricSettings {
+            area: 1,
+            ..Default::default()
+        };
+        let mut intensities = IndexMap::new();
+        intensities.insert(
+            0,
+            IntensitySettings {
+                sum_intensity: 1.0,
+                avg_intensity: 1.0,
+                ..Default::default()
+            },
+        );
+        object.intensities = intensities;
+
+        let (sums, avgs) = format_intensities_per_channel(&object, Some(16));
+        assert_eq!(sums[0], "65535.0");
+        assert_eq!(avgs[0], "65535.0");
+        let (sums, _) = format_intensities_per_channel(&object, Some(12));
+        assert_eq!(sums[0], "4095.0");
+    }
+
+    #[test]
+    fn format_intensities_per_channel_shows_a_dash_without_a_valid_bit_depth() {
+        let mut object = ObjectMetricSettings {
+            area: 1,
+            ..Default::default()
+        };
+        let mut intensities = IndexMap::new();
+        intensities.insert(
+            0,
+            IntensitySettings {
+                sum_intensity: 0.5,
+                avg_intensity: 0.5,
+                ..Default::default()
+            },
+        );
+        object.intensities = intensities;
+
+        for nr_of_bits in [None, Some(0), Some(64)] {
+            let (sums, avgs) = format_intensities_per_channel(&object, nr_of_bits);
+            assert_eq!(sums[0], "-", "bit depth {nr_of_bits:?}");
+            assert_eq!(avgs[0], "-", "bit depth {nr_of_bits:?}");
+        }
     }
 
     #[test]
@@ -528,14 +586,14 @@ mod tests {
         intensities.insert(
             0,
             IntensitySettings {
-                sum_intensity: 100.0,
+                sum_intensity: 2.0,
                 ..Default::default()
             },
         );
         object.intensities = intensities;
 
-        let (sums, avgs) = format_intensities_per_channel(&object);
-        assert_eq!(sums[0], "100.0");
+        let (sums, avgs) = format_intensities_per_channel(&object, Some(8));
+        assert_eq!(sums[0], "510.0");
         assert_eq!(avgs[0], "", "can't average over a zero-area object");
     }
 
@@ -679,7 +737,7 @@ mod tests {
         let mut object = ObjectMetricSettings::default();
         object.object_class.insert(ObjectClass::Valid(1));
 
-        let slint_obj = object_rust_to_object_slint(&object, &project, 3, true, 0);
+        let slint_obj = object_rust_to_object_slint(&object, &project, 3, true, 0, Some(16));
 
         assert_eq!(slint_obj.display_name.as_str(), "Nuclei");
         assert_eq!(slint_obj.label_count, 3);
@@ -697,7 +755,7 @@ mod tests {
         let mut object = ObjectMetricSettings::default();
         object.object_class.insert(ObjectClass::Valid(99));
 
-        let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 0);
+        let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 0, Some(16));
 
         assert_eq!(slint_obj.display_name.as_str(), "Unclassified");
     }
@@ -711,7 +769,7 @@ mod tests {
         object.object_class.insert(ObjectClass::Valid(1));
         object.object_class.insert(ObjectClass::Valid(2));
 
-        let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 0);
+        let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 0, Some(16));
 
         // HashSet iteration order isn't guaranteed - just check both names
         // appear, comma-joined, rather than asserting an exact order.
@@ -727,7 +785,7 @@ mod tests {
         let project = ProjectWithRuntime::default();
         let object = ObjectMetricSettings::default();
 
-        let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 41);
+        let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 41, Some(16));
 
         assert_eq!(slint_obj.id, 42);
     }
@@ -737,8 +795,8 @@ mod tests {
         let project = ProjectWithRuntime::default();
         let object = object_with_area_and_perimeter(500, 10.0);
 
-        let full = object_rust_to_object_slint(&object, &project, 0, true, 0);
-        let partial = object_rust_to_object_slint(&object, &project, 0, false, 0);
+        let full = object_rust_to_object_slint(&object, &project, 0, true, 0, Some(16));
+        let partial = object_rust_to_object_slint(&object, &project, 0, false, 0, Some(16));
 
         assert!(!full.area_nm2.is_empty());
         assert_eq!(partial.area_nm2.as_str(), "");
@@ -753,6 +811,7 @@ mod tests {
             notify: ModelNotify::default(),
             label_counts: precompute_label_counts(ui_state),
             visible_rows: compute_visible_rows(ui_state),
+            nr_of_bits: Some(16),
         }
     }
 
@@ -914,61 +973,5 @@ mod tests {
             ui_state.get_project().get_selected_object_id(),
             Some(evanalyzer_cfg::core_types::ObjectId(2))
         );
-    }
-
-    #[test]
-    fn attach_callbacks_object_add_class_targets_the_manual_object_when_preview_objects_are_also_present()
-     {
-        let mut project = project_with_one_image();
-        project.add_object(&object_with_class(1, 1, false)); // manual, unclassified
-        project
-            .tmp_settings
-            .preview_objects
-            .push(object_with_class(2, 1, true)); // preview, combined index 1
-
-        let (ui, _results_ui) = test_ui_windows();
-        let (ui_state, controller) = make_controller_with_ui(ui.as_weak(), project);
-        let controller = Arc::new(controller);
-        controller.attach_callbacks();
-        ui_state
-            .get_project_write()
-            .set_selected_object_class(ObjectClass::Valid(1));
-
-        // id 1 is the manual object even though a preview object also exists
-        // in the combined list - regression coverage that the shared
-        // resolution logic still picks the right one when both lists are
-        // non-empty at once.
-        ui.global::<ObjectListState>().invoke_object_add_class(1);
-
-        let project = ui_state.get_project();
-        let manual_object = &project.get_objects().unwrap()[0];
-        assert!(
-            manual_object.object_class.contains(&ObjectClass::Valid(1)),
-            "the manual object should have had the class applied"
-        );
-    }
-
-    #[test]
-    fn attach_callbacks_object_delete_removes_the_manual_object_when_preview_objects_are_also_present()
-     {
-        let mut project = project_with_one_image();
-        project.add_object(&object_with_class(1, 1, true)); // manual, combined index 0
-        project
-            .tmp_settings
-            .preview_objects
-            .push(object_with_class(2, 1, true)); // preview, combined index 1
-
-        let (ui, _results_ui) = test_ui_windows();
-        let (ui_state, controller) = make_controller_with_ui(ui.as_weak(), project);
-        let controller = Arc::new(controller);
-        controller.attach_callbacks();
-
-        ui.global::<ObjectListState>().invoke_object_delete(1);
-
-        let project = ui_state.get_project();
-        assert!(project.get_objects().unwrap().is_empty());
-        // The preview object (not touched by delete_object, which only ever
-        // operates on the manual list) must be unaffected.
-        assert_eq!(project.get_preview_objects().len(), 1);
     }
 }

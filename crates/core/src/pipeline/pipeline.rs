@@ -110,6 +110,26 @@ impl Pipeline {
         }
     }
 
+    /// Says which start image is missing - and what to do about it - when
+    /// the pipeline's image isn't available.
+    fn missing_start_image_message(&self) -> String {
+        match self.settings.start_image {
+            ImageAddress::Channel(channel) => format!(
+                "pipeline {} reads image channel {channel}, which this image doesn't have \
+                 (or which could not be read) - check the pipeline's image source",
+                self.id
+            ),
+            ImageAddress::Memory(slot) => format!(
+                "pipeline {} starts from memory slot {slot:?}, which no earlier pipeline \
+                 stored - add an Image Cache step that stores it to a pipeline running before",
+                self.id
+            ),
+            ImageAddress::Scratchpad => {
+                format!("pipeline {}: its start image is not available", self.id)
+            }
+        }
+    }
+
     /// Execute this pipeline's per-tile (`ExecutionScope::Tile`) commands.
     ///
     /// Called once per tile, before tile-merge has reconciled the image's
@@ -151,7 +171,9 @@ impl Pipeline {
         };
 
         let Some(initial_image) = cache.get_image_from_cache(&cache_idx, tile) else {
-            return Err(InternalErrors::CacheMiss("Image not found in cache".into()));
+            return Err(InternalErrors::CacheMiss(
+                self.missing_start_image_message(),
+            ));
         };
 
         let mut ctx = PipelineContext::new_from_image(
@@ -240,15 +262,14 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image::Point2d;
     use crate::{
         ManagedImage, Object,
         algos::{ExecutionScope, ExtractObjects, Voronoi},
         pipeline::pipeline_cache::GlobalImageMeta,
     };
     use evanalyzer_cfg::core_types::{CitationMetadata, ImageAddress, ObjectClass, SizeUnits};
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     /// Test-only stand-in for real segmentation (Threshold + ConnectedComponents):
     /// stamps one rectangular object - at tile-local coordinates - directly into
@@ -276,10 +297,8 @@ mod tests {
                     inst[y * w + x] = 1;
                 }
             }
-            ctx.segmentation_map =
-                Some(Image::<u32, 1, CpuAllocator>::new(size, seg, CpuAllocator).unwrap());
-            ctx.instance_map =
-                Some(Image::<u32, 1, CpuAllocator>::new(size, inst, CpuAllocator).unwrap());
+            ctx.segmentation_map = Some(Image::<u32, 1>::new(size, seg).unwrap());
+            ctx.instance_map = Some(Image::<u32, 1>::new(size, inst).unwrap());
             Ok(())
         }
 
@@ -287,8 +306,8 @@ mod tests {
             "FakeSegmenter"
         }
 
-        fn cite(&self) -> Option<&'static CitationMetadata> {
-            None
+        fn cite(&self) -> Vec<&'static CitationMetadata> {
+            Vec::new()
         }
 
         fn execution_scope(&self) -> ExecutionScope {
@@ -340,13 +359,12 @@ mod tests {
 
             let mut cache = GlobalPipelineCache::default();
             cache.image_meta = meta;
-            let channel = Image::<f32, 1, CpuAllocator>::new(
+            let channel = Image::<f32, 1>::new(
                 ImageSize {
                     width: tile_size.0,
                     height: tile_size.1,
                 },
                 vec![2.0f32; tile_size.0 * tile_size.1],
-                CpuAllocator,
             )
             .unwrap();
             cache.add_to_channel_cache(
@@ -516,8 +534,8 @@ mod tests {
             "SetFirstPixel"
         }
 
-        fn cite(&self) -> Option<&'static CitationMetadata> {
-            None
+        fn cite(&self) -> Vec<&'static CitationMetadata> {
+            Vec::new()
         }
 
         fn execution_scope(&self) -> ExecutionScope {
@@ -532,7 +550,7 @@ mod tests {
             height: 4,
         };
         let channel_image = Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::new(size, vec![2.0f32; 16], CpuAllocator).unwrap(),
+            data: Image::<f32, 1>::new(size, vec![2.0f32; 16]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }));
@@ -589,7 +607,7 @@ mod tests {
             height: 2,
         };
         let channel_image = Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::new(size, vec![1.0f32; 4], CpuAllocator).unwrap(),
+            data: Image::<f32, 1>::new(size, vec![1.0f32; 4]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }));
@@ -667,8 +685,7 @@ mod tests {
             height: 4,
         };
         let rgb_image = Arc::new(ImageContainer::F32Rgb(ManagedImage {
-            data: Image::<f32, 3, CpuAllocator>::new(size, vec![0.5f32; 16 * 3], CpuAllocator)
-                .unwrap(),
+            data: Image::<f32, 3>::new(size, vec![0.5f32; 16 * 3]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         }));

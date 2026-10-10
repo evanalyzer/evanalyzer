@@ -78,8 +78,8 @@ impl ImageAlgorithm for MedianSubtract {
         "Median Subtract"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::DANMAYR]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -99,7 +99,6 @@ mod tests {
         pipeline::pipeline::PipelineImageMeta,
     };
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     #[test]
     fn test_median_subtract_spike_isolation() -> Result<(), Box<dyn std::error::Error>> {
@@ -112,9 +111,8 @@ mod tests {
         let mut data = vec![10.0f32; 25];
         data[12] = 50.0; // Center pixel
 
-        let input_img = ImageContainer::new_f32_gray_from_image_test(
-            Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?,
-        );
+        let input_img =
+            ImageContainer::new_f32_gray_from_image_test(Image::<f32, 1>::new(size, data)?);
 
         // Prepare context
         let mut ctx = PipelineContext::new_from_image(
@@ -184,7 +182,7 @@ mod tests {
     fn test_median_subtract_name() {
         let algo = MedianSubtract { radius: 10.0 };
         assert_eq!(algo.name(), "Median Subtract");
-        assert!(algo.cite().is_none());
+        assert_eq!(algo.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 }

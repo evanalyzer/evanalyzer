@@ -12,3 +12,4 @@
 //! step list, without touching anything else.
 
 pub mod migration_v1_to_v2;
+pub mod migration_v2_to_v3;

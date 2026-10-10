@@ -1,11 +1,10 @@
+use crate::image::Point2d;
 use crate::{
     ImagePlane,
     image::{ImageContainer, ManagedImage},
 };
 use evanalyzer_cfg::core_types::InternalErrors;
-use kornia_apriltag::utils::Point2d;
 use kornia_image::Image;
-use kornia_tensor::CpuAllocator;
 
 pub struct F32Gray;
 pub struct F32Rgb;
@@ -48,12 +47,8 @@ impl ImageTypeMarker for F32Gray {
         plane: ImagePlane,
     ) -> Result<Self::ImageRef, InternalErrors> {
         Ok(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::new(
-                size,
-                vec![0f32; size.width * size.height],
-                CpuAllocator,
-            )
-            .map_err(|e| InternalErrors::Generic(e.to_string()))?,
+            data: Image::<f32, 1>::new(size, vec![0f32; size.width * size.height])
+                .map_err(|e| InternalErrors::Generic(e.to_string()))?,
             tile_offset,
             plane: Some(plane),
         })
@@ -64,12 +59,8 @@ impl ImageTypeMarker for F32Gray {
         tile_offset: Point2d,
         plane: ImagePlane,
     ) -> Result<ImageContainer, InternalErrors> {
-        let img = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![0f32; size.width * size.height],
-            CpuAllocator,
-        )
-        .map_err(InternalErrors::from_kornia)?;
+        let img = Image::<f32, 1>::new(size, vec![0f32; size.width * size.height])
+            .map_err(InternalErrors::from_kornia)?;
         Ok(ImageContainer::F32Gray(ManagedImage {
             data: img,
             tile_offset,
@@ -111,12 +102,8 @@ impl ImageTypeMarker for F32Rgb {
         plane: ImagePlane,
     ) -> Result<Self::ImageRef, InternalErrors> {
         Ok(ManagedImage {
-            data: Image::<f32, 3, CpuAllocator>::new(
-                size,
-                vec![0f32; size.width * size.height * 3],
-                CpuAllocator,
-            )
-            .map_err(|e| InternalErrors::Generic(e.to_string()))?,
+            data: Image::<f32, 3>::new(size, vec![0f32; size.width * size.height * 3])
+                .map_err(|e| InternalErrors::Generic(e.to_string()))?,
             tile_offset,
             plane: Some(plane),
         })
@@ -127,12 +114,8 @@ impl ImageTypeMarker for F32Rgb {
         tile_offset: Point2d,
         plane: ImagePlane,
     ) -> Result<ImageContainer, InternalErrors> {
-        let img = Image::<f32, 3, CpuAllocator>::new(
-            size,
-            vec![0f32; size.width * size.height * 3],
-            CpuAllocator,
-        )
-        .map_err(InternalErrors::from_kornia)?;
+        let img = Image::<f32, 3>::new(size, vec![0f32; size.width * size.height * 3])
+            .map_err(InternalErrors::from_kornia)?;
         Ok(ImageContainer::F32Rgb(ManagedImage {
             data: img,
             tile_offset,
@@ -182,12 +165,7 @@ mod tests {
 
     fn u32_container(size: kornia_image::ImageSize) -> ImageContainer {
         ImageContainer::U32(ManagedImage {
-            data: Image::<u32, 1, CpuAllocator>::new(
-                size,
-                vec![0u32; size.width * size.height],
-                CpuAllocator,
-            )
-            .unwrap(),
+            data: Image::<u32, 1>::new(size, vec![0u32; size.width * size.height]).unwrap(),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
         })

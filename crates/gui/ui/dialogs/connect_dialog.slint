@@ -1,0 +1,177 @@
+import { LineEdit } from "std-widgets.slint";
+import { BaseDialog } from "dialog_base.slint";
+import { GlobalAppState, DialogType, ConnectState } from "../state.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
+
+// "File > Connect to server": address, user and password, the servers used
+// before - and, on the first connection to a server, its certificate to
+// confirm (step 1), or a warning that it changed (step 2).
+export component ConnectDialog inherits BaseDialog {
+    title-text: ConnectState.step == 0 ? "Connect to server"
+        : ConnectState.step == 1 ? "Is this your server?"
+        : "The server's certificate has changed";
+    icon: ConnectState.step == 2 ? "⚠️" : "ℹ️";
+    main-width: 520px;
+    main-height: ConnectState.step == 0 ? 470px : 360px;
+
+    // -- step 0: address, user, password ------------------------------------
+    if ConnectState.step == 0: VerticalLayout {
+        spacing: 10px;
+
+        if ConnectState.recent.length > 0: VerticalLayout {
+            spacing: 4px;
+            vertical-stretch: 0;
+            Text {
+                text: "Recent servers";
+                font-size: 11px;
+                color: Theme.text-dim;
+            }
+            for server[index] in ConnectState.recent: Rectangle {
+                height: 26px;
+                border-radius: 4px;
+                background: recent-touch.has-hover ? Theme.hover : transparent;
+                Text {
+                    x: 8px;
+                    text: server.user + " @ " + server.url;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    color: Theme.text;
+                }
+                recent-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        ConnectState.pick-recent(index);
+                        password-edit.focus();
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: "Server";
+            font-size: 11px;
+            color: Theme.text-dim;
+        }
+        LineEdit {
+            height: 30px;
+            text <=> ConnectState.url;
+            placeholder-text: "wss://workstation:7400";
+            enabled: !ConnectState.busy;
+        }
+        Text {
+            text: "User";
+            font-size: 11px;
+            color: Theme.text-dim;
+        }
+        LineEdit {
+            height: 30px;
+            text <=> ConnectState.user;
+            enabled: !ConnectState.busy;
+        }
+        Text {
+            text: "Password";
+            font-size: 11px;
+            color: Theme.text-dim;
+        }
+        password-edit := LineEdit {
+            height: 30px;
+            input-type: password;
+            text <=> ConnectState.password;
+            enabled: !ConnectState.busy;
+            accepted => {
+                ConnectState.connect();
+            }
+        }
+
+        Text {
+            text: ConnectState.busy ? "Connecting ..." : ConnectState.error;
+            wrap: word-wrap;
+            font-size: 12px;
+            color: ConnectState.busy ? Theme.text-dim : Theme.err;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: end;
+            AppButton {
+                text: "Cancel";
+                clicked => {
+                    ConnectState.cancel();
+                    GlobalAppState.active-dialog = DialogType.none;
+                }
+            }
+            AppButton {
+                text: "Connect";
+                primary: true;
+                enabled: !ConnectState.busy && ConnectState.url != "" && ConnectState.user != "";
+                clicked => {
+                    ConnectState.connect();
+                }
+            }
+        }
+    }
+
+    // -- steps 1 and 2: the certificate --------------------------------------
+    if ConnectState.step != 0: VerticalLayout {
+        spacing: 10px;
+
+        Text {
+            text: ConnectState.step == 1
+                ? "This is the first connection to " + ConnectState.url + ". Its certificate has the fingerprint below. Compare it with the one your administrator gave you (the server logs it at startup) - connect only if they match."
+                : "The certificate of " + ConnectState.url + " is not the one confirmed before. If your administrator replaced it, compare the new fingerprint with theirs. Otherwise someone may be intercepting the connection - don't connect.";
+            wrap: word-wrap;
+            font-size: 13px;
+            color: Theme.text;
+        }
+        if ConnectState.step == 2: Text {
+            text: "Before:  " + ConnectState.known-fingerprint;
+            wrap: word-wrap;
+            font-family: "monospace";
+            font-size: 11px;
+            color: Theme.text-dim;
+        }
+        Text {
+            text: (ConnectState.step == 2 ? "Now:  " : "") + ConnectState.fingerprint;
+            wrap: word-wrap;
+            font-family: "monospace";
+            font-size: 12px;
+            color: ConnectState.step == 2 ? Theme.err : Theme.text;
+        }
+        Text {
+            text: ConnectState.busy ? "Connecting ..." : ConnectState.error;
+            wrap: word-wrap;
+            font-size: 12px;
+            color: ConnectState.busy ? Theme.text-dim : Theme.err;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: end;
+            AppButton {
+                text: "Back";
+                enabled: !ConnectState.busy;
+                clicked => {
+                    ConnectState.back();
+                }
+            }
+            AppButton {
+                text: ConnectState.step == 1 ? "They match - connect" : "Trust the new certificate";
+                primary: ConnectState.step == 1;
+                danger: ConnectState.step == 2;
+                enabled: !ConnectState.busy;
+                clicked => {
+                    ConnectState.trust();
+                }
+            }
+        }
+    }
+}

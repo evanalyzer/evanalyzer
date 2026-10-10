@@ -9,10 +9,11 @@ export component BaseDialog inherits Rectangle {
     in property <string> icon: "ℹ️";
     in property <color> icon-bg-color: Theme.icon-bg-default;
     in property <color> drop-shadow-color-in: Theme.shadow;
+    in property <bool> show-icon:true;
 
     // Dimmed background
     background: Theme.modal-overlay;
-    
+
     // Block clicks to the main app
     TouchArea { }
 
@@ -35,7 +36,8 @@ export component BaseDialog inherits Rectangle {
                 spacing: 12px;
                 alignment: start;
                 Rectangle {
-                    width: 32px;
+                    visible: show-icon;
+                    width: show-icon ? 32px : 0px;
                     height: 32px;
                     background: icon-bg-color;
                     border-radius: 16px;

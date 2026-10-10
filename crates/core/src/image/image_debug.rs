@@ -8,13 +8,12 @@
 //! Licensed under the **AGPL-3.0**.
 
 use kornia_image::Image;
-use kornia_tensor::CpuAllocator;
 
 pub trait ImageDebugExt {
     fn print_window(&self);
 }
 
-impl ImageDebugExt for Image<u32, 1, CpuAllocator> {
+impl ImageDebugExt for Image<u32, 1> {
     /// Prints a sub-region of the image to the console for debugging.
     fn print_window(&self) {
         let img_width = self.width();
@@ -52,7 +51,7 @@ impl ImageDebugExt for Image<u32, 1, CpuAllocator> {
     }
 }
 
-impl ImageDebugExt for Image<f32, 1, CpuAllocator> {
+impl ImageDebugExt for Image<f32, 1> {
     /// Prints a sub-region of the image to the console for debugging.
     fn print_window(&self) {
         let img_width = self.width();

@@ -6,22 +6,18 @@ authors = { workspace = true }
 license = { workspace = true }
 publish = { workspace = true }
 
-[dependencies]
-# For Linux/macOS: Use Skia
-[target.'cfg(not(target_os = "windows"))'.dependencies.slint]
-version = "1.17"
-features = ["renderer-skia"]
+# For Linux/macOS: slint's defaults plus Skia
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+slint = { workspace = true, features = ["default", "renderer-skia"] }
 
 # For Windows: Use Software Renderer (No Skia/VC++ requirement)
-[target.'cfg(target_os = "windows")'.dependencies.slint]
-version = "1.17"
-default-features = false
-features = [
+[target.'cfg(target_os = "windows")'.dependencies]
+slint = { workspace = true, features = [
     "std",
     "compat-1-2",
     "renderer-software",
     "backend-winit",
-]
+] }
 
 [build-dependencies]
-slint-build = "1.17"
+slint-build = { workspace = true }

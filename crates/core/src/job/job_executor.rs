@@ -12,7 +12,7 @@ use crate::{
     storage::PipelineResultExporter,
 };
 use evanalyzer_cfg::{
-    core_types::{ImageAddress, InternalErrors, PipelineId},
+    core_types::{BreakpointMode, BreakpointSettings, ImageAddress, InternalErrors, PipelineId},
     settings::{
         images_settings::{
             GlobalImageSettings, ImageEntry, TStackHandling, ZStackHandling, ZStackSettings,
@@ -133,23 +133,6 @@ impl PreviewTileSettings {
     }
 }
 
-/// Controls pipeline behaviour when a breakpoint step is reached.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BreakpointMode {
-    /// Stop the pipeline at this step and return the intermediate image.
-    Stop,
-    /// Capture the image at this step, then continue running the pipeline
-    /// to completion.  The final results (ROIs, DB write) are produced
-    /// normally; the captured image is sent as a side-channel preview.
-    Snapshot,
-}
-
-pub struct BreakpointSettings {
-    pub pipeline_id: PipelineId,
-    pub pipeline_step_id: i32,
-    pub mode: BreakpointMode,
-}
-
 /// The one place `evanalyzer_cfg::settings::project_settings::TileMergeConnectivity`
 /// (project settings) gets converted into `algos::Connectivity` (the algorithm's
 /// own parameter type) - `TileMerge` itself never references project settings
@@ -190,7 +173,7 @@ pub struct JobExecutor {
     pub image_base_path: PathBuf,
     pub images: IndexMap<PathBuf, ImageEntry>,
     pub global_image_settings: GlobalImageSettings,
-    pub result_storage: Arc<Mutex<dyn PipelineResultExporter>>,
+    pub result_storage: Arc<dyn PipelineResultExporter>,
     pub override_pixel_sizes: Option<PixelSizes>,
     /// When set, tile selection in single-image preview runs is guided by the
     /// viewport position.  `None` means process all tiles (normal full run).
@@ -207,7 +190,7 @@ impl<'a> JobExecutor {
         images: IndexMap<PathBuf, ImageEntry>,
         image_base_path: PathBuf,
         global_image_settings: GlobalImageSettings,
-        result_storage: Arc<Mutex<dyn PipelineResultExporter>>,
+        result_storage: Arc<dyn PipelineResultExporter>,
         override_pixel_sizes: Option<PixelSizes>,
     ) -> Self {
         Self {
@@ -321,6 +304,10 @@ impl<'a> JobExecutor {
                             .ok();
                         Ok(())
                     }
+                    // A cancel is not a failure of this image - pass it on
+                    // unwrapped so callers can tell "cancelled by user" from
+                    // a real error, same as the multi-image branch below.
+                    Err(InternalErrors::Cancelled) => Err(InternalErrors::Cancelled),
                     Err(e) => {
                         progress
                             .send(ProgressEvent::ImageFailed {
@@ -406,6 +393,10 @@ impl<'a> JobExecutor {
         });
 
         info!("Pipeline completed in {:?}", start.elapsed());
+        // Before `Finished`: whoever reads the results next sees the outcome.
+        if let Err(e) = self.result_storage.finish_run(&result) {
+            warn!("Could not record how the run ended: {e}");
+        }
         progress.send(ProgressEvent::Finished).ok();
         result
     }
@@ -502,7 +493,7 @@ impl<'a> JobExecutor {
         image_path: &PathBuf,
         image_entry: &ImageEntry,
         order: &[PipelineId],
-        exporter: Arc<Mutex<dyn PipelineResultExporter>>,
+        exporter: Arc<dyn PipelineResultExporter>,
         cancel: Arc<AtomicBool>,
         progress: Option<Sender<ProgressEvent>>,
         image_cache_bytes: u64,
@@ -539,7 +530,7 @@ impl<'a> JobExecutor {
             let series_info = reader
                 .image_meta
                 .series
-                .get(&image_entry.selected_series)
+                .get(&self.active_series(image_entry))
                 .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
 
             let py_meta = series_info
@@ -594,39 +585,7 @@ impl<'a> JobExecutor {
         // to the viewport centre (in image-pixel space).  When no viewport
         // settings are available, fall back to the geometrically middle tile.
         let breakpoint_target: Option<(usize, usize)> = if self.breakpoint.is_some() {
-            match &self.preview_tile_settings {
-                Some(settings) => {
-                    let visible: Vec<&ImageTile> = tiles
-                        .iter()
-                        .filter(|t| settings.is_tile_visible(t))
-                        .collect();
-                    let candidates = if visible.is_empty() {
-                        tiles.iter().collect::<Vec<_>>()
-                    } else {
-                        visible
-                    };
-                    if candidates.len() == 1 {
-                        candidates.first().map(|t| (t.offset_x, t.offset_y))
-                    } else {
-                        // Viewport centre in image-pixel coordinates:
-                        //   screen_x = img_x * zoom + offset_x  →  img_x = (screen_x - offset_x) / zoom
-                        let cx =
-                            (settings.viewport_width / 2.0 - settings.offset_x) / settings.zoom;
-                        let cy =
-                            (settings.viewport_height / 2.0 - settings.offset_y) / settings.zoom;
-                        candidates
-                            .iter()
-                            .map(|t| {
-                                let tx = t.offset_x as f32 + t.width as f32 / 2.0;
-                                let ty = t.offset_y as f32 + t.height as f32 / 2.0;
-                                (t, (tx - cx).powi(2) + (ty - cy).powi(2))
-                            })
-                            .min_by(|(_, da), (_, db)| da.total_cmp(db))
-                            .map(|(t, _)| (t.offset_x, t.offset_y))
-                    }
-                }
-                None => tiles.get(tiles.len() / 2).map(|t| (t.offset_x, t.offset_y)),
-            }
+            Self::breakpoint_target_tile(&tiles, self.preview_tile_settings.as_ref())
         } else {
             None
         };
@@ -689,8 +648,36 @@ impl<'a> JobExecutor {
         // on every single tile.
         let image_entry_arc = Arc::new(image_entry.clone());
 
+        // The user's hand-annotated objects of this image, for
+        // `LoadAnnotatedObjects` - only gathered when a pipeline uses them.
+        let loads_annotations = self
+            .pipelines_post_process
+            .values()
+            .any(|p| p.commands.iter().any(|(_, c)| c.uses_annotated_objects()));
+        let series_annotations: &[ObjectMetricSettings] = match loads_annotations {
+            true => image_entry
+                .series
+                .get(&self.active_series(image_entry))
+                .map(|series| series.objects.as_slice())
+                .unwrap_or(&[]),
+            false => &[],
+        };
+        // With a z-projection the stacks loop sees one projected image, not
+        // individual z-planes, so annotations then match on t alone.
+        let per_z_plane = matches!(
+            z_handling,
+            ZStackHandling::AllStacks | ZStackHandling::SingleStack
+        );
+
         'stacks: for &t in &t_stacks {
             for &z in &z_stacks {
+                let plane_annotations: Arc<Vec<ObjectMetricSettings>> = Arc::new(
+                    series_annotations
+                        .iter()
+                        .filter(|a| a.t_stack == t && (!per_z_plane || a.z_stack == z))
+                        .cloned()
+                        .collect(),
+                );
                 let global_cache = match self.prepare_global_image_cache(
                     full_size,
                     is_rgb,
@@ -885,7 +872,10 @@ impl<'a> JobExecutor {
                     });
 
                 let stack_merge_result = stack_result.and_then(|mut merged_cache| {
-                    if merged_cache.object_cache.is_empty() {
+                    merged_cache.annotated_objects = plane_annotations;
+                    if merged_cache.object_cache.is_empty()
+                        && merged_cache.annotated_objects.is_empty()
+                    {
                         // Object buffer is empty - no whole-image-scoped
                         // commands or export to run, but this stack's
                         // reserved progress unit (see `total_tiles` above)
@@ -954,10 +944,7 @@ impl<'a> JobExecutor {
                         }
                     }
 
-                    exporter
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .export(&merged_cache)?;
+                    exporter.export(&merged_cache)?;
 
                     if let Some(sender) = &progress {
                         let idx = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -984,18 +971,15 @@ impl<'a> JobExecutor {
         // is passed through so it's recorded as failed rather than looking
         // identical to a genuinely complete image.
         let combined_error = analyze_result.as_ref().err().map(|e| e.to_string());
-        let finalize_result = exporter
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .finalize_image(
-                image_rel_path,
-                full_size.width as u32,
-                full_size.height as u32,
-                nr_c_stacks,
-                nr_z_stacks,
-                nr_t_stacks,
-                combined_error.as_deref(),
-            );
+        let finalize_result = exporter.finalize_image(
+            image_rel_path,
+            full_size.width as u32,
+            full_size.height as u32,
+            nr_c_stacks,
+            nr_z_stacks,
+            nr_t_stacks,
+            combined_error.as_deref(),
+        );
 
         let duration = start_image.elapsed();
         info!("Executed image pipeline in {:?}", duration);
@@ -1050,7 +1034,7 @@ impl<'a> JobExecutor {
     ///
     /// Resolves settings as **per-series override -> global setting -> default**
     /// (matching the equivalent resolution the GUI itself uses, in
-    /// `evanalyzer_app`'s `images_ext.rs`/`project_ext.rs`). A series entry always
+    /// `evanalyzer_app`'s `project_ext.rs`). A series entry always
     /// exists once an image is added to a project, but its `t_stack` field is only
     /// ever populated by an explicit per-series override - so checking *whether
     /// the field is set* (not whether the entry exists) is what makes the global
@@ -1072,7 +1056,7 @@ impl<'a> JobExecutor {
     ) -> RangeInclusive<i32> {
         let local = image_entry
             .series
-            .get(&image_entry.selected_series)
+            .get(&self.active_series(image_entry))
             .and_then(|s| s.t_stack.clone());
         let settings = local
             .or_else(|| self.global_image_settings.t_stack.clone())
@@ -1091,10 +1075,19 @@ impl<'a> JobExecutor {
     /// overridden, so the previous entry-existence check meant a project-wide
     /// projection choice (e.g. Maximum Intensity) was silently discarded in favor
     /// of the `SingleStack` default for every image.
+    /// The series that counts for `image_entry` - see
+    /// [`crate::job::job_generator::active_series`].
+    fn active_series(&self, image_entry: &ImageEntry) -> i32 {
+        crate::job::job_generator::active_series(
+            image_entry,
+            self.global_image_settings.selected_series,
+        )
+    }
+
     fn get_z_stack_settings(&self, image_entry: &ImageEntry) -> ZStackSettings {
         let local = image_entry
             .series
-            .get(&image_entry.selected_series)
+            .get(&self.active_series(image_entry))
             .and_then(|s| s.z_stack.clone());
 
         local
@@ -1167,6 +1160,7 @@ impl<'a> JobExecutor {
             },
             object_cache: ObjectCache::default(),
             image_rel_path: image_rel_path.into(),
+            annotated_objects: Default::default(),
         })
     }
 
@@ -1187,7 +1181,7 @@ impl<'a> JobExecutor {
         resolution_index: i32,
     ) -> Result<GlobalPipelineCache, InternalErrors> {
         let loaded_channels = image_reader.read_image_tile_combined(
-            image_entry.selected_series,
+            self.active_series(&image_entry),
             resolution_index,
             z_projection.clone(),
             z_range,
@@ -1256,7 +1250,7 @@ impl<'a> JobExecutor {
             let series_info = reader
                 .image_meta
                 .series
-                .get(&image_entry.selected_series)
+                .get(&self.active_series(image_entry))
                 .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
             let py_meta = series_info
                 .resolutions
@@ -1363,6 +1357,46 @@ impl<'a> JobExecutor {
     /// of pixels the user can't see just to get the small visible patch. Shrinking
     /// the tile as zoom increases keeps the analyzed area closer to what's on
     /// screen, so feedback for that area arrives faster.
+    /// The tile a breakpoint captures (its offset): among the tiles visible in
+    /// the viewport (all tiles if none is), the one whose centre is closest
+    /// to the viewport centre; without viewport settings the middle tile.
+    fn breakpoint_target_tile(
+        tiles: &[ImageTile],
+        settings: Option<&PreviewTileSettings>,
+    ) -> Option<(usize, usize)> {
+        match settings {
+            Some(settings) => {
+                let visible: Vec<&ImageTile> = tiles
+                    .iter()
+                    .filter(|t| settings.is_tile_visible(t))
+                    .collect();
+                let candidates = if visible.is_empty() {
+                    tiles.iter().collect::<Vec<_>>()
+                } else {
+                    visible
+                };
+                if candidates.len() == 1 {
+                    candidates.first().map(|t| (t.offset_x, t.offset_y))
+                } else {
+                    // Viewport centre in image-pixel coordinates:
+                    //   screen_x = img_x * zoom + offset_x  →  img_x = (screen_x - offset_x) / zoom
+                    let cx = (settings.viewport_width / 2.0 - settings.offset_x) / settings.zoom;
+                    let cy = (settings.viewport_height / 2.0 - settings.offset_y) / settings.zoom;
+                    candidates
+                        .iter()
+                        .map(|t| {
+                            let tx = t.offset_x as f32 + t.width as f32 / 2.0;
+                            let ty = t.offset_y as f32 + t.height as f32 / 2.0;
+                            (t, (tx - cx).powi(2) + (ty - cy).powi(2))
+                        })
+                        .min_by(|(_, da), (_, db)| da.total_cmp(db))
+                        .map(|(t, _)| (t.offset_x, t.offset_y))
+                }
+            }
+            None => tiles.get(tiles.len() / 2).map(|t| (t.offset_x, t.offset_y)),
+        }
+    }
+
     fn preview_tile_size(&self) -> usize {
         let Some(zoom) = self.preview_tile_settings.as_ref().map(|s| s.zoom) else {
             return MAX_TILE_SIZE;
@@ -1397,7 +1431,7 @@ impl<'a> JobExecutor {
     pub fn estimate_ram_budget(&self) -> crate::resources::RamBudget {
         self.images
             .values()
-            .filter_map(|entry| entry.series.get(&entry.selected_series))
+            .filter_map(|entry| entry.series.get(&self.active_series(entry)))
             .map(|series| {
                 let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
                 let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);
@@ -1445,9 +1479,9 @@ mod z_t_stack_precedence_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             global_image_settings,
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         )
     }
@@ -1662,9 +1696,9 @@ mod preview_visible_tile_count_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         );
         job.preview_tile_settings = preview_tile_settings;
@@ -1748,9 +1782,9 @@ mod preview_tile_size_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         );
         job.preview_tile_settings = zoom.map(|zoom| PreviewTileSettings {
@@ -1818,9 +1852,9 @@ mod tile_iterator_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         )
     }
@@ -1978,9 +2012,9 @@ mod z_stack_iterator_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             global_image_settings,
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         )
     }
@@ -2119,9 +2153,9 @@ mod execution_order_tests {
             IndexMap::new(),
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         )
     }
@@ -2252,8 +2286,8 @@ mod execution_order_tests {
         fn name(&self) -> &'static str {
             "Noop"
         }
-        fn cite(&self) -> Option<&'static CitationMetadata> {
-            None
+        fn cite(&self) -> Vec<&'static CitationMetadata> {
+            Vec::new()
         }
         fn execution_scope(&self) -> ExecutionScope {
             ExecutionScope::WholeImage
@@ -2324,7 +2358,7 @@ mod full_run_integration_tests {
     };
     use crate::pipeline::pipeline::CorePipelineSettings;
     use crate::storage::memory::MemoryExporter;
-    use evanalyzer_cfg::core_types::{PixelUnits, SegmentationClass};
+    use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, PixelUnits, SegmentationClass};
     use evanalyzer_cfg::settings::images_settings::SeriesSettings;
     use std::collections::BTreeMap;
     use std::sync::atomic::AtomicBool;
@@ -2379,11 +2413,34 @@ mod full_run_integration_tests {
             images,
             PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter { out_objects })),
+            Arc::new(MemoryExporter { out_objects }),
             None,
         );
         job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
         job
+    }
+
+    #[test]
+    fn a_pipeline_reading_a_channel_the_image_lacks_fails_with_a_clear_message() {
+        // What the pre-start check catches for images with stored channel
+        // info - here it reaches the run itself.
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = make_single_image_job(out_objects);
+        let mut pipeline = threshold_connected_components_extract_pipeline();
+        pipeline.settings.start_image = ImageAddress::Channel(9);
+        job.pipelines_pre_process.clear();
+        job.add_pre_process_pipeline(pipeline);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let err = job
+            .run(1, tx, Arc::new(AtomicBool::new(false)))
+            .unwrap_err();
+        let message = format!("{err}");
+        assert!(message.contains("reads image channel 9"), "{message}");
+        assert!(
+            message.contains("check the pipeline's image source"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -2453,7 +2510,7 @@ mod full_run_integration_tests {
             images,
             PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter { out_objects })),
+            Arc::new(MemoryExporter { out_objects }),
             None,
         );
         job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
@@ -2569,6 +2626,115 @@ mod full_run_integration_tests {
     // (`pipeline.rs`'s early-return branch) - `Snapshot` always falls through
     // to the normal completion path with `breakpoint_hit: false`.
 
+    // ---- breakpoint capture ----
+
+    fn tile(x: usize, y: usize) -> ImageTile {
+        ImageTile {
+            offset_x: x,
+            offset_y: y,
+            width: 512,
+            height: 512,
+        }
+    }
+
+    fn viewport(offset_x: f32, offset_y: f32) -> PreviewTileSettings {
+        PreviewTileSettings {
+            offset_x,
+            offset_y,
+            viewport_width: 400.0,
+            viewport_height: 400.0,
+            zoom: 1.0,
+            process_all_tiles: false,
+        }
+    }
+
+    #[test]
+    fn the_breakpoint_captures_the_visible_tile_closest_to_the_viewport_centre() {
+        let tiles = [tile(0, 0), tile(512, 0), tile(0, 512), tile(512, 512)];
+        // The viewport (400x400 at zoom 1) panned so its centre lies at image
+        // pixel (700, 650): over the bottom-right tile, with others visible too.
+        let settings = viewport(200.0 - 700.0, 200.0 - 650.0);
+        assert_eq!(
+            JobExecutor::breakpoint_target_tile(&tiles, Some(&settings)),
+            Some((512, 512))
+        );
+    }
+
+    #[test]
+    fn the_breakpoint_falls_back_sensibly_without_a_usable_viewport() {
+        let tiles = [tile(0, 0), tile(512, 0), tile(0, 512), tile(512, 512)];
+        // No viewport settings: the middle tile of the list.
+        assert_eq!(
+            JobExecutor::breakpoint_target_tile(&tiles, None),
+            Some((0, 512))
+        );
+        // Viewport far away from the image: the closest of all tiles.
+        let away = viewport(-5000.0, -5000.0);
+        assert_eq!(
+            JobExecutor::breakpoint_target_tile(&tiles, Some(&away)),
+            Some((512, 512))
+        );
+        // A single visible tile is taken as is.
+        let only_first = viewport(0.0, 0.0);
+        assert_eq!(
+            JobExecutor::breakpoint_target_tile(&tiles[..1], Some(&only_first)),
+            Some((0, 0))
+        );
+        assert_eq!(JobExecutor::breakpoint_target_tile(&[], None), None);
+    }
+
+    fn breakpoint_events(mode: BreakpointMode) -> (Vec<ProgressEvent>, usize) {
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = make_single_image_job(out_objects.clone());
+        job.breakpoint = Some(BreakpointSettings {
+            pipeline_id: PipelineId(1),
+            pipeline_step_id: 0, // right after Threshold
+            mode,
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false)))
+            .expect("a breakpoint is not an error");
+        let events = rx.into_iter().collect();
+        let written = out_objects.lock().unwrap().len();
+        (events, written)
+    }
+
+    fn reached(events: &[ProgressEvent]) -> Vec<&ProgressEvent> {
+        events
+            .iter()
+            .filter(|e| matches!(e, ProgressEvent::BreakpointReached { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn a_stop_breakpoint_reports_the_captured_tile_and_writes_nothing() {
+        let (events, written) = breakpoint_events(BreakpointMode::Stop);
+        let reached = reached(&events);
+        assert_eq!(reached.len(), 1, "exactly one tile sends the capture");
+        let ProgressEvent::BreakpointReached {
+            segmentation,
+            tile_offset_x,
+            tile_offset_y,
+            tile_width,
+            tile_height,
+            ..
+        } = reached[0]
+        else {
+            unreachable!()
+        };
+        assert!(segmentation.is_some(), "captured after Threshold");
+        assert_eq!((*tile_offset_x, *tile_offset_y), (0, 0));
+        assert_eq!((*tile_width, *tile_height), (439, 167));
+        assert_eq!(written, 0, "the pipeline stopped before Extract Objects");
+    }
+
+    #[test]
+    fn a_snapshot_breakpoint_reports_the_capture_and_still_writes_the_objects() {
+        let (events, written) = breakpoint_events(BreakpointMode::Snapshot);
+        assert_eq!(reached(&events).len(), 1);
+        assert!(written > 0, "a snapshot lets the pipeline run to the end");
+    }
+
     #[test]
     fn breakpoint_stop_during_a_batch_run_skips_the_write_but_the_image_still_completes() {
         let out_objects = Arc::new(Mutex::new(Vec::new()));
@@ -2655,6 +2821,29 @@ mod full_run_integration_tests {
     }
 
     #[test]
+    fn run_on_a_single_image_reports_cancelled_unwrapped() {
+        // The single-image branch used to wrap every error, `Cancelled`
+        // included, into `Internal("<path>: Cancelled")` - so cancelling a
+        // preview showed up as a failure instead of "cancelled by user".
+        let job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let result = job.run(1, tx, Arc::new(AtomicBool::new(true)));
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        assert!(
+            matches!(result, Err(InternalErrors::Cancelled)),
+            "{result:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageFailed { .. })),
+            "a cancelled image must not be reported as failed"
+        );
+    }
+
+    #[test]
     fn count_preview_visible_tiles_matches_the_real_fixture_images_single_tile_grid() {
         let job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
 
@@ -2663,6 +2852,113 @@ mod full_run_integration_tests {
         // exactly one tile.
         let count = job.count_preview_visible_tiles().unwrap();
         assert_eq!(count, 1);
+    }
+
+    /// A filled 3×3 annotation of the plane (`z`, `t`), carrying `class`.
+    fn annotation_on_plane(z: i32, t: i32, class: ObjectClass) -> ObjectMetricSettings {
+        let mut object = crate::object::Object::new(crate::object::ObjectInit {
+            id: ObjectId(800_000 + (z * 10 + t) as u128),
+            bbox: [1, 1, 3, 3],
+            mask_data: bitvec::bitvec![u64, bitvec::order::Lsb0; 1; 9],
+            area: 9,
+            ..Default::default()
+        });
+        object.add_object_class(class);
+        let mut settings = object.to_object_settings();
+        settings.z_stack = z;
+        settings.t_stack = t;
+        settings
+    }
+
+    #[test]
+    fn load_annotated_objects_runs_without_segmentation_and_only_loads_the_analyzed_plane() {
+        use crate::algos::LoadAnnotatedObjects;
+        const ANALYZED: ObjectClass = ObjectClass::Valid(1);
+        const OTHER_Z: ObjectClass = ObjectClass::Valid(2);
+        const OTHER_T: ObjectClass = ObjectClass::Valid(3);
+        const LOADED: ObjectClass = ObjectClass::Valid(4);
+
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let rel_path = PathBuf::from("multi-channel-4D-series.ome.tif");
+        let mut series = BTreeMap::new();
+        series.insert(
+            0,
+            SeriesSettings {
+                // Default stack settings analyze z = 0, t = 0 only.
+                objects: vec![
+                    annotation_on_plane(0, 0, ANALYZED),
+                    annotation_on_plane(1, 0, OTHER_Z),
+                    annotation_on_plane(0, 1, OTHER_T),
+                ],
+                ..Default::default()
+            },
+        );
+        let mut images = IndexMap::new();
+        images.insert(
+            rel_path.clone(),
+            ImageEntry {
+                rel_path,
+                file_size: 0,
+                selected_series: 0,
+                series,
+            },
+        );
+        let mut job = JobExecutor::new(
+            PathBuf::new(),
+            std::env::temp_dir(),
+            images,
+            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
+            GlobalImageSettings::default(),
+            Arc::new(MemoryExporter {
+                out_objects: out_objects.clone(),
+            }),
+            None,
+        );
+        // Built like `job_generator` does for a pipeline holding only this
+        // command: an empty tile pipeline (nothing is segmented) plus the
+        // whole-image one. The annotations alone must be enough for the
+        // whole-image phase to run.
+        job.add_pre_process_pipeline(Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        ));
+        let mut pipeline = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        pipeline.add_command(Box::new(LoadAnnotatedObjects {
+            input_classes: vec![],
+            output_class: LOADED,
+            keep_annotated_classes: true,
+        }));
+        job.add_post_process_pipeline(pipeline);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false)))
+            .expect("loading annotations should succeed");
+
+        let exported = out_objects.lock().unwrap();
+        assert_eq!(
+            exported.len(),
+            1,
+            "only the z = 0, t = 0 annotation is loaded"
+        );
+        let object = &exported[0];
+        assert!(object.object_class.contains(&ANALYZED));
+        assert!(object.object_class.contains(&LOADED));
+        assert_eq!(
+            object.segmentation_class,
+            SegmentationClass::MANUAL_ANNOTATED
+        );
+        assert_eq!(object.area, 9);
+        assert!(
+            !object.intensities.is_empty(),
+            "the loaded annotation is measured on the image"
+        );
     }
 }
 
@@ -2692,13 +2988,12 @@ mod tile_merge_end_to_end_tests {
         ConnectedComponents, Connectivity, ExtractObjects, Threshold, ThresholdEntry,
         ThresholdMethod, ThresholdValueSource,
     };
+    use crate::image::Point2d;
     use crate::image::{ImageContainer, ManagedImage};
     use crate::pipeline::image_cache::ImageCache;
     use crate::pipeline::pipeline::CorePipelineSettings;
     use evanalyzer_cfg::core_types::{ObjectClass, PixelUnits, SegmentationClass, SizeUnits};
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::Image;
-    use kornia_tensor::CpuAllocator;
 
     fn threshold_connected_components_extract_pipeline() -> Pipeline {
         let mut pipeline = Pipeline::new(
@@ -2736,13 +3031,12 @@ mod tile_merge_end_to_end_tests {
         full_width: usize,
         full_height: usize,
     ) -> GlobalPipelineCache {
-        let image = Image::<f32, 1, CpuAllocator>::new(
+        let image = Image::<f32, 1>::new(
             ImageSize {
                 width: tile_width,
                 height: tile_height,
             },
             data,
-            CpuAllocator,
         )
         .unwrap();
         let container = Arc::new(ImageContainer::F32Gray(ManagedImage {
@@ -2771,6 +3065,7 @@ mod tile_merge_end_to_end_tests {
 
             object_cache: Default::default(),
             image_rel_path: PathBuf::new(),
+            annotated_objects: Default::default(),
             image_meta: GlobalImageMeta {
                 full_image_width: ImageSize {
                     width: full_width,
@@ -3198,9 +3493,9 @@ mod estimate_ram_per_worker_bytes_tests {
             images,
             PathBuf::new(),
             GlobalImageSettings::default(),
-            Arc::new(Mutex::new(MemoryExporter {
+            Arc::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
-            })),
+            }),
             None,
         )
     }
@@ -3234,50 +3529,6 @@ mod estimate_ram_per_worker_bytes_tests {
     fn falls_back_sanely_when_the_job_has_no_images() {
         let job = job_with(IndexMap::new());
         assert!(job.estimate_ram_per_worker_bytes() > 0);
-    }
-}
-
-#[cfg(test)]
-mod exporter_poison_tests {
-    use crate::storage::PipelineResultExporter;
-    use crate::storage::memory::MemoryExporter;
-    use std::sync::{Arc, Mutex};
-
-    #[test]
-    fn locking_the_shared_exporter_recovers_from_poison_instead_of_panicking() {
-        // `exporter` (`Arc<Mutex<dyn PipelineResultExporter>>`) is shared
-        // across every concurrently-running image's writer thread - see
-        // `analyze_image`. One image's writer panicking while holding this
-        // lock must not crash every other image's export/finalize_image
-        // call too.
-        let exporter: Arc<Mutex<dyn PipelineResultExporter>> =
-            Arc::new(Mutex::new(MemoryExporter {
-                out_objects: Arc::new(Mutex::new(Vec::new())),
-            }));
-
-        let exporter_for_panic = exporter.clone();
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = exporter_for_panic.lock().unwrap();
-            panic!("simulated writer-thread panic while holding the exporter lock");
-        }));
-        assert!(panicked.is_err(), "the panic should have propagated");
-
-        // Same recovery pattern used at every real call site in this module.
-        let recovered = exporter.lock().unwrap_or_else(|e| e.into_inner());
-        assert!(
-            recovered
-                .finalize_image(
-                    std::path::Path::new("after-poison.tif"),
-                    0,
-                    0,
-                    1,
-                    1,
-                    1,
-                    None
-                )
-                .is_ok(),
-            "the exporter must still be usable after recovering from poison"
-        );
     }
 }
 

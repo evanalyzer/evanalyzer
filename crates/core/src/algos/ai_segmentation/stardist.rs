@@ -60,7 +60,7 @@ pub struct Stardist {
 
     /// Pixel-overlap ratio (intersection / union) above which a lower-scoring
     /// candidate polygon is suppressed in favor of an overlapping higher-scoring one.
-    #[cmdsmeta(default = 0.3, min = 0.0, max = 1.0, step = 0.01)]
+    #[cmdsmeta(default = 0.3, min = 0.0, max = 1.0, step = 0.01, visibility = Advanced)]
     pub nms_threshold: f32,
 }
 
@@ -149,8 +149,8 @@ impl ImageAlgorithm for Stardist {
         "Stardist"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "schmidt2018stardist",
             title: "Cell Detection with Star-Convex Polygons",
             authors: &[
@@ -164,7 +164,7 @@ impl ImageAlgorithm for Stardist {
             doi: Some("10.1007/978-3-030-00934-2_30"),
             url: Some("https://doi.org/10.1007/978-3-030-00934-2_30"),
             pages: Some("265-273"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -511,7 +511,6 @@ mod tests {
     use super::*;
     use crate::algos::ai_segmentation::test_support::trace_and_save_model;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     fn stardist(probability_threshold: f32, nms_threshold: f32) -> Stardist {
         Stardist {
@@ -523,9 +522,7 @@ mod tests {
     }
 
     fn gray_ctx(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
-        let img =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, values, CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 1>::new(ImageSize { width, height }, values).unwrap();
         PipelineContext::new_from_image_test(img).unwrap()
     }
 

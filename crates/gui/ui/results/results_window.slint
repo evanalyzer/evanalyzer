@@ -19,6 +19,11 @@ import { ResultsListView } from "results_list.slint";
 import { ResultsMatrixView } from "results_matrix.slint";
 import { ResultsChartsView } from "results_charts.slint";
 import { ExportDialog, ExportDialogState } from "export_dialog.slint";
+import { ResultsStatusBar } from "results_status_bar.slint";
+import {
+    FileBrowserDialog,
+    FileBrowserState,
+} from "../dialogs/file_browser_dialog.slint";
 
 export component ResultsWindow inherits Window {
     title: "Results - EVAnalyzer";
@@ -28,30 +33,57 @@ export component ResultsWindow inherits Window {
     min-height: 900px;
     background: Theme.bg;
 
-    HorizontalLayout {
+    // Like the main window: the status bar spans the full width below.
+    VerticalLayout {
         spacing: 0px;
 
-        ResultsRail { }
-
-        VerticalLayout {
-            horizontal-stretch: 1;
+        HorizontalLayout {
             spacing: 0px;
 
-            ResultsBreadcrumb { }
+            ResultsRail { }
 
-            if ResultsState.rail-mode == ResultsRailMode.list: ResultsListView {
-                vertical-stretch: 1;
-            }
-            if ResultsState.rail-mode == ResultsRailMode.matrix: ResultsMatrixView {
-                vertical-stretch: 1;
-            }
-            if ResultsState.rail-mode == ResultsRailMode.charts: ResultsChartsView {
-                vertical-stretch: 1;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 0px;
+
+                ResultsBreadcrumb { }
+
+                // The analysis that wrote this database didn't finish: say so
+                // before anyone draws conclusions from the numbers.
+                if ResultsState.run-warning != "": Rectangle {
+                    height: 30px;
+                    background: Theme.warn;
+                    Text {
+                        text: "⚠  " + ResultsState.run-warning;
+                        color: #000000;
+                        font-size: 12px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                }
+
+                if ResultsState.rail-mode == ResultsRailMode.list: ResultsListView {
+                    vertical-stretch: 1;
+                }
+                if ResultsState.rail-mode == ResultsRailMode.matrix: ResultsMatrixView {
+                    vertical-stretch: 1;
+                }
+                if ResultsState.rail-mode == ResultsRailMode.charts: ResultsChartsView {
+                    vertical-stretch: 1;
+                }
             }
         }
+
+        ResultsStatusBar { }
     }
 
     if ExportDialogState.active: ExportDialog {
+        width: 100%;
+        height: 100%;
+    }
+
+    if FileBrowserState.visible: FileBrowserDialog {
         width: 100%;
         height: 100%;
     }

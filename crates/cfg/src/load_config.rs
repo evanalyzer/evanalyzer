@@ -15,6 +15,7 @@
 
 use crate::core_types::InternalErrors;
 use crate::migration::migration_v1_to_v2::migrate_from_v1_to_v2;
+use crate::migration::migration_v2_to_v3::migrate_from_v2_to_v3;
 use crate::settings::ai_learning_settings::AiLearningSettings;
 use crate::settings::project_settings::ProjectSettings;
 use crate::{CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION, CURRENT_PROJECT_SCHEMA_VERSION};
@@ -29,6 +30,7 @@ use serde_json::Value;
 const PROJECT_MIGRATIONS: &[MigrationStep] = &[
     |_raw| {}, // 0 -> 1: nothing to do yet
     migrate_from_v1_to_v2,
+    migrate_from_v2_to_v3,
 ];
 
 /// Loads a [`ProjectSettings`] from its raw on-disk JSON, migrating it

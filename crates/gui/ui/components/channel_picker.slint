@@ -1,0 +1,201 @@
+// channel_picker.slint
+// Channel picker (popup list with each channel's color + name) and the
+// image-address picker built on it (channel / memory slot / scratchpad).
+
+import { ComboBox, ScrollView } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ChannelState } from "../state.slint";
+import { ImageMetaData } from "../editor/image_meta_panel.slint";
+
+// Color swatch + name of channel `idx`; collapses to nothing for a channel
+// the open image doesn't define.
+component ChannelLabel inherits Rectangle {
+    in property <int> idx;
+    in property <length> font-size: 12px;
+
+    for ch in ChannelState.channels: HorizontalLayout {
+        visible: ch.idx == root.idx;
+        spacing: ch.idx == root.idx ? 5px : 0px;
+        padding-left: ch.idx == root.idx ? 8px : 0px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 10px;
+                height: 10px;
+                border-radius: 2px;
+                background: ch.color;
+            }
+        }
+
+        Text {
+            text: ch.name;
+            font-size: root.font-size;
+            color: Theme.text-dim;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+// Popup channel picker. Always lists channels 0-9, like the class dropdown
+// always lists every class - a setting like "channel 8" must stay visible
+// and selectable while an image with fewer channels is open, not get lost.
+// Channels the open image has show its name and color beside the number.
+// Lists more than 10 only for an image with more channels (or a value
+// beyond 9), scrolling once there are more than fit.
+export component ChannelPicker inherits Rectangle {
+    in-out property <int> value: 0;
+    in property <length> font-size: 12px;
+    callback changed(int);
+
+    property <int> channel-count: max(10, ImageMetaData.nr-c-stacks, root.value + 1);
+    property <length> row-height: 28px;
+    property <int> max-visible-rows: 10;
+
+    height: 30px;
+
+    trigger-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            popup.show();
+        }
+
+        Rectangle {
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            background: trigger-ta.has-hover ? Theme.raised : Theme.bg;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 6px;
+                spacing: 0px;
+                Text {
+                    text: "Channel " + root.value;
+                    font-size: root.font-size;
+                    font-family: Theme.font-mono;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+
+                ChannelLabel {
+                    idx: root.value;
+                    font-size: root.font-size;
+                }
+
+                Text {
+                    text: "↓";
+                    font-size: 9px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: max(root.width, 200px);
+        height: min(root.channel-count, root.max-visible-rows) * root.row-height + 8px;
+
+        Rectangle {
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 6px;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: Theme.shadow;
+            clip: true;
+
+            ScrollView {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+
+                VerticalLayout {
+                    spacing: 0px;
+                    for index in root.channel-count: ch-ta := TouchArea {
+                        height: root.row-height;
+                        clicked => {
+                            root.value = index;
+                            root.changed(index);
+                            popup.close();
+                        }
+                        Rectangle {
+                            border-radius: 3px;
+                            background: index == root.value ? Theme.accent.with-alpha(0.12) : (ch-ta.has-hover ? Theme.raised : transparent);
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 0px;
+                                Text {
+                                    text: "Channel " + index;
+                                    font-size: 11px;
+                                    font-family: Theme.font-mono;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                }
+
+                                ChannelLabel {
+                                    idx: index;
+                                    font-size: 11px;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Editor for an `ImageAddress` command parameter. `kind`/`number` are the
+// current value pre-split by Rust (`ImageAddress::param_parts`: "channel",
+// "memory", "cache" or "scratchpad"); `changed` reports the new value in
+// `ImageAddress::to_param_value`'s format ("channel:2", "memory:1",
+// "scratchpad"). A project-cache address shows as "Memory"; editing it
+// turns it into a pipeline memory slot.
+export component ImageAddressPicker inherits HorizontalLayout {
+    in property <string> kind;
+    in property <int> number;
+    callback changed(string);
+
+    spacing: 4px;
+
+    ComboBox {
+        horizontal-stretch: 1;
+        model: ["Channel", "Memory", "Scratchpad"];
+        current-index: root.kind == "channel" ? 0 : (root.kind == "scratchpad" ? 2 : 1);
+        selected(v) => {
+            if v == "Channel" {
+                root.changed("channel:" + (root.kind == "channel" ? root.number : 0));
+            } else if v == "Memory" {
+                root.changed("memory:" + (root.kind == "memory" ? root.number : 1));
+            } else {
+                root.changed("scratchpad");
+            }
+        }
+    }
+
+    if root.kind == "channel": ChannelPicker {
+        horizontal-stretch: 2;
+        height: 24px;
+        font-size: 11px;
+        value: root.number;
+        changed(v) => {
+            root.changed("channel:" + v);
+        }
+    }
+
+    if root.kind == "memory" || root.kind == "cache": ComboBox {
+        horizontal-stretch: 2;
+        model: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+        current-value: root.number;
+        selected(v) => {
+            root.changed("memory:" + v);
+        }
+    }
+}

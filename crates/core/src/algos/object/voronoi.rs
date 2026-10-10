@@ -43,6 +43,7 @@ pub struct Voronoi {
     ///
     /// Only center objects that carry all listed classes pass the filter.
     /// Leave empty to include all objects of `centers`.
+    #[cmdsmeta(visibility = Advanced)]
     pub center_filter_classes: Vec<ObjectClass>,
 
     /// Object class used to spatially constrain the Voronoi areas.
@@ -56,6 +57,7 @@ pub struct Voronoi {
     ///
     /// Only mask objects that carry all listed classes pass the filter.
     /// Leave empty to include all objects of `mask`.
+    #[cmdsmeta(visibility = Advanced)]
     pub mask_filter_classes: Vec<ObjectClass>,
 
     /// Object class assigned to the resulting Voronoi region ROIs.
@@ -74,6 +76,7 @@ pub struct Voronoi {
     pub exclude_areas_at_the_edges: bool,
 
     /// Discard Voronoi regions whose originating center object was filtered out or missing.
+    #[cmdsmeta(visibility = Advanced)]
     pub exclude_areas_with_no_center: bool,
 }
 
@@ -502,8 +505,8 @@ impl ImageAlgorithm for Voronoi {
         "Voronoi"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "voronoi1908nouvelles",
             title: "Nouvelles applications des paramètres continus à la théorie des formes quadratiques. Deuxième mémoire",
             authors: &["Georgy Voronoi"],
@@ -512,7 +515,7 @@ impl ImageAlgorithm for Voronoi {
             doi: None,
             url: None,
             pages: Some("198-287"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -525,6 +528,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::image::Point2d;
     use crate::{
         ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::PixelSizes,
@@ -535,9 +539,7 @@ mod tests {
     };
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
-    use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     const CENTER_CLASS: ObjectClass = ObjectClass::Valid(1);
     const MASK_CLASS: ObjectClass = ObjectClass::Valid(2);
@@ -548,9 +550,7 @@ mod tests {
 
     fn make_ctx(width: usize, height: usize) -> PipelineContext {
         let size = ImageSize { width, height };
-        let img =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; width * height], CpuAllocator)
-                .unwrap();
+        let img = Image::<f32, 1>::new(size, vec![0.0f32; width * height]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -593,12 +593,7 @@ mod tests {
             width: tile_w,
             height: tile_h,
         };
-        let img = Image::<f32, 1, CpuAllocator>::new(
-            tile_size,
-            vec![0.0f32; tile_w * tile_h],
-            CpuAllocator,
-        )
-        .unwrap();
+        let img = Image::<f32, 1>::new(tile_size, vec![0.0f32; tile_w * tile_h]).unwrap();
         let managed = ManagedImage {
             data: img,
             tile_offset: Point2d { x: off_x, y: off_y },
@@ -687,17 +682,16 @@ mod tests {
         // that normally samples pixel data), so without their own measurement pass
         // they'd be left with empty intensities.
         const CHANNEL: i32 = 0;
-        const VALUE: f32 = 5.0;
+        const VALUE: f64 = 5.0;
         let mut ctx = make_ctx(10, 10);
         let mut cache = GlobalPipelineCache::default();
 
-        let channel_img = Image::<f32, 1, CpuAllocator>::new(
+        let channel_img = Image::<f32, 1>::new(
             ImageSize {
                 width: 10,
                 height: 10,
             },
-            vec![VALUE; 100],
-            CpuAllocator,
+            vec![VALUE as f32; 100],
         )
         .unwrap();
         cache.add_to_channel_cache(
@@ -759,13 +753,12 @@ mod tests {
         // one tile's worth of pixels) - intensity sampling must still only sum over
         // the pixels it actually has, silently skipping the rest of the now-larger
         // region rather than panicking.
-        let channel_img = Image::<f32, 1, CpuAllocator>::new(
+        let channel_img = Image::<f32, 1>::new(
             ImageSize {
                 width: tile_w,
                 height: tile_h,
             },
             vec![7.0f32; tile_w * tile_h],
-            CpuAllocator,
         )
         .unwrap();
         cache.add_to_channel_cache(

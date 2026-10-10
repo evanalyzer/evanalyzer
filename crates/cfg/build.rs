@@ -7,7 +7,7 @@
 // is include!()-d into this separate build-script crate root, so it needs its
 // own copy of anything from `crate::` that it references.
 #[allow(dead_code)]
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 3;
 
 mod utils {
     pub mod hex_colors {
@@ -31,8 +31,9 @@ mod types {
 mod core_types {
     pub use super::types::classes::{ObjectClass, SegmentationClass};
     pub use super::types::ids::ImageAddress;
+    pub use super::types::ids::ImageChannelIdx;
     pub use super::types::ids::MemoryId;
-    pub use super::types::units::{PixelUnits, SizeUnits};
+    pub use super::types::units::{PixelUnits, SizeUnits, SizeUnitsRel};
 }
 mod modules {
     pub mod meta_data {
@@ -77,6 +78,7 @@ mod modules {
             "/src/modules/pipeline_command_settings.rs"
         ));
     }
+    #[allow(unused_parens)]
     pub mod pipeline_command {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -89,6 +91,8 @@ mod modules {
             "/src/modules/pipeline_settings.rs"
         ));
     }
+    // Only the types are needed for the schema, not their helpers.
+    #[allow(dead_code)]
     pub mod plate_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

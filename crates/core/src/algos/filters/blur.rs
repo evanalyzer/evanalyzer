@@ -14,7 +14,6 @@ use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, Pipeline
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::{Image, ImageSize};
-use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 
 /// Smooths an image by averaging pixel intensities within a local neighborhood.
@@ -33,7 +32,6 @@ pub struct Blur {
         default = 3,
         min = 3,
         max = 27,
-        rename = "kernel_size",
         display_name = "Kernel size",
         summary = true,
         step = 2
@@ -88,8 +86,8 @@ impl ImageAlgorithm for Blur {
         "Blur"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        None
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata::IMAGEJ]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -128,9 +126,9 @@ impl Blur {
     /// `mode` to `BLUR_MORE`, not `GAUSSIAN`) replicates edge pixels instead,
     /// which is what the clamped window below matches.
     fn box_blur_edge_replicate<const C: usize>(
-        src: &Image<f32, C, CpuAllocator>,
+        src: &Image<f32, C>,
         kernel_size: usize,
-    ) -> Result<Image<f32, C, CpuAllocator>, InternalErrors> {
+    ) -> Result<Image<f32, C>, InternalErrors> {
         let (w, h) = (src.width(), src.height());
         let radius = kernel_size / 2;
 
@@ -140,13 +138,12 @@ impl Blur {
         let mut out = vec![0.0f32; w * h * C];
         Self::box_blur_pass_transposed::<C>(&transposed, &mut out, h, w, radius);
 
-        Image::<f32, C, CpuAllocator>::new(
+        Image::<f32, C>::new(
             ImageSize {
                 width: w,
                 height: h,
             },
             out,
-            CpuAllocator,
         )
         .map_err(InternalErrors::from_kornia)
     }
@@ -243,7 +240,6 @@ mod tests {
     use crate::pipeline::pipeline::PipelineImageMeta;
     use kornia_image::Image;
     use kornia_image::ImageSize;
-    use kornia_tensor::CpuAllocator;
 
     #[test]
     fn test_box_blur_grayscale() {
@@ -255,7 +251,7 @@ mod tests {
         let mut data = vec![0.0f32; 25];
         data[12] = 1.0; // Center pixel (x=2, y=2)
 
-        let input_img = Image::new(size, data, CpuAllocator).unwrap();
+        let input_img = Image::new(size, data).unwrap();
 
         let blur_cmd = Blur { kernel_size: 3 };
 
@@ -317,7 +313,7 @@ mod tests {
         let mut data = vec![0.0f32; 25];
         data[0] = 1.0; // top-left corner pixel
 
-        let input_img = Image::new(size, data, CpuAllocator).unwrap();
+        let input_img = Image::new(size, data).unwrap();
         let blur_cmd = Blur { kernel_size: 3 };
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
         let mut cache = GlobalPipelineCache::default();
@@ -361,7 +357,7 @@ mod tests {
         // data[center_idx + 1] = 0.0; // Green (already 0)
         // data[center_idx + 2] = 0.0; // Blue (already 0)
 
-        let input_img = Image::new(size, data, CpuAllocator).unwrap();
+        let input_img = Image::new(size, data).unwrap();
         let blur_cmd = Blur { kernel_size: 3 };
 
         // Create context with F32Rgb
@@ -415,8 +411,8 @@ mod tests {
             width: 5,
             height: 5,
         };
-        let gray_img = Image::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
-        let rgb_img = Image::new(size, vec![0.0f32; 75], CpuAllocator).unwrap();
+        let gray_img = Image::new(size, vec![0.0f32; 25]).unwrap();
+        let rgb_img = Image::new(size, vec![0.0f32; 75]).unwrap();
 
         PipelineContext {
             output_path: None,
@@ -501,7 +497,7 @@ mod tests {
             width: 1,
             height: 1,
         };
-        let img = Image::new(size, vec![0.0f32], CpuAllocator).unwrap();
+        let img = Image::new(size, vec![0.0f32]).unwrap();
         let container = ImageContainer::new_f32_gray_from_image_test(img);
 
         // This ensures the code generated for Debug is executed
@@ -521,7 +517,7 @@ mod tests {
             width: 5,
             height: 5,
         };
-        let img = Image::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
+        let img = Image::new(size, vec![0.0f32; 25]).unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
         let blur_cmd = Blur { kernel_size: 0 };
         let mut cache = GlobalPipelineCache::default();
@@ -536,7 +532,7 @@ mod tests {
             width: 5,
             height: 5,
         };
-        let img = Image::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
+        let img = Image::new(size, vec![0.0f32; 25]).unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
 
         // Force an error: Use an even kernel size (most libs reject this)
@@ -556,14 +552,14 @@ mod tests {
             width: 5,
             height: 5,
         };
-        let img = Image::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
+        let img = Image::new(size, vec![0.0f32; 25]).unwrap();
 
         // 2. Create a 3x3 "Wrong" scratch pad
         let wrong_size = ImageSize {
             width: 3,
             height: 3,
         };
-        let wrong_scratch = Image::new(wrong_size, vec![0.0f32; 9], CpuAllocator).unwrap();
+        let wrong_scratch = Image::new(wrong_size, vec![0.0f32; 9]).unwrap();
 
         // 3. Manually build a context whose scratch pad doesn't match the
         // image size.

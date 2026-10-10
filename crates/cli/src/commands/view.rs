@@ -1,7 +1,12 @@
 use crate::args::{ColumnsArgs, ViewArgs};
 use crate::commands::common::{cell_text, resolve_image_rel_paths, resolve_object_classes};
 use crate::table::print_object_table;
-use evanalyzer_app::result::{Column, ListFilter, Pagination, PlaneFilter, ResultsGenerator};
+use evanalyzer_app::backends::Backend;
+use evanalyzer_app::results::Column;
+use evanalyzer_app::results::ListFilter;
+use evanalyzer_app::results::Pagination;
+use evanalyzer_app::results::PlaneFilter;
+use evanalyzer_app::results::ResultsSource;
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde_json::json;
 
@@ -26,7 +31,7 @@ fn is_intensity_column(column: &Column) -> bool {
 /// `--page`, typically 0); an unbounded deep `--page` would rescan a lot -
 /// use `export` for anything that needs the whole table.
 fn cursor_for_page(
-    db: &ResultsGenerator,
+    db: &dyn ResultsSource,
     base: &ListFilter,
     target_page: usize,
 ) -> Result<Option<String>, InternalErrors> {
@@ -48,8 +53,9 @@ fn cursor_for_page(
     Ok(cursor)
 }
 
-pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
-    let db = ResultsGenerator::open_database(args.db.clone())?;
+pub fn run(args: ViewArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
+    let db = backend.open_results(&args.db)?;
+    let db = db.as_ref();
 
     if args.filter.colocalized.is_some() {
         return Err(InternalErrors::InvalidArgument(
@@ -62,8 +68,8 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
     let image_names: Vec<String> = images.iter().map(|image| image.name.clone()).collect();
     let class_names: Vec<String> = classes.iter().map(|class| class.name.clone()).collect();
 
-    let image_rel_paths = resolve_image_rel_paths(&db, &args.filter.images)?;
-    let object_classes = resolve_object_classes(&db, &args.filter.classes)?;
+    let image_rel_paths = resolve_image_rel_paths(db, &args.filter.images)?;
+    let object_classes = resolve_object_classes(db, &args.filter.classes)?;
     let columns: Vec<Column> = db
         .get_available_columns()?
         .into_iter()
@@ -84,8 +90,9 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
             limit: args.limit.max(1) as i32,
             after: None,
         },
+        transpond_table: args.filter.transpond.unwrap_or_else(|| false),
     };
-    let cursor = cursor_for_page(&db, &base_filter, args.page)?;
+    let cursor = cursor_for_page(db, &base_filter, args.page)?;
     let result = db.get_object_list(&ListFilter {
         page: Pagination {
             limit: base_filter.page.limit,
@@ -137,6 +144,14 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
     );
     println!("T-stack:  0..{}", db.get_nr_of_t_stacks());
     println!("Z-stack:  0..{}", db.get_nr_of_z_stacks());
+    match db.run_status() {
+        Ok(status) => {
+            if let Some(warning) = status.warning() {
+                println!("WARNING:  {warning}");
+            }
+        }
+        Err(e) => eprintln!("Warning: could not read how the analysis ended: {e}"),
+    }
     println!();
 
     if result.rows.is_empty() {
@@ -154,8 +169,8 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
     Ok(())
 }
 
-pub fn run_columns(args: ColumnsArgs) -> Result<(), InternalErrors> {
-    let db = ResultsGenerator::open_database(args.db.clone())?;
+pub fn run_columns(args: ColumnsArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
+    let db = backend.open_results(&args.db)?;
     let classes = db.get_object_classes()?;
     let columns = db.get_available_columns()?;
 
@@ -200,7 +215,17 @@ fn summarize(names: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use evanalyzer_app::backends::local::LocalBackend;
+
     use super::*;
+
+    fn run(args: ViewArgs) -> Result<(), InternalErrors> {
+        super::run(args, &LocalBackend::default())
+    }
+
+    fn run_columns(args: ColumnsArgs) -> Result<(), InternalErrors> {
+        super::run_columns(args, &LocalBackend::default())
+    }
     use crate::args::{ColumnsArgs, FilterArgs, ViewArgs};
     use crate::commands::test_support::TempResultsDb;
 

@@ -1,10 +1,11 @@
 use crate::args::{ProjectInfoArgs, ValidateArgs};
-use evanalyzer_app::extensions::project_ext::{ProjectExt, load_project};
+use evanalyzer_app::backends::Backend;
+use evanalyzer_app::project::{ProjectExt, load_project};
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde_json::json;
 
-pub fn run(args: ProjectInfoArgs) -> Result<(), InternalErrors> {
-    let project = load_project(&args.project)?;
+pub fn run(args: ProjectInfoArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
+    let project = load_project(backend.files(), &args.project)?;
 
     let pipelines: Vec<_> = project
         .pipelines
@@ -20,7 +21,7 @@ pub fn run(args: ProjectInfoArgs) -> Result<(), InternalErrors> {
         .iter()
         .map(|c| c.name.as_str())
         .collect();
-    let reachable = project.does_project_images_exist();
+    let reachable = project.does_project_images_exist(backend.files());
 
     if args.json {
         let out = json!({
@@ -79,8 +80,8 @@ pub fn run(args: ProjectInfoArgs) -> Result<(), InternalErrors> {
 
 /// Checks every image referenced by the project against disk, rather than just the
 /// single sample `does_project_images_exist` uses to detect a relinked/moved root.
-pub fn run_validate(args: ValidateArgs) -> Result<(), InternalErrors> {
-    let project = load_project(&args.project)?;
+pub fn run_validate(args: ValidateArgs, backend: &dyn Backend) -> Result<(), InternalErrors> {
+    let project = load_project(backend.files(), &args.project)?;
     let root = project.images.root.clone();
 
     let missing: Vec<_> = project
@@ -122,6 +123,15 @@ pub fn run_validate(args: ValidateArgs) -> Result<(), InternalErrors> {
 mod tests {
     use super::*;
     use crate::commands::test_support::TempProjectFile;
+
+    fn run(args: ProjectInfoArgs) -> Result<(), InternalErrors> {
+        super::run(args, &LocalBackend::default())
+    }
+
+    fn run_validate(args: ValidateArgs) -> Result<(), InternalErrors> {
+        super::run_validate(args, &LocalBackend::default())
+    }
+    use evanalyzer_app::backends::local::LocalBackend;
     use evanalyzer_cfg::settings::images_settings::ImageEntry;
     use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 

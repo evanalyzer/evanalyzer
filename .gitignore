@@ -49,3 +49,4 @@ tests/20260831_Uptake1_Exp0706_PH1.evadb
 # crates/core/tests/cellpose_sam_real_model.rs - too large to commit.
 # Regenerate locally with docs/convert_cellpose.py.
 crates/core/tests/models/
+tests/__pycache__

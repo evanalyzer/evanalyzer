@@ -35,6 +35,7 @@ pub struct RollingBall {
     /// The geometric shape of the rolling structural element.
     pub ball_type: BallType,
 
+    #[cmdsmeta(visibility = Advanced)]
     pub pre_smooth: bool,
 }
 
@@ -345,8 +346,8 @@ impl ImageAlgorithm for RollingBall {
         "Rolling Ball"
     }
 
-    fn cite(&self) -> Option<&'static CitationMetadata> {
-        Some(&CitationMetadata {
+    fn cite(&self) -> Vec<&'static CitationMetadata> {
+        vec![&CitationMetadata {
             cite_key: "sternberg1983biomedical",
             title: "Biomedical Image Processing",
             authors: &["Stanley R. Sternberg"],
@@ -355,7 +356,7 @@ impl ImageAlgorithm for RollingBall {
             doi: Some("10.1109/MC.1983.1654163"),
             url: Some("https://doi.org/10.1109/MC.1983.1654163"),
             pages: Some("22-34"),
-        })
+        }]
     }
 
     fn execution_scope(&self) -> ExecutionScope {
@@ -981,7 +982,6 @@ mod tests {
     use super::*;
     use crate::{ImageContainer, image::PixelSizes, pipeline::pipeline::PipelineImageMeta};
     use kornia_image::{Image, ImageSize};
-    use kornia_tensor::CpuAllocator;
 
     #[test]
     fn zero_or_negative_or_nan_radius_returns_error_instead_of_dividing_by_it() {
@@ -990,8 +990,7 @@ mod tests {
             height: 5,
         };
         for radius in [0.0, -1.0, f64::NAN] {
-            let img =
-                Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
+            let img = Image::<f32, 1>::new(size, vec![0.0f32; 25]).unwrap();
             let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
             let mut cache = GlobalPipelineCache::default();
             let cmd = RollingBall {
@@ -1036,8 +1035,7 @@ mod tests {
         }
         let original_pixels = data.clone();
 
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
+        let image = Image::<f32, 1>::new(ImageSize { width, height }, data)?;
         // This Arc stands in for the pipeline cache's own reference to the
         // channel image - something that keeps reading it after this run.
         let shared_original: Arc<ImageContainer> =
@@ -1138,8 +1136,7 @@ mod tests {
         }
         let original_pixels = data.clone();
 
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
+        let image = Image::<f32, 1>::new(ImageSize { width, height }, data)?;
         // This Arc stands in for the pipeline cache's own reference to the
         // channel image - something that keeps reading it after this run.
         let shared_original: Arc<ImageContainer> =
@@ -1235,8 +1232,7 @@ mod tests {
             }
         }
 
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
+        let image = Image::<f32, 1>::new(ImageSize { width, height }, data)?;
 
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
@@ -1338,8 +1334,7 @@ mod tests {
             }
         }
 
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
+        let image = Image::<f32, 1>::new(ImageSize { width, height }, data)?;
 
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
@@ -1413,8 +1408,7 @@ mod tests {
         let mut data = vec![0.2f32; width * height];
         data[50 * width + 50] = 0.8; // Cell signal spike
 
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
+        let image = Image::<f32, 1>::new(ImageSize { width, height }, data)?;
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
             PipelineImageMeta {
@@ -1494,8 +1488,7 @@ mod tests {
         }
         let original = data.clone();
 
-        let image =
-            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
+        let image = Image::<f32, 1>::new(ImageSize { width, height }, data)?;
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
             PipelineImageMeta {
@@ -1631,13 +1624,12 @@ mod tests {
             0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
         ];
 
-        let image = Image::<f32, 1, CpuAllocator>::new(
+        let image = Image::<f32, 1>::new(
             ImageSize {
                 width: WIDTH,
                 height: HEIGHT,
             },
             INPUT.to_vec(),
-            CpuAllocator,
         )?;
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),
@@ -1746,13 +1738,12 @@ mod tests {
             555.0, 563.0, 571.0, 579.0, 587.0, 595.0, 603.0, 611.0, 619.0, 627.0, 635.0, 643.0, 651.0, 659.0, 667.0, 675.0,
         ];
 
-        let image = Image::<f32, 1, CpuAllocator>::new(
+        let image = Image::<f32, 1>::new(
             ImageSize {
                 width: WIDTH,
                 height: HEIGHT,
             },
             INPUT.to_vec(),
-            CpuAllocator,
         )?;
         let mut ctx = PipelineContext::new_from_image(
             PathBuf::default(),

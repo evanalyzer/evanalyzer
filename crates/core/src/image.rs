@@ -19,4 +19,3 @@ pub use self::image_reader::ImageReader;
 pub use self::image_reader::ManagedImage;
 pub use self::image_reader::ReadMode;
 pub use self::image_reader::SUPPORTED_IMAGE_FORMATS;
-pub use self::image_reader::ZProjection;

@@ -52,6 +52,8 @@ export struct DefaultParamPreview {
     value: string,    // pre-formatted ("2.0 px", "Otsu", "on")
 }
 
+export struct CommandAuthor { full_name: string, organization: string }
+
 export struct CommandDef {
     id: int,
     name: string,
@@ -66,9 +68,7 @@ export struct CommandDef {
     default-params: [DefaultParamPreview],
     // Pipeline template entries (negative ids).
     is-template: bool,
-    author: string,
-    co-authors: string,
-    organization: string,
+    authors: [CommandAuthor],
     creation-time: string,
 }
 
@@ -523,7 +523,7 @@ component DetailPane inherits Rectangle {
 
         VerticalLayout {
             spacing: 4px;
-            if cmd.is-template && cmd.author != "": HorizontalLayout {
+            if cmd.is-template && cmd.authors.length > 0: HorizontalLayout {
                 spacing: 8px;
                 alignment: space-between;
                 Text {
@@ -533,7 +533,7 @@ component DetailPane inherits Rectangle {
                 }
 
                 Text {
-                    text: cmd.author;
+                    text: cmd.authors[0].full-name + " (" + cmd.authors[0].organization + ")";
                     color: Theme.text-dim;
                     font-size: 10.5px;
                     font-family: Theme.font-mono;
@@ -541,39 +541,27 @@ component DetailPane inherits Rectangle {
                 }
             }
 
-            if cmd.is-template && cmd.co-authors != "": HorizontalLayout {
-                spacing: 8px;
-                alignment: space-between;
-                Text {
-                    text: "Co-authors";
-                    color: Theme.text-mute;
-                    font-size: 10.5px;
-                }
+            if cmd.is-template: VerticalLayout {
+                spacing: 4px;
+                for author[index] in cmd.authors: HorizontalLayout {
+                    if index > 0: HorizontalLayout {
+                        spacing: 8px;
+                        alignment: space-between;
 
-                Text {
-                    text: cmd.co-authors;
-                    color: Theme.text-dim;
-                    font-size: 10.5px;
-                    font-family: Theme.font-mono;
-                    overflow: elide;
-                }
-            }
+                        Text {
+                            text: index == 1 ? "Co-authors" : "";
+                            color: Theme.text-mute;
+                            font-size: 10.5px;
+                        }
 
-            if cmd.is-template && cmd.organization != "": HorizontalLayout {
-                spacing: 8px;
-                alignment: space-between;
-                Text {
-                    text: "Organization";
-                    color: Theme.text-mute;
-                    font-size: 10.5px;
-                }
-
-                Text {
-                    text: cmd.organization;
-                    color: Theme.text-dim;
-                    font-size: 10.5px;
-                    font-family: Theme.font-mono;
-                    overflow: elide;
+                        Text {
+                            text: author.full-name + " (" + author.organization + ")";
+                            color: Theme.text-dim;
+                            font-size: 10.5px;
+                            font-family: Theme.font-mono;
+                            overflow: elide;
+                        }
+                    }
                 }
             }
 

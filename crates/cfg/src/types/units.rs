@@ -1,6 +1,20 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Largest gray value representable with `nr_of_bits` bits (255 for 8-bit,
+/// 65535 for 16-bit) - the factor that turns a normalized [0, 1] intensity
+/// back into an ImageJ/Fiji-style gray value.
+///
+/// `None` for an implausible bit depth outside 1-32: unguarded,
+/// `1u64 << nr_of_bits` for nr_of_bits > 63 is a shift-by-too-large,
+/// silently producing a wrong scale factor instead of an error.
+#[allow(dead_code)] // unused by the build script, which also compiles this file
+pub fn max_gray_value(nr_of_bits: u16) -> Option<f64> {
+    (1..=32)
+        .contains(&nr_of_bits)
+        .then(|| ((1u64 << nr_of_bits) - 1) as f64)
+}
+
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PixelUnits {
@@ -49,6 +63,32 @@ impl SizeUnits {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SizeUnitsRel {
+    #[default]
+    #[serde(alias = "nm")]
+    NanoMeter,
+    #[serde(alias = "px")]
+    Pixels,
+    #[serde(alias = "%")]
+    Percent,
+}
+
+impl SizeUnitsRel {
+    /// Convert a value in this unit to pixels.
+    /// `pixel_size_nm` is the size of one pixel in nanometers (nm/px), used only for `NanoMeter`.
+    #[allow(dead_code)]
+    pub fn to_pixel(self, value: f32, pixel_size_nm: f32) -> f32 {
+        match self {
+            SizeUnitsRel::Pixels => value,
+            SizeUnitsRel::NanoMeter => value / pixel_size_nm,
+            SizeUnitsRel::Percent => value / 100.0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,6 +96,22 @@ mod tests {
     // --- Conversion logic (marked `#[allow(dead_code)]` since this crate
     // never calls them itself - only `core` does - but the logic is real
     // and untested otherwise) ---
+
+    #[test]
+    fn max_gray_value_is_two_to_the_bit_depth_minus_one() {
+        assert_eq!(max_gray_value(1), Some(1.0));
+        assert_eq!(max_gray_value(8), Some(255.0));
+        assert_eq!(max_gray_value(16), Some(65535.0));
+        assert_eq!(max_gray_value(32), Some(u32::MAX as f64));
+    }
+
+    #[test]
+    fn max_gray_value_rejects_implausible_bit_depths() {
+        assert_eq!(max_gray_value(0), None);
+        assert_eq!(max_gray_value(33), None);
+        assert_eq!(max_gray_value(64), None, "would overflow the shift");
+        assert_eq!(max_gray_value(u16::MAX), None);
+    }
 
     #[test]
     fn to_relative_normalizes_bit_values_by_the_bit_depths_max() {

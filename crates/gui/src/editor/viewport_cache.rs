@@ -1,13 +1,15 @@
 use crate::UiState;
 use crate::editor::viewport_controller::ViewportState;
 use clru::{CLruCache, WeightScale};
-use evanalyzer_app::extensions::project_ext::ProjectExt;
+use evanalyzer_app::images::ImageChannel;
+use evanalyzer_app::images::ImageContainer;
+use evanalyzer_app::images::ManagedImage;
+use evanalyzer_app::images::PyramidInfo;
+use evanalyzer_app::images::TileRequest;
+use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{ImageTile, ZProjection};
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
-use evanalyzer_core::{
-    ImageChannel, ImageContainer, ImageReader, ImageTile, ManagedImage, PyramidInfo, ZProjection,
-};
-use kornia_image::allocator::CpuAllocator;
 use kornia_image::{Image, InterpolationMode};
 use kornia_imgproc::resize;
 use log::error;
@@ -279,8 +281,8 @@ impl ViewportCache {
             )
         };
 
-        let pool = self.app_state.get_or_create_reader_pool(&path)?;
-        let meta = pool.readers()[0].get_image_meta();
+        let source = self.app_state.get_image_source(&path)?;
+        let meta = source.meta();
         let s_info = meta
             .series
             .get(&series)
@@ -493,23 +495,21 @@ impl ViewportCache {
             return Ok((cached_tile.data.clone(), ctx));
         }
 
-        // Read image from disk - channels/Z-slices are read in parallel
-        // across the reader pool instead of one at a time.
-        let mut loaded = ImageReader::read_image_tile_combined_pooled(
-            pool.readers(),
+        // Read the tile through the backend - locally, channels/Z-slices are
+        // read in parallel across a reader pool instead of one at a time.
+        let mut loaded = source.read_tile(&TileRequest {
             series,
-            ctx.res_idx,
+            resolution_idx: ctx.res_idx,
             z_projection,
-            &z_range,
+            z_range: z_range.clone(),
             t_stack,
-            None,
-            &ImageTile {
+            tile: ImageTile {
                 offset_x: ctx.read_off_x,
                 offset_y: ctx.read_off_y,
                 width: request_w as usize,
                 height: request_h as usize,
             },
-        )?;
+        })?;
 
         // Scale down if it is low res
         if is_low_res {
@@ -633,14 +633,11 @@ pub(crate) fn scale_image(
         .map(|channel| {
             let resized_container = match &*channel.image {
                 ImageContainer::F32Gray(img) => {
-                    let mut dst = Image::<f32, 1, CpuAllocator>::new(
-                        new_size,
-                        vec![0.0; new_size.width * new_size.height],
-                        CpuAllocator,
-                    )
-                    .map_err(InternalErrors::from_kornia)?;
+                    let mut dst =
+                        Image::<f32, 1>::new(new_size, vec![0.0; new_size.width * new_size.height])
+                            .map_err(InternalErrors::from_kornia)?;
 
-                    resize::resize_native(img, &mut dst, InterpolationMode::Nearest)
+                    resize::resize(img, &mut dst, InterpolationMode::Nearest)
                         .map_err(InternalErrors::from_kornia)?;
                     Ok::<ImageContainer, InternalErrors>(ImageContainer::F32Gray(ManagedImage {
                         data: dst,
@@ -649,14 +646,13 @@ pub(crate) fn scale_image(
                     }))
                 }
                 ImageContainer::F32Rgb(img) => {
-                    let mut dst = Image::<f32, 3, CpuAllocator>::new(
+                    let mut dst = Image::<f32, 3>::new(
                         new_size,
                         vec![0.0; new_size.width * new_size.height * 3],
-                        CpuAllocator,
                     )
                     .map_err(InternalErrors::from_kornia)?;
 
-                    resize::resize_native(img, &mut dst, InterpolationMode::Nearest)
+                    resize::resize(img, &mut dst, InterpolationMode::Nearest)
                         .map_err(InternalErrors::from_kornia)?;
 
                     Ok::<ImageContainer, InternalErrors>(ImageContainer::F32Rgb(ManagedImage {
@@ -697,8 +693,8 @@ pub fn to_z_projection(z_handling: ZStackHandling) -> ZProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_core::ImagePlane;
-    use kornia_apriltag::utils::Point2d;
+    use evanalyzer_app::images::Point2d;
+    use evanalyzer_cfg::core_types::ImagePlane;
     use kornia_image::ImageSize;
 
     fn key(series: i32, level: i32, t: i32, x: usize, y: usize, w: usize, h: usize) -> TileKey {
@@ -718,13 +714,12 @@ mod tests {
     /// A tile with a real, size-proportional weight (w*h*4 bytes for a single
     /// F32Gray channel), so capacity/eviction behaves like production.
     fn weighted_tile(w: usize, h: usize) -> Arc<CachedTile> {
-        let image = Image::<f32, 1, CpuAllocator>::new(
+        let image = Image::<f32, 1>::new(
             ImageSize {
                 width: w,
                 height: h,
             },
             vec![0.0f32; w * h],
-            CpuAllocator,
         )
         .unwrap();
         let container = ImageContainer::F32Gray(ManagedImage {

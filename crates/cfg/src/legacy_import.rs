@@ -21,6 +21,7 @@
 
 use crate::core_types::{ImageAddress, ObjectClass, PipelineId, SegmentationClass, SizeUnits};
 use crate::legacy_schema::*;
+use crate::modules::meta_data::AuthorInformation;
 use crate::settings::classification_settings::{Class, ClassificationSettings};
 use crate::settings::images_settings::{
     GlobalImageSettings, PixelSizeSettings, ZStackHandling, ZStackSettings,
@@ -29,7 +30,7 @@ use crate::settings::meta_data::MetaData;
 use crate::settings::pipeline_command::PipelineCommand;
 use crate::settings::pipeline_command_settings::*;
 use crate::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
-use crate::settings::plate_settings::{GroupingMode, PlateSettings};
+use crate::settings::plate_settings::{GroupingMode, PlateSettings, PlateSize, WellLayout};
 use crate::settings::project_settings::ProjectSettings;
 
 #[derive(Debug, thiserror::Error)]
@@ -113,12 +114,17 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(chrono::Utc::now);
-    let authors = m
+    let authors: Vec<AuthorInformation> = m
         .author
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| vec![s.to_string()])
+        .map(|s| {
+            vec![AuthorInformation {
+                full_name: s.to_string(),
+                organization: m.organization.clone().unwrap_or_default(),
+            }]
+        })
         .unwrap_or_default();
 
     MetaData {
@@ -126,7 +132,6 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         short_description: String::new(),
         description,
         authors,
-        author_organization: m.organization.clone().unwrap_or_default(),
         creation_time,
         category: String::new(),
         tags: Vec::new(),
@@ -236,42 +241,41 @@ fn convert_plate(old: &LegacyProjectSettings, warnings: &mut Vec<String>) -> Pla
     let plate = resolve_plate(old, warnings);
 
     let grouping_mode = match plate.group_by.as_str() {
-        "Directory" => GroupingMode::FolderName,
-        "Filename" => GroupingMode::FileName,
-        _ => GroupingMode::NoGrouping,
+        "Directory" => GroupingMode::Folder,
+        "Filename" if !plate.filename_regex.is_empty() => GroupingMode::Custom,
+        _ => GroupingMode::Auto,
     };
 
-    let well_image_order: Vec<i32> = plate
+    let well_image_order: Vec<u32> = plate
         .plate_setup
         .well_image_order
         .iter()
         .flatten()
-        .copied()
+        .filter_map(|v| u32::try_from(*v).ok())
         .collect();
 
-    let default = PlateSettings::default();
+    // The old format has no physical plate size - only the per-well image
+    // grid (`plate_setup.rows`/`cols`).
+    let (rows, cols) = (plate.plate_setup.rows, plate.plate_setup.cols);
+    let well_layout = if rows > 0 && cols > 0 {
+        WellLayout::Fixed {
+            rows: rows as u32,
+            cols: cols as u32,
+        }
+    } else {
+        WellLayout::Auto
+    };
     PlateSettings {
         grouping_mode,
         grouping_regex: plate.filename_regex.clone(),
-        // The old format has no concept of multiple physical plates per project -
-        // that's `wellRows`/`wellCols` below (the per-well image tiling grid).
-        plate_cols: 1,
-        plate_rows: 1,
-        well_cols: if plate.plate_setup.cols > 0 {
-            plate.plate_setup.cols
-        } else {
-            default.well_cols
+        plate_size: PlateSize::Auto,
+        well_image_order: match well_layout {
+            WellLayout::Fixed { rows, cols } if well_image_order.is_empty() => {
+                PlateSettings::default_image_order(rows, cols)
+            }
+            _ => well_image_order,
         },
-        well_rows: if plate.plate_setup.rows > 0 {
-            plate.plate_setup.rows
-        } else {
-            default.well_rows
-        },
-        well_image_order: if well_image_order.is_empty() {
-            default.well_image_order
-        } else {
-            well_image_order
-        },
+        well_layout,
     }
 }
 
@@ -947,7 +951,7 @@ fn convert_classifier(
         for filter in &model_class.filters {
             if filter.intensity.min_intensity >= 0.0 || filter.intensity.max_intensity >= 0.0 {
                 warnings.push(format!(
-                    "{context}: '$classify' intensity filter has no equivalent in ClassifyObjects - dropped"
+                    "{context}: '$classify' intensity filter dropped - it names no channel or intensity metric, so add it again as a ClassifyObjects intensity filter"
                 ));
             }
             let output_class = resolve_class(
@@ -985,6 +989,7 @@ fn convert_classifier(
                 min_feret: 0.0,
                 max_feret: 2_147_483_600.0,
                 allow_edge_touching: !filter.metrics.exclude_objects_at_the_edge,
+                intensity_filters: vec![],
             }));
         }
     }
@@ -1117,8 +1122,8 @@ mod tests {
         let p = &outcome.project;
 
         assert_eq!(p.meta.name, "Legacy Demo");
-        assert_eq!(p.meta.authors, vec!["Joachim Danmayr".to_string()]);
-        assert_eq!(p.meta.author_organization, "evanalyzer.org");
+        assert_eq!(p.meta.authors[0].full_name, "Joachim Danmayr".to_string());
+        assert_eq!(p.meta.authors[0].organization, "evanalyzer.org".to_string());
 
         // classes()[0] is always the auto-prepended Background class - see
         // `ClassificationSettings::new_from_existing`.
@@ -1128,12 +1133,10 @@ mod tests {
         assert_eq!(p.classification.classes()[1].color, 0x3399FF);
         assert_eq!(p.classification.classes()[2].id, ObjectClass::Unset);
 
-        assert_eq!(p.plate.grouping_mode, GroupingMode::FolderName);
-        assert_eq!(p.plate.well_rows, 2);
-        assert_eq!(p.plate.well_cols, 2);
+        assert_eq!(p.plate.grouping_mode, GroupingMode::Folder);
+        assert_eq!(p.plate.well_layout, WellLayout::Fixed { rows: 2, cols: 2 });
         assert_eq!(p.plate.well_image_order, vec![1, 2, 3, 4]);
-        assert_eq!(p.plate.plate_rows, 1);
-        assert_eq!(p.plate.plate_cols, 1);
+        assert_eq!(p.plate.plate_size, PlateSize::Auto);
 
         assert_eq!(outcome.legacy_image_folder, Some("images".to_string()));
     }
@@ -1376,7 +1379,8 @@ mod tests {
         }"##;
         let outcome = import_legacy_project(json).unwrap();
         assert_eq!(outcome.legacy_image_folder, Some("old_images".to_string()));
-        assert_eq!(outcome.project.plate.grouping_mode, GroupingMode::FileName);
+        // "Filename" without a regex of its own: detected automatically.
+        assert_eq!(outcome.project.plate.grouping_mode, GroupingMode::Auto);
         assert!(
             outcome
                 .warnings
@@ -1561,7 +1565,6 @@ mod tests {
         assert_eq!(outcome.project.meta.name, "Fallback Name");
         assert_eq!(outcome.project.meta.description, "fallback notes");
         assert!(outcome.project.meta.authors.is_empty());
-        assert_eq!(outcome.project.meta.author_organization, "");
     }
 
     #[test]
@@ -1616,7 +1619,7 @@ mod tests {
     // ---- plate edge cases ----
 
     #[test]
-    fn plate_group_by_off_falls_back_to_no_grouping() {
+    fn plate_group_by_off_falls_back_to_auto() {
         let json = r##"{
             "meta": { "name": "X" },
             "projectSettings": { "classification": { "classes": [] },
@@ -1625,10 +1628,7 @@ mod tests {
             "pipelines": []
         }"##;
         let outcome = import_legacy_project(json).unwrap();
-        assert_eq!(
-            outcome.project.plate.grouping_mode,
-            GroupingMode::NoGrouping
-        );
+        assert_eq!(outcome.project.plate.grouping_mode, GroupingMode::Auto);
     }
 
     #[test]
@@ -1641,13 +1641,7 @@ mod tests {
             "pipelines": []
         }"##;
         let outcome = import_legacy_project(json).unwrap();
-        let default = PlateSettings::default();
-        assert_eq!(outcome.project.plate.well_cols, default.well_cols);
-        assert_eq!(outcome.project.plate.well_rows, default.well_rows);
-        assert_eq!(
-            outcome.project.plate.well_image_order,
-            default.well_image_order
-        );
+        assert_eq!(outcome.project.plate, PlateSettings::default());
     }
 
     #[test]
