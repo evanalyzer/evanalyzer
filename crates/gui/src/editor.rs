@@ -72,8 +72,12 @@ impl Editor {
         results_ui: slint::Weak<ResultsWindow>,
         app_state: Arc<UiState>,
     ) -> Self {
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), app_state.clone()));
         let view_port_cache = Arc::new(viewport_cache::ViewportCache::new(app_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            app_state.clone(),
+            view_port_cache.clone(),
+        ));
 
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),

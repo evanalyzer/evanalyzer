@@ -944,7 +944,13 @@ mod tests {
         project: ProjectWithRuntime,
     ) -> (Arc<UiState>, ObjectListController) {
         let ui_state = test_ui_state_with_project(project);
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         (
             ui_state.clone(),
             ObjectListController::new(ui, ui_state, viewport_controller),

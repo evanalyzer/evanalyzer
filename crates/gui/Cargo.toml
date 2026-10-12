@@ -24,6 +24,9 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 rhai = { workspace = true }
 
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 tungstenite = { workspace = true }
 rustls = { workspace = true }

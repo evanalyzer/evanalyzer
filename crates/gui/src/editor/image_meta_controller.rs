@@ -507,6 +507,9 @@ mod tests {
         let viewport_controller = Arc::new(ViewportController::new(
             slint::Weak::default(),
             ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
         ));
         let controller = ImageMetaController::new(
             slint::Weak::default(),
@@ -562,6 +565,9 @@ mod tests {
         let viewport_controller = Arc::new(ViewportController::new(
             slint::Weak::default(),
             ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
         ));
         let controller =
             ImageMetaController::new(slint::Weak::default(), ui_state, viewport_controller);
@@ -583,7 +589,13 @@ mod tests {
     ) -> (AppWindow, Arc<UiState>, Arc<ImageMetaController>) {
         let (ui, _results_ui) = test_ui_windows();
         let ui_state = test_ui_state_with_project(project);
-        let viewport_controller = Arc::new(ViewportController::new(ui.as_weak(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.as_weak(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let controller = Arc::new(ImageMetaController::new(
             ui.as_weak(),
             ui_state.clone(),

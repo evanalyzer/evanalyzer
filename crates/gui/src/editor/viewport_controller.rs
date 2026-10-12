@@ -1,6 +1,8 @@
 use crate::ViewportState as ViewportSlintState;
+use crate::editor::viewport_cache::ViewportCache;
 use crate::editor::viewport_task::{DrawingTask, TaskDispatch};
 use crate::helper::color_generators::get_colors_from_class;
+use crate::helper::size_formater::{BYTES_PER_MB, format_bytes};
 use crate::{AppWindow, HistogramData, HistogramState, PipelinesPanelState, RetainedTile, UiState};
 use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::images::ImageContainer;
@@ -211,11 +213,22 @@ fn update_retained_tiles(
     view_state.set_retained_tiles(Rc::new(VecModel::from(kept)).into());
 }
 
+/// Hands freed heap memory back to the operating system. glibc keeps freed
+/// chunks of its heap for reuse instead, so the process wouldn't shrink
+/// after a cache is emptied. Elsewhere large blocks go back on their own.
+fn return_freed_memory_to_os() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim only releases free memory of the allocator.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
 /// The tile history budget in bytes, `None` when the history is off.
 fn tile_history_budget(settings: &ViewportMemorySettings) -> Option<u64> {
     settings
         .tile_history_enabled
-        .then(|| settings.tile_history_budget_mb as u64 * 1024 * 1024)
+        .then(|| settings.tile_history_budget_mb as u64 * BYTES_PER_MB)
 }
 
 #[derive(Clone)]
@@ -286,6 +299,9 @@ pub struct ViewportController {
     /// Full-resolution size of the current image, for the navigator, which
     /// pan/zoom update without a render.
     pub(crate) full_image_size: Mutex<(i64, i64)>,
+    /// The tile cache the viewport workers read through - limited by the
+    /// memory settings, emptied for an analysis.
+    pub(crate) viewport_cache: Arc<ViewportCache>,
 }
 
 /// Posts `t` into the worker's single-slot task queue, merging it with
@@ -309,7 +325,11 @@ fn merge_into_slot(pair: &(Mutex<Option<DrawingTask>>, Condvar), t: DrawingTask)
 }
 
 impl ViewportController {
-    pub fn new(ui: slint::Weak<AppWindow>, app_state: Arc<UiState>) -> Self {
+    pub fn new(
+        ui: slint::Weak<AppWindow>,
+        app_state: Arc<UiState>,
+        viewport_cache: Arc<ViewportCache>,
+    ) -> Self {
         let drawing_tasks = Tasks {
             low_res_task: Arc::new(DrawingTaskContainer {
                 task_count: Arc::new(AtomicU32::new(0)),
@@ -349,6 +369,7 @@ impl ViewportController {
             content_generation: AtomicU64::new(0),
             memory_settings: RwLock::new(app_state.viewport_memory_settings()),
             full_image_size: Mutex::new((0, 0)),
+            viewport_cache,
             app_state,
         }
     }
@@ -367,13 +388,15 @@ impl ViewportController {
         self.memory_settings.read().expect("Poisoned").clone()
     }
 
-    /// Applies new viewport memory settings: frees kept renders the new
-    /// budget no longer allows right away and redraws the objects with the
-    /// new margin.
+    /// Applies new viewport memory settings: frees kept renders and cached
+    /// tiles the new limits no longer allow right away and redraws the
+    /// objects with the new margin.
     pub fn set_memory_settings(&self, settings: ViewportMemorySettings) {
         let margin_changed =
             self.memory_settings().object_overlay_margin_px != settings.object_overlay_margin_px;
         let budget = tile_history_budget(&settings);
+        self.viewport_cache
+            .set_limits(settings.tile_cache_mb, settings.overview_cache_mb);
         *self.memory_settings.write().expect("Poisoned") = settings;
 
         let generation = self.content_generation() as i32;
@@ -393,6 +416,32 @@ impl ViewportController {
         if margin_changed {
             self.trigger_image_redraw_objects();
         }
+    }
+
+    /// Frees what the viewport keeps beyond what is on screen - the tile
+    /// and overview caches and the kept earlier renders - if the settings
+    /// ask for it. Called when an analysis starts on this computer; the
+    /// caches fill up again as the viewport is used.
+    pub fn release_preview_memory_for_analysis(&self) {
+        if !self.memory_settings().free_caches_on_analysis {
+            return;
+        }
+        let (tiles, overviews) = self.viewport_cache.held_bytes();
+        self.viewport_cache.clear();
+        log::info!(
+            "Freed the viewport caches for the analysis: {} tiles, {} overviews",
+            format_bytes(tiles as f64),
+            format_bytes(overviews as f64)
+        );
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ViewportSlintState>()
+                    .set_retained_tiles(Rc::new(VecModel::<RetainedTile>::default()).into());
+            }
+            return_freed_memory_to_os();
+        })
+        .ok();
     }
 
     /// Lets a 'not ready' from the next low-res render of new content hide
@@ -1785,7 +1834,12 @@ mod breakpoint_state_tests {
     use kornia_image::{Image, ImageSize};
 
     fn make_controller() -> ViewportController {
-        ViewportController::new(slint::Weak::default(), test_ui_state())
+        let ui_state = test_ui_state();
+        ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            Arc::new(ViewportCache::new(ui_state)),
+        )
     }
 
     fn gray_image() -> ImageContainer {

@@ -77,6 +77,9 @@ impl ViewportImageController {
             state.set_tile_history_enabled(settings.tile_history_enabled);
             state.set_tile_history_budget_mb(settings.tile_history_budget_mb as i32);
             state.set_object_overlay_margin_px(settings.object_overlay_margin_px as i32);
+            state.set_tile_cache_mb(settings.tile_cache_mb as i32);
+            state.set_overview_cache_mb(settings.overview_cache_mb as i32);
+            state.set_free_caches_on_analysis(settings.free_caches_on_analysis);
         }
     }
 
@@ -91,6 +94,11 @@ impl ViewportImageController {
             tile_history_enabled: state.get_tile_history_enabled(),
             tile_history_budget_mb: state.get_tile_history_budget_mb().max(0) as u32,
             object_overlay_margin_px: state.get_object_overlay_margin_px().max(0) as u32,
+            tile_cache_mb: (state.get_tile_cache_mb().max(0) as u32)
+                .max(ViewportMemorySettings::MIN_CACHE_MB),
+            overview_cache_mb: (state.get_overview_cache_mb().max(0) as u32)
+                .max(ViewportMemorySettings::MIN_CACHE_MB),
+            free_caches_on_analysis: state.get_free_caches_on_analysis(),
         };
         if settings != self.viewport_controller.memory_settings() {
             self.apply_memory_settings(settings);
@@ -761,11 +769,12 @@ mod tests {
 
     fn make_controller() -> (Arc<UiState>, Arc<ViewportImageController>) {
         let ui_state = test_ui_state_with_project(project_with_one_image());
+        let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
         let viewport_controller = Arc::new(ViewportController::new(
             slint::Weak::default(),
             ui_state.clone(),
+            viewport_cache.clone(),
         ));
-        let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
         let histogram_controller = Arc::new(HistogramController::new(
             slint::Weak::default(),
             ui_state.clone(),
@@ -1053,7 +1062,13 @@ mod tests {
         ui: slint::Weak<AppWindow>,
     ) -> (Arc<UiState>, Arc<ViewportImageController>) {
         let ui_state = test_ui_state_with_project(project_with_one_image());
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
         let histogram_controller = Arc::new(HistogramController::new(
             ui.clone(),

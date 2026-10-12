@@ -629,6 +629,9 @@ mod tests {
         let viewport_controller = Arc::new(ViewportController::new(
             slint::Weak::default(),
             ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
         ));
         let object_list_controller = Arc::new(ObjectListController::new(
             slint::Weak::default(),
@@ -738,7 +741,13 @@ mod tests {
 
     fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> ImagesListController {
         let ui_state = test_ui_state();
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
             ui_state.clone(),

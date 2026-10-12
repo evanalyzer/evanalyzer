@@ -534,7 +534,13 @@ mod tests {
         let ui_state =
             crate::editor::test_support::ui_state_with_windows_on(&ui, &results_ui, project, owner);
         let w = ui.as_weak();
-        let viewport = Arc::new(ViewportController::new(w.clone(), ui_state.clone()));
+        let viewport = Arc::new(ViewportController::new(
+            w.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let objects = Arc::new(ObjectListController::new(
             w.clone(),
             ui_state.clone(),

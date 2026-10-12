@@ -1,5 +1,6 @@
 use crate::UiState;
 use crate::editor::viewport_controller::ViewportState;
+use crate::helper::size_formater::BYTES_PER_MB;
 use clru::{CLruCache, WeightScale};
 use evanalyzer_app::images::ImageChannel;
 use evanalyzer_app::images::ImageContainer;
@@ -171,6 +172,18 @@ impl IndexedTileCache {
         self.index.clear();
     }
 
+    /// Changes the weight budget, evicting least recently used tiles until
+    /// the rest fits.
+    fn resize(&mut self, capacity: NonZeroUsize) {
+        self.cache.resize(capacity);
+        self.index.rebuild_from(&self.cache);
+    }
+
+    /// Bytes currently held.
+    fn weight(&self) -> usize {
+        self.cache.weight()
+    }
+
     fn get_exact(&mut self, key: &TileKey) -> Option<Arc<CachedTile>> {
         self.cache.get(key).cloned()
     }
@@ -223,9 +236,11 @@ pub struct ViewportCache {
 }
 
 impl ViewportCache {
+    /// A cache with the limits of this computer's viewport memory settings.
     pub fn new(app_state: Arc<UiState>) -> Self {
-        let high_res_capacity = NonZeroUsize::new(1 * 1024 * 1024 * 1024).unwrap(); // 1 GB budget
-        let low_res_capacity = NonZeroUsize::new(256 * 1024 * 1024).unwrap(); // 256 MB budget
+        let settings = app_state.viewport_memory_settings();
+        let high_res_capacity = mb_to_bytes(settings.tile_cache_mb);
+        let low_res_capacity = mb_to_bytes(settings.overview_cache_mb);
 
         Self {
             app_state,
@@ -233,6 +248,34 @@ impl ViewportCache {
             cache_low_res: Mutex::new(IndexedTileCache::new(low_res_capacity)),
             active_high_res_data: RwLock::new(None),
         }
+    }
+
+    /// Changes the limits (in MB) of the tile and the overview cache; a
+    /// lower limit evicts the least recently used entries right away.
+    pub fn set_limits(&self, tile_cache_mb: u32, overview_cache_mb: u32) {
+        self.cache_high_res
+            .lock()
+            .unwrap()
+            .resize(mb_to_bytes(tile_cache_mb));
+        self.cache_low_res
+            .lock()
+            .unwrap()
+            .resize(mb_to_bytes(overview_cache_mb));
+    }
+
+    /// Empties both caches. What is on screen stays (it holds its own
+    /// references); anything else is read from disk again when needed.
+    pub fn clear(&self) {
+        self.cache_high_res.lock().unwrap().clear();
+        self.cache_low_res.lock().unwrap().clear();
+    }
+
+    /// Bytes held by the (tile, overview) cache.
+    pub fn held_bytes(&self) -> (usize, usize) {
+        (
+            self.cache_high_res.lock().unwrap().weight(),
+            self.cache_low_res.lock().unwrap().weight(),
+        )
     }
 
     pub fn get_image_references(&self) -> (Vec<(i32, Arc<ImageContainer>)>, ReadContext) {
@@ -608,6 +651,11 @@ fn look_for_best_matching_resolution_index(
     }
 }
 
+/// A cache limit in MB as the byte budget `clru` takes (at least 1 MB).
+fn mb_to_bytes(mb: u32) -> NonZeroUsize {
+    NonZeroUsize::new(mb.max(1) as usize * BYTES_PER_MB as usize).expect("at least 1 MB")
+}
+
 /// Scale images from the given vector
 ///
 /// The images in the image channel are scaled to the given width and height
@@ -833,6 +881,33 @@ mod tests {
         assert!(cache.get_exact(&k).is_none());
         let group = TileGroupKey::from(&k);
         assert!(cache.index.candidates(&group).is_empty());
+    }
+
+    #[test]
+    fn a_lower_limit_evicts_the_least_recently_used_tiles_and_keeps_the_index_in_sync() {
+        // 100x100 F32 = 40_000 bytes per tile (clru adds 1 per entry);
+        // room for three.
+        let mut cache = IndexedTileCache::new(NonZeroUsize::new(130_000).unwrap());
+        let keys: Vec<_> = (0..3).map(|i| key(0, 0, 0, i * 100, 0, 100, 100)).collect();
+        for k in &keys {
+            cache.insert(k.clone(), weighted_tile(100, 100)).unwrap();
+        }
+        cache.get_exact(&keys[0]); // now the most recently used
+
+        // Room for two.
+        cache.resize(NonZeroUsize::new(90_000).unwrap());
+
+        assert_eq!(cache.weight(), 80_000);
+        assert!(cache.get_exact(&keys[0]).is_some(), "recently used stays");
+        assert!(cache.get_exact(&keys[1]).is_none(), "oldest goes");
+        let group = TileGroupKey::from(&keys[1]);
+        assert!(!cache.index.candidates(&group).contains(&keys[1]));
+    }
+
+    #[test]
+    fn a_cache_limit_of_zero_mb_still_is_a_valid_budget() {
+        assert_eq!(mb_to_bytes(0).get(), 1024 * 1024);
+        assert_eq!(mb_to_bytes(1024).get(), 1024 * 1024 * 1024);
     }
 
     // -- to_z_projection ---------------------------------------------------------

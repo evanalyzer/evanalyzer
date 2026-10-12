@@ -376,7 +376,13 @@ mod tests {
         let results_ui = slint::Weak::default();
         let ui_state: Arc<UiState> = test_ui_state_with_project(ProjectWithRuntime::default());
 
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
             ui_state.clone(),

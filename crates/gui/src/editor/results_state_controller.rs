@@ -4203,7 +4203,13 @@ mod tests {
         results_ui: slint::Weak<ResultsWindow>,
         ui_state: Arc<UiState>,
     ) -> Arc<ResultsStateController> {
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
             ui_state.clone(),

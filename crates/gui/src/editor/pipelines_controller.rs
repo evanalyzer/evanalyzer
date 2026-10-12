@@ -1532,6 +1532,13 @@ impl PipelinesController {
                 .set_active_dialog(DialogType::PipelineRunning);
         }
 
+        // A local analysis gets the RAM of the viewport caches; a server's
+        // doesn't need this computer's.
+        if !self.app_state.backend().is_remote() {
+            self.viewport_controller
+                .release_preview_memory_for_analysis();
+        }
+
         self.dispatch_worker_task(task);
     }
 
@@ -3489,7 +3496,13 @@ mod tests {
 
     fn make_controller(ui: slint::Weak<AppWindow>) -> (Arc<UiState>, Arc<PipelinesController>) {
         let ui_state = test_ui_state();
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
             ui_state.clone(),

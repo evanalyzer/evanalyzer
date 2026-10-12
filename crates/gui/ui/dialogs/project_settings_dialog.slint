@@ -113,6 +113,9 @@ export global ViewportMemoryState {
     in-out property <bool> tile_history_enabled: false;
     in-out property <int> tile_history_budget_mb: 512;
     in-out property <int> object_overlay_margin_px: 256;
+    in-out property <int> tile_cache_mb: 1024;
+    in-out property <int> overview_cache_mb: 256;
+    in-out property <bool> free_caches_on_analysis: true;
 
     // Show the settings in effect - each time the dialog opens, so edits
     // left by a Cancel are gone.
@@ -367,6 +370,9 @@ export component ProjectSettingsDialog inherits Rectangle {
     property <string> kw-history: "Keep earlier high-resolution renders tile history ghost overview memory RAM whole slide zoom pan performance";
     property <string> kw-budget: "Memory for earlier renders budget MB megabytes RAM tile history performance";
     property <string> kw-margin: "Object overlay margin pixels border pan memory RAM performance";
+    property <string> kw-tile-cache: "Tile cache image tiles read from disk memory RAM MB megabytes performance";
+    property <string> kw-overview-cache: "Overview cache whole image overviews switching images memory RAM MB megabytes performance";
+    property <string> kw-free-caches: "Free caches when an analysis starts release memory RAM analysis run";
 
     // Whether `words` contain the search text (ignoring case).
     pure function matches(words: string) -> bool {
@@ -383,7 +389,7 @@ export component ProjectSettingsDialog inherits Rectangle {
         section == 0 ? (root.matches(root.kw-name) || root.matches(root.kw-author) || root.matches(root.kw-org))
         : section == 1 ? (root.matches(root.kw-grouping) || (ProjectSettingsState.settings.grouping_mode == 1 && root.matches(root.kw-regex)) || root.matches(root.kw-plate) || root.matches(root.kw-well-size) || (!ProjectSettingsState.settings.well_auto && root.matches(root.kw-well-images)))
         : section == 2 ? (root.matches(root.kw-merge) || (ProjectSettingsState.settings.tile_merge_enabled && (root.matches(root.kw-exclude) || root.matches(root.kw-connectivity) || root.matches(root.kw-fragments))))
-        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin))
+        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-free-caches))
     }
 
     pure function shows-section(section: int) -> bool {
@@ -885,6 +891,36 @@ export component ProjectSettingsDialog inherits Rectangle {
                                             maximum: 2048;
                                             step-size: 64;
                                             value <=> ViewportMemoryState.object_overlay_margin_px;
+                                        }
+                                    }
+                                    if root.shows(3, root.kw-tile-cache): SettingRow {
+                                        label: "Tile cache";
+                                        description: "In MB: image tiles kept after reading, so panning back or returning to an image doesn't read them from disk again.";
+                                        SpinBox {
+                                            minimum: 64;
+                                            maximum: 65536;
+                                            step-size: 128;
+                                            value <=> ViewportMemoryState.tile_cache_mb;
+                                        }
+                                    }
+                                    if root.shows(3, root.kw-overview-cache): SettingRow {
+                                        label: "Overview cache";
+                                        description: "In MB: whole-image overviews kept, so switching between images shows them at once.";
+                                        SpinBox {
+                                            minimum: 64;
+                                            maximum: 16384;
+                                            step-size: 64;
+                                            value <=> ViewportMemoryState.overview_cache_mb;
+                                        }
+                                    }
+                                    if root.shows(3, root.kw-free-caches): SettingRow {
+                                        label: "Free caches when an analysis starts";
+                                        description: "Gives a local analysis the RAM of both caches; they fill up again as you use the viewport.";
+                                        HorizontalLayout {
+                                            alignment: end;
+                                            Switch {
+                                                checked <=> ViewportMemoryState.free_caches_on_analysis;
+                                            }
                                         }
                                     }
                                 }

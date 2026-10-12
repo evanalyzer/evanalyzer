@@ -1239,7 +1239,12 @@ mod tests {
     fn render_fixture(project: evanalyzer_app::project::ProjectWithRuntime) -> Render {
         let (ui, results_ui) = test_ui_windows();
         let app_state = ui_state_with_windows(&ui, &results_ui, project);
-        let viewport = Arc::new(ViewportController::new(ui.as_weak(), app_state.clone()));
+        let cache = Arc::new(ViewportCache::new(app_state.clone()));
+        let viewport = Arc::new(ViewportController::new(
+            ui.as_weak(),
+            app_state.clone(),
+            cache.clone(),
+        ));
         {
             let mut vp = viewport.viewport_state.write().unwrap();
             vp.viewport_width = 400.0;
@@ -1251,7 +1256,6 @@ mod tests {
             app_state.clone(),
             viewport.clone(),
         ));
-        let cache = Arc::new(ViewportCache::new(app_state.clone()));
         let worker = Arc::new(ViewportWorker::new(
             app_state.clone(),
             viewport,
@@ -1476,6 +1480,46 @@ mod tests {
             .set_memory_settings(ViewportMemorySettings::default());
         drain_ui_queue();
         assert_eq!(r.view().get_retained_tiles().row_count(), 0);
+    }
+
+    #[test]
+    fn an_analysis_start_empties_the_caches_unless_the_settings_say_otherwise() {
+        let mut r = render_fixture(project_with_fixture_image());
+        enable_tile_history(&r);
+        zoom_in_and_out(&mut r);
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        let cache = r.worker.viewport_cache.clone();
+        let (tiles, overviews) = cache.held_bytes();
+        assert!(tiles > 0 && overviews > 0);
+
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings {
+                tile_history_enabled: true,
+                free_caches_on_analysis: false,
+                ..Default::default()
+            });
+        r.worker
+            .viewport_controller
+            .release_preview_memory_for_analysis();
+        drain_ui_queue();
+        assert_eq!(cache.held_bytes(), (tiles, overviews), "switched off: kept");
+
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings {
+                tile_history_enabled: true,
+                ..Default::default()
+            });
+        r.worker
+            .viewport_controller
+            .release_preview_memory_for_analysis();
+        drain_ui_queue();
+        assert_eq!(cache.held_bytes(), (0, 0));
+        assert_eq!(r.view().get_retained_tiles().row_count(), 0);
+        // What is on screen stays.
+        assert!(r.ui.get_display_image().size().width > 0);
+        assert!(r.view().get_high_res_ready());
     }
 
     #[test]

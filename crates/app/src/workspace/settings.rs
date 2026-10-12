@@ -54,11 +54,27 @@ pub struct ViewportMemorySettings {
     /// viewport edge, so panning doesn't uncover an empty border right
     /// away. 0 keeps the overlay exactly viewport-sized (least RAM).
     pub object_overlay_margin_px: u32,
+
+    /// Most RAM, in MB, the image tiles read for the viewport may keep, so
+    /// panning back or switching back doesn't read them from disk again.
+    pub tile_cache_mb: u32,
+
+    /// Most RAM, in MB, the whole-image overviews may keep (one per image
+    /// and channel combination recently shown).
+    pub overview_cache_mb: u32,
+
+    /// Empty both caches when an analysis starts on this computer, so it
+    /// gets that RAM; they fill up again as the viewport is used.
+    pub free_caches_on_analysis: bool,
 }
 
 impl ViewportMemorySettings {
     pub const DEFAULT_TILE_HISTORY_BUDGET_MB: u32 = 512;
     pub const DEFAULT_OBJECT_OVERLAY_MARGIN_PX: u32 = 256;
+    pub const DEFAULT_TILE_CACHE_MB: u32 = 1024;
+    pub const DEFAULT_OVERVIEW_CACHE_MB: u32 = 256;
+    /// Below this a cache can't hold even one typical tile/overview.
+    pub const MIN_CACHE_MB: u32 = 64;
 }
 
 impl Default for ViewportMemorySettings {
@@ -67,6 +83,9 @@ impl Default for ViewportMemorySettings {
             tile_history_enabled: false,
             tile_history_budget_mb: Self::DEFAULT_TILE_HISTORY_BUDGET_MB,
             object_overlay_margin_px: Self::DEFAULT_OBJECT_OVERLAY_MARGIN_PX,
+            tile_cache_mb: Self::DEFAULT_TILE_CACHE_MB,
+            overview_cache_mb: Self::DEFAULT_OVERVIEW_CACHE_MB,
+            free_caches_on_analysis: true,
         }
     }
 }
@@ -299,6 +318,11 @@ mod tests {
             settings.viewport.object_overlay_margin_px,
             ViewportMemorySettings::DEFAULT_OBJECT_OVERLAY_MARGIN_PX
         );
+        // The cache limits were fixed before they became settings: older
+        // files get exactly those values.
+        assert_eq!(settings.viewport.tile_cache_mb, 1024);
+        assert_eq!(settings.viewport.overview_cache_mb, 256);
+        assert!(settings.viewport.free_caches_on_analysis);
     }
 
     #[test]
