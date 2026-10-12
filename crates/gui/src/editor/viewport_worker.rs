@@ -1838,6 +1838,7 @@ mod tests {
     ///
     /// EVANALYZER_BENCH_SLIDE=<slide.tif> [BENCH_TILE_CACHE_MB=1024]
     /// [BENCH_OVERVIEW_CACHE_MB=256] [BENCH_TRIM=1] [BENCH_PAN_STEPS=8]
+    /// [BENCH_VIEWPORT=1920x1080] [BENCH_SERIES=0]
     /// RAYON_NUM_THREADS=2
     /// LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo test --release
     /// -p evanalyzer_gui bench_viewport -- --ignored --nocapture
@@ -1852,12 +1853,43 @@ mod tests {
         let manual = std::env::var("BENCH_TILE_CACHE_MB").is_ok();
         let tile_mb = env_u32("BENCH_TILE_CACHE_MB", 1024);
         let overview_mb = env_u32("BENCH_OVERVIEW_CACHE_MB", 256);
-        let (vp_w, vp_h) = (1920.0f32, 1080.0f32);
+        // BENCH_VIEWPORT=WxH, default a 1080p screen.
+        let (vp_w, vp_h) = std::env::var("BENCH_VIEWPORT")
+            .ok()
+            .and_then(|v| {
+                let (w, h) = v.split_once('x')?;
+                Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))
+            })
+            .unwrap_or((1920.0, 1080.0));
 
         let (rss_start, _) = rss_mb();
         let mut r = render_fixture(crate::editor::test_support::project_with_image_file(
             slide.clone().into(),
         ));
+        // The file's structure, and BENCH_SERIES to pick the series viewed.
+        if let Ok(source) = r.app_state.get_image_source(&slide.clone().into()) {
+            for (idx, series) in &source.meta().series {
+                println!(
+                    "series {idx}: c={} z={} t={}, levels: {}",
+                    series.nr_c_stacks,
+                    series.nr_z_stacks,
+                    series.nr_t_stacks,
+                    series
+                        .resolutions
+                        .iter()
+                        .map(|(l, p)| format!(
+                            "{l}:{}x{} {}bit tile {}x{}",
+                            p.width, p.height, p.nr_bits, p.tile_width, p.tile_height
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+        if let Ok(series) = std::env::var("BENCH_SERIES") {
+            let series: i32 = series.parse().expect("BENCH_SERIES is a number");
+            r.app_state.get_project_write().set_active_series(&series);
+        }
         r.worker
             .viewport_controller
             .set_memory_settings(ViewportMemorySettings {
@@ -1962,8 +1994,10 @@ mod tests {
         // places (cache hits if they were kept).
         let pan = 700.0;
         let steps = env_u32("BENCH_PAN_STEPS", 8) as usize;
+        // Along the image's longer side, so the tour stays on the image.
+        let (dx, dy) = if full_w >= full_h { (pan, 0.0) } else { (0.0, pan) };
         for i in 1..=steps {
-            center(&r, 1.0, cx + i as f32 * pan, cy);
+            center(&r, 1.0, cx + i as f32 * dx, cy + i as f32 * dy);
             step(
                 &mut r,
                 &format!("pan right {i}"),
@@ -1972,7 +2006,7 @@ mod tests {
             );
         }
         for i in (0..steps).rev() {
-            center(&r, 1.0, cx + i as f32 * pan, cy);
+            center(&r, 1.0, cx + i as f32 * dx, cy + i as f32 * dy);
             step(
                 &mut r,
                 &format!("pan back {i}"),
