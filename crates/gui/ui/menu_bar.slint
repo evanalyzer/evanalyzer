@@ -152,6 +152,17 @@ export component CustomMenuBar inherits Rectangle {
                     MenuSeparator { }
 
                     MenuItem {
+                        text: "Settings…";
+                        icon: @image-url("icons/regular-black/gear.svg");
+                        clicked => {
+                            GlobalAppState.active-dialog = DialogType.project-settings;
+                            file-menu.close();
+                        }
+                    }
+
+                    MenuSeparator { }
+
+                    MenuItem {
                         text: ConnectionState.remote ? "Connect to other server…" : "Connect to server…";
                         icon: @image-url("icons/regular-black/cloud.svg");
                         clicked => {
@@ -211,37 +222,6 @@ export component CustomMenuBar inherits Rectangle {
                    //         export-menu.close();
                    //     }
                    // }
-                }
-            }
-        }
-
-        // --- MENU: VIEW ---
-        view-item := Rectangle {
-            width: view-text.preferred-width + 16px;
-            background: view-touch.has-hover ? Theme.hover : transparent;
-            border-radius: 3px;
-            view-text := Text {
-                text: "View";
-                vertical-alignment: center;
-            }
-
-            view-touch := TouchArea {
-                clicked => {
-                    view-menu.show();
-                }
-            }
-
-            view-menu := PopupWindow {
-                y: parent.height;
-                width: 200px;
-                MenuContainer {
-                    MenuItem {
-                        text: "Viewport memory…";
-                        clicked => {
-                            GlobalAppState.active-dialog = DialogType.viewport-memory;
-                            view-menu.close();
-                        }
-                    }
                 }
             }
         }

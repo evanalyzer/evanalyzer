@@ -70,7 +70,7 @@ impl ViewportImageController {
     /// pixels, with room for a display scale factor of 2.
     const SOFTWARE_RENDERER_MAX_LAYER_EXTENT: f32 = 16000.0;
 
-    /// Shows `settings` in the viewport memory dialog.
+    /// Shows `settings` in the settings dialog's Viewport section.
     fn show_memory_settings(&self, settings: &ViewportMemorySettings) {
         if let Some(ui) = self.ui.upgrade() {
             let state = ui.global::<ViewportMemoryState>();
@@ -80,17 +80,21 @@ impl ViewportImageController {
         }
     }
 
-    /// Takes over what the viewport memory dialog shows now.
+    /// Takes over what the settings dialog's Viewport section shows now -
+    /// only what changed, so an Apply of other settings costs nothing here.
     fn apply_memory_settings_from_ui(&self) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
         let state = ui.global::<ViewportMemoryState>();
-        self.apply_memory_settings(ViewportMemorySettings {
+        let settings = ViewportMemorySettings {
             tile_history_enabled: state.get_tile_history_enabled(),
             tile_history_budget_mb: state.get_tile_history_budget_mb().max(0) as u32,
             object_overlay_margin_px: state.get_object_overlay_margin_px().max(0) as u32,
-        });
+        };
+        if settings != self.viewport_controller.memory_settings() {
+            self.apply_memory_settings(settings);
+        }
     }
 
     /// Applies `settings` to the viewport and saves them on this computer.
@@ -111,18 +115,21 @@ impl ViewportImageController {
                     .set_max_layer_extent(Self::SOFTWARE_RENDERER_MAX_LAYER_EXTENT);
             }
 
-            // Viewport memory settings
+            // Viewport memory settings (Viewport section of the settings
+            // dialog): shown when it opens, taken over on Apply.
             self.show_memory_settings(&self.viewport_controller.memory_settings());
             let manager = self.clone();
-            ui.global::<ViewportMemoryState>().on_changed(move || {
+            ui.global::<ViewportMemoryState>().on_load(move || {
+                manager.show_memory_settings(&manager.viewport_controller.memory_settings());
+            });
+            let manager = self.clone();
+            ui.global::<ViewportMemoryState>().on_apply(move || {
                 manager.apply_memory_settings_from_ui();
             });
             let manager = self.clone();
             ui.global::<ViewportMemoryState>()
                 .on_reset_to_defaults(move || {
-                    let defaults = ViewportMemorySettings::default();
-                    manager.show_memory_settings(&defaults);
-                    manager.apply_memory_settings(defaults);
+                    manager.show_memory_settings(&ViewportMemorySettings::default());
                 });
 
             // Viewport size changed

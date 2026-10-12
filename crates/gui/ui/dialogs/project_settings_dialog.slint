@@ -2,8 +2,7 @@ import {
     LineEdit,
     ComboBox,
     SpinBox,
-    CheckBox,
-    Palette,
+    Switch,
     ScrollView,
 } from "std-widgets.slint";
 import { GlobalAppState, DialogType } from "../state.slint";
@@ -108,17 +107,314 @@ export global ProjectSettingsState {
     }
 }
 
+// The viewport's RAM/smoothness trade-offs (Viewport section). Kept on this
+// computer, not in the project - they are about its RAM.
+export global ViewportMemoryState {
+    in-out property <bool> tile_history_enabled: false;
+    in-out property <int> tile_history_budget_mb: 512;
+    in-out property <int> object_overlay_margin_px: 256;
+
+    // Show the settings in effect - each time the dialog opens, so edits
+    // left by a Cancel are gone.
+    callback load();
+    // Take over what is shown (Apply).
+    callback apply();
+    // Show the defaults; Apply saves them.
+    callback reset_to_defaults();
+}
+
+// -- Building blocks -----------------------------------------------------------
+
+// One entry of the section list on the left.
+component NavItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> active;
+    // Searching, and nothing in this section matches.
+    in property <bool> dimmed;
+    callback clicked;
+
+    height: 32px;
+    border-radius: 6px;
+    background: root.active ? Theme.accent-dim : (ta.has-hover ? Theme.hover : transparent);
+
+    Rectangle {
+        x: 0;
+        y: 8px;
+        width: 3px;
+        height: parent.height - 16px;
+        border-radius: 1.5px;
+        background: root.active ? Theme.accent : transparent;
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: 14px;
+                height: 14px;
+                colorize: root.active ? Theme.accent : (root.dimmed ? Theme.text-faint : Theme.text-dim);
+            }
+        }
+
+        Text {
+            text: root.text;
+            vertical-alignment: center;
+            font-size: 12px;
+            font-weight: root.active ? 600 : 400;
+            color: root.dimmed ? Theme.text-faint : (root.active ? Theme.text : Theme.text-dim);
+            overflow: elide;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component NavGroupLabel inherits Text {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    color: Theme.text-mute;
+}
+
+// Title of a settings section, with where its settings are kept.
+component SectionHeader inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <string> scope;
+
+    spacing: 4px;
+
+    HorizontalLayout {
+        spacing: 10px;
+
+        Text {
+            text: root.title;
+            font-size: 16px;
+            font-weight: 700;
+            color: Theme.text;
+            vertical-alignment: center;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 18px;
+                width: scope-text.preferred-width + 14px;
+                border-radius: 9px;
+                background: Theme.raised;
+                scope-text := Text {
+                    text: root.scope;
+                    font-size: 10px;
+                    color: Theme.text-dim;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        @children
+    }
+
+    Text {
+        text: root.subtitle;
+        font-size: 11px;
+        color: Theme.text-dim;
+        wrap: word-wrap;
+    }
+}
+
+// A rounded panel the rows of a section sit on.
+component SettingsCard inherits Rectangle {
+    background: Theme.panel;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border-soft;
+    clip: true;
+
+    VerticalLayout {
+        @children
+    }
+}
+
+// One setting: name and explanation on the left, its control on the right.
+// The divider on top of the first row lies on the card's own border.
+component SettingRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> description;
+    in property <bool> enabled: true;
+    in property <length> control-width: 240px;
+
+    Rectangle {
+        height: 1px;
+        background: Theme.border-soft;
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 24px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 3px;
+
+            Text {
+                text: root.label;
+                font-size: 12px;
+                font-weight: 600;
+                color: root.enabled ? Theme.text : Theme.text-mute;
+                wrap: word-wrap;
+            }
+
+            if root.description != "": Text {
+                text: root.description;
+                font-size: 11px;
+                color: root.enabled ? Theme.text-dim : Theme.text-mute;
+                wrap: word-wrap;
+            }
+        }
+
+        VerticalLayout {
+            width: root.control-width;
+            alignment: center;
+            @children
+        }
+    }
+}
+
+// A setting whose control needs the card's full width (shown below its
+// name and explanation).
+component SettingBlock inherits VerticalLayout {
+    in property <string> label;
+    in property <string> description;
+
+    Rectangle {
+        height: 1px;
+        background: Theme.border-soft;
+    }
+
+    VerticalLayout {
+        padding: 16px;
+        padding-top: 12px;
+        spacing: 10px;
+
+        VerticalLayout {
+            spacing: 3px;
+            Text {
+                text: root.label;
+                font-size: 12px;
+                font-weight: 600;
+                color: Theme.text;
+            }
+
+            if root.description != "": Text {
+                text: root.description;
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+        }
+
+        @children
+    }
+}
+
+// -- Dialog --------------------------------------------------------------------
+
+// All settings in one place: the project's (saved with the project) and this
+// computer's (viewport memory). A section list on the left, or - while
+// searching - every matching setting of all sections.
 export component ProjectSettingsDialog inherits Rectangle {
     background: Theme.modal-overlay;
     private property <length> well_size: (ProjectSettingsState.settings.well_rows > 5 || ProjectSettingsState.settings.well_columns > 5) ? 30px : 45px;
 
+    // Sections: 0 General, 1 Plate & grouping, 2 Object merging, 3 Viewport.
+    property <int> current-section: 0;
+    property <string> query;
+    property <bool> searching: root.query.replace-all(" ", "") != "";
+
+    // Words each setting is found by (its name, explanation and synonyms).
+    property <string> kw-name: "Project name title identification";
+    property <string> kw-author: "Author name person user identification";
+    property <string> kw-org: "Organization organisation university company institute lab identification";
+    property <string> kw-grouping: "Grouping group images into wells file name auto custom regex folder";
+    property <string> kw-regex: "Regex regular expression grouping file name pattern";
+    property <string> kw-plate: "Plate size wells 6 12 24 48 96 384 1536";
+    property <string> kw-well-size: "Well size images per well rows columns auto custom";
+    property <string> kw-well-images: "Images in well order position layout rows columns";
+    property <string> kw-merge: "Merge objects split across tile boundaries cross-tile whole slide stitching";
+    property <string> kw-exclude: "Exclude classes from merging object classes";
+    property <string> kw-connectivity: "Connectivity 4-connected 8-connected neighbours neighbors diagonal merging";
+    property <string> kw-fragments: "Max maximum fragments per group merging limit";
+    property <string> kw-history: "Keep earlier high-resolution renders tile history ghost overview memory RAM whole slide zoom pan performance";
+    property <string> kw-budget: "Memory for earlier renders budget MB megabytes RAM tile history performance";
+    property <string> kw-margin: "Object overlay margin pixels border pan memory RAM performance";
+
+    // Whether `words` contain the search text (ignoring case).
+    pure function matches(words: string) -> bool {
+        words.to-lowercase().replace-all(root.query.to-lowercase(), "") != words.to-lowercase()
+    }
+
+    // Whether a setting of `section` found by `words` is shown.
+    pure function shows(section: int, words: string) -> bool {
+        root.searching ? root.matches(words) : root.current-section == section
+    }
+
+    // Whether anything of `section` matches the search.
+    pure function section-matches(section: int) -> bool {
+        section == 0 ? (root.matches(root.kw-name) || root.matches(root.kw-author) || root.matches(root.kw-org))
+        : section == 1 ? (root.matches(root.kw-grouping) || (ProjectSettingsState.settings.grouping_mode == 1 && root.matches(root.kw-regex)) || root.matches(root.kw-plate) || root.matches(root.kw-well-size) || (!ProjectSettingsState.settings.well_auto && root.matches(root.kw-well-images)))
+        : section == 2 ? (root.matches(root.kw-merge) || (ProjectSettingsState.settings.tile_merge_enabled && (root.matches(root.kw-exclude) || root.matches(root.kw-connectivity) || root.matches(root.kw-fragments))))
+        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin))
+    }
+
+    pure function shows-section(section: int) -> bool {
+        root.searching ? root.section-matches(section) : root.current-section == section
+    }
+
+    function go-to(section: int) {
+        root.query = "";
+        root.current-section = section;
+    }
+
+    function cancel() {
+        ProjectSettingsState.project_settings_canceled();
+        GlobalAppState.active-dialog = DialogType.none;
+    }
+
+    init => {
+        ViewportMemoryState.load();
+        search-input.focus();
+    }
+
+    // Block clicks to the app behind.
+    TouchArea { }
+
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 620px;
-        height: 780px;
-        background: Theme.panel;
-        border-radius: 10px;
+        width: min(900px, parent.width - 48px);
+        height: min(680px, parent.height - 48px);
+        background: Theme.bg;
+        border-radius: 12px;
         border-width: 1px;
         border-color: Theme.border;
         drop-shadow-color: Theme.shadow;
@@ -129,410 +425,554 @@ export component ProjectSettingsDialog inherits Rectangle {
         VerticalLayout {
             spacing: 0;
 
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 0;
+
+                // -- Section list ----------------------------------------------
+                Rectangle {
+                    width: 230px;
+                    background: Theme.sidebar;
+
+                    VerticalLayout {
+                        padding: 16px;
+                        padding-top: 18px;
+                        spacing: 4px;
+
+                        Text {
+                            text: "Settings";
+                            font-size: 17px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+
+                        Rectangle {
+                            height: 10px;
+                        }
+
+                        // Search field
+                        Rectangle {
+                            height: 32px;
+                            border-radius: 6px;
+                            background: Theme.panel;
+                            border-width: 1px;
+                            border-color: search-input.has-focus ? Theme.accent : Theme.border-soft;
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 6px;
+                                spacing: 8px;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Image {
+                                        source: @image-url("../icons/regular-black/magnifying-glass.svg");
+                                        width: 14px;
+                                        height: 14px;
+                                        colorize: Theme.text-mute;
+                                    }
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+
+                                    if root.query == "": Text {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: "Search settings";
+                                        font-size: 12px;
+                                        color: Theme.text-faint;
+                                        vertical-alignment: center;
+                                    }
+
+                                    search-input := TextInput {
+                                        width: 100%;
+                                        height: 100%;
+                                        text <=> root.query;
+                                        single-line: true;
+                                        font-size: 12px;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                if root.query != "": VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 20px;
+                                        height: 20px;
+                                        border-radius: 4px;
+                                        background: clear-ta.has-hover ? Theme.hover : transparent;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/x.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.text-dim;
+                                        }
+
+                                        clear-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.query = "";
+                                                search-input.focus();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 14px;
+                        }
+
+                        NavGroupLabel {
+                            text: "PROJECT";
+                        }
+
+                        NavItem {
+                            text: "General";
+                            icon: @image-url("../icons/regular-black/user-circle.svg");
+                            active: !root.searching && root.current-section == 0;
+                            dimmed: root.searching && !root.section-matches(0);
+                            clicked => {
+                                root.go-to(0);
+                            }
+                        }
+
+                        NavItem {
+                            text: "Plate & grouping";
+                            icon: @image-url("../icons/regular-black/grid-nine.svg");
+                            active: !root.searching && root.current-section == 1;
+                            dimmed: root.searching && !root.section-matches(1);
+                            clicked => {
+                                root.go-to(1);
+                            }
+                        }
+
+                        NavItem {
+                            text: "Object merging";
+                            icon: @image-url("../icons/regular-black/squares-four.svg");
+                            active: !root.searching && root.current-section == 2;
+                            dimmed: root.searching && !root.section-matches(2);
+                            clicked => {
+                                root.go-to(2);
+                            }
+                        }
+
+                        Rectangle {
+                            height: 14px;
+                        }
+
+                        NavGroupLabel {
+                            text: "THIS COMPUTER";
+                        }
+
+                        NavItem {
+                            text: "Viewport";
+                            icon: @image-url("../icons/regular-black/monitor.svg");
+                            active: !root.searching && root.current-section == 3;
+                            dimmed: root.searching && !root.section-matches(3);
+                            clicked => {
+                                root.go-to(3);
+                            }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                        }
+                    }
+
+                    Rectangle {
+                        x: parent.width - 1px;
+                        width: 1px;
+                        height: parent.height;
+                        background: Theme.border-soft;
+                    }
+                }
+
+                // -- Settings ------------------------------------------------
+                Rectangle {
+                    horizontal-stretch: 1;
+
+                    ScrollView {
+                        VerticalLayout {
+                            alignment: start;
+                            padding: 28px;
+                            padding-top: 22px;
+                            spacing: 28px;
+
+                            if root.searching && !root.section-matches(0) && !root.section-matches(1) && !root.section-matches(2) && !root.section-matches(3): VerticalLayout {
+                                padding-top: 60px;
+                                spacing: 6px;
+                                Text {
+                                    text: "No settings match “" + root.query + "”";
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    color: Theme.text;
+                                    horizontal-alignment: center;
+                                }
+
+                                Text {
+                                    text: "Try another word, e.g. “plate”, “merge” or “memory”.";
+                                    font-size: 11px;
+                                    color: Theme.text-dim;
+                                    horizontal-alignment: center;
+                                }
+                            }
+
+                            // -- General -----------------------------------
+                            if root.shows-section(0): VerticalLayout {
+                                spacing: 14px;
+                                SectionHeader {
+                                    title: "General";
+                                    scope: "Saved with the project";
+                                    subtitle: "Who made this project - stored with it and shown when it is cited.";
+                                }
+
+                                SettingsCard {
+                                    if root.shows(0, root.kw-name): SettingRow {
+                                        label: "Project name";
+                                        LineEdit {
+                                            placeholder-text: "Enter project name…";
+                                            text <=> ProjectSettingsState.settings.project_name;
+                                        }
+                                    }
+                                    if root.shows(0, root.kw-author): SettingRow {
+                                        label: "Author";
+                                        LineEdit {
+                                            placeholder-text: "Charles Darwin";
+                                            text <=> ProjectSettingsState.settings.author_name;
+                                        }
+                                    }
+                                    if root.shows(0, root.kw-org): SettingRow {
+                                        label: "Organization";
+                                        LineEdit {
+                                            placeholder-text: "University / Company";
+                                            text <=> ProjectSettingsState.settings.organization_name;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // -- Plate & grouping --------------------------
+                            if root.shows-section(1): VerticalLayout {
+                                spacing: 14px;
+                                SectionHeader {
+                                    title: "Plate & grouping";
+                                    scope: "Saved with the project";
+                                    subtitle: "How images are grouped into wells and how the plate is laid out in the results.";
+                                }
+
+                                SettingsCard {
+                                    if root.shows(1, root.kw-grouping): SettingRow {
+                                        label: "Grouping";
+                                        description: "How the well of an image is found.";
+                                        ComboBox {
+                                            model: [
+                                                "Auto (from the file name)",
+                                                "Custom regex",
+                                                "Folder [well/image_01.tif]"
+                                            ];
+                                            current-index <=> ProjectSettingsState.settings.grouping_mode;
+                                        }
+                                    }
+                                    if ProjectSettingsState.settings.grouping_mode == 1 && root.shows(1, root.kw-regex): SettingRow {
+                                        label: "Regex";
+                                        description: "Applied to the file name to find the well.";
+                                        LineEdit {
+                                            placeholder-text: "^(([A-H])([0-9]+))_([0-9]+)";
+                                            text <=> ProjectSettingsState.settings.custom_regex;
+                                        }
+                                    }
+                                    if root.shows(1, root.kw-plate): SettingRow {
+                                        label: "Plate size";
+                                        description: "The same choice as the results window's plate size.";
+                                        ComboBox {
+                                            model: ProjectSettingsState.plate-size-labels;
+                                            current-index <=> ProjectSettingsState.settings.plate_size_index;
+                                        }
+                                    }
+                                    if root.shows(1, root.kw-well-size): SettingRow {
+                                        label: "Well size";
+                                        description: ProjectSettingsState.settings.well_auto ? "Rows and columns of images in a well, fitted to the images." : "Rows × columns of images in a well.";
+                                        VerticalLayout {
+                                            spacing: 8px;
+                                            ComboBox {
+                                                model: ["Auto (fitted to the images)", "Custom"];
+                                                current-index: ProjectSettingsState.settings.well_auto ? 0 : 1;
+                                                selected => {
+                                                    ProjectSettingsState.settings.well_auto = self.current-index == 0;
+                                                }
+                                            }
+
+                                            // Stacked: two SpinBoxes (min. 128px each)
+                                            // don't fit the control column side by side.
+                                            if !ProjectSettingsState.settings.well_auto: HorizontalLayout {
+                                                spacing: 8px;
+                                                Text {
+                                                    text: "Rows";
+                                                    width: 56px;
+                                                    font-size: 11px;
+                                                    color: Theme.text-dim;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                SpinBox {
+                                                    value: ProjectSettingsState.settings.well_rows;
+                                                    minimum: 1;
+                                                    maximum: 8;
+                                                    edited => {
+                                                        ProjectSettingsState.settings.well_rows = self.value;
+                                                        ProjectSettingsState.well_dims_changed(self.value, ProjectSettingsState.settings.well_columns);
+                                                    }
+                                                }
+                                            }
+
+                                            if !ProjectSettingsState.settings.well_auto: HorizontalLayout {
+                                                spacing: 8px;
+                                                Text {
+                                                    text: "Columns";
+                                                    width: 56px;
+                                                    font-size: 11px;
+                                                    color: Theme.text-dim;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                SpinBox {
+                                                    value: ProjectSettingsState.settings.well_columns;
+                                                    minimum: 1;
+                                                    maximum: 8;
+                                                    edited => {
+                                                        ProjectSettingsState.settings.well_columns = self.value;
+                                                        ProjectSettingsState.well_dims_changed(ProjectSettingsState.settings.well_rows, self.value);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if !ProjectSettingsState.settings.well_auto && root.shows(1, root.kw-well-images): SettingBlock {
+                                        label: "Images in well";
+                                        description: "Which image number is shown at each position of the well (press Enter to confirm a change).";
+                                        HorizontalLayout {
+                                            alignment: start;
+                                            GridLayout {
+                                                spacing: 2px;
+                                                for val[i] in ProjectSettingsState.settings.well_values: Rectangle {
+                                                    row: i / ProjectSettingsState.settings.well_columns;
+                                                    col: mod(i, ProjectSettingsState.settings.well_columns);
+                                                    width: root.well_size;
+                                                    height: root.well_size * 0.8;
+                                                    background: Theme.bg;
+                                                    border-width: 1px;
+                                                    border-color: Theme.border-soft;
+                                                    border-radius: 3px;
+
+                                                    TextInput {
+                                                        text: val;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                        color: Theme.text;
+                                                        font-size: 11px;
+                                                        accepted => {
+                                                            ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
+                                                        }
+                                                        edited => {
+                                                            ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // -- Object merging ----------------------------
+                            if root.shows-section(2): VerticalLayout {
+                                spacing: 14px;
+                                SectionHeader {
+                                    title: "Object merging";
+                                    scope: "Saved with the project";
+                                    subtitle: "Reassembles objects split across an internal tile boundary (e.g. a whole organ on a whole slide image) into one object. Every object class merges unless excluded.";
+                                }
+
+                                SettingsCard {
+                                    if root.shows(2, root.kw-merge): SettingRow {
+                                        label: "Merge objects across tiles";
+                                        description: "Off: objects are exported per tile, as found.";
+                                        HorizontalLayout {
+                                            alignment: end;
+                                            Switch {
+                                                checked <=> ProjectSettingsState.settings.tile_merge_enabled;
+                                            }
+                                        }
+                                    }
+                                    if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-exclude): SettingRow {
+                                        label: "Exclude classes";
+                                        description: "Classes whose objects are never merged.";
+                                        MultiClassDropdown {
+                                            is-seg: false;
+                                            value: "excluded-classes";
+                                            selection-flags: ProjectSettingsState.settings.tile_merge_classes_to_not_merge_flags;
+                                            changed(v) => {
+                                                ProjectSettingsState.tile_merge_class_toggled(v);
+                                            }
+                                        }
+                                    }
+                                    if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-connectivity): SettingRow {
+                                        label: "Connectivity";
+                                        description: "8-connected also joins pieces touching only diagonally.";
+                                        ComboBox {
+                                            model: ["4-connected", "8-connected"];
+                                            current-index <=> ProjectSettingsState.settings.tile_merge_connectivity;
+                                        }
+                                    }
+                                    if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-fragments): SettingRow {
+                                        label: "Max fragments per group";
+                                        description: "Upper limit of pieces joined into one object.";
+                                        SpinBox {
+                                            value: ProjectSettingsState.settings.tile_merge_max_fragments_per_group;
+                                            minimum: 1;
+                                            maximum: 1000000;
+                                            edited => {
+                                                ProjectSettingsState.settings.tile_merge_max_fragments_per_group = self.value;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // -- Viewport ----------------------------------
+                            if root.shows-section(3): VerticalLayout {
+                                spacing: 14px;
+                                SectionHeader {
+                                    title: "Viewport";
+                                    scope: "This computer only";
+                                    subtitle: "Memory the image viewport may use for smoother panning and zooming. Kept on this computer, for every project.";
+                                }
+
+                                SettingsCard {
+                                    if root.shows(3, root.kw-history): SettingRow {
+                                        label: "Keep earlier high-resolution renders";
+                                        description: "Panning back or zooming shows the sharp earlier renders instead of the blurry overview - most useful for whole slide images. Off: only the current render and one overview are kept (least RAM).";
+                                        HorizontalLayout {
+                                            alignment: end;
+                                            Switch {
+                                                checked <=> ViewportMemoryState.tile_history_enabled;
+                                            }
+                                        }
+                                    }
+                                    if root.shows(3, root.kw-budget): SettingRow {
+                                        label: "Memory for earlier renders";
+                                        description: "In MB. The graphics card holds about as much again.";
+                                        enabled: ViewportMemoryState.tile_history_enabled;
+                                        SpinBox {
+                                            enabled: ViewportMemoryState.tile_history_enabled;
+                                            minimum: 64;
+                                            maximum: 16384;
+                                            step-size: 64;
+                                            value <=> ViewportMemoryState.tile_history_budget_mb;
+                                        }
+                                    }
+                                    if root.shows(3, root.kw-margin): SettingRow {
+                                        label: "Object overlay margin";
+                                        description: "In pixels: how far objects are drawn past the visible area, so panning doesn't uncover an empty border. 0 uses the least RAM; objects at a newly uncovered edge then appear once you stop moving.";
+                                        SpinBox {
+                                            minimum: 0;
+                                            maximum: 2048;
+                                            step-size: 64;
+                                            value <=> ViewportMemoryState.object_overlay_margin_px;
+                                        }
+                                    }
+                                }
+
+                                if !root.searching: HorizontalLayout {
+                                    alignment: end;
+                                    AppButton {
+                                        text: "Reset to defaults";
+                                        clicked => {
+                                            ViewportMemoryState.reset_to_defaults();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // -- Footer ------------------------------------------------------
+            Rectangle {
+                height: 1px;
+                background: Theme.border-soft;
+            }
+
             Rectangle {
                 height: 56px;
                 background: Theme.panel;
+
                 HorizontalLayout {
                     padding-left: 20px;
                     padding-right: 16px;
                     spacing: 12px;
-                    alignment: stretch;
 
                     Text {
-                        text: "Project Settings";
-                        color: Theme.text;
-                        font-size: 15px;
-                        font-weight: 600;
+                        text: "Project settings are saved with the project; viewport settings on this computer.";
+                        font-size: 11px;
+                        color: Theme.text-mute;
                         vertical-alignment: center;
-                    }
-
-                    Rectangle {
                         horizontal-stretch: 1;
+                        overflow: elide;
                     }
 
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 5px;
-                        background: close-ta.has-hover ? Theme.raised : transparent;
-                        Text {
-                            text: "✕";
-                            color: Theme.text-dim;
-                            font-size: 12px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        close-ta := TouchArea {
+                    VerticalLayout {
+                        alignment: center;
+                        AppButton {
+                            text: "Cancel";
                             clicked => {
-                                ProjectSettingsState.project_settings_canceled();
+                                root.cancel();
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        AppButton {
+                            text: "Apply";
+                            primary: true;
+                            clicked => {
+                                ProjectSettingsState.trigger_project_settings_accepted();
+                                ViewportMemoryState.apply();
                                 GlobalAppState.active-dialog = DialogType.none;
                             }
                         }
                     }
                 }
+            }
+        }
 
-                Rectangle {
-                    x: 0;
-                    y: parent.height - 1px;
-                    width: parent.width;
-                    height: 1px;
-                    background: Theme.border-soft;
-                }
+        // Close button
+        Rectangle {
+            x: parent.width - self.width - 12px;
+            y: 12px;
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: close-ta.has-hover ? Theme.raised : transparent;
+            Image {
+                source: @image-url("../icons/regular-black/x.svg");
+                width: 12px;
+                height: 12px;
+                colorize: Theme.text-dim;
             }
 
-            Rectangle {
-                vertical-stretch: 1;
-                background: Theme.bg;
-
-                ScrollView {
-                    VerticalLayout {
-                        padding: 20px;
-                        spacing: 20px;
-
-                        VerticalLayout {
-                            spacing: 12px;
-                            Text {
-                                text: "Identification";
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 600;
-                            }
-
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Project Name:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                LineEdit {
-                                    placeholder-text: "Enter project name...";
-                                    text <=> ProjectSettingsState.settings.project_name;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Author Name:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                LineEdit {
-                                    placeholder-text: "Charles Darwin";
-                                    text <=> ProjectSettingsState.settings.author_name;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Organization:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                LineEdit {
-                                    placeholder-text: "University / Company";
-                                    text <=> ProjectSettingsState.settings.organization_name;
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
-
-                        VerticalLayout {
-                            spacing: 12px;
-                            Text {
-                                text: "Cross-tile object merging";
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 600;
-                            }
-
-                            Text {
-                                text: "Reassemble objects split across an internal tile boundary (e.g. a whole organ on a whole-slide image) back into one correct object. On by default; every object class merges unless excluded below.";
-                                color: Theme.text-dim;
-                                font-size: 10px;
-                                wrap: word-wrap;
-                            }
-
-                            CheckBox {
-                                text: "Merge objects split across tile boundaries";
-                                checked <=> ProjectSettingsState.settings.tile_merge_enabled;
-                            }
-
-                            if (ProjectSettingsState.settings.tile_merge_enabled): VerticalLayout {
-                                spacing: 12px;
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    Text {
-                                        text: "Exclude classes:";
-                                        vertical-alignment: center;
-                                        width: 110px;
-                                        color: Theme.text-dim;
-                                        font-size: 11px;
-                                    }
-
-                                    MultiClassDropdown {
-                                        is-seg: false;
-                                        value: "excluded-classes";
-                                        selection-flags: ProjectSettingsState.settings.tile_merge_classes_to_not_merge_flags;
-                                        changed(v) => {
-                                            ProjectSettingsState.tile_merge_class_toggled(v);
-                                        }
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    Text {
-                                        text: "Connectivity:";
-                                        vertical-alignment: center;
-                                        width: 110px;
-                                        color: Theme.text-dim;
-                                        font-size: 11px;
-                                    }
-
-                                    ComboBox {
-                                        model: ["4-connected", "8-connected"];
-                                        current-index <=> ProjectSettingsState.settings.tile_merge_connectivity;
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    Text {
-                                        text: "Max fragments/group:";
-                                        vertical-alignment: center;
-                                        width: 110px;
-                                        color: Theme.text-dim;
-                                        font-size: 11px;
-                                    }
-
-                                    SpinBox {
-                                        value: ProjectSettingsState.settings.tile_merge_max_fragments_per_group;
-                                        minimum: 1;
-                                        maximum: 1000000;
-                                        edited => {
-                                            ProjectSettingsState.settings.tile_merge_max_fragments_per_group = self.value;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
-
-                        VerticalLayout {
-                            spacing: 12px;
-                            Text {
-                                text: "Analyze settings";
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 600;
-                            }
-
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Grouping:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                group_mode := ComboBox {
-                                    model: [
-                                        "Auto (detect the well from the file name)",
-                                        "Custom regex",
-                                        "Folder [well/image_01.tif]"
-                                    ];
-                                    current-index <=> ProjectSettingsState.settings.grouping_mode;
-                                }
-                            }
-
-                            if (group_mode.current-index == 1): HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Regex:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                LineEdit {
-                                    placeholder-text: "^(([A-H])([0-9]+))_([0-9]+)";
-                                    text <=> ProjectSettingsState.settings.custom_regex;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Plate size:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                ComboBox {
-                                    model: ProjectSettingsState.plate-size-labels;
-                                    current-index <=> ProjectSettingsState.settings.plate_size_index;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Well size:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                ComboBox {
-                                    model: ["Auto (fitted to the images)", "Custom"];
-                                    current-index: ProjectSettingsState.settings.well_auto ? 0 : 1;
-                                    selected => {
-                                        ProjectSettingsState.settings.well_auto = self.current-index == 0;
-                                    }
-                                }
-                            }
-
-                            if !ProjectSettingsState.settings.well_auto: HorizontalLayout {
-                                spacing: 12px;
-                                Text {
-                                    text: "Well Rows/Cols:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                    color: Theme.text-dim;
-                                    font-size: 11px;
-                                }
-
-                                SpinBox {
-                                    value: ProjectSettingsState.settings.well_rows;
-                                    minimum: 1;
-                                    maximum: 8;
-                                    edited => {
-                                        ProjectSettingsState.settings.well_rows = self.value;
-                                        ProjectSettingsState.well_dims_changed(self.value, ProjectSettingsState.settings.well_columns);
-                                    }
-                                }
-
-                                SpinBox {
-                                    value: ProjectSettingsState.settings.well_columns;
-                                    minimum: 1;
-                                    maximum: 8;
-                                    edited => {
-                                        ProjectSettingsState.settings.well_columns = self.value;
-                                        ProjectSettingsState.well_dims_changed(ProjectSettingsState.settings.well_rows, self.value);
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
-
-                        if !ProjectSettingsState.settings.well_auto: VerticalLayout {
-                            spacing: 12px;
-                            Text {
-                                text: "Images in well";
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 600;
-                            }
-
-                            Text {
-                                text: "Which image number is shown at each position of the well (press Enter to confirm a change).";
-                                color: Theme.text-dim;
-                                font-size: 10px;
-                                wrap: word-wrap;
-                            }
-
-                            GridLayout {
-                                spacing: 2px;
-                                for val[i] in ProjectSettingsState.settings.well_values: Rectangle {
-                                    row: i / ProjectSettingsState.settings.well_columns;
-                                    col: mod(i, ProjectSettingsState.settings.well_columns);
-                                    width: root.well_size;
-                                    height: root.well_size * 0.8;
-                                    background: Theme.panel;
-                                    border-width: 1px;
-                                    border-color: Theme.border-soft;
-                                    border-radius: 3px;
-
-                                    TextInput {
-                                        text: val;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
-                                        color: Theme.text;
-                                        font-size: 11px;
-                                        accepted => {
-                                            ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
-                                        }
-                                        edited => {
-                                            ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                height: 56px;
-                background: Theme.bg;
-                border-color: Theme.border-soft;
-                HorizontalLayout {
-                    padding-left: 20px;
-                    padding-right: 16px;
-                    spacing: 12px;
-                    alignment: end;
-
-                    AppButton {
-                        text: "Cancel";
-                        clicked => {
-                            ProjectSettingsState.project_settings_canceled();
-                            GlobalAppState.active-dialog = DialogType.none;
-                        }
-                    }
-
-                    AppButton {
-                        text: "Apply Settings";
-                        primary: true;
-                        clicked => {
-                            ProjectSettingsState.trigger_project_settings_accepted();
-                            GlobalAppState.active-dialog = DialogType.none;
-                        }
-                    }
+            close-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.cancel();
                 }
             }
         }

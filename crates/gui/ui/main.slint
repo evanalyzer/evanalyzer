@@ -33,6 +33,7 @@ import {
     ProjectSettingsDialog,
     ProjectSettingsState,
     ProjectSettingsSlint,
+    ViewportMemoryState,
 } from "dialogs/project_settings_dialog.slint";
 import {
     ImageItemData,
@@ -132,10 +133,6 @@ import {
     RunAnalysisDialog,
     RunAnalysisState,
 } from "dialogs/run_analysis_dialog.slint";
-import {
-    ViewportMemoryDialog,
-    ViewportMemoryState,
-} from "dialogs/viewport_memory_dialog.slint";
 import {
     ResultsWindow,
 } from "results/results_window.slint";
@@ -465,10 +462,6 @@ export component AppWindow inherits Window {
                 height: 100%;
             }
             if (GlobalAppState.active_dialog == DialogType.run-analysis-confirm): RunAnalysisDialog {
-                width: 100%;
-                height: 100%;
-            }
-            if (GlobalAppState.active_dialog == DialogType.viewport-memory): ViewportMemoryDialog {
                 width: 100%;
                 height: 100%;
             }
