@@ -2992,6 +2992,7 @@ dependencies = [
  "evanalyzer_cfg",
  "evanalyzer_gui_slint",
  "i-slint-backend-testing",
+ "image",
  "indexmap",
  "kornia-image",
  "kornia-imgproc",

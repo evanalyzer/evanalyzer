@@ -1,10 +1,13 @@
 use crate::UiState;
+use crate::editor::view_channel::ViewChannel;
 use crate::editor::viewport_controller::ViewportState;
 use crate::helper::size_formater::BYTES_PER_MB;
 use clru::{CLruCache, WeightScale};
 use evanalyzer_app::images::ImageChannel;
 use evanalyzer_app::images::ImageContainer;
+use evanalyzer_app::images::ImageSource;
 use evanalyzer_app::images::ManagedImage;
+use evanalyzer_app::images::Point2d;
 use evanalyzer_app::images::PyramidInfo;
 use evanalyzer_app::images::TileRequest;
 use evanalyzer_app::project::ProjectExt;
@@ -55,9 +58,19 @@ pub struct TileKey {
     pub y: usize, // offset_y
     pub width: usize,
     pub height: usize,
+    /// Every how many pixels of the region one was kept (1: all).
+    pub subsample: usize,
     pub z_projection: ZProjection,
     pub z_range: Option<RangeInclusive<i32>>,
     pub t: i32,
+}
+
+impl TileKey {
+    /// Size of the tile's image: the region, subsampled.
+    fn output_size(&self) -> (usize, usize) {
+        let step = self.subsample.max(1);
+        (self.width.div_ceil(step), self.height.div_ceil(step))
+    }
 }
 
 pub struct TileWeightScale;
@@ -69,21 +82,18 @@ impl WeightScale<TileKey, Arc<CachedTile>> for TileWeightScale {
 }
 
 pub struct CachedTile {
-    pub data: Arc<Vec<ImageChannel>>,
+    pub(crate) data: RenderSource,
 }
 
 impl CachedTile {
     pub fn size_in_bytes(&self) -> usize {
-        let mut memory_size: usize = 0;
-        for val in self.data.iter() {
-            memory_size += val.image.get_image_memory_usage();
-        }
-
-        memory_size
+        self.data.iter().map(ViewChannel::size_in_bytes).sum()
     }
 }
 
-pub(crate) type RenderSource = Arc<Vec<ImageChannel>>;
+/// A tile's channels as the viewport keeps them - compact where exact (see
+/// [`ViewChannel`]).
+pub(crate) type RenderSource = Arc<Vec<ViewChannel>>;
 
 /// Everything about a cached tile except its spatial position - the part of
 /// a request that must match exactly, used to scope the spatial
@@ -93,6 +103,7 @@ pub(crate) type RenderSource = Arc<Vec<ImageChannel>>;
 struct TileGroupKey {
     series: i32,
     level: i32,
+    subsample: usize,
     t: i32,
     z_projection: ZProjection,
     z_range: Option<RangeInclusive<i32>>,
@@ -103,6 +114,7 @@ impl From<&TileKey> for TileGroupKey {
         Self {
             series: key.series,
             level: key.level,
+            subsample: key.subsample,
             t: key.t,
             z_projection: key.z_projection.clone(),
             z_range: key.z_range.clone(),
@@ -286,7 +298,7 @@ impl ViewportCache {
         (
             render_source
                 .iter()
-                .map(|ch| (ch.c_stack, ch.image.clone()))
+                .filter_map(|ch| Some((ch.c_stack, ch.to_container().ok()?)))
                 .collect(),
             read_context.clone(),
         )
@@ -381,159 +393,144 @@ impl ViewportCache {
             is_low_res,
         );
 
-        // If this is the low res image, scale down to 1024x1024
-        let (scale_x, scale_y, read_off_x, read_off_y, request_w, request_h, image_w, image_h) =
-            match is_low_res {
-                true => {
-                    // Low resolution image
-                    let ratio = pyramid_w / pyramid_h;
-                    let image_w: f32 = LOW_RES_MAX_WIDTH_AND_HEIGHT as f32;
-                    let image_h: f32 = LOW_RES_MAX_WIDTH_AND_HEIGHT as f32 * ratio;
-                    let scale_x = wanted_w / image_w;
-                    let scale_y = wanted_h / image_h;
+        // `key_w`/`key_h`: the region read, in pixels of pyramid level
+        // `res_idx` (the overview: its output size). `subsample`: every how
+        // many of those pixels one is kept (see `read_subsampled`).
+        let (
+            scale_x,
+            scale_y,
+            read_off_x,
+            read_off_y,
+            request_w,
+            request_h,
+            key_w,
+            key_h,
+            subsample,
+        ) = match is_low_res {
+            true => {
+                // The overview: the whole image, at most
+                // LOW_RES_MAX_WIDTH_AND_HEIGHT wide, keeping its shape.
+                let ratio = pyramid_w / pyramid_h;
+                let image_w: f32 = LOW_RES_MAX_WIDTH_AND_HEIGHT as f32;
+                let image_h: f32 = (LOW_RES_MAX_WIDTH_AND_HEIGHT as f32 / ratio).max(1.0);
+                let scale_x = wanted_w / image_w;
+                let scale_y = wanted_h / image_h;
 
-                    if !scale_x.is_finite()
-                        || scale_x <= 0.0
-                        || !scale_y.is_finite()
-                        || scale_y <= 0.0
-                    {
-                        return Err(InternalErrors::Internal(
-                            "Degenerate low-res tile scale".into(),
-                        ));
-                    }
-
-                    // The overview is always the whole image (read
-                    // whole, scaled to `image_w` x `image_h`), so it
-                    // starts at the origin wherever the view is - the
-                    // viewport places it with the live zoom/offset.
-                    let read_off_x = 0;
-                    let read_off_y = 0;
-
-                    (
-                        scale_x as f32,
-                        scale_y as f32,
-                        read_off_x as usize,
-                        read_off_y as usize,
-                        pyramid_w as usize,
-                        pyramid_h as usize,
-                        image_w as usize,
-                        image_h as usize,
-                    )
+                if !scale_x.is_finite() || scale_x <= 0.0 || !scale_y.is_finite() || scale_y <= 0.0
+                {
+                    return Err(InternalErrors::Internal(
+                        "Degenerate low-res tile scale".into(),
+                    ));
                 }
-                false => {
-                    // High resolution image
-                    let scale_x = wanted_w / pyramid_w;
-                    let scale_y = wanted_h / pyramid_h;
 
-                    if !scale_x.is_finite()
-                        || scale_x <= 0.0
-                        || !scale_y.is_finite()
-                        || scale_y <= 0.0
-                    {
-                        return Err(InternalErrors::Internal(
-                            "Degenerate high-res tile scale".into(),
-                        ));
-                    }
+                // The overview is always the whole image, so it starts
+                // at the origin wherever the view is - the viewport
+                // places it with the live zoom/offset.
+                (
+                    scale_x,
+                    scale_y,
+                    0,
+                    0,
+                    pyramid_w as usize,
+                    pyramid_h as usize,
+                    image_w as usize,
+                    image_h as usize,
+                    1,
+                )
+            }
+            false => {
+                // High resolution image
+                let scale_x = wanted_w / pyramid_w;
+                let scale_y = wanted_h / pyramid_h;
 
-                    let max_tiles_x = (pyramid_w / TILE_SIZE_TO_LOAD).floor().max(0.0) as usize;
-                    let max_tiles_y = (pyramid_h / TILE_SIZE_TO_LOAD).floor().max(0.0) as usize;
-
-                    let read_off_x = ((-off_x / scale_x) / TILE_SIZE_TO_LOAD)
-                        .floor()
-                        .max(0.0)
-                        .min(max_tiles_x as f32) as usize
-                        * TILE_SIZE_TO_LOAD as usize;
-                    let read_off_y = ((-off_y / scale_y) / TILE_SIZE_TO_LOAD)
-                        .floor()
-                        .max(0.0)
-                        .min(max_tiles_y as f32) as usize
-                        * TILE_SIZE_TO_LOAD as usize;
-
-                    // Calculate Tile Dimensions
-                    let request_w = (((v_w / scale_x).ceil() as usize)
-                        + TILE_SIZE_TO_LOAD as usize)
-                        .next_multiple_of(TILE_SIZE_TO_LOAD as usize)
-                        .min((pyramid_w as usize).saturating_sub(read_off_x));
-
-                    let request_h = (((v_h / scale_y).ceil() as usize)
-                        + TILE_SIZE_TO_LOAD as usize)
-                        .next_multiple_of(TILE_SIZE_TO_LOAD as usize)
-                        .min((pyramid_h as usize).saturating_sub(read_off_y));
-                    (
-                        scale_x, scale_y, read_off_x, read_off_y, request_w, request_h, request_w,
-                        request_h,
-                    )
+                if !scale_x.is_finite() || scale_x <= 0.0 || !scale_y.is_finite() || scale_y <= 0.0
+                {
+                    return Err(InternalErrors::Internal(
+                        "Degenerate high-res tile scale".into(),
+                    ));
                 }
-            };
+
+                let max_tiles_x = (pyramid_w / TILE_SIZE_TO_LOAD).floor().max(0.0) as usize;
+                let max_tiles_y = (pyramid_h / TILE_SIZE_TO_LOAD).floor().max(0.0) as usize;
+
+                let read_off_x = ((-off_x / scale_x) / TILE_SIZE_TO_LOAD)
+                    .floor()
+                    .max(0.0)
+                    .min(max_tiles_x as f32) as usize
+                    * TILE_SIZE_TO_LOAD as usize;
+                let read_off_y = ((-off_y / scale_y) / TILE_SIZE_TO_LOAD)
+                    .floor()
+                    .max(0.0)
+                    .min(max_tiles_y as f32) as usize
+                    * TILE_SIZE_TO_LOAD as usize;
+
+                // Calculate Tile Dimensions
+                let request_w = (((v_w / scale_x).ceil() as usize) + TILE_SIZE_TO_LOAD as usize)
+                    .next_multiple_of(TILE_SIZE_TO_LOAD as usize)
+                    .min((pyramid_w as usize).saturating_sub(read_off_x));
+
+                let request_h = (((v_h / scale_y).ceil() as usize) + TILE_SIZE_TO_LOAD as usize)
+                    .next_multiple_of(TILE_SIZE_TO_LOAD as usize)
+                    .min((pyramid_h as usize).saturating_sub(read_off_y));
+
+                // No stored level is near the wanted size (no pyramid,
+                // or a coarse one): keep only every `subsample`-th
+                // pixel instead of the whole region at full size.
+                let subsample = ((1.0 / scale_x.max(scale_y)).floor() as usize).max(1);
+                (
+                    scale_x, scale_y, read_off_x, read_off_y, request_w, request_h, request_w,
+                    request_h, subsample,
+                )
+            }
+        };
 
         let cache_key = TileKey {
             series,
             level: res_idx,
             x: read_off_x,
             y: read_off_y,
-            width: image_w as usize,
-            height: image_h as usize,
+            width: key_w,
+            height: key_h,
+            subsample,
             z_projection: z_projection.clone(),
             z_range: z_range.clone(),
             t: t_stack,
         };
 
-        let (draw_x, draw_y) =
-            self.calc_draw_pos(cache_key.x, cache_key.y, scale_x, scale_y, off_x, off_y);
-
-        let mut ctx = ReadContext {
-            zoomed_w: cache_key.width as f32 * scale_x,
-            zoomed_h: cache_key.height as f32 * scale_y,
-            zoom: zoom,
-            draw_x: draw_x,
-            draw_y: draw_y,
-            offset_x: off_x,
-            offset_y: off_y,
-            read_off_x: cache_key.x,
-            read_off_y: cache_key.y,
-            res_idx: res_idx,
-            image_w: image_w,
-            image_h: image_h,
-            bit_depth: highest_res.nr_bits,
-            _nr_color_channels: highest_res.color_channels,
-            viewport_width: v_w,
-            viewport_height: v_h,
-            full_image_w: highest_res.width as usize,
-            full_image_h: highest_res.height as usize,
-        };
-
-        // Read image from cache
-        if let Some((found_key, cached_tile)) = self.find_in_cache(&cache_key, is_low_res) {
-            let (draw_x, draw_y) =
-                self.calc_draw_pos(found_key.x, found_key.y, scale_x, scale_y, off_x, off_y);
-
-            ctx = ReadContext {
-                zoomed_w: found_key.width as f32 * scale_x,
-                zoomed_h: found_key.height as f32 * scale_y,
-                zoom: zoom,
-                draw_x: draw_x,
-                draw_y: draw_y,
+        // The render context of a tile cached (or about to be) under `key`.
+        let context_for = |key: &TileKey| {
+            let (draw_x, draw_y) = self.calc_draw_pos(key.x, key.y, scale_x, scale_y, off_x, off_y);
+            let (image_w, image_h) = key.output_size();
+            ReadContext {
+                // Each output pixel covers `subsample` pixels of the level.
+                zoomed_w: (image_w * key.subsample) as f32 * scale_x,
+                zoomed_h: (image_h * key.subsample) as f32 * scale_y,
+                zoom,
+                draw_x,
+                draw_y,
                 offset_x: off_x,
                 offset_y: off_y,
-                read_off_x: found_key.x,
-                read_off_y: found_key.y,
-                res_idx: res_idx,
-                image_w: found_key.width,
-                image_h: found_key.height,
+                read_off_x: key.x,
+                read_off_y: key.y,
+                res_idx,
+                image_w,
+                image_h,
                 bit_depth: highest_res.nr_bits,
                 _nr_color_channels: highest_res.color_channels,
                 viewport_width: v_w,
                 viewport_height: v_h,
                 full_image_w: highest_res.width as usize,
                 full_image_h: highest_res.height as usize,
-            };
+            }
+        };
 
-            return Ok((cached_tile.data.clone(), ctx));
+        // Read image from cache
+        if let Some((found_key, cached_tile)) = self.find_in_cache(&cache_key, is_low_res) {
+            return Ok((cached_tile.data.clone(), context_for(&found_key)));
         }
+        let ctx = context_for(&cache_key);
 
-        // Read the tile through the backend - locally, channels/Z-slices are
-        // read in parallel across a reader pool instead of one at a time.
-        let mut loaded = source.read_tile(&TileRequest {
+        let request = TileRequest {
             series,
             resolution_idx: ctx.res_idx,
             z_projection,
@@ -542,18 +539,33 @@ impl ViewportCache {
             tile: ImageTile {
                 offset_x: ctx.read_off_x,
                 offset_y: ctx.read_off_y,
-                width: request_w as usize,
-                height: request_h as usize,
+                width: request_w,
+                height: request_h,
             },
-        })?;
+        };
+        let loaded = if is_low_res {
+            // The overview: subsampled down to about its size first (the
+            // only level may be the full image), then scaled exactly.
+            let step = (request_w / key_w).min(request_h / key_h).max(1);
+            let loaded = read_subsampled(&*source, &request, step)?;
+            scale_image(loaded, key_w, key_h)?
+        } else {
+            // Read through the backend - locally, channels/Z-slices are read
+            // in parallel across a reader pool instead of one at a time.
+            read_subsampled(&*source, &request, subsample)?
+        };
 
-        // Scale down if it is low res
-        if is_low_res {
-            loaded = scale_image(loaded, ctx.image_w, ctx.image_h)?;
-        }
+        // Keep the samples compact (exactly - see `ViewChannel`); the
+        // reader's f32 copy is dropped right here.
+        let shared_data: RenderSource = Arc::new(
+            loaded
+                .iter()
+                .map(|channel| ViewChannel::from_image_channel(channel, highest_res.nr_bits))
+                .collect(),
+        );
+        drop(loaded);
 
         // Put to cache and return
-        let shared_data = Arc::new(loaded);
         let cached_tile = Arc::new(CachedTile {
             data: Arc::clone(&shared_data),
         });
@@ -648,6 +660,129 @@ fn look_for_best_matching_resolution_index(
         None => {
             return (0, 0.0, 0.0);
         }
+    }
+}
+
+/// Size of the blocks [`read_subsampled`] reads at a time - a multiple of
+/// the usual 256/512 px file tiles, so no file tile is decoded twice.
+const SUBSAMPLE_BLOCK_W: usize = 2048;
+const SUBSAMPLE_BLOCK_H: usize = 512;
+
+/// Reads `request`'s region keeping only every `step`-th pixel in both
+/// directions (nearest neighbour). With `step` > 1 the region is read block
+/// by block and each block is thinned out right away, so RAM holds one
+/// block plus the (`step`^2 times smaller) result - never the whole region
+/// at full size, which for an image without a pyramid can be many GB.
+fn read_subsampled(
+    source: &dyn ImageSource,
+    request: &TileRequest,
+    step: usize,
+) -> Result<Vec<ImageChannel>, InternalErrors> {
+    if step <= 1 {
+        return source.read_tile(request);
+    }
+    let region = request.tile;
+    let out_w = region.width.div_ceil(step);
+    let out_h = region.height.div_ceil(step);
+    // Per channel: (samples per pixel, output samples), set by the first block.
+    let mut outputs: Vec<(usize, Vec<f32>)> = Vec::new();
+    let mut template: Vec<ImageChannel> = Vec::new();
+
+    for by in (0..region.height).step_by(SUBSAMPLE_BLOCK_H) {
+        let bh = SUBSAMPLE_BLOCK_H.min(region.height - by);
+        // First row of this block on the sampling grid.
+        let first_row = (step - by % step) % step;
+        if first_row >= bh {
+            continue;
+        }
+        for bx in (0..region.width).step_by(SUBSAMPLE_BLOCK_W) {
+            let bw = SUBSAMPLE_BLOCK_W.min(region.width - bx);
+            let first_col = (step - bx % step) % step;
+            if first_col >= bw {
+                continue;
+            }
+            let mut block_request = request.clone();
+            block_request.tile = ImageTile {
+                offset_x: region.offset_x + bx,
+                offset_y: region.offset_y + by,
+                width: bw,
+                height: bh,
+            };
+            let block = source.read_tile(&block_request)?;
+            if outputs.is_empty() {
+                outputs = block
+                    .iter()
+                    .map(|c| {
+                        let n = samples_per_pixel(&c.image);
+                        (n, vec![0.0f32; out_w * out_h * n])
+                    })
+                    .collect();
+                template = block.clone();
+            }
+            for (channel, (n, out)) in block.iter().zip(outputs.iter_mut()) {
+                let Some(src) = f32_samples(&channel.image) else {
+                    continue;
+                };
+                let n = *n;
+                for ry in (first_row..bh).step_by(step) {
+                    let oy = (by + ry) / step;
+                    for rx in (first_col..bw).step_by(step) {
+                        let ox = (bx + rx) / step;
+                        let s = (ry * bw + rx) * n;
+                        let d = (oy * out_w + ox) * n;
+                        out[d..d + n].copy_from_slice(&src[s..s + n]);
+                    }
+                }
+            }
+        }
+    }
+
+    let size = kornia_image::ImageSize {
+        width: out_w,
+        height: out_h,
+    };
+    template
+        .into_iter()
+        .zip(outputs)
+        .map(|(channel, (n, data))| {
+            let tile_offset = Point2d {
+                x: region.offset_x,
+                y: region.offset_y,
+            };
+            let plane = channel.image.plane();
+            let image = if n == 3 {
+                ImageContainer::F32Rgb(ManagedImage {
+                    data: Image::<f32, 3>::new(size, data).map_err(InternalErrors::from_kornia)?,
+                    tile_offset,
+                    plane,
+                })
+            } else {
+                ImageContainer::F32Gray(ManagedImage {
+                    data: Image::<f32, 1>::new(size, data).map_err(InternalErrors::from_kornia)?,
+                    tile_offset,
+                    plane,
+                })
+            };
+            Ok(ImageChannel {
+                image: Arc::new(image),
+                ..channel
+            })
+        })
+        .collect()
+}
+
+fn samples_per_pixel(image: &ImageContainer) -> usize {
+    match image {
+        ImageContainer::F32Rgb(_) => 3,
+        _ => 1,
+    }
+}
+
+fn f32_samples(image: &ImageContainer) -> Option<&[f32]> {
+    match image {
+        ImageContainer::F32Gray(img) => Some(img.as_slice()),
+        ImageContainer::F32Rgb(img) => Some(img.as_slice()),
+        ImageContainer::U32(_) => None,
     }
 }
 
@@ -746,6 +881,7 @@ mod tests {
             y,
             width: w,
             height: h,
+            subsample: 1,
             z_projection: ZProjection::None,
             z_range: None,
             t,
@@ -769,14 +905,14 @@ mod tests {
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         });
         Arc::new(CachedTile {
-            data: Arc::new(vec![ImageChannel {
+            data: Arc::new(vec![ViewChannel::wrap(&ImageChannel {
                 image: Arc::new(container),
                 color: [1.0, 1.0, 1.0],
                 is_visible: true,
                 c_stack: 0,
                 name: "ch0".to_string(),
                 is_rgb: false,
-            }]),
+            })]),
         })
     }
 
@@ -902,6 +1038,131 @@ mod tests {
         assert!(cache.get_exact(&keys[1]).is_none(), "oldest goes");
         let group = TileGroupKey::from(&keys[1]);
         assert!(!cache.index.candidates(&group).contains(&keys[1]));
+    }
+
+    /// A virtual gray image whose value at (x, y) is known, recording the
+    /// largest block read from it.
+    struct PatternSource {
+        meta: evanalyzer_app::images::ImageMeta,
+        largest_read: std::sync::Mutex<usize>,
+    }
+
+    fn pattern_value(x: usize, y: usize) -> f32 {
+        ((x * 31 + y * 17) % 256) as f32 / 255.0
+    }
+
+    impl ImageSource for PatternSource {
+        fn meta(&self) -> &evanalyzer_app::images::ImageMeta {
+            &self.meta
+        }
+
+        fn read_tile(&self, req: &TileRequest) -> Result<Vec<ImageChannel>, InternalErrors> {
+            let t = req.tile;
+            let mut largest = self.largest_read.lock().unwrap();
+            *largest = (*largest).max(t.width * t.height);
+            let data = (0..t.height)
+                .flat_map(|y| {
+                    (0..t.width).map(move |x| pattern_value(t.offset_x + x, t.offset_y + y))
+                })
+                .collect();
+            let image = Image::<f32, 1>::new(
+                ImageSize {
+                    width: t.width,
+                    height: t.height,
+                },
+                data,
+            )
+            .unwrap();
+            Ok(vec![ImageChannel {
+                image: Arc::new(ImageContainer::F32Gray(ManagedImage {
+                    data: image,
+                    tile_offset: Point2d {
+                        x: t.offset_x,
+                        y: t.offset_y,
+                    },
+                    plane: None,
+                })),
+                color: [1.0, 1.0, 1.0],
+                is_visible: true,
+                c_stack: 0,
+                name: "ch0".into(),
+                is_rgb: false,
+            }])
+        }
+    }
+
+    fn pattern_request(x: usize, y: usize, w: usize, h: usize) -> TileRequest {
+        TileRequest {
+            series: 0,
+            resolution_idx: 0,
+            z_projection: ZProjection::None,
+            z_range: None,
+            t_stack: 0,
+            tile: ImageTile {
+                offset_x: x,
+                offset_y: y,
+                width: w,
+                height: h,
+            },
+        }
+    }
+
+    #[test]
+    fn a_subsampled_read_keeps_every_nth_pixel_and_reads_only_small_blocks() {
+        let source = PatternSource {
+            meta: Default::default(),
+            largest_read: Default::default(),
+        };
+        let step = 3;
+        let (x0, y0, w, h) = (1024, 512, 5000, 1300);
+
+        let channels = read_subsampled(&source, &pattern_request(x0, y0, w, h), step).unwrap();
+
+        let ImageContainer::F32Gray(img) = &*channels[0].image else {
+            panic!("gray image expected");
+        };
+        let (out_w, out_h) = (w.div_ceil(step), h.div_ceil(step));
+        assert_eq!((img.width(), img.height()), (out_w, out_h));
+        let px = img.as_slice();
+        for (ox, oy) in [
+            (0, 0),
+            (1, 0),
+            (682, 170),
+            (out_w - 1, out_h - 1),
+            (700, 171),
+        ] {
+            assert_eq!(
+                px[oy * out_w + ox],
+                pattern_value(x0 + ox * step, y0 + oy * step),
+                "output ({ox}, {oy})"
+            );
+        }
+        assert!(
+            *source.largest_read.lock().unwrap() <= SUBSAMPLE_BLOCK_W * SUBSAMPLE_BLOCK_H,
+            "never the whole region at once"
+        );
+    }
+
+    #[test]
+    fn without_subsampling_the_region_is_read_in_one_piece() {
+        let source = PatternSource {
+            meta: Default::default(),
+            largest_read: Default::default(),
+        };
+        let channels = read_subsampled(&source, &pattern_request(0, 0, 3000, 700), 1).unwrap();
+        assert_eq!(channels[0].image.size().width, 3000);
+        assert_eq!(*source.largest_read.lock().unwrap(), 3000 * 700);
+    }
+
+    #[test]
+    fn a_subsampled_tile_is_sized_and_grouped_by_its_step() {
+        let mut k = key(0, 0, 0, 0, 0, 5000, 1300);
+        k.subsample = 3;
+        assert_eq!(k.output_size(), (1667, 434));
+        assert_ne!(
+            TileGroupKey::from(&k),
+            TileGroupKey::from(&key(0, 0, 0, 0, 0, 5000, 1300))
+        );
     }
 
     #[test]

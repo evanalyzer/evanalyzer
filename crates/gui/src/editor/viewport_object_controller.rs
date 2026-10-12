@@ -12,7 +12,6 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::editor::viewport_controller::{ZOrder, is_object_drawn};
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
-use evanalyzer_app::images::ImageContainer;
 use evanalyzer_app::images::object_from_mask;
 use evanalyzer_app::project::ObjectExt;
 use evanalyzer_app::project::ProjectExt;
@@ -227,8 +226,8 @@ impl ViewPortObjectController {
         let idx = (local_y as usize * ctx.image_w) + local_x as usize;
         let mut values = Vec::new();
         for channel in image_data.iter() {
-            if let ImageContainer::F32Gray(img) = &*channel.image {
-                if let Some(&raw_val) = img.as_slice().get(idx) {
+            if !channel.is_rgb {
+                if let Some(raw_val) = channel.value_at(idx) {
                     let scaled = raw_val * 2.0_f32.powf(ctx.bit_depth as f32);
                     values.push(format!("{}: {:.0}", channel.name, scaled));
                 }
@@ -739,7 +738,7 @@ mod tests {
             height: 20,
         };
         let image = Image::<f32, 1>::new(size, vec![0.5f32; 20 * 20]).unwrap();
-        let container = ImageContainer::F32Gray(ManagedImage {
+        let container = evanalyzer_app::images::ImageContainer::F32Gray(ManagedImage {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
@@ -753,7 +752,9 @@ mod tests {
             is_rgb: false,
         };
         *viewport_cache.active_high_res_data.write().unwrap() = Some((
-            Arc::new(vec![channel]),
+            Arc::new(vec![crate::editor::view_channel::ViewChannel::wrap(
+                &channel,
+            )]),
             ReadContext {
                 zoom: 1.0,
                 image_w: 20,

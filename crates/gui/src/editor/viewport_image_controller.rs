@@ -8,7 +8,6 @@ use crate::{
     ViewportMemoryState, ViewportState as ViewportSlintState,
 };
 use evanalyzer_app::global::ViewportMemorySettings;
-use evanalyzer_app::images::ImageContainer;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::{
@@ -514,8 +513,8 @@ impl ViewportImageController {
             // Format the string right here
             let mut pixel_values = Vec::new();
             for channel in image_data.iter() {
-                if let ImageContainer::F32Gray(img) = &*channel.image {
-                    if let Some(&raw_val) = img.as_slice().get(idx) {
+                if !channel.is_rgb {
+                    if let Some(raw_val) = channel.value_at(idx) {
                         let normalized_val = raw_val * 100.0;
                         let scaled_val = raw_val * 2.0f32.powf(ctx.bit_depth as f32);
                         pixel_values.push(format!(

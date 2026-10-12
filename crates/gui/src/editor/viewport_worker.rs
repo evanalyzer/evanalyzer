@@ -2,6 +2,7 @@ use crate::{
     HistogramData, UiState,
     editor::{
         histogram_controller::HistogramController,
+        view_channel::{SampleSlice, Samples, ViewChannel},
         viewport_cache::{ReadContext, ViewportCache, to_z_projection},
         viewport_controller::{DrawingTaskContainer, ImageRect, ViewportController},
         viewport_task::{DrawingTask, TaskDispatch},
@@ -28,7 +29,7 @@ pub struct ViewportWorker {
 }
 
 pub(crate) struct ChannelCtx<'a> {
-    pub(crate) image_data: &'a [f32],
+    pub(crate) image_data: SampleSlice<'a>,
     pub(crate) histogram: HistogramSettings,
     pub(crate) color: [f32; 3],
     pub(crate) r_factor: f32,
@@ -234,7 +235,7 @@ impl ViewportWorker {
                         full_image_w: bp.tile_offset_x + bp.tile_width,
                         full_image_h: bp.tile_offset_y + bp.tile_height,
                     };
-                    Ok((Arc::new(vec![channel]), prepared))
+                    Ok((Arc::new(vec![ViewChannel::wrap(&channel)]), prepared))
                 }
                 None => Err(InternalErrors::ImageReadError(
                     "No breakpoint image captured yet".into(),
@@ -306,10 +307,11 @@ impl ViewportWorker {
             let mut is_rgb = false;
 
             let all_hists: Vec<Vec<f32>> = if is_label_render {
-                if let Some(channel) = render_src.first() {
-                    if let ImageContainer::U32(img) = &*channel.image {
-                        render_labels_to_rgb8(img.data.as_slice(), master_slice);
-                    }
+                if let Some(channel) = render_src.first()
+                    && let Samples::Image(image) = &channel.samples
+                    && let ImageContainer::U32(img) = &**image
+                {
+                    render_labels_to_rgb8(img.data.as_slice(), master_slice);
                 }
                 Vec::new()
             } else {
@@ -325,7 +327,7 @@ impl ViewportWorker {
                                 || (task.auto_adjust_selected && idx == selected_channel)
                             {
                                 let (min, max, min_range, max_range) =
-                                    apply_auto_adjust(&channel.image, channel.is_rgb);
+                                    auto_adjust_range(channel.slice(), channel.is_rgb);
                                 debug!(
                                     "Auto-adjusting channel {} min={} max={} range=({},{})",
                                     idx, min, max, min_range, max_range
@@ -360,17 +362,10 @@ impl ViewportWorker {
                 for channel in render_src.iter() {
                     let idx = channel.c_stack;
                     if let Some(Some(histogram)) = hist_settings_fresh.get(&idx) {
-                        let data_slice = match &*channel.image {
-                            ImageContainer::F32Gray(img) => {
-                                is_rgb = false;
-                                Some(img.as_slice())
-                            }
-                            ImageContainer::F32Rgb(img) => {
-                                is_rgb = true;
-                                Some(img.as_slice())
-                            }
-                            _ => None,
-                        };
+                        // One value per pixel; interleaved RGB and label
+                        // maps have no intensity window to render with.
+                        let data_slice = channel.slice();
+                        is_rgb = channel.is_rgb;
 
                         if let Some(slice) = data_slice {
                             let inv_range = 1.0 / (histogram.max - histogram.min).max(0.001);
@@ -671,7 +666,7 @@ impl RenderBuffers {
 /// project knows the channel not. RGB images keep their fixed colours -
 /// except in grayscale mode, where every channel is white.
 fn channel_display_color(
-    channel: &ImageChannel,
+    channel: &ViewChannel,
     project_color: Option<[f32; 3]>,
     grayscale: bool,
 ) -> [f32; 3] {
@@ -703,6 +698,79 @@ fn wait_for_task(pair: &Arc<DrawingTaskContainer>) -> DrawingTask {
     task_slot.take().unwrap()
 }
 
+/// The pixel loop of [`prepare_image_channels_for_slint`]: blends the
+/// visible channels into `dest_pixels` and counts their histograms.
+/// `value(k, i)` is visible channel `k`'s value at pixel `i` - generic, so
+/// each sample type gets a loop of its own without a per-pixel type check.
+fn render_pixels<F>(
+    channels: &[ChannelCtx],
+    visible_indices: &[usize],
+    dest_pixels: &mut [Rgb8Pixel],
+    num_bins: usize,
+    create_histogram: bool,
+    value: F,
+) -> Vec<Vec<u32>>
+where
+    F: Fn(usize, usize) -> f32 + Sync,
+{
+    use rayon::prelude::*;
+
+    let chunk_size = 1024 * 4;
+    let n_channels = channels.len();
+
+    dest_pixels
+        .par_chunks_mut(chunk_size)
+        .enumerate()
+        .map(|(chunk_idx, chunk)| {
+            let mut local_hists = vec![vec![0u32; num_bins]; n_channels];
+            let start_idx = chunk_idx * chunk_size;
+
+            for (p_idx, pixel) in chunk.iter_mut().enumerate() {
+                let global_idx = start_idx + p_idx;
+
+                let mut r_acc = 0.0f32;
+                let mut g_acc = 0.0f32;
+                let mut b_acc = 0.0f32;
+
+                for (k, &c_idx) in visible_indices.iter().enumerate() {
+                    let ctx = &channels[c_idx];
+                    let p = value(k, global_idx);
+
+                    if create_histogram
+                        && p >= ctx.histogram.min_limit
+                        && p <= ctx.histogram.max_limit
+                    {
+                        let bin_idx = ((p - ctx.histogram.min_limit) * ctx.h_mult) as usize;
+                        if bin_idx < num_bins {
+                            local_hists[c_idx][bin_idx] += 1;
+                        }
+                    }
+
+                    let val = (p + ctx.offset).max(0.0);
+                    r_acc += val * ctx.r_factor;
+                    g_acc += val * ctx.g_factor;
+                    b_acc += val * ctx.b_factor;
+                }
+
+                pixel.r = r_acc.min(255.0) as u8;
+                pixel.g = g_acc.min(255.0) as u8;
+                pixel.b = b_acc.min(255.0) as u8;
+            }
+            local_hists
+        })
+        .reduce(
+            || vec![vec![0u32; num_bins]; n_channels],
+            |mut a, b| {
+                for (ah, bh) in a.iter_mut().zip(b.iter()) {
+                    for (av, bv) in ah.iter_mut().zip(bh.iter()) {
+                        *av += bv;
+                    }
+                }
+                a
+            },
+        )
+}
+
 /// Applies auto-adjustment to an image using partial sorting (O(N) average).
 ///
 /// Samples every 10th pixel and finds the 0.5th and 99.5th percentile values
@@ -710,7 +778,12 @@ fn wait_for_task(pair: &Arc<DrawingTaskContainer>) -> DrawingTask {
 ///
 /// # Returns
 /// `(min, max, min_limit, max_limit)` - display range and histogram limits.
-pub fn apply_auto_adjust(img: &ImageContainer, is_rgb: bool) -> (f32, f32, f32, f32) {
+/// `samples`: a viewport channel's values, `None` when it isn't one value
+/// per pixel - the full range is used then.
+pub(crate) fn auto_adjust_range(
+    samples: Option<SampleSlice<'_>>,
+    is_rgb: bool,
+) -> (f32, f32, f32, f32) {
     if is_rgb {
         return (0.0, 1.0, 0.0, 1.0);
     }
@@ -718,10 +791,12 @@ pub fn apply_auto_adjust(img: &ImageContainer, is_rgb: bool) -> (f32, f32, f32, 
     let mut min = 0.0;
     let mut max = 1.0;
 
-    if let ImageContainer::F32Gray(image) = img {
-        let pixels = image.as_slice();
-        if !pixels.is_empty() {
-            let mut sample: Vec<f32> = pixels.iter().step_by(10).cloned().collect();
+    if let Some(pixels) = samples {
+        if pixels.len() > 0 {
+            let mut sample: Vec<f32> = (0..pixels.len())
+                .step_by(10)
+                .map(|i| pixels.get(i))
+                .collect();
             let len = sample.len();
 
             let low_idx = (len as f32 * 0.005) as usize;
@@ -806,8 +881,6 @@ pub(crate) fn prepare_image_channels_for_slint(
     visible_channels: &Vec<i32>,
     _is_rgb: bool,
 ) -> Vec<Vec<f32>> {
-    use rayon::prelude::*;
-
     let expected_len = dest_pixels.len();
     // Resolved once, outside the pixel loop: which `channels` entries are
     // actually visible. `visible_channels.contains(...)` used to be called
@@ -836,60 +909,50 @@ pub(crate) fn prepare_image_channels_for_slint(
         }
     }
 
-    let chunk_size = 1024 * 4;
     let n_channels = channels.len();
 
-    let raw_hists: Vec<Vec<u32>> = dest_pixels
-        .par_chunks_mut(chunk_size)
-        .enumerate()
-        .map(|(chunk_idx, chunk)| {
-            let mut local_hists = vec![vec![0u32; num_bins]; n_channels];
-            let start_idx = chunk_idx * chunk_size;
-
-            for (p_idx, pixel) in chunk.iter_mut().enumerate() {
-                let global_idx = start_idx + p_idx;
-
-                let mut r_acc = 0.0f32;
-                let mut g_acc = 0.0f32;
-                let mut b_acc = 0.0f32;
-
-                for &c_idx in &visible_indices {
-                    let ctx = &channels[c_idx];
-                    let p = ctx.image_data[global_idx];
-
-                    if create_histogram
-                        && p >= ctx.histogram.min_limit
-                        && p <= ctx.histogram.max_limit
-                    {
-                        let bin_idx = ((p - ctx.histogram.min_limit) * ctx.h_mult) as usize;
-                        if bin_idx < num_bins {
-                            local_hists[c_idx][bin_idx] += 1;
-                        }
-                    }
-
-                    let val = (p + ctx.offset).max(0.0);
-                    r_acc += val * ctx.r_factor;
-                    g_acc += val * ctx.g_factor;
-                    b_acc += val * ctx.b_factor;
-                }
-
-                pixel.r = r_acc.min(255.0) as u8;
-                pixel.g = g_acc.min(255.0) as u8;
-                pixel.b = b_acc.min(255.0) as u8;
-            }
-            local_hists
-        })
-        .reduce(
-            || vec![vec![0u32; num_bins]; n_channels],
-            |mut a, b| {
-                for (ah, bh) in a.iter_mut().zip(b.iter()) {
-                    for (av, bv) in ah.iter_mut().zip(bh.iter()) {
-                        *av += bv;
-                    }
-                }
-                a
-            },
-        );
+    // The sample type is resolved once per frame, not per pixel: when all
+    // visible channels share one (the usual case), the loop below is
+    // compiled for exactly that type.
+    macro_rules! typed {
+        ($variant:ident) => {
+            visible_indices
+                .iter()
+                .map(|&i| match channels[i].image_data {
+                    SampleSlice::$variant(d, inv) => Some((d, inv)),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()
+        };
+    }
+    let raw_hists = if let Some(data) = typed!(U8) {
+        render_pixels(
+            channels,
+            &visible_indices,
+            dest_pixels,
+            num_bins,
+            create_histogram,
+            |k, i| data[k].0[i] as f32 * data[k].1,
+        )
+    } else if let Some(data) = typed!(U16) {
+        render_pixels(
+            channels,
+            &visible_indices,
+            dest_pixels,
+            num_bins,
+            create_histogram,
+            |k, i| data[k].0[i] as f32 * data[k].1,
+        )
+    } else {
+        render_pixels(
+            channels,
+            &visible_indices,
+            dest_pixels,
+            num_bins,
+            create_histogram,
+            |k, i| channels[visible_indices[k]].image_data.get(i),
+        )
+    };
 
     if !create_histogram {
         return vec![];
@@ -961,6 +1024,7 @@ pub(crate) fn histogram_to_svg_fast(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helper::size_formater::BYTES_PER_MB;
     use evanalyzer_app::global::ViewportMemorySettings;
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
@@ -1036,6 +1100,14 @@ mod tests {
     }
 
     // -- apply_auto_adjust --------------------------------------------------------
+
+    fn apply_auto_adjust(img: &ImageContainer, is_rgb: bool) -> (f32, f32, f32, f32) {
+        let samples = match img {
+            ImageContainer::F32Gray(image) => Some(SampleSlice::F32(image.as_slice())),
+            _ => None,
+        };
+        auto_adjust_range(samples, is_rgb)
+    }
 
     fn gray_container(pixels: Vec<f32>) -> ImageContainer {
         let len = pixels.len();
@@ -1122,7 +1194,7 @@ mod tests {
 
     fn ctx_for(data: &[f32]) -> ChannelCtx<'_> {
         ChannelCtx {
-            image_data: data,
+            image_data: SampleSlice::F32(data),
             histogram: HistogramSettings {
                 min: 0.0,
                 max: 1.0,
@@ -1150,6 +1222,24 @@ mod tests {
         assert_eq!(dest[0], Rgb8Pixel { r: 0, g: 0, b: 0 });
         // (0.9 + offset(0.0)) * r_factor(255.0) = 229.5 -> truncated to 229
         assert_eq!(dest[1], Rgb8Pixel { r: 229, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn compact_and_float_samples_render_identical_pixels_and_histograms() {
+        let inv = 1.0 / 255.0f32;
+        let raw: Vec<u8> = (0..=255).collect();
+        let floats: Vec<f32> = raw.iter().map(|&q| q as f32 * inv).collect();
+
+        let render = |ctx: ChannelCtx| {
+            let mut dest = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; raw.len()];
+            let hists =
+                prepare_image_channels_for_slint(&[ctx], &mut dest, 16, true, &vec![0], false);
+            (dest, hists)
+        };
+        let mut compact = ctx_for(&floats);
+        compact.image_data = SampleSlice::U8(&raw, inv);
+
+        assert_eq!(render(compact), render(ctx_for(&floats)));
     }
 
     #[test]
@@ -1656,23 +1746,39 @@ mod tests {
         let reader_red = [1.0, 0.0, 0.0];
         let green = [0.0, 1.0, 0.0];
         assert_eq!(
-            channel_display_color(&image_channel(false, reader_red), Some(green), false),
+            channel_display_color(
+                &ViewChannel::wrap(&image_channel(false, reader_red)),
+                Some(green),
+                false
+            ),
             green,
             "the project's colour wins"
         );
         assert_eq!(
-            channel_display_color(&image_channel(false, reader_red), None, false),
+            channel_display_color(
+                &ViewChannel::wrap(&image_channel(false, reader_red)),
+                None,
+                false
+            ),
             reader_red,
             "a channel the project doesn't know: the reader's colour"
         );
         assert_eq!(
-            channel_display_color(&image_channel(true, reader_red), Some(green), false),
+            channel_display_color(
+                &ViewChannel::wrap(&image_channel(true, reader_red)),
+                Some(green),
+                false
+            ),
             reader_red,
             "RGB images keep their colours"
         );
         for is_rgb in [false, true] {
             assert_eq!(
-                channel_display_color(&image_channel(is_rgb, reader_red), None, true),
+                channel_display_color(
+                    &ViewChannel::wrap(&image_channel(is_rgb, reader_red)),
+                    None,
+                    true
+                ),
                 [1.0, 1.0, 1.0],
                 "grayscale mode: white, RGB images too"
             );
@@ -1693,6 +1799,185 @@ mod tests {
         assert!(
             lit.iter().all(|p| p.r == 0 && p.b == 0),
             "drawn in green only"
+        );
+    }
+
+    // -- benchmark (ignored: needs a whole slide image) ---------------------
+
+    /// Current and peak resident memory of this process, in MB (Linux).
+    fn rss_mb() -> (f64, f64) {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        let field = |name: &str| {
+            status
+                .lines()
+                .find(|l| l.starts_with(name))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<f64>().ok())
+                .map_or(0.0, |kb| kb / 1024.0)
+        };
+        (field("VmRSS:"), field("VmHWM:"))
+    }
+
+    /// Resets the peak resident memory (`VmHWM`) to the current one (Linux).
+    fn reset_peak_rss() {
+        let _ = std::fs::write("/proc/self/clear_refs", "5");
+    }
+
+    fn env_u32(name: &str, default: u32) -> u32 {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    /// Viewport benchmark on a real or generated whole slide image (see
+    /// `examples/make_test_slide.rs`): a 1920x1080 viewport opens the image,
+    /// zooms in, pans away and back - each step is one settled re-render
+    /// (what the 150 ms debounce triggers). Prints time, cache size, and the
+    /// process's current and peak RAM per step.
+    ///
+    /// EVANALYZER_BENCH_SLIDE=<slide.tif> [BENCH_TILE_CACHE_MB=1024]
+    /// [BENCH_OVERVIEW_CACHE_MB=256] [BENCH_TRIM=1] RAYON_NUM_THREADS=2
+    /// LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo test --release
+    /// -p evanalyzer_gui bench_viewport -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_viewport_whole_slide() {
+        let Ok(slide) = std::env::var("EVANALYZER_BENCH_SLIDE") else {
+            eprintln!("EVANALYZER_BENCH_SLIDE not set - skipped");
+            return;
+        };
+        let tile_mb = env_u32("BENCH_TILE_CACHE_MB", 1024);
+        let overview_mb = env_u32("BENCH_OVERVIEW_CACHE_MB", 256);
+        let (vp_w, vp_h) = (1920.0f32, 1080.0f32);
+
+        let (rss_start, _) = rss_mb();
+        let mut r = render_fixture(crate::editor::test_support::project_with_image_file(
+            slide.clone().into(),
+        ));
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings {
+                tile_cache_mb: tile_mb,
+                overview_cache_mb: overview_mb,
+                ..Default::default()
+            });
+        drain_ui_queue();
+        {
+            let mut vp = r.worker.viewport_controller.viewport_state.write().unwrap();
+            vp.viewport_width = vp_w;
+            vp.viewport_height = vp_h;
+        }
+
+        println!(
+            "\nslide {slide}\ncaches {tile_mb} / {overview_mb} MB, {} threads, viewport {vp_w}x{vp_h}",
+            rayon::current_num_threads()
+        );
+        println!(
+            "{:<28} {:>9} {:>11} {:>14} {:>9} {:>9} {:>7}",
+            "step", "ms", "tile px", "cache MB", "RSS MB", "peak MB", "drawn"
+        );
+        let mut total = std::time::Duration::ZERO;
+        let mut step = |r: &mut Render, name: &str, scope: &[TaskDispatch], task: DrawingTask| {
+            reset_peak_rss();
+            let start = Instant::now();
+            for s in scope {
+                r.draw(*s, task.clone());
+            }
+            let took = start.elapsed();
+            total += took;
+            // BENCH_TRIM=1: hand freed memory back first, so RSS shows what
+            // is actually in use rather than what glibc keeps for reuse.
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            if std::env::var("BENCH_TRIM").is_ok() {
+                // SAFETY: only releases free allocator memory.
+                unsafe {
+                    libc::malloc_trim(0);
+                }
+            }
+            let size = r.ui.get_display_image().size();
+            let (tiles, overviews) = r.worker.viewport_cache.held_bytes();
+            let (rss, peak) = rss_mb();
+            // Sanity check: share of non-black pixels in the sharp render.
+            let drawn = r.ui.get_display_image().to_rgb8().map_or(0.0, |b| {
+                let px = b.as_slice();
+                px.iter().filter(|p| p.r | p.g | p.b != 0).count() as f64 / px.len().max(1) as f64
+            });
+            println!(
+                "{:<28} {:>9.1} {:>11} {:>14} {:>9.0} {:>9.0} {:>6.0}%",
+                name,
+                took.as_secs_f64() * 1000.0,
+                format!("{}x{}", size.width, size.height),
+                format!(
+                    "{:.0}+{:.0}",
+                    tiles as f64 / BYTES_PER_MB as f64,
+                    overviews as f64 / BYTES_PER_MB as f64
+                ),
+                rss - rss_start,
+                peak - rss_start,
+                drawn * 100.0
+            );
+        };
+
+        // Open: fitted overview and sharp render.
+        step(
+            &mut r,
+            "open (fit to screen)",
+            &[TaskDispatch::LowRes, TaskDispatch::HighRes],
+            new_image_task(),
+        );
+        let (channels, ctx) = r.worker.viewport_cache.get_image_references();
+        println!(
+            "channels: {:?}, bit depth {}",
+            channels
+                .iter()
+                .map(|(c, img)| format!("{c}:{img:?}"))
+                .collect::<Vec<_>>(),
+            ctx.bit_depth
+        );
+        let (full_w, full_h) = *r.worker.viewport_controller.full_image_size.lock().unwrap();
+        let (cx, cy) = (full_w as f32 / 2.0, full_h as f32 / 2.0);
+        let center = |r: &Render, zoom: f32, cx: f32, cy: f32| {
+            set_view(r, zoom, vp_w / 2.0 - cx * zoom, vp_h / 2.0 - cy * zoom)
+        };
+
+        for zoom in [0.05f32, 0.25, 1.0] {
+            center(&r, zoom, cx, cy);
+            step(
+                &mut r,
+                &format!("zoom {zoom}"),
+                &[TaskDispatch::HighRes],
+                DrawingTask::default(),
+            );
+        }
+
+        // Pan right in screen-sized steps at 100%, then back over the same
+        // places (cache hits if they were kept).
+        let pan = 700.0;
+        let steps = 8;
+        for i in 1..=steps {
+            center(&r, 1.0, cx + i as f32 * pan, cy);
+            step(
+                &mut r,
+                &format!("pan right {i}"),
+                &[TaskDispatch::HighRes],
+                DrawingTask::default(),
+            );
+        }
+        for i in (0..steps).rev() {
+            center(&r, 1.0, cx + i as f32 * pan, cy);
+            step(
+                &mut r,
+                &format!("pan back {i}"),
+                &[TaskDispatch::HighRes],
+                DrawingTask::default(),
+            );
+        }
+        let (_, peak) = rss_mb();
+        println!(
+            "total {:.0} ms; process peak since start {:.0} MB",
+            total.as_secs_f64() * 1000.0,
+            peak - rss_start
         );
     }
 }

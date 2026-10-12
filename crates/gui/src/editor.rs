@@ -36,6 +36,7 @@ pub mod template_controller;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod undo_redo_controller;
+pub(crate) mod view_channel;
 pub mod viewport_cache;
 pub mod viewport_controller;
 pub mod viewport_image_controller;

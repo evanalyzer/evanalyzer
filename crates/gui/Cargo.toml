@@ -28,6 +28,7 @@ rhai = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+image = { workspace = true }
 tungstenite = { workspace = true }
 rustls = { workspace = true }
 rcgen = { workspace = true }
