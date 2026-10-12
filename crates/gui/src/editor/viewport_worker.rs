@@ -1995,7 +1995,11 @@ mod tests {
         let pan = 700.0;
         let steps = env_u32("BENCH_PAN_STEPS", 8) as usize;
         // Along the image's longer side, so the tour stays on the image.
-        let (dx, dy) = if full_w >= full_h { (pan, 0.0) } else { (0.0, pan) };
+        let (dx, dy) = if full_w >= full_h {
+            (pan, 0.0)
+        } else {
+            (0.0, pan)
+        };
         for i in 1..=steps {
             center(&r, 1.0, cx + i as f32 * dx, cy + i as f32 * dy);
             step(

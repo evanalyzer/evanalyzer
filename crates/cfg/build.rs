@@ -164,6 +164,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/modules/ai_learning_settings.rs");
     // Input: algo structs the generator reads to produce pipeline_command*.rs
     println!("cargo:rerun-if-changed=../core/src/algos");
+    println!("cargo:rerun-if-changed=../core/src/dataset");
 
     if let Err(e) = pipeline_commands_generator_old::generate_mappings() {
         eprintln!("Command Mapping Error: {}", e);

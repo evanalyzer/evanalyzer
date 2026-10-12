@@ -230,6 +230,7 @@ fn category_order_reference() -> String {
         CommandCategory::InstanceSegmentation,
         CommandCategory::Measure,
         CommandCategory::Object,
+        CommandCategory::Dataset,
     ];
     let mut out = String::from(
         "Pipeline step ordering: each command belongs to one of these categories, and a \

@@ -84,6 +84,7 @@ export global CommandPickerState {
     in property <[CommandDef]> shown-segment;
     in property <[CommandDef]> shown-object;
     in property <[CommandDef]> shown-classify;
+    in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-measure;
     in property <[CommandDef]> shown-templates;
     in property <CommandDef> detail;
@@ -93,6 +94,7 @@ export global CommandPickerState {
     in property <int> cat-count-seg;
     in property <int> cat-count-obj;
     in property <int> cat-count-cls;
+    in property <int> cat-count-dat;
     in property <int> cat-count-mea;
     in property <int> cat-count-fav;
     /// -1 = no context (empty pipeline); 0..4 = display_order of the last step's category.
@@ -109,6 +111,7 @@ export global CommandPickerState {
     in-out property <bool> fcat-obj: false;
     in-out property <bool> fcat-mea: false;
     in-out property <bool> fcat-cls: false;
+    in-out property <bool> fcat-dat: false;
     in-out property <bool> filter-favorites: false;
     in-out property <int> selected-id: -1;
 
@@ -141,6 +144,9 @@ global PickerStyle {
         if c == StepCategory.measure {
             return Theme.cat-measure;
         }
+        if c == StepCategory.dataset {
+            return Theme.cat-dataset;
+        }
         return Theme.cat-classify;
     }
     // Templates always use the accent color, regardless of the category of
@@ -163,6 +169,9 @@ global PickerStyle {
         }
         if c == StepCategory.measure {
             return "Measure";
+        }
+        if c == StepCategory.dataset {
+            return "Dataset";
         }
         return "Object";
     }
@@ -639,6 +648,7 @@ export component CommandSelectionDialog inherits Rectangle {
     in-out property <bool> fcat-obj: false;
     in-out property <bool> fcat-mea: false;
     in-out property <bool> fcat-cls: false;
+    in-out property <bool> fcat-dat: false;
     in-out property <bool> filter-favorites: false;
     in-out property <bool> filter-recents: false;
     in-out property <int> selected-id: -1;
@@ -651,6 +661,7 @@ export component CommandSelectionDialog inherits Rectangle {
     in property <[CommandDef]> shown-segment;
     in property <[CommandDef]> shown-object;
     in property <[CommandDef]> shown-classify;
+    in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-measure;
     in property <[CommandDef]> shown-templates;
     in property <CommandDef> detail;            // command for selected-id (or default)
@@ -660,6 +671,7 @@ export component CommandSelectionDialog inherits Rectangle {
     in property <int> cat-count-seg;
     in property <int> cat-count-obj;
     in property <int> cat-count-cls;
+    in property <int> cat-count-dat;
     in property <int> cat-count-mea;
     in property <int> cat-count-fav;
     in property <int> cat-count-rec;
@@ -847,13 +859,14 @@ export component CommandSelectionDialog inherits Rectangle {
                         label: "All";
                         count: total-shown;
                         tinted: false;
-                        active: !fcat-pre && !fcat-seg && !fcat-obj && !fcat-mea && !fcat-cls && !filter-favorites && !filter-recents;
+                        active: !fcat-pre && !fcat-seg && !fcat-obj && !fcat-mea && !fcat-cls && !fcat-dat && !filter-favorites && !filter-recents;
                         clicked => {
                             root.fcat-pre = false;
                             root.fcat-seg = false;
                             root.fcat-obj = false;
                             root.fcat-mea = false;
                             root.fcat-cls = false;
+                            root.fcat-dat = false;
                             root.filter-favorites = false;
                             root.filter-recents = false;
                             root.query-changed(query);
@@ -925,6 +938,19 @@ export component CommandSelectionDialog inherits Rectangle {
                         }
                     }
 
+                    FilterChip {
+                        label: "Dataset";
+                        count: cat-count-dat;
+                        tint: Theme.cat-dataset;
+                        active: fcat-dat;
+                        clicked => {
+                            root.fcat-dat = !fcat-dat;
+                            root.filter-favorites = false;
+                            root.filter-recents = false;
+                            root.query-changed(query);
+                        }
+                    }
+
                     Rectangle {
                         width: 1px;
                         height: 16px;
@@ -958,6 +984,7 @@ export component CommandSelectionDialog inherits Rectangle {
                             root.fcat-obj = false;
                             root.fcat-mea = false;
                             root.fcat-cls = false;
+                            root.fcat-dat = false;
                             root.query-changed(query);
                         }
                     }
@@ -1224,6 +1251,107 @@ export component CommandSelectionDialog inherits Rectangle {
                                         }
                                     }
                                 }
+
+                                // Dataset
+                            if shown-dataset.length > 0 && !filter-favorites: VerticalLayout {
+                                    spacing: 0;
+                                    SectionHeader {
+                                        category: StepCategory.dataset;
+                                        count: shown-dataset.length;
+                                    }
+
+                                    for c in shown-dataset: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+                                }
+
+                                // Templates
+                            if filter-favorites: VerticalLayout {
+                                    spacing: 0;
+
+                                    if shown-templates.length == 0: VerticalLayout {
+                                        padding-top: 60px;
+                                        spacing: 10px;
+                                        Text {
+                                            text: "No templates found";
+                                            color: Theme.text-dim;
+                                            font-size: 12px;
+                                            horizontal-alignment: center;
+                                        }
+
+                                        Text {
+                                            text: "Save a pipeline as template to see it here";
+                                            color: Theme.text-mute;
+                                            font-size: 10.5px;
+                                            font-family: Theme.font-mono;
+                                            horizontal-alignment: center;
+                                        }
+                                    }
+
+                                    if shown-templates.length > 0: Rectangle {
+                                        height: 28px;
+                                        HorizontalLayout {
+                                            padding-left: 14px;
+                                            padding-right: 14px;
+                                            spacing: 8px;
+                                            alignment: start;
+                                            Rectangle {
+                                                width: 3px;
+                                                height: 10px;
+                                                background: Theme.accent;
+                                                border-radius: 1.5px;
+                                                y: (parent.height - 10px) / 2;
+                                            }
+
+                                            Text {
+                                                text: "TEMPLATES";
+                                                color: Theme.accent;
+                                                font-size: 10px;
+                                                font-weight: 600;
+                                                letter-spacing: 0.6px;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Rectangle {
+                                                horizontal-stretch: 1;
+                                            }
+
+                                            Text {
+                                                text: "\{shown-templates.length}";
+                                                color: Theme.text-mute;
+                                                font-size: 10px;
+                                                font-family: Theme.font-mono;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    for c in shown-templates: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1384,6 +1512,7 @@ export component CommandPickerModal inherits Rectangle {
     in property <[CommandDef]> shown-segment;
     in property <[CommandDef]> shown-object;
     in property <[CommandDef]> shown-classify;
+    in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-measure;
     in property <[CommandDef]> shown-templates;
     in property <CommandDef> detail;
@@ -1393,6 +1522,7 @@ export component CommandPickerModal inherits Rectangle {
     in property <int> cat-count-seg;
     in property <int> cat-count-obj;
     in property <int> cat-count-cls;
+    in property <int> cat-count-dat;
     in property <int> cat-count-mea;
     in property <int> cat-count-fav;
     in property <int> cat-count-rec;
@@ -1403,6 +1533,7 @@ export component CommandPickerModal inherits Rectangle {
     in-out property <bool> fcat-obj: false;
     in-out property <bool> fcat-mea: false;
     in-out property <bool> fcat-cls: false;
+    in-out property <bool> fcat-dat: false;
     in-out property <bool> filter-favorites: false;
     in-out property <bool> filter-recents: false;
     in-out property <int> selected-id: -1;
@@ -1434,6 +1565,7 @@ export component CommandPickerModal inherits Rectangle {
         shown-segment: root.shown-segment;
         shown-object: root.shown-object;
         shown-classify: root.shown-classify;
+        shown-dataset: root.shown-dataset;
         shown-measure: root.shown-measure;
         shown-templates: root.shown-templates;
         detail: root.detail;
@@ -1443,6 +1575,7 @@ export component CommandPickerModal inherits Rectangle {
         cat-count-seg: root.cat-count-seg;
         cat-count-obj: root.cat-count-obj;
         cat-count-cls: root.cat-count-cls;
+        cat-count-dat: root.cat-count-dat;
         cat-count-mea: root.cat-count-mea;
         cat-count-fav: root.cat-count-fav;
         cat-count-rec: root.cat-count-rec;
@@ -1452,6 +1585,7 @@ export component CommandPickerModal inherits Rectangle {
         fcat-obj <=> root.fcat-obj;
         fcat-mea <=> root.fcat-mea;
         fcat-cls <=> root.fcat-cls;
+        fcat-dat <=> root.fcat-dat;
         filter-favorites <=> root.filter-favorites;
         filter-recents <=> root.filter-recents;
         selected-id <=> root.selected-id;

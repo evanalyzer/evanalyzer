@@ -3,9 +3,12 @@
 //! per-plate normalisation). Image steps live in `algos`.
 
 mod dataset_context;
-mod tracking;
+pub mod tracking;
 
 pub use self::dataset_context::{DatasetContext, DatasetStore, ObjectFilter, ObjectRow};
+
+// Commands, flat like `crate::algos::*` - the generated code names them so.
+pub use self::tracking::simple_tracker::SimpleTracker;
 
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 

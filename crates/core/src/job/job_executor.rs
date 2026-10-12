@@ -1,6 +1,7 @@
 use crate::{
     ImageInfo, ZProjection,
     algos::Connectivity,
+    dataset::DatasetAlgorithm,
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
     pipeline::{
         image_cache::ImageCache,
@@ -8,7 +9,6 @@ use crate::{
         pipeline::{Pipeline, PipelineImageMeta},
         pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache},
     },
-    dataset::DatasetAlgorithm,
     storage::PipelineResultExporter,
     utils::resources::MAX_TILE_SIZE,
 };

@@ -20,7 +20,7 @@ import { ScriptEditorState, ScriptFont } from "script_editor_panel.slint";
 // ----------------------------------------------------------
 // Data model
 
-export enum StepCategory { preprocess, segment, instance-segmentation, measure, object }
+export enum StepCategory { preprocess, segment, instance-segmentation, measure, object, dataset }
 export enum PipelineStatus { idle, queued, running, done, error }
 export enum ParamType {
     number,
@@ -125,6 +125,9 @@ global Cat {
             if c == StepCategory.measure {
                 return Theme.cat-measure;
             }
+            if c == StepCategory.dataset {
+                return Theme.cat-dataset;
+            }
             return Theme.cat-classify;
         }
         public pure function tint(c: StepCategory) -> color {
@@ -142,6 +145,9 @@ global Cat {
             }
             if c == StepCategory.measure {
                 return "Measure";
+            }
+            if c == StepCategory.dataset {
+                return "Dataset";
             }
             return "Object";
         }

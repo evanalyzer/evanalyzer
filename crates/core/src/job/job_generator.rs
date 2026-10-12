@@ -3,8 +3,9 @@ use crate::{
     algos::{ExecutionScope, TileMerge},
     image::PixelSizes,
     job::{
+        algos_from_config::into_pipeline_step,
         job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
-        pipeline_step::{PipelineStep, into_pipeline_step},
+        pipeline_step::PipelineStep,
     },
     pipeline::pipeline::{CorePipelineSettings, Pipeline},
     storage::PipelineResultExporter,

@@ -2608,3 +2608,10 @@ pub struct VoronoiSettings {
     /// Discard Voronoi regions whose originating center object was filtered out or missing.
     pub exclude_areas_with_no_center: bool,
 }
+
+// ============ DATASET ============
+
+/// Links each object to the nearest one in the next frame.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SimpleTrackerSettings {}

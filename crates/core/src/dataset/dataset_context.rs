@@ -41,7 +41,8 @@ pub struct ObjectFilter {
 impl ObjectFilter {
     /// Whether an object with `classes` passes the class filter.
     pub fn matches_classes(&self, classes: &[ObjectClass]) -> bool {
-        self.object_class.is_none_or(|class| classes.contains(&class))
+        self.object_class
+            .is_none_or(|class| classes.contains(&class))
     }
 }
 

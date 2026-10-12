@@ -2,38 +2,13 @@ use std::{collections::HashMap, fs, path::Path};
 use syn::{GenericArgument, Item, ItemEnum, ItemStruct, PathArguments, Type, parse_file};
 
 pub fn generate_mappings() -> Result<(), Box<dyn std::error::Error>> {
-    let algos_path = Path::new("../core/src/algos");
-    let module_features = parse_module_features(Path::new("../core/src/algos.rs"));
     let mut commands = Vec::new();
     let mut enums = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(algos_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            // Top-level module name as declared in algos.rs (`mod <name>;` /
-            // `mod <name>.rs`), used to look up an optional `#[cfg(feature = "...")]`
-            // gate that must be propagated onto the generated glue code.
-            let module_name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
-            let feature = module_features.get(module_name).and_then(|f| f.clone());
-
-            if path.is_dir() {
-                // A directory's own per-file `#[cfg(feature = "...")]` gates live on
-                // the `pub mod <child>;` declarations in its sibling mod-root file
-                // (e.g. `classification.rs` for `classification/`), not in `algos.rs` -
-                // parse those too so a submodule can be gated more specifically than
-                // (or independently of) the directory's inherited top-level feature.
-                let mod_root_overrides = parse_module_features(&path.with_extension("rs"));
-                scan_directory(
-                    &path,
-                    &mut commands,
-                    &mut enums,
-                    feature.as_deref(),
-                    &mod_root_overrides,
-                );
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
-                extract_command_structs(&path, &mut commands, &mut enums, feature.as_deref());
-            }
-        }
+    // Image steps (`impl ImageAlgorithm`) live in `algos`, dataset steps
+    // (`impl DatasetAlgorithm`) in `dataset` - both become pipeline commands.
+    for root in ["algos", "dataset"] {
+        scan_module_root(root, &mut commands, &mut enums);
     }
 
     commands.sort_by(|a, b| a.struct_name.cmp(&b.struct_name));
@@ -61,6 +36,42 @@ pub fn generate_mappings() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     Ok(())
+}
+
+/// Collects the command structs and enums of the core module `root`
+/// (`../core/src/<root>.rs` and `../core/src/<root>/`).
+fn scan_module_root(root: &str, commands: &mut Vec<CommandInfo>, enums: &mut Vec<EnumInfo>) {
+    let root_dir = Path::new("../core/src").join(root);
+    let module_features = parse_module_features(&root_dir.with_extension("rs"));
+
+    if let Ok(entries) = fs::read_dir(&root_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Top-level module name as declared in <root>.rs (`mod <name>;` /
+            // `mod <name>.rs`), used to look up an optional `#[cfg(feature = "...")]`
+            // gate that must be propagated onto the generated glue code.
+            let module_name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+            let feature = module_features.get(module_name).and_then(|f| f.clone());
+
+            if path.is_dir() {
+                // A directory's own per-file `#[cfg(feature = "...")]` gates live on
+                // the `pub mod <child>;` declarations in its sibling mod-root file
+                // (e.g. `classification.rs` for `classification/`), not in <root>.rs -
+                // parse those too so a submodule can be gated more specifically than
+                // (or independently of) the directory's inherited top-level feature.
+                let mod_root_overrides = parse_module_features(&path.with_extension("rs"));
+                scan_directory(
+                    &path,
+                    commands,
+                    enums,
+                    feature.as_deref(),
+                    &mod_root_overrides,
+                );
+            } else if path.extension().map_or(false, |ext| ext == "rs") {
+                extract_command_structs(&path, commands, enums, feature.as_deref());
+            }
+        }
+    }
 }
 
 fn write_if_changed(path: &Path, content: &str) {
@@ -374,6 +385,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
         "InstanceSegmentation",
         "Measure",
         "Object",
+        "Dataset",
         "Other",
     ] {
         if let Some(cmds) = by_category.get(*category) {
@@ -508,7 +520,8 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
     // Header - imports both core algos and config settings
     out.push_str("// @generated - do not edit by hand\n");
     out.push_str("use evanalyzer_cfg::settings::pipeline_command_settings::*;\n");
-    out.push_str("use crate::algos::*;\n\n");
+    out.push_str("use crate::algos::*;\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::dataset::*;\n\n");
 
     // Enum From impls
     out.push_str("// ============ ENUM FROM IMPLS ============\n\n");
@@ -583,39 +596,78 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
         out.push_str("        }\n    }\n}\n\n");
     }
 
-    // into_algorithm standalone function - only structs that implement ImageAlgorithm
+    // into_algorithm / into_pipeline_step standalone functions - only
+    // structs that implement ImageAlgorithm or DatasetAlgorithm.
+    let steps: Vec<&&CommandInfo> = filtered_commands
+        .iter()
+        .filter(|c| c.kind.is_some())
+        .collect();
     out.push_str("// ============ INTO ALGORITHM ============\n\n");
     out.push_str("use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;\n");
-    out.push_str("use evanalyzer_cfg::core_types::InternalErrors;\n\n");
+    out.push_str("use evanalyzer_cfg::core_types::InternalErrors;\n");
+    out.push_str("use crate::job::pipeline_step::PipelineStep;\n\n");
+
+    out.push_str("/// The step `cmd` configures, ready to run.\n");
+    out.push_str(
+        "pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, InternalErrors> {\n",
+    );
+    out.push_str("    match cmd {\n");
+    for cmd in &steps {
+        let kind = cmd.kind.expect("filtered to steps");
+        let variant = match kind {
+            StepKind::Image => "Image",
+            StepKind::Dataset => "Dataset",
+        };
+        let build = format!(
+            "Ok(PipelineStep::{variant}(Box::new(crate::{}::{}::from(settings))))",
+            kind.module(),
+            cmd.struct_name
+        );
+        push_feature_gated_arm(&mut out, cmd, &build);
+    }
+    out.push_str("    }\n}\n\n");
+
+    out.push_str("/// The image step `cmd` configures - an error for a dataset step, which\n");
+    out.push_str("/// doesn't run per image.\n");
     out.push_str(
         "pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, InternalErrors> {\n",
     );
-    out.push_str("    match cmd {\n");
-    for cmd in filtered_commands.iter().filter(|c| c.is_algo) {
-        match &cmd.feature {
-            Some(feature) => {
-                out.push_str(&format!("        #[cfg(feature = {feature:?})]\n"));
-                out.push_str(&format!(
-                    "        PipelineCommand::{}(settings) => Ok(Box::new(crate::algos::{}::from(settings))),\n",
-                    cmd.struct_name, cmd.struct_name
-                ));
-                out.push_str(&format!("        #[cfg(not(feature = {feature:?}))]\n"));
-                out.push_str(&format!(
-                    "        PipelineCommand::{}(_settings) => Err(InternalErrors::Generic(\"This build was compiled without the {feature} feature; {} is unavailable.\".into())),\n",
-                    cmd.struct_name, cmd.struct_name
-                ));
-            }
-            None => {
-                out.push_str(&format!(
-                    "        PipelineCommand::{}(settings) => Ok(Box::new(crate::algos::{}::from(settings))),\n",
-                    cmd.struct_name, cmd.struct_name
-                ));
-            }
-        }
-    }
+    out.push_str("    match into_pipeline_step(cmd)? {\n");
+    out.push_str("        PipelineStep::Image(algo) => Ok(algo),\n");
+    out.push_str(
+        "        PipelineStep::Dataset(algo) => Err(InternalErrors::InvalidArgument(format!(\n",
+    );
+    out.push_str(
+        "            \"{} is a dataset step: it runs once after all images, not per image\",\n",
+    );
+    out.push_str("            algo.name()\n");
+    out.push_str("        ))),\n");
     out.push_str("    }\n}\n");
 
     out
+}
+
+/// One `PipelineCommand::<cmd>(settings) => <build>` match arm - for a
+/// feature-gated command, plus the arm that reports the missing feature.
+fn push_feature_gated_arm(out: &mut String, cmd: &CommandInfo, build: &str) {
+    match &cmd.feature {
+        Some(feature) => {
+            out.push_str(&format!("        #[cfg(feature = {feature:?})]\n"));
+            out.push_str(&format!(
+                "        PipelineCommand::{}(settings) => {build},\n",
+                cmd.struct_name
+            ));
+            out.push_str(&format!("        #[cfg(not(feature = {feature:?}))]\n"));
+            out.push_str(&format!(
+                "        PipelineCommand::{}(_settings) => Err(InternalErrors::Generic(\"This build was compiled without the {feature} feature; {} is unavailable.\".into())),\n",
+                cmd.struct_name, cmd.struct_name
+            ));
+        }
+        None => out.push_str(&format!(
+            "        PipelineCommand::{}(settings) => {build},\n",
+            cmd.struct_name
+        )),
+    }
 }
 
 // ============================================================
@@ -781,6 +833,33 @@ struct StructMetadata {
     key: Option<String>,
 }
 
+/// Which step trait a command implements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepKind {
+    /// `impl ImageAlgorithm`: runs per tile or per image (`crate::algos`).
+    Image,
+    /// `impl DatasetAlgorithm`: runs once after every image (`crate::dataset`).
+    Dataset,
+}
+
+impl StepKind {
+    fn from_trait(name: &str) -> Option<Self> {
+        match name {
+            "ImageAlgorithm" => Some(Self::Image),
+            "DatasetAlgorithm" => Some(Self::Dataset),
+            _ => None,
+        }
+    }
+
+    /// The core module the command struct is re-exported from.
+    fn module(self) -> &'static str {
+        match self {
+            Self::Image => "algos",
+            Self::Dataset => "dataset",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CommandInfo {
     struct_name: String,
@@ -788,7 +867,9 @@ struct CommandInfo {
     category: String,
     _source_file: String,
     doc_comments: Vec<String>,
-    is_algo: bool,
+    /// `Some` for a pipeline command - a struct that implements one of the
+    /// step traits - `None` for a helper struct used by one.
+    kind: Option<StepKind>,
     struct_meta: StructMetadata,
     /// Cargo feature (in the `core` crate) that must be enabled for this command's
     /// `crate::algos::<struct_name>` to exist, e.g. `Some("ai")` for U-Net/Cellpose/StarDist.
@@ -880,7 +961,7 @@ fn extract_command_structs(
         Err(_) => return,
     };
 
-    if !content.contains("impl ImageAlgorithm") && !content.contains("impl ") {
+    if !content.contains("impl ") {
         return;
     }
 
@@ -895,8 +976,9 @@ fn extract_command_structs(
     let category = determine_category(file_path);
     let source_file = extract_source_module(file_path);
 
-    // Only structs with `impl ImageAlgorithm for X` are pipeline commands.
-    let algo_structs: std::collections::HashSet<String> = ast
+    // Only structs with `impl ImageAlgorithm for X` / `impl DatasetAlgorithm
+    // for X` are pipeline commands.
+    let algo_structs: HashMap<String, StepKind> = ast
         .items
         .iter()
         .filter_map(|item| {
@@ -907,9 +989,9 @@ fn extract_command_structs(
                     .and_then(|(path, _)| path.segments.last())
                     .map(|s| s.ident.to_string())
                     .unwrap_or_default();
-                if trait_name == "ImageAlgorithm" {
+                if let Some(kind) = StepKind::from_trait(&trait_name) {
                     if let Type::Path(tp) = item_impl.self_ty.as_ref() {
-                        return tp.path.segments.last().map(|s| s.ident.to_string());
+                        return tp.path.segments.last().map(|s| (s.ident.to_string(), kind));
                     }
                 }
             }
@@ -930,7 +1012,12 @@ fn extract_command_structs(
                 {
                     continue;
                 }
-                let is_algo = algo_structs.contains(&struct_name);
+                let kind = algo_structs.get(&struct_name).copied();
+                // Neither a step nor a settings helper of one (those derive
+                // `CommandsMeta`): e.g. `DatasetContext` next to the steps.
+                if kind.is_none() && !derives(&item_struct.attrs, "CommandsMeta") {
+                    continue;
+                }
                 let fields = extract_fields(&item_struct);
                 let doc_comments = extract_doc_comments(&item_struct.attrs);
                 let struct_meta = parse_struct_meta(&item_struct.attrs);
@@ -940,17 +1027,13 @@ fn extract_command_structs(
                     .as_deref()
                     .map(normalize_category)
                     .unwrap_or_else(|| category.clone());
-                eprintln!(
-                    "DBG extract struct={} raw_cat={:?} effective_cat={:?}",
-                    item_struct.ident, struct_meta.category, effective_category
-                );
                 commands.push(CommandInfo {
                     struct_name,
                     fields,
                     category: effective_category,
                     _source_file: source_file.clone(),
                     doc_comments,
-                    is_algo,
+                    kind,
                     struct_meta,
                     feature: feature.map(str::to_string),
                 });
@@ -981,13 +1064,26 @@ fn extract_command_structs(
     }
 }
 
+/// Whether `attrs` contain `#[derive(..., <name>, ...)]`.
+fn derives(attrs: &[syn::Attribute], name: &str) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("derive")
+            && attr
+                .meta
+                .require_list()
+                .is_ok_and(|list| list.tokens.to_string().split(',').any(|t| t.trim() == name))
+    })
+}
+
 fn determine_category(file_path: &Path) -> String {
     let path_str = file_path.to_string_lossy();
     // Checked first, ahead of the generic filename-substring checks below:
     // a file living under `algos/object/` (e.g. `object_math.rs`) would
     // otherwise get misclassified by, say, the `"math"` check meant for
     // `algos/math/`.
-    if path_str.contains("/object/")
+    if path_str.contains("/dataset/") {
+        "Dataset".to_string()
+    } else if path_str.contains("/object/")
         || path_str.contains("classification")
         || path_str.contains("extract")
     {
@@ -1018,6 +1114,7 @@ fn normalize_category(raw: &str) -> String {
         "instance_segmentation" => "InstanceSegmentation".to_string(),
         "measure" | "measurement" => "Measure".to_string(),
         "object" | "classify" | "classification" => "Object".to_string(),
+        "dataset" => "Dataset".to_string(),
         _ => "Other".to_string(),
     }
 }
@@ -2906,6 +3003,7 @@ fn category_to_enum_variant(category: &str) -> &str {
         "InstanceSegmentation" => "InstanceSegmentation",
         "Measure" => "Measure",
         "Object" => "Object",
+        "Dataset" => "Dataset",
         _ => "Preprocess",
     }
 }
@@ -2928,6 +3026,7 @@ fn default_next_for_category(variant: &str) -> &'static [&'static str] {
         "InstanceSegmentation" => &["Measure", "InstanceSegmentation"],
         "Measure" => &["Object", "Measure"],
         "Object" => &["Object"],
+        "Dataset" => &["Dataset"],
         _ => &["Segment"],
     }
 }
@@ -2937,7 +3036,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     const GENERATE_ALL_DEFAULT: bool = false;
 
     // Only true algorithm structs go into the PipelineCommand enum.
-    let algo_commands: Vec<&CommandInfo> = commands.iter().filter(|c| c.is_algo).collect();
+    let algo_commands: Vec<&CommandInfo> = commands.iter().filter(|c| c.kind.is_some()).collect();
 
     out.push_str("// @generated - do not edit by hand\n");
     out.push_str("use crate::modules::pipeline_command_settings::*;\n");
@@ -2961,6 +3060,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("    InstanceSegmentation,\n");
     out.push_str("    Measure,\n");
     out.push_str("    Object,\n");
+    out.push_str("    /// Runs once after every image, on the objects of all of them.\n");
+    out.push_str("    Dataset,\n");
     out.push_str("}\n\n");
 
     // --- CommandCategory methods (ordering rules) ---
@@ -2974,6 +3075,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("            Self::InstanceSegmentation => 2,\n");
     out.push_str("            Self::Measure              => 3,\n");
     out.push_str("            Self::Object               => 4,\n");
+    out.push_str("            Self::Dataset              => 5,\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// Which categories are valid immediately before this one in a pipeline.\n");
     out.push_str("    /// An empty slice means this category can start a pipeline.\n");
@@ -2989,6 +3091,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         "            Self::Measure              => &[Self::InstanceSegmentation, Self::Measure],\n",
     );
     out.push_str("            Self::Object               => &[Self::Measure, Self::Object],\n");
+    out.push_str("            Self::Dataset              => &[Self::Measure, Self::Object, Self::Dataset],\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// The natural next category after this one, used to pre-filter the command picker.\n");
     out.push_str("#[allow(dead_code)]\n");
@@ -2999,6 +3102,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("            Self::InstanceSegmentation => Self::Measure,\n");
     out.push_str("            Self::Measure              => Self::Object,\n");
     out.push_str("            Self::Object               => Self::Object,\n");
+    out.push_str("            Self::Dataset              => Self::Dataset,\n");
     out.push_str("        }\n    }\n");
     out.push_str("}\n\n");
 
@@ -3144,7 +3248,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("        match self {\n");
     for cmd in &algo_commands {
         let variant = category_to_enum_variant(&cmd.category);
-        let next_variants: Vec<String> = match &cmd.struct_meta.next {
+        let mut next_variants: Vec<String> = match &cmd.struct_meta.next {
             Some(list) => list
                 .iter()
                 .map(|c| {
@@ -3159,6 +3263,14 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
                 .map(|c| format!("CommandCategory::{c}"))
                 .collect(),
         };
+        // A dataset step may follow wherever an object step may - both need
+        // extracted objects. It runs after every image anyway, wherever it sits.
+        let dataset = "CommandCategory::Dataset".to_string();
+        if next_variants.contains(&"CommandCategory::Object".to_string())
+            && !next_variants.contains(&dataset)
+        {
+            next_variants.push(dataset);
+        }
         out.push_str(&format!(
             "            Self::{}(_) => &[{}],\n",
             cmd.struct_name,

@@ -48,18 +48,22 @@ pub use crate::object::ObjectInit;
 pub use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 
 // Job execution
-pub use crate::job::algos_from_config::into_algorithm;
 pub use crate::dataset::{DatasetAlgorithm, DatasetContext, DatasetStore, ObjectFilter, ObjectRow};
+pub use crate::job::algos_from_config::{into_algorithm, into_pipeline_step};
 pub use crate::job::job_executor::JobExecutor;
 pub use crate::job::job_executor::PreviewTileSettings;
 pub use crate::job::job_executor::ProgressEvent;
 pub use crate::job::job_generator::active_series;
 pub use crate::job::job_generator::generate_analyze_job_from_project_settings;
 pub use crate::job::job_generator::generate_preview_job_from_project_settings;
+pub use crate::job::pipeline_step::PipelineStep;
 pub use crate::storage::PipelineResultExporter;
 pub use crate::storage::duckdb::DuckDbExporter;
 pub use crate::storage::file::CsvExporter;
 pub use crate::storage::memory::MemoryExporter;
+
+// Dataset
+pub use crate::dataset::tracking::simple_tracker::SimpleTracker;
 
 // AI classifier training
 #[cfg(feature = "ai")]

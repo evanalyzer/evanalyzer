@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
-use evanalyzer_core::into_algorithm;
+use evanalyzer_core::into_pipeline_step;
 
 /// Renders every enabled pipeline as an ASCII/Unicode flow diagram followed
 /// by a consolidated reference list of every citation used, and writes the
@@ -44,7 +44,8 @@ pub fn cite_project(
 
         let mut rows = Vec::with_capacity(steps.len());
         for (i, step) in steps.iter().enumerate() {
-            let algo = into_algorithm(step.command.clone())?;
+            // Image and dataset steps alike.
+            let algo = into_pipeline_step(step.command.clone())?;
             let label = format!("[Step {}] {}", i + 1, algo.name());
             let cites = algo.cite();
             let citation_marker = if cites.is_empty() {

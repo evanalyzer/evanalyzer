@@ -1380,7 +1380,9 @@ mod tests {
             }
             exporter.export(&cache).unwrap();
         }
-        let store = exporter.dataset_store().expect("DuckDB results can be read back");
+        let store = exporter
+            .dataset_store()
+            .expect("DuckDB results can be read back");
         let ids = |filter: ObjectFilter| -> Vec<(String, i32, u128)> {
             store
                 .objects(&filter)
@@ -1392,8 +1394,13 @@ mod tests {
 
         assert_eq!(
             ids(ObjectFilter::default()),
-            [("a.tif", 0, 2), ("a.tif", 1, 1), ("b.tif", 0, 4), ("b.tif", 1, 3)]
-                .map(|(image, t, id)| (image.to_string(), t, id)),
+            [
+                ("a.tif", 0, 2),
+                ("a.tif", 1, 1),
+                ("b.tif", 0, 4),
+                ("b.tif", 1, 3)
+            ]
+            .map(|(image, t, id)| (image.to_string(), t, id)),
             "ordered by image, then frame"
         );
         let in_b = ObjectFilter {
@@ -1422,6 +1429,10 @@ mod tests {
         assert_eq!(row.bbox_px, [10, 20, 14, 30]);
         assert_eq!(row.area_px, 4);
         assert_eq!(row.object_classes, [ObjectClass::Valid(1)]);
-        assert_eq!(row.intensity_mean, [None, Some(0.5)], "channel 0 not measured");
+        assert_eq!(
+            row.intensity_mean,
+            [None, Some(0.5)],
+            "channel 0 not measured"
+        );
     }
 }

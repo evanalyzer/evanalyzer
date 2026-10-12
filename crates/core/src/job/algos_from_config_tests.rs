@@ -1192,7 +1192,7 @@ fn every_command_cites_something() {
     let mut checked = 0;
     for meta in all_command_meta() {
         let command = default_command(meta.id).expect("every listed command has a default");
-        let Ok(algo) = into_algorithm(command) else {
+        let Ok(algo) = super::algos_from_config::into_pipeline_step(command) else {
             // Commands that need a trained model file can't be built from
             // their defaults.
             continue;

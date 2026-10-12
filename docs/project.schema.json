@@ -2547,6 +2547,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "SIMPLE_TRACKER"
+            }
+          },
+          "$ref": "#/$defs/SimpleTrackerSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "STARDIST"
             }
           },
@@ -3374,6 +3387,10 @@
         "pixelSizes",
         "objects"
       ]
+    },
+    "SimpleTrackerSettings": {
+      "description": "Links each object to the nearest one in the next frame.",
+      "type": "object"
     },
     "SizeUnits": {
       "type": "string",

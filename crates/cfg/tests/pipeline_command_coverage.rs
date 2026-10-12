@@ -264,12 +264,13 @@ fn command_category_helpers_cover_every_variant() {
         CommandCategory::InstanceSegmentation,
         CommandCategory::Measure,
         CommandCategory::Object,
+        CommandCategory::Dataset,
     ];
     for cat in categories {
         // These are `#[allow(dead_code)]` (unused outside tests currently),
         // which is exactly why they were at 0% coverage.
         let order = cat.display_order();
-        assert!(order <= 4);
+        assert!(order <= 5);
         let _ = cat.allowed_after();
         let _ = cat.suggested_next();
     }
@@ -294,6 +295,7 @@ fn command_category_display_order_is_sequential_by_pipeline_stage() {
     assert_eq!(CommandCategory::InstanceSegmentation.display_order(), 2);
     assert_eq!(CommandCategory::Measure.display_order(), 3);
     assert_eq!(CommandCategory::Object.display_order(), 4);
+    assert_eq!(CommandCategory::Dataset.display_order(), 5);
 }
 
 #[test]
@@ -324,6 +326,15 @@ fn command_category_allowed_after_matches_expected_predecessors() {
         CommandCategory::Object.allowed_after(),
         &[CommandCategory::Measure, CommandCategory::Object]
     );
+    // Dataset steps need extracted objects, like Object steps.
+    assert_eq!(
+        CommandCategory::Dataset.allowed_after(),
+        &[
+            CommandCategory::Measure,
+            CommandCategory::Object,
+            CommandCategory::Dataset
+        ]
+    );
 }
 
 #[test]
@@ -350,24 +361,31 @@ fn command_category_suggested_next_advances_and_terminates_at_object() {
         CommandCategory::Object.suggested_next(),
         CommandCategory::Object
     );
+    // Dataset steps come last: only more dataset steps may follow.
+    assert_eq!(
+        CommandCategory::Dataset.suggested_next(),
+        CommandCategory::Dataset
+    );
 }
 
 #[test]
 fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
-    let expected: [(&str, &[CommandCategory]); 39] = [
-        ("AI Object Classifier", &[Object]),
+    // Wherever an Object step may follow, a dataset step may too: both
+    // need extracted objects.
+    let expected: [(&str, &[CommandCategory]); 40] = [
+        ("AI Object Classifier", &[Object, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Measure]),
-        ("ClassifyObjects", &[Object]),
-        ("Colocalization", &[Object]),
+        ("ClassifyObjects", &[Object, Dataset]),
+        ("Colocalization", &[Object, Dataset]),
         ("ColorFilterCommand", &[Segment, Preprocess]),
         ("ConnectedComponents", &[InstanceSegmentation, Measure]),
         ("DistanceTransform", &[Segment, Preprocess]),
         ("EdgeDetectionCanny", &[Segment, Preprocess]),
         ("EdgeDetectionSobel", &[Segment, Preprocess]),
         ("EnhanceContrast", &[Segment, Preprocess]),
-        ("ExtractObjects", &[Object]),
+        ("ExtractObjects", &[Object, Dataset]),
         // Not `default_next_for_category("InstanceSegmentation")`
         // (`[Measure, InstanceSegmentation]`) - pinned to just
         // `[InstanceSegmentation]`: `Measure`-stage commands like
@@ -384,10 +402,10 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("ImageMath", &[Segment, Preprocess]),
         ("IntensityTransformation", &[Segment, Preprocess]),
         ("Laplacian", &[Segment, Preprocess]),
-        ("LoadAnnotatedObjects", &[Object]),
+        ("LoadAnnotatedObjects", &[Object, Dataset]),
         ("MedianSubtract", &[Segment, Preprocess]),
         ("MorphologicalCommand", &[Segment, Preprocess]),
-        ("ObjectMath", &[Object]),
+        ("ObjectMath", &[Object, Dataset]),
         ("AI Pixel Classifier", &[InstanceSegmentation]),
         ("RankFilter", &[Segment, Preprocess]),
         ("Rolling Ball", &[Segment, Preprocess]),
@@ -395,18 +413,27 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         // A script can sit at any stage, so every stage may follow it.
         (
             "Script",
-            &[Preprocess, Segment, InstanceSegmentation, Measure, Object],
+            &[
+                Preprocess,
+                Segment,
+                InstanceSegmentation,
+                Measure,
+                Object,
+                Dataset,
+            ],
         ),
+        // Only dataset steps may follow a dataset step.
+        ("SimpleTracker", &[Dataset]),
         ("AI Stardist Segmentation", &[Measure]),
         ("StructureTensor", &[Segment, Preprocess]),
         // Pinned to `[InstanceSegmentation]` (same as the default for
         // `Threshold`'s own `Segment` category) so instance labeling
         // (ConnectedComponents) is suggested right after it.
         ("Threshold", &[InstanceSegmentation]),
-        ("TransformObjects", &[Object]),
+        ("TransformObjects", &[Object, Dataset]),
         ("AI UNet Segmentation", &[InstanceSegmentation]),
         ("AI YOLOv5 Segmentation", &[Measure]),
-        ("Voronoi", &[Object]),
+        ("Voronoi", &[Object, Dataset]),
         ("Watershed", &[Measure]),
         ("WeightedDeviation", &[Segment, Preprocess]),
     ];
