@@ -61,6 +61,7 @@ import {
 import {
     ViewportState,
     ViewportObjectState,
+    RetainedTile,
 } from "editor/viewport_state.slint";
 import {
     ConfirmDeleteObjectDialog,
@@ -132,6 +133,10 @@ import {
     RunAnalysisState,
 } from "dialogs/run_analysis_dialog.slint";
 import {
+    ViewportMemoryDialog,
+    ViewportMemoryState,
+} from "dialogs/viewport_memory_dialog.slint";
+import {
     ResultsWindow,
 } from "results/results_window.slint";
 import { ResultsListState } from "editor/results_list_panel.slint";
@@ -152,6 +157,8 @@ import {
 
 export {
     GlobalAppState,
+    ViewportMemoryState,
+    RetainedTile,
     ProjectSettingsSlint,
     ProjectSettingsState,
     ImagePixelInfo,
@@ -458,6 +465,10 @@ export component AppWindow inherits Window {
                 height: 100%;
             }
             if (GlobalAppState.active_dialog == DialogType.run-analysis-confirm): RunAnalysisDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.viewport-memory): ViewportMemoryDialog {
                 width: 100%;
                 height: 100%;
             }

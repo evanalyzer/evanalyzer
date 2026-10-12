@@ -161,6 +161,36 @@ impl UiState {
         }
     }
 
+    /// The viewport's memory settings - always this computer's, since they
+    /// are about this computer's RAM.
+    pub fn viewport_memory_settings(&self) -> evanalyzer_app::global::ViewportMemorySettings {
+        self.local_backend
+            .load_app_settings()
+            .map(|settings| settings.viewport)
+            .unwrap_or_default()
+    }
+
+    /// Saves the viewport's memory settings on this computer.
+    pub fn save_viewport_memory_settings(
+        &self,
+        viewport: evanalyzer_app::global::ViewportMemorySettings,
+    ) {
+        // Locally the cached preferences are saved to this same file by
+        // `update_app_settings` - keep them current so that doesn't write
+        // an older value back.
+        self.app_settings.lock().unwrap().viewport = viewport.clone();
+        let result = self
+            .local_backend
+            .load_app_settings()
+            .and_then(|mut settings| {
+                settings.viewport = viewport;
+                self.local_backend.save_app_settings(&settings)
+            });
+        if let Err(e) = result {
+            log::warn!("Could not save the viewport memory settings: {e}");
+        }
+    }
+
     /// The user's remembered preferences (see `app_settings`).
     pub fn load_app_settings(&self) -> evanalyzer_app::global::AppSettings {
         self.app_settings.lock().unwrap().clone()

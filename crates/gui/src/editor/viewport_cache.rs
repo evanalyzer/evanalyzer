@@ -359,19 +359,12 @@ impl ViewportCache {
                         ));
                     }
 
-                    let max_tiles_x = (pyramid_w / TILE_SIZE_TO_LOAD).floor().max(0.0) as usize;
-                    let max_tiles_y = (pyramid_h / TILE_SIZE_TO_LOAD).floor().max(0.0) as usize;
-
-                    let read_off_x = ((-off_x / scale_x) / TILE_SIZE_TO_LOAD)
-                        .floor()
-                        .max(0.0)
-                        .min(max_tiles_x as f32) as usize
-                        * TILE_SIZE_TO_LOAD as usize;
-                    let read_off_y = ((-off_y / scale_y) / TILE_SIZE_TO_LOAD)
-                        .floor()
-                        .max(0.0)
-                        .min(max_tiles_y as f32) as usize
-                        * TILE_SIZE_TO_LOAD as usize;
+                    // The overview is always the whole image (read
+                    // whole, scaled to `image_w` x `image_h`), so it
+                    // starts at the origin wherever the view is - the
+                    // viewport places it with the live zoom/offset.
+                    let read_off_x = 0;
+                    let read_off_y = 0;
 
                     (
                         scale_x as f32,

@@ -28,6 +28,47 @@ pub struct AppSettings {
 
     #[serde(default)]
     pub author: Option<UserInformation>,
+
+    /// How much memory the image viewport may spend on smoother pan/zoom.
+    /// About this computer's RAM, so the GUI keeps it in this computer's
+    /// settings even when connected to a server.
+    #[serde(default)]
+    pub viewport: ViewportMemorySettings,
+}
+
+/// Memory/smoothness trade-offs of the image viewport - see
+/// [`AppSettings::viewport`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ViewportMemorySettings {
+    /// Keep earlier high-resolution renders around (up to
+    /// [`Self::tile_history_budget_mb`]) so panning back or zooming shows
+    /// them instead of the blurry whole-image overview. Off: only the
+    /// current render and the overview are kept.
+    pub tile_history_enabled: bool,
+
+    /// RAM the kept renders may use together, in MB.
+    pub tile_history_budget_mb: u32,
+
+    /// How far, in screen pixels, the object overlay is drawn past each
+    /// viewport edge, so panning doesn't uncover an empty border right
+    /// away. 0 keeps the overlay exactly viewport-sized (least RAM).
+    pub object_overlay_margin_px: u32,
+}
+
+impl ViewportMemorySettings {
+    pub const DEFAULT_TILE_HISTORY_BUDGET_MB: u32 = 512;
+    pub const DEFAULT_OBJECT_OVERLAY_MARGIN_PX: u32 = 256;
+}
+
+impl Default for ViewportMemorySettings {
+    fn default() -> Self {
+        Self {
+            tile_history_enabled: false,
+            tile_history_budget_mb: Self::DEFAULT_TILE_HISTORY_BUDGET_MB,
+            object_overlay_margin_px: Self::DEFAULT_OBJECT_OVERLAY_MARGIN_PX,
+        }
+    }
 }
 
 /// Persisted, per-user application preferences (as opposed to project
@@ -239,6 +280,25 @@ mod tests {
         let loaded = load_app_settings_from(&path);
 
         assert!(loaded.dark_mode);
+    }
+
+    #[test]
+    fn viewport_memory_settings_default_to_one_overview_and_fill_in_missing_fields() {
+        let settings: AppSettings = serde_json::from_str(r#"{"darkMode":true}"#).unwrap();
+        assert_eq!(settings.viewport, ViewportMemorySettings::default());
+        assert!(!settings.viewport.tile_history_enabled);
+
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"viewport":{"tileHistoryEnabled":true}}"#).unwrap();
+        assert!(settings.viewport.tile_history_enabled);
+        assert_eq!(
+            settings.viewport.tile_history_budget_mb,
+            ViewportMemorySettings::DEFAULT_TILE_HISTORY_BUDGET_MB
+        );
+        assert_eq!(
+            settings.viewport.object_overlay_margin_px,
+            ViewportMemorySettings::DEFAULT_OBJECT_OVERLAY_MARGIN_PX
+        );
     }
 
     #[test]

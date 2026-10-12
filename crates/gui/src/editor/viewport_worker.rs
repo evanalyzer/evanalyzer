@@ -3,7 +3,7 @@ use crate::{
     editor::{
         histogram_controller::HistogramController,
         viewport_cache::{ReadContext, ViewportCache, to_z_projection},
-        viewport_controller::{DrawingTaskContainer, ViewportController},
+        viewport_controller::{DrawingTaskContainer, ImageRect, ViewportController},
         viewport_task::{DrawingTask, TaskDispatch},
     },
 };
@@ -106,6 +106,10 @@ impl ViewportWorker {
             self.viewport_controller.sync_objects_to_slint_viewport();
             return;
         }
+
+        // Taken before any display settings are read: a change landing
+        // mid-render then leaves this render tagged as outdated.
+        let generation = self.viewport_controller.content_generation();
 
         // ----------------------------------------------------------------
         // STEP 1: Extract all needed data from project - drop lock immediately
@@ -270,9 +274,17 @@ impl ViewportWorker {
                 }
             }
 
-            // Resize buffer from pool if needed
+            // Resize buffer from pool if needed. A high-res buffer the tile
+            // history may still hold is never written again (that would
+            // copy it first) - a fresh one is taken instead.
             b.pool_idx = (b.pool_idx + 1) % b.buffer_pool.len();
-            if b.buffer_pool[b.pool_idx].width() != prepared.image_w as u32
+            let tile_history_on = !is_low_res
+                && self
+                    .viewport_controller
+                    .memory_settings()
+                    .tile_history_enabled;
+            if tile_history_on
+                || b.buffer_pool[b.pool_idx].width() != prepared.image_w as u32
                 || b.buffer_pool[b.pool_idx].height() != prepared.image_h as u32
             {
                 b.buffer_pool[b.pool_idx] =
@@ -433,7 +445,8 @@ impl ViewportWorker {
                 let vp_w = prepared.viewport_width.max(1.0) as usize;
                 let vp_h = prepared.viewport_height.max(1.0) as usize;
                 b.screen_pool_idx = (b.screen_pool_idx + 1) % b.screen_buffer_pool.len();
-                if b.screen_buffer_pool[b.screen_pool_idx].width() as usize != vp_w
+                if tile_history_on
+                    || b.screen_buffer_pool[b.screen_pool_idx].width() as usize != vp_w
                     || b.screen_buffer_pool[b.screen_pool_idx].height() as usize != vp_h
                 {
                     b.screen_buffer_pool[b.screen_pool_idx] =
@@ -555,10 +568,17 @@ impl ViewportWorker {
             self.viewport_controller.sync_viewport_state_to_slint(
                 pb,
                 svg_hists_to_send,
-                info.draw_x,
-                info.draw_y,
-                info.zoomed_w,
-                info.zoomed_h,
+                ImageRect::from_screen(
+                    info.draw_x,
+                    info.draw_y,
+                    info.zoomed_w,
+                    info.zoomed_h,
+                    info.zoom,
+                    info.offset_x,
+                    info.offset_y,
+                ),
+                info.zoom,
+                generation,
                 is_low_res,
             );
 
@@ -571,7 +591,17 @@ impl ViewportWorker {
             }
 
             if is_low_res {
-                self.viewport_controller.sync_high_res_ready_to_slint(false);
+                // Only new content hides the current high-res render (it
+                // shows the previous image); after anything else it still
+                // lines up with the overview and stays.
+                if task.is_new_image || task.is_new_series {
+                    self.viewport_controller.sync_high_res_ready_to_slint(false);
+                }
+                *self
+                    .viewport_controller
+                    .full_image_size
+                    .lock()
+                    .expect("Poisoned") = (info.full_image_w as i64, info.full_image_h as i64);
                 self.viewport_controller.sync_navigator_to_slint(
                     info.full_image_w as i64,
                     info.full_image_h as i64,
@@ -931,10 +961,12 @@ pub(crate) fn histogram_to_svg_fast(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_app::global::ViewportMemorySettings;
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
     use evanalyzer_cfg::core_types::ImagePlane;
     use kornia_image::{Image, ImageSize};
+    use slint::Model;
 
     // -- hsv_to_rgb8 ------------------------------------------------------------
 
@@ -1261,7 +1293,7 @@ mod tests {
         let image = r.ui.get_display_image();
         assert!(image.size().width > 0 && image.size().height > 0);
         assert!(r.view().get_high_res_ready());
-        assert!(r.view().get_tile_width() > 0.0);
+        assert!(r.view().get_hr_img_w() > 0.0);
         // Auto-adjust stored a histogram window for the image's channels.
         let histograms = r.app_state.get_project().get_image_channel_histograms();
         assert!(histograms.values().any(|h| h.is_some()), "{histograms:?}");
@@ -1276,9 +1308,208 @@ mod tests {
         r.draw(TaskDispatch::HighRes, new_image_task());
         r.draw(TaskDispatch::LowRes, new_image_task());
         assert!(r.ui.get_ghost_image().size().width > 0);
-        assert!(r.view().get_tile_width_ghost() > 0.0);
+        assert!(r.view().get_ghost_img_w() > 0.0);
         // A low-res frame never takes back an already posted high-res one.
         assert!(r.view().get_high_res_ready());
+    }
+
+    /// Full-resolution size of the image as read from the file (the
+    /// fixture project's metadata doesn't match the file) - known once an
+    /// overview was drawn.
+    fn full_image_size(r: &mut Render) -> (f32, f32) {
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        let (w, h) = *r.worker.viewport_controller.full_image_size.lock().unwrap();
+        assert!(w > 0 && h > 0);
+        (w as f32, h as f32)
+    }
+
+    fn set_view(r: &Render, zoom: f32, offset_x: f32, offset_y: f32) {
+        let mut vp = r.worker.viewport_controller.viewport_state.write().unwrap();
+        vp.zoom = zoom;
+        vp.offset_x = offset_x;
+        vp.offset_y = offset_y;
+    }
+
+    #[test]
+    fn the_overview_covers_the_whole_image_in_image_pixels_wherever_the_view_is() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let (full_w, full_h) = full_image_size(&mut r);
+
+        // Panned far and zoomed in: the overview still lies at the image
+        // origin, image-sized - the viewport places it with the live
+        // transform, so a pan needs no new overview.
+        set_view(&r, 3.0, -5000.0, -4000.0);
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+
+        let v = r.view();
+        assert!(v.get_ghost_img_x().abs() < 0.01, "{}", v.get_ghost_img_x());
+        assert!(v.get_ghost_img_y().abs() < 0.01, "{}", v.get_ghost_img_y());
+        assert!(
+            (v.get_ghost_img_w() - full_w).abs() < 0.5,
+            "{} vs {full_w}",
+            v.get_ghost_img_w()
+        );
+        assert!(
+            (v.get_ghost_img_h() - full_h).abs() < 0.5,
+            "{} vs {full_h}",
+            v.get_ghost_img_h()
+        );
+    }
+
+    #[test]
+    fn the_high_res_rect_is_where_the_render_lies_in_the_image() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let (full_w, full_h) = full_image_size(&mut r);
+
+        let v = r.view();
+        // Fitted to the screen, the whole image is one tile.
+        assert!(v.get_hr_img_x().abs() < 0.01);
+        assert!(v.get_hr_img_y().abs() < 0.01);
+        assert!(
+            (v.get_hr_img_w() - full_w).abs() < 0.5,
+            "{} vs {full_w}",
+            v.get_hr_img_w()
+        );
+        assert!(
+            (v.get_hr_img_h() - full_h).abs() < 0.5,
+            "{} vs {full_h}",
+            v.get_hr_img_h()
+        );
+        assert!(v.get_hr_zoom() > 0.0);
+    }
+
+    #[test]
+    fn a_low_res_frame_of_new_content_hides_the_previous_high_res_render() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        assert!(r.view().get_high_res_ready());
+
+        // A new image: its overview arrives before its sharp render.
+        r.worker.viewport_controller.trigger_new_image_redraw();
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        assert!(!r.view().get_high_res_ready());
+
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        assert!(r.view().get_high_res_ready());
+
+        // Any other overview (a pan, a histogram change) leaves it shown.
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        assert!(r.view().get_high_res_ready());
+    }
+
+    /// Renders the fixture at its fitted zoom, then 4x zoomed in, then at
+    /// the fitted zoom again - returns the fitted zoom.
+    fn zoom_in_and_out(r: &mut Render) -> f32 {
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let fitted = r
+            .worker
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap()
+            .zoom;
+        set_view(r, fitted * 4.0, 0.0, 0.0);
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        set_view(r, fitted, 0.0, 0.0);
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        fitted
+    }
+
+    fn enable_tile_history(r: &Render) {
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings {
+                tile_history_enabled: true,
+                ..Default::default()
+            });
+        drain_ui_queue();
+    }
+
+    #[test]
+    fn without_the_tile_history_no_earlier_render_is_kept() {
+        let mut r = render_fixture(project_with_fixture_image());
+        zoom_in_and_out(&mut r);
+        assert_eq!(r.view().get_retained_tiles().row_count(), 0);
+    }
+
+    #[test]
+    fn the_tile_history_keeps_a_sharper_earlier_render_after_zooming_out() {
+        let mut r = render_fixture(project_with_fixture_image());
+        enable_tile_history(&r);
+        let fitted = zoom_in_and_out(&mut r);
+
+        let kept: Vec<_> = r.view().get_retained_tiles().iter().collect();
+        assert!(
+            kept.iter().any(|t| (t.zoom - fitted * 4.0).abs() < 1e-4),
+            "zooms kept: {:?}",
+            kept.iter().map(|t| t.zoom).collect::<Vec<_>>()
+        );
+        // The first, fitted render is hidden by the current one (same area,
+        // same sharpness) and not kept twice.
+        assert!(kept.iter().all(|t| (t.zoom - fitted).abs() > 1e-4));
+    }
+
+    #[test]
+    fn a_display_change_drops_the_tile_history() {
+        let mut r = render_fixture(project_with_fixture_image());
+        enable_tile_history(&r);
+        zoom_in_and_out(&mut r);
+        assert!(r.view().get_retained_tiles().row_count() > 0);
+
+        // E.g. a histogram change: the kept renders show the old look.
+        r.worker.viewport_controller.trigger_image_redraw();
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        assert_eq!(r.view().get_retained_tiles().row_count(), 0);
+    }
+
+    #[test]
+    fn turning_the_tile_history_off_frees_the_kept_renders() {
+        let mut r = render_fixture(project_with_fixture_image());
+        enable_tile_history(&r);
+        zoom_in_and_out(&mut r);
+        assert!(r.view().get_retained_tiles().row_count() > 0);
+
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings::default());
+        drain_ui_queue();
+        assert_eq!(r.view().get_retained_tiles().row_count(), 0);
+    }
+
+    #[test]
+    fn the_object_overlay_reaches_the_margin_past_every_viewport_edge() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let zoom = 2.0;
+        let (off_x, off_y) = (-30.0, 12.0);
+        set_view(&r, zoom, off_x, off_y);
+
+        for margin in [0u32, 64] {
+            r.worker
+                .viewport_controller
+                .set_memory_settings(ViewportMemorySettings {
+                    object_overlay_margin_px: margin,
+                    ..Default::default()
+                });
+            r.draw(TaskDispatch::Objects, DrawingTask::default());
+
+            let size = r.ui.get_object_image().size();
+            assert_eq!(
+                (size.width, size.height),
+                (400 + 2 * margin, 300 + 2 * margin),
+                "margin {margin}"
+            );
+            // Its top-left corner lies `margin` screen pixels before the
+            // viewport's, in image pixels.
+            let v = r.view();
+            let m = margin as f32;
+            assert!((v.get_obj_img_x() - (-m - off_x) / zoom).abs() < 1e-3);
+            assert!((v.get_obj_img_y() - (-m - off_y) / zoom).abs() < 1e-3);
+            assert!((v.get_obj_img_w() - size.width as f32 / zoom).abs() < 1e-3);
+            assert!(v.get_object_ready());
+        }
     }
 
     #[test]

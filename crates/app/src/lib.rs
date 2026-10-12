@@ -28,6 +28,7 @@ pub mod global {
     pub use crate::workspace::settings::AppSettings;
     pub use crate::workspace::settings::RecentServer;
     pub use crate::workspace::settings::UserInformation;
+    pub use crate::workspace::settings::ViewportMemorySettings;
 }
 
 pub mod results {

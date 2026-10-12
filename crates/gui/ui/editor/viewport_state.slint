@@ -24,6 +24,20 @@ export struct ObjectHighlightBox {
     paint-as-rectangle: bool,
 }
 
+// An earlier high-res render kept for smoother pan/zoom - see
+// `ViewportState.retained_tiles`. Rectangle in full-resolution image pixels.
+export struct RetainedTile {
+    image: image,
+    img-x: float,
+    img-y: float,
+    img-w: float,
+    img-h: float,
+    zoom: float,
+    generation: int,
+    seq: int,
+    bytes: int,
+}
+
 //
 // Viewport
 //
@@ -31,15 +45,39 @@ export global ViewportState {
     in-out property <length> offset_x: 0;
     in-out property <length> offset_y: 0;
 
-    in-out property <length> tile_width: 800px;
-    in-out property <length> tile_height: 800px;
-    in-out property <length> display_x: 0;
-    in-out property <length> display_y: 0;
+    // Where each layer's buffer lies, in full-resolution image pixels. The
+    // viewport places the layers with the live zoom/offset below, so panning
+    // and zooming move the textures already on screen at display rate -
+    // the workers only re-render once the gesture settles.
+    in-out property <float> ghost_img_x: 0;
+    in-out property <float> ghost_img_y: 0;
+    in-out property <float> ghost_img_w: 0;
+    in-out property <float> ghost_img_h: 0;
 
-    in-out property <length> tile_width_ghost: 0;
-    in-out property <length> tile_height_ghost: 0;
-    in-out property <length> display_x_ghost: 0;
-    in-out property <length> display_y_ghost: 0;
+    in-out property <float> hr_img_x: 0;
+    in-out property <float> hr_img_y: 0;
+    in-out property <float> hr_img_w: 0;
+    in-out property <float> hr_img_h: 0;
+    // Zoom and content generation the current high-res buffer was rendered
+    // with - what decides whether it may join `retained_tiles` once the next
+    // one replaces it.
+    in-out property <float> hr_zoom: 0;
+    in-out property <int> hr_generation: 0;
+
+    in-out property <float> obj_img_x: 0;
+    in-out property <float> obj_img_y: 0;
+    in-out property <float> obj_img_w: 0;
+    in-out property <float> obj_img_h: 0;
+
+    // Earlier high-res renders of the current content, drawn between the
+    // overview and the current render (sharpest on top). Empty unless the
+    // tile history is enabled in the viewport memory settings.
+    in-out property <[RetainedTile]> retained_tiles: [];
+
+    // Layers whose screen rectangle reaches past this are hidden. Unlimited
+    // except with the software renderer (Windows), which stores scene
+    // coordinates as i16 and misplaces anything beyond.
+    in-out property <length> max_layer_extent: 1000000px;
 
     in-out property <bool> high_res_ready: true;
     in-out property <bool> object_ready: false;

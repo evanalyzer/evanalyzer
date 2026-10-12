@@ -27,6 +27,25 @@ export component Viewport inherits Rectangle {
     background: Theme.bg-viewport;
     clip: true;
 
+    // Image pixel coordinates -> viewport coordinates, with the live
+    // zoom/offset (see `ViewportState.ghost_img_x`).
+    pure function screen_x(img_x: float) -> length {
+        ViewportState.offset_x + img_x * ViewportState.zoom_factor * 1px
+    }
+
+    pure function screen_y(img_y: float) -> length {
+        ViewportState.offset_y + img_y * ViewportState.zoom_factor * 1px
+    }
+
+    pure function screen_len(img_len: float) -> length {
+        img_len * ViewportState.zoom_factor * 1px
+    }
+
+    // See `ViewportState.max_layer_extent`.
+    pure function fits(x: length, y: length, w: length, h: length) -> bool {
+        abs(x) < ViewportState.max_layer_extent && abs(y) < ViewportState.max_layer_extent && abs(x + w) < ViewportState.max_layer_extent && abs(y + h) < ViewportState.max_layer_extent
+    }
+
     pure function get_polyg_path(offset_x: length, offset_y: length) -> string {
         get_polyg_segment(offset_x, offset_y, 0, "M") + get_polyg_segment(offset_x, offset_y, 1, " L") + get_polyg_segment(offset_x, offset_y, 2, " L") + get_polyg_segment(offset_x, offset_y, 3, " L") + get_polyg_segment(offset_x, offset_y, 4, " L") + get_polyg_segment(offset_x, offset_y, 5, " L") + get_polyg_segment(offset_x, offset_y, 6, " L") + get_polyg_segment(offset_x, offset_y, 7, " L") + get_polyg_segment(offset_x, offset_y, 8, " L") + get_polyg_segment(offset_x, offset_y, 9, " L") + get_polyg_segment(offset_x, offset_y, 10, " L") + get_polyg_segment(offset_x, offset_y, 11, " L") + get_polyg_segment(offset_x, offset_y, 12, " L") + get_polyg_segment(offset_x, offset_y, 13, " L") + get_polyg_segment(offset_x, offset_y, 14, " L") + get_polyg_segment(offset_x, offset_y, 15, " L") + (ViewportObjectState.polygon_points.length > 0 ? " Z" : "")
     }
@@ -75,11 +94,24 @@ export component Viewport inherits Rectangle {
         Image {
             source: root.ghost_image;
             image-fit: fill;
-            //opacity: 0.9;
-            x: ViewportState.display_x_ghost;
-            y: ViewportState.display_y_ghost;
-            width: ViewportState.tile_width_ghost;
-            height: ViewportState.tile_height_ghost;
+            x: root.screen_x(ViewportState.ghost_img_x);
+            y: root.screen_y(ViewportState.ghost_img_y);
+            width: root.screen_len(ViewportState.ghost_img_w);
+            height: root.screen_len(ViewportState.ghost_img_h);
+            visible: root.fits(self.x, self.y, self.width, self.height);
+        }
+
+        // Layer 1b: Earlier high-res renders of the same content (tile
+        // history), so panning back or zooming shows them instead of the
+        // overview. Ordered sharpest last, i.e. on top.
+        for tile in ViewportState.retained_tiles: Image {
+            source: tile.image;
+            image-fit: fill;
+            x: root.screen_x(tile.img-x);
+            y: root.screen_y(tile.img-y);
+            width: root.screen_len(tile.img-w);
+            height: root.screen_len(tile.img-h);
+            visible: ViewportState.high_res_ready && root.fits(self.x, self.y, self.width, self.height);
         }
 
         // Layer 2: The High-Res Detail (shows on top when ready).
@@ -87,25 +119,26 @@ export component Viewport inherits Rectangle {
         // into display_image directly, so no separate property is needed here.
         Image {
             source: root.display_image;
-            visible: ViewportState.high_res_ready;
+            visible: ViewportState.high_res_ready && root.fits(self.x, self.y, self.width, self.height);
             image-fit: fill;
-            x: ViewportState.display_x;
-            y: ViewportState.display_y;
-            width: ViewportState.tile_width;
-            height: ViewportState.tile_height;
+            x: root.screen_x(ViewportState.hr_img_x);
+            y: root.screen_y(ViewportState.hr_img_y);
+            width: root.screen_len(ViewportState.hr_img_w);
+            height: root.screen_len(ViewportState.hr_img_h);
         }
 
         // Layer 3: The objects
-        // The buffer is viewport-sized and already in screen coordinates, so it
-        // covers the viewport directly - no stretching or offset needed here.
+        // Rendered in screen space (viewport plus a margin) at the zoom/offset
+        // of its render; placed like the image layers, so it stays on the
+        // image while a pan/zoom moves it, until the re-render settles.
         Image {
             source: root.object_image;
             image-fit: fill;
-            visible: ViewportObjectState.show_objects && ViewportState.object_ready;
-            x: 0;
-            y: 0;
-            width: parent.width;
-            height: parent.height;
+            visible: ViewportObjectState.show_objects && ViewportState.object_ready && root.fits(self.x, self.y, self.width, self.height);
+            x: root.screen_x(ViewportState.obj_img_x);
+            y: root.screen_y(ViewportState.obj_img_y);
+            width: root.screen_len(ViewportState.obj_img_w);
+            height: root.screen_len(ViewportState.obj_img_h);
         }
 
         // Layer 4: Markers
@@ -238,18 +271,20 @@ export component Viewport inherits Rectangle {
         }
 
         // Layer 5: Drawing layer
+        // The shape's points are viewport coordinates, so it is drawn in a
+        // frame covering the viewport.
         Rectangle {
-            x: ViewportState.display_x;
-            y: ViewportState.display_y;
-            width: ViewportState.tile_width;
-            height: ViewportState.tile_height;
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
             visible: ViewportObjectState.poly_idx > 0;
             Path {
                 stroke: Theme.accent;
-                viewbox-width: ViewportState.tile_width / 1px;
-                viewbox-height: ViewportState.tile_height / 1px;
+                viewbox-width: parent.width / 1px;
+                viewbox-height: parent.height / 1px;
                 stroke-width: 2px;
-                commands: ViewportObjectState.act_tool_state == ToolState.PaintOval ? get_oval_path(ViewportState.display_x,ViewportState.display_y) : ViewportObjectState.act_tool_state == ToolState.PaintRectangle ? get_rect_path(ViewportState.display_x,ViewportState.display_y) : get_polyg_path(ViewportState.display_x,ViewportState.display_y);
+                commands: ViewportObjectState.act_tool_state == ToolState.PaintOval ? get_oval_path(0, 0) : ViewportObjectState.act_tool_state == ToolState.PaintRectangle ? get_rect_path(0, 0) : get_polyg_path(0, 0);
             }
         }
 
