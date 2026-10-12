@@ -1,7 +1,7 @@
 use crate::UiState;
 use crate::editor::histogram_controller::HistogramController;
 use crate::editor::image_meta_controller::ImageMetaController;
-use crate::editor::viewport_cache::ViewportCache;
+use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb, this_computer_ram_bytes};
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     AppWindow, ChannelInfo, ChannelState, ImageMetaData, ImagePixelInfo, IntensityProjection,
@@ -76,8 +76,21 @@ impl ViewportImageController {
             state.set_tile_history_enabled(settings.tile_history_enabled);
             state.set_tile_history_budget_mb(settings.tile_history_budget_mb as i32);
             state.set_object_overlay_margin_px(settings.object_overlay_margin_px as i32);
-            state.set_tile_cache_mb(settings.tile_cache_mb as i32);
-            state.set_overview_cache_mb(settings.overview_cache_mb as i32);
+            // With automatic sizing the sizes in effect are shown (and kept as
+            // the starting point if it's switched off).
+            let (tile_mb, overview_mb) = effective_cache_mb(settings);
+            let (auto_tile, auto_overview) =
+                ViewportMemorySettings::auto_cache_mb(this_computer_ram_bytes());
+            state.set_cache_sizes_auto(settings.cache_sizes_auto);
+            state.set_auto_cache_note(
+                format!(
+                    "{:.0} GB RAM: {auto_tile} MB tiles, {auto_overview} MB overviews",
+                    this_computer_ram_bytes() as f64 / (1024.0 * 1024.0 * 1024.0)
+                )
+                .into(),
+            );
+            state.set_tile_cache_mb(tile_mb as i32);
+            state.set_overview_cache_mb(overview_mb as i32);
             state.set_free_caches_on_analysis(settings.free_caches_on_analysis);
         }
     }
@@ -98,6 +111,7 @@ impl ViewportImageController {
             overview_cache_mb: (state.get_overview_cache_mb().max(0) as u32)
                 .max(ViewportMemorySettings::MIN_CACHE_MB),
             free_caches_on_analysis: state.get_free_caches_on_analysis(),
+            cache_sizes_auto: state.get_cache_sizes_auto(),
         };
         if settings != self.viewport_controller.memory_settings() {
             self.apply_memory_settings(settings);

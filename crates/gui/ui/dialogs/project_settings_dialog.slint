@@ -113,6 +113,10 @@ export global ViewportMemoryState {
     in-out property <bool> tile_history_enabled: false;
     in-out property <int> tile_history_budget_mb: 512;
     in-out property <int> object_overlay_margin_px: 256;
+    in-out property <bool> cache_sizes_auto: true;
+    // What automatic sizing gives on this computer, e.g. "16 GB RAM: 1024 MB
+    // tiles, 256 MB overviews" - set from Rust.
+    in property <string> auto_cache_note;
     in-out property <int> tile_cache_mb: 1024;
     in-out property <int> overview_cache_mb: 256;
     in-out property <bool> free_caches_on_analysis: true;
@@ -370,6 +374,7 @@ export component ProjectSettingsDialog inherits Rectangle {
     property <string> kw-history: "Keep earlier high-resolution renders tile history ghost overview memory RAM whole slide zoom pan performance";
     property <string> kw-budget: "Memory for earlier renders budget MB megabytes RAM tile history performance";
     property <string> kw-margin: "Object overlay margin pixels border pan memory RAM performance";
+    property <string> kw-cache-auto: "Size caches automatically from RAM tile overview cache memory MB";
     property <string> kw-tile-cache: "Tile cache image tiles read from disk memory RAM MB megabytes performance";
     property <string> kw-overview-cache: "Overview cache whole image overviews switching images memory RAM MB megabytes performance";
     property <string> kw-free-caches: "Free caches when an analysis starts release memory RAM analysis run";
@@ -389,7 +394,7 @@ export component ProjectSettingsDialog inherits Rectangle {
         section == 0 ? (root.matches(root.kw-name) || root.matches(root.kw-author) || root.matches(root.kw-org))
         : section == 1 ? (root.matches(root.kw-grouping) || (ProjectSettingsState.settings.grouping_mode == 1 && root.matches(root.kw-regex)) || root.matches(root.kw-plate) || root.matches(root.kw-well-size) || (!ProjectSettingsState.settings.well_auto && root.matches(root.kw-well-images)))
         : section == 2 ? (root.matches(root.kw-merge) || (ProjectSettingsState.settings.tile_merge_enabled && (root.matches(root.kw-exclude) || root.matches(root.kw-connectivity) || root.matches(root.kw-fragments))))
-        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-free-caches))
+        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-cache-auto) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-free-caches))
     }
 
     pure function shows-section(section: int) -> bool {
@@ -893,10 +898,22 @@ export component ProjectSettingsDialog inherits Rectangle {
                                             value <=> ViewportMemoryState.object_overlay_margin_px;
                                         }
                                     }
+                                    if root.shows(3, root.kw-cache-auto): SettingRow {
+                                        label: "Size caches automatically";
+                                        description: "From this computer's RAM - " + ViewportMemoryState.auto_cache_note + ". Off: use the sizes below.";
+                                        HorizontalLayout {
+                                            alignment: end;
+                                            Switch {
+                                                checked <=> ViewportMemoryState.cache_sizes_auto;
+                                            }
+                                        }
+                                    }
                                     if root.shows(3, root.kw-tile-cache): SettingRow {
+                                        enabled: !ViewportMemoryState.cache_sizes_auto;
                                         label: "Tile cache";
                                         description: "In MB: image tiles kept after reading, so panning back or returning to an image doesn't read them from disk again.";
                                         SpinBox {
+                                            enabled: !ViewportMemoryState.cache_sizes_auto;
                                             minimum: 64;
                                             maximum: 65536;
                                             step-size: 128;
@@ -904,9 +921,11 @@ export component ProjectSettingsDialog inherits Rectangle {
                                         }
                                     }
                                     if root.shows(3, root.kw-overview-cache): SettingRow {
+                                        enabled: !ViewportMemoryState.cache_sizes_auto;
                                         label: "Overview cache";
                                         description: "In MB: whole-image overviews kept, so switching between images shows them at once.";
                                         SpinBox {
+                                            enabled: !ViewportMemoryState.cache_sizes_auto;
                                             minimum: 64;
                                             maximum: 16384;
                                             step-size: 64;

@@ -3,6 +3,7 @@ use crate::editor::view_channel::ViewChannel;
 use crate::editor::viewport_controller::ViewportState;
 use crate::helper::size_formater::BYTES_PER_MB;
 use clru::{CLruCache, WeightScale};
+use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::images::ImageChannel;
 use evanalyzer_app::images::ImageContainer;
 use evanalyzer_app::images::ImageSource;
@@ -250,9 +251,9 @@ pub struct ViewportCache {
 impl ViewportCache {
     /// A cache with the limits of this computer's viewport memory settings.
     pub fn new(app_state: Arc<UiState>) -> Self {
-        let settings = app_state.viewport_memory_settings();
-        let high_res_capacity = mb_to_bytes(settings.tile_cache_mb);
-        let low_res_capacity = mb_to_bytes(settings.overview_cache_mb);
+        let (tile_mb, overview_mb) = effective_cache_mb(&app_state.viewport_memory_settings());
+        let high_res_capacity = mb_to_bytes(tile_mb);
+        let low_res_capacity = mb_to_bytes(overview_mb);
 
         Self {
             app_state,
@@ -784,6 +785,17 @@ fn f32_samples(image: &ImageContainer) -> Option<&[f32]> {
         ImageContainer::F32Rgb(img) => Some(img.as_slice()),
         ImageContainer::U32(_) => None,
     }
+}
+
+/// This computer's total RAM in bytes - read once, it doesn't change.
+pub(crate) fn this_computer_ram_bytes() -> u64 {
+    static RAM: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *RAM.get_or_init(|| evanalyzer_app::backends::local::cpu_ram_diagnostics().1)
+}
+
+/// The cache sizes (tile, overview) in MB `settings` give on this computer.
+pub(crate) fn effective_cache_mb(settings: &ViewportMemorySettings) -> (u32, u32) {
+    settings.effective_cache_mb(this_computer_ram_bytes())
 }
 
 /// A cache limit in MB as the byte budget `clru` takes (at least 1 MB).

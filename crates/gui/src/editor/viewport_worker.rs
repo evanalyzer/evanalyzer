@@ -1837,7 +1837,8 @@ mod tests {
     /// process's current and peak RAM per step.
     ///
     /// EVANALYZER_BENCH_SLIDE=<slide.tif> [BENCH_TILE_CACHE_MB=1024]
-    /// [BENCH_OVERVIEW_CACHE_MB=256] [BENCH_TRIM=1] RAYON_NUM_THREADS=2
+    /// [BENCH_OVERVIEW_CACHE_MB=256] [BENCH_TRIM=1] [BENCH_PAN_STEPS=8]
+    /// RAYON_NUM_THREADS=2
     /// LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo test --release
     /// -p evanalyzer_gui bench_viewport -- --ignored --nocapture
     #[test]
@@ -1847,6 +1848,8 @@ mod tests {
             eprintln!("EVANALYZER_BENCH_SLIDE not set - skipped");
             return;
         };
+        // Explicit sizes, or this computer's automatic ones.
+        let manual = std::env::var("BENCH_TILE_CACHE_MB").is_ok();
         let tile_mb = env_u32("BENCH_TILE_CACHE_MB", 1024);
         let overview_mb = env_u32("BENCH_OVERVIEW_CACHE_MB", 256);
         let (vp_w, vp_h) = (1920.0f32, 1080.0f32);
@@ -1858,11 +1861,15 @@ mod tests {
         r.worker
             .viewport_controller
             .set_memory_settings(ViewportMemorySettings {
+                cache_sizes_auto: !manual,
                 tile_cache_mb: tile_mb,
                 overview_cache_mb: overview_mb,
                 ..Default::default()
             });
         drain_ui_queue();
+        let (tile_mb, overview_mb) = crate::editor::viewport_cache::effective_cache_mb(
+            &r.worker.viewport_controller.memory_settings(),
+        );
         {
             let mut vp = r.worker.viewport_controller.viewport_state.write().unwrap();
             vp.viewport_width = vp_w;
@@ -1954,7 +1961,7 @@ mod tests {
         // Pan right in screen-sized steps at 100%, then back over the same
         // places (cache hits if they were kept).
         let pan = 700.0;
-        let steps = 8;
+        let steps = env_u32("BENCH_PAN_STEPS", 8) as usize;
         for i in 1..=steps {
             center(&r, 1.0, cx + i as f32 * pan, cy);
             step(

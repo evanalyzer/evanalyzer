@@ -133,6 +133,7 @@ pub mod backends {
     pub use crate::api::SystemInfo;
     pub mod local {
         pub use crate::backend::LocalBackend;
+        pub use crate::backend::local::system::cpu_ram_diagnostics;
     }
     pub mod remote {
         pub use crate::backend::RemoteBackend;

@@ -1,5 +1,5 @@
 use crate::ViewportState as ViewportSlintState;
-use crate::editor::viewport_cache::ViewportCache;
+use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb};
 use crate::editor::viewport_task::{DrawingTask, TaskDispatch};
 use crate::helper::color_generators::get_colors_from_class;
 use crate::helper::size_formater::{BYTES_PER_MB, format_bytes};
@@ -395,8 +395,8 @@ impl ViewportController {
         let margin_changed =
             self.memory_settings().object_overlay_margin_px != settings.object_overlay_margin_px;
         let budget = tile_history_budget(&settings);
-        self.viewport_cache
-            .set_limits(settings.tile_cache_mb, settings.overview_cache_mb);
+        let (tile_mb, overview_mb) = effective_cache_mb(&settings);
+        self.viewport_cache.set_limits(tile_mb, overview_mb);
         *self.memory_settings.write().expect("Poisoned") = settings;
 
         let generation = self.content_generation() as i32;
