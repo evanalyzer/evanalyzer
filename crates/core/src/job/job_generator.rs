@@ -1,10 +1,11 @@
 use crate::{
     DuckDbExporter, MemoryExporter,
     algos::{ExecutionScope, TileMerge},
+    dataset::{DatasetAlgorithm, DatasetContext, run_dataset_steps},
     image::PixelSizes,
     job::{
         algos_from_config::into_pipeline_step,
-        job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
+        job_executor::{JobExecutor, ProgressEvent, TILE_MERGE_PIPELINE_ID},
         pipeline_step::PipelineStep,
     },
     pipeline::pipeline::{CorePipelineSettings, Pipeline},
@@ -16,13 +17,13 @@ use evanalyzer_cfg::{
     core_types::InternalErrors,
     settings::{
         images_settings::ImageEntry, object_settings::ObjectMetricSettings,
-        project_settings::ProjectSettings,
+        pipeline_command::CommandCategory, project_settings::ProjectSettings,
     },
 };
 use log::{error, info, warn};
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc::Sender},
 };
 
 /// Generate a job just for preview
@@ -53,12 +54,16 @@ pub fn generate_preview_job_from_project_settings(
         return Err(InternalErrors::Io(format!("{e}")));
     }
 
-    let job = generate_job_from_project_settings_intenal(
+    let mut job = generate_job_from_project_settings_intenal(
         config,
         project_path,
         output_path,
         memory_storage,
     )?;
+    // A preview analyses one frame of the visible tiles - too little for a
+    // step over all images and frames, which would only show a misleading
+    // result (e.g. a tracker with nothing to link).
+    job.dataset_steps.clear();
     Ok((job, out_objects))
 }
 
@@ -389,6 +394,58 @@ fn generate_job_from_project_settings_intenal(
     }
 
     Ok(job)
+}
+
+/// The enabled dataset steps of `config`'s enabled pipelines, in pipeline
+/// and step order. Image steps aren't built, so an image step this build
+/// can't run (e.g. an AI step without the `ai` feature) doesn't matter.
+pub(crate) fn dataset_steps_from_project_settings(
+    config: &ProjectSettings,
+) -> Result<Vec<Box<dyn DatasetAlgorithm>>, InternalErrors> {
+    let mut steps = Vec::new();
+    for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
+        for step in pipeline.steps.iter().filter(|s| s.enabled) {
+            if !matches!(step.command.category(), CommandCategory::Dataset) {
+                continue;
+            }
+            if let PipelineStep::Dataset(step) = into_pipeline_step(step.command.clone())? {
+                steps.push(step);
+            }
+        }
+    }
+    Ok(steps)
+}
+
+/// Runs `config`'s dataset steps again on the results database of an
+/// earlier analysis (`results_db`, a `.evadb` file), without analysing the
+/// images again. Returns how many steps ran.
+pub fn rerun_dataset_steps(
+    config: &ProjectSettings,
+    results_db: &Path,
+    progress: Option<Sender<ProgressEvent>>,
+    cancel: Arc<AtomicBool>,
+) -> Result<usize, InternalErrors> {
+    let steps = dataset_steps_from_project_settings(config)?;
+    run_dataset_steps_on(results_db, &steps, progress, cancel)?;
+    Ok(steps.len())
+}
+
+fn run_dataset_steps_on(
+    results_db: &Path,
+    steps: &[Box<dyn DatasetAlgorithm>],
+    progress: Option<Sender<ProgressEvent>>,
+    cancel: Arc<AtomicBool>,
+) -> Result<(), InternalErrors> {
+    if steps.is_empty() {
+        return Ok(());
+    }
+    let store = DuckDbExporter::open_existing(results_db)?;
+    let mut ctx = DatasetContext {
+        store: &store,
+        progress,
+        cancel,
+    };
+    run_dataset_steps(steps, &mut ctx)
 }
 
 #[cfg(test)]
@@ -893,5 +950,122 @@ mod tests {
         assert_eq!(sanitize_job_name("  padded  "), "padded");
         assert_eq!(sanitize_job_name("///"), "");
         assert_eq!(sanitize_job_name(""), "");
+    }
+
+    // ---- dataset steps ----
+
+    fn tracker_step(enabled: bool) -> PipelineStepSettings {
+        PipelineStepSettings {
+            enabled,
+            command: PipelineCommand::SimpleTracker(
+                evanalyzer_cfg::settings::pipeline_command_settings::SimpleTrackerSettings::default(
+                ),
+            ),
+        }
+    }
+
+    fn project_with_dataset_steps(root: PathBuf) -> ProjectSettings {
+        project_with(
+            Some(root),
+            vec![
+                pipeline(
+                    1,
+                    true,
+                    vec![blur_step(true), tracker_step(true), tracker_step(false)],
+                ),
+                pipeline(2, false, vec![tracker_step(true)]),
+            ],
+        )
+    }
+
+    #[test]
+    fn dataset_steps_are_collected_apart_from_the_image_pipelines() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = project_with_dataset_steps(dir.path().to_path_buf());
+
+        let job = generate_job_from_project_settings_intenal(
+            project.clone(),
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Arc::new(MemoryExporter {
+                out_objects: Arc::new(Mutex::new(Vec::new())),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            job.dataset_steps.len(),
+            1,
+            "enabled ones of enabled pipelines"
+        );
+        assert_eq!(
+            job.pipelines_pre_process[&PipelineId(1)].commands.len(),
+            1,
+            "blur"
+        );
+        assert_eq!(
+            dataset_steps_from_project_settings(&project).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_preview_runs_no_dataset_steps() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with_dataset_steps(image_root.path().to_path_buf());
+
+        let (job, _out_objects) =
+            generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
+                .unwrap();
+
+        assert!(job.dataset_steps.is_empty());
+    }
+
+    #[test]
+    fn dataset_steps_rerun_on_an_earlier_analysis_results() {
+        use crate::object::{Object, ObjectInit};
+        use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+        use evanalyzer_cfg::core_types::ObjectId;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("results.evadb");
+        {
+            let exporter =
+                DuckDbExporter::new(&db, Default::default(), &Default::default()).unwrap();
+            let mut cache = GlobalPipelineCache::default();
+            cache.image_rel_path = PathBuf::from("a.tif");
+            cache.image_meta.nr_of_bits = 8;
+            for id in 1..=3u128 {
+                cache.object_cache.insert(
+                    ObjectId(id),
+                    Object::new(ObjectInit {
+                        id: ObjectId(id),
+                        area: 1,
+                        bbox: [0, 0, 1, 1],
+                        ..Default::default()
+                    }),
+                );
+            }
+            exporter.export(&cache).unwrap();
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let steps: Vec<Box<dyn DatasetAlgorithm>> =
+            vec![Box::new(crate::dataset::test_support::RecordingStep {
+                seen: seen.clone(),
+                fail: false,
+            })];
+        run_dataset_steps_on(&db, &steps, None, Arc::new(AtomicBool::new(false))).unwrap();
+        assert_eq!(*seen.lock().unwrap(), [3]);
+
+        let err = run_dataset_steps_on(
+            &dir.path().join("missing.evadb"),
+            &steps,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("No results database"), "{err}");
     }
 }

@@ -1,7 +1,7 @@
 use crate::{
     ImageInfo, ZProjection,
     algos::Connectivity,
-    dataset::DatasetAlgorithm,
+    dataset::{DatasetAlgorithm, DatasetContext},
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
     pipeline::{
         image_cache::ImageCache,
@@ -228,6 +228,29 @@ impl<'a> JobExecutor {
         self.dataset_steps.push(step);
     }
 
+    /// Runs the dataset steps on the exported objects of every image - once
+    /// the image phase has finished.
+    fn run_dataset_steps(
+        &self,
+        progress: &Sender<ProgressEvent>,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<(), InternalErrors> {
+        if self.dataset_steps.is_empty() {
+            return Ok(());
+        }
+        let store = self.result_storage.dataset_store().ok_or_else(|| {
+            InternalErrors::Generic(
+                "These results can't be read back, so the dataset steps can't run on them".into(),
+            )
+        })?;
+        let mut ctx = DatasetContext {
+            store,
+            progress: Some(progress.clone()),
+            cancel: cancel.clone(),
+        };
+        crate::dataset::run_dataset_steps(&self.dataset_steps, &mut ctx)
+    }
+
     pub fn add_post_process_pipeline(&mut self, p: Pipeline) {
         self.pipelines_post_process.insert(p.id, p);
     }
@@ -306,7 +329,7 @@ impl<'a> JobExecutor {
                     image_info,
                     &order,
                     self.result_storage.clone(),
-                    cancel,
+                    cancel.clone(),
                     Some(progress.clone()),
                     image_cache_bytes,
                 ) {
@@ -407,6 +430,10 @@ impl<'a> JobExecutor {
                 }
             }
         });
+
+        // Only on complete results: a step over all images must not see a
+        // partial set (a failed or cancelled image).
+        let result = result.and_then(|()| self.run_dataset_steps(&progress, &cancel));
 
         info!("Pipeline completed in {:?}", start.elapsed());
         // Before `Finished`: whoever reads the results next sees the outcome.
@@ -2465,6 +2492,56 @@ mod full_run_integration_tests {
             message.contains("check the pipeline's image source"),
             "{message}"
         );
+    }
+
+    /// `make_single_image_job` plus a [`RecordingStep`] as dataset step.
+    fn single_image_job_with_dataset_step(
+        fail: bool,
+    ) -> (
+        JobExecutor,
+        Arc<Mutex<Vec<ObjectMetricSettings>>>,
+        Arc<Mutex<Vec<usize>>>,
+    ) {
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = make_single_image_job(out_objects.clone());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        job.add_dataset_step(Box::new(crate::dataset::test_support::RecordingStep {
+            seen: seen.clone(),
+            fail,
+        }));
+        (job, out_objects, seen)
+    }
+
+    #[test]
+    fn dataset_steps_run_once_after_the_images_on_every_exported_object() {
+        let (job, out_objects, seen) = single_image_job_with_dataset_step(false);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+
+        let exported = out_objects.lock().unwrap().len();
+        assert!(exported > 0, "the fixture image has objects");
+        assert_eq!(*seen.lock().unwrap(), [exported]);
+    }
+
+    #[test]
+    fn a_failing_dataset_step_fails_the_run() {
+        let (job, _out_objects, _seen) = single_image_job_with_dataset_step(true);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let err = job
+            .run(1, tx, Arc::new(AtomicBool::new(false)))
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("the dataset step failed"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_run_skips_the_dataset_steps() {
+        let (job, _out_objects, seen) = single_image_job_with_dataset_step(false);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        assert!(job.run(1, tx, Arc::new(AtomicBool::new(true))).is_err());
+        assert!(seen.lock().unwrap().is_empty(), "no partial results");
     }
 
     #[test]

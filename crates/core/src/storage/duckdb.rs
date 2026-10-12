@@ -207,6 +207,21 @@ impl DuckDbExporter {
     }
 
     // Plain display name for `object_class_name`
+    /// The results database of an earlier analysis, to read and add to -
+    /// unlike [`Self::new`], it must exist and no new run is recorded.
+    pub fn open_existing(path: &Path) -> Result<Self, InternalErrors> {
+        if !path.is_file() {
+            return Err(InternalErrors::Io(format!(
+                "No results database at {}",
+                path.display()
+            )));
+        }
+        Ok(Self {
+            conn: Mutex::new(shared_connection(path)?),
+            class_names: HashMap::new(),
+        })
+    }
+
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),
