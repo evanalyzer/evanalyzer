@@ -18,7 +18,7 @@
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     object::{Object, ObjectInit},
-    spatial_grid::BboxGrid,
+    utils::spatial_grid::BboxGrid,
 };
 use evanalyzer_cfg::core_types::{
     CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,

@@ -1,3 +1,4 @@
+use crate::dataset::DatasetStore;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use evanalyzer_cfg::core_types::InternalErrors;
 pub mod duckdb;
@@ -6,6 +7,12 @@ pub mod memory;
 
 pub trait PipelineResultExporter: Send + Sync {
     fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors>;
+
+    /// The exported objects for dataset steps to read - `None` for storage
+    /// that can't be read back (e.g. a CSV file). Default `None`.
+    fn dataset_store(&self) -> Option<&dyn DatasetStore> {
+        None
+    }
 
     /// Called once per image, after every tile/plane `export()` call for that
     /// image has completed, so an image that produced zero objects is still

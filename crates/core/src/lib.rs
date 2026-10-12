@@ -4,24 +4,23 @@ pub mod ai_devices;
 #[cfg(feature = "ai")]
 pub mod ai_learning;
 mod algos;
-mod converters;
+mod dataset;
 mod extlibs;
 mod image;
 mod job;
 mod object;
 mod pipeline;
-mod resources;
-mod spatial_grid;
 mod storage;
+mod utils;
 
 // System resource sizing (parallelism, reader pool size) based on available RAM
-pub use crate::resources::SystemDiagnostics;
-pub use crate::resources::cpu_ram_diagnostics;
-pub use crate::resources::cuda_is_available;
-pub use crate::resources::recommended_parallelism;
-pub use crate::resources::recommended_reader_pool_size;
-pub use crate::resources::system_diagnostics;
 pub use crate::storage::duckdb::shared_connection as open_results_database;
+pub use crate::utils::resources::SystemDiagnostics;
+pub use crate::utils::resources::cpu_ram_diagnostics;
+pub use crate::utils::resources::cuda_is_available;
+pub use crate::utils::resources::recommended_parallelism;
+pub use crate::utils::resources::recommended_reader_pool_size;
+pub use crate::utils::resources::system_diagnostics;
 
 // Image reader
 pub use crate::image::ChannelInfo;
@@ -50,6 +49,7 @@ pub use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 
 // Job execution
 pub use crate::job::algos_from_config::into_algorithm;
+pub use crate::dataset::{DatasetAlgorithm, DatasetContext, DatasetStore, ObjectFilter, ObjectRow};
 pub use crate::job::job_executor::JobExecutor;
 pub use crate::job::job_executor::PreviewTileSettings;
 pub use crate::job::job_executor::ProgressEvent;

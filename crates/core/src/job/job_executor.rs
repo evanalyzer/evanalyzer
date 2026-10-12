@@ -8,8 +8,9 @@ use crate::{
         pipeline::{Pipeline, PipelineImageMeta},
         pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache},
     },
-    resources::MAX_TILE_SIZE,
+    dataset::DatasetAlgorithm,
     storage::PipelineResultExporter,
+    utils::resources::MAX_TILE_SIZE,
 };
 use evanalyzer_cfg::{
     core_types::{
@@ -171,6 +172,9 @@ pub struct JobExecutor {
     // after the preprocessing has been finished
     pub pipelines_pre_process: IndexMap<PipelineId, Pipeline>,
     pub pipelines_post_process: IndexMap<PipelineId, Pipeline>,
+    /// Dataset steps, in the order the pipelines and their steps are
+    /// authored. They run once after every image has been analysed.
+    pub dataset_steps: Vec<Box<dyn DatasetAlgorithm>>,
 
     pub image_base_path: PathBuf,
     pub images: IndexMap<PathBuf, ImageEntry>,
@@ -202,6 +206,7 @@ impl<'a> JobExecutor {
         Self {
             pipelines_pre_process: IndexMap::new(),
             pipelines_post_process: IndexMap::new(),
+            dataset_steps: Vec::new(),
             project_path,
             output_path,
             image_base_path,
@@ -217,6 +222,10 @@ impl<'a> JobExecutor {
 
     pub fn add_pre_process_pipeline(&mut self, p: Pipeline) {
         self.pipelines_pre_process.insert(p.id, p);
+    }
+
+    pub fn add_dataset_step(&mut self, step: Box<dyn DatasetAlgorithm>) {
+        self.dataset_steps.push(step);
     }
 
     pub fn add_post_process_pipeline(&mut self, p: Pipeline) {
@@ -263,7 +272,7 @@ impl<'a> JobExecutor {
         let start = Instant::now();
 
         let ram_budget = self.estimate_ram_budget();
-        let image_cache_bytes = crate::resources::recommended_image_cache_bytes(
+        let image_cache_bytes = crate::utils::resources::recommended_image_cache_bytes(
             parallelism,
             ram_budget.working_set_bytes + ram_budget.object_cache_margin_bytes,
             ram_budget.min_image_cache_bytes,
@@ -271,7 +280,7 @@ impl<'a> JobExecutor {
         info!(
             "Image cache capacity: {} bytes/worker ({}) x {} worker(s)",
             image_cache_bytes,
-            crate::resources::format_binary_bytes(image_cache_bytes),
+            crate::utils::resources::format_binary_bytes(image_cache_bytes),
             parallelism
         );
 
@@ -1436,14 +1445,14 @@ impl<'a> JobExecutor {
     /// dimensions/channel count come from already-scanned metadata
     /// (`ImageEntry`/`SeriesSettings`) - this never reopens a file, so it's
     /// cheap to call before starting a run.
-    pub fn estimate_ram_budget(&self) -> crate::resources::RamBudget {
+    pub fn estimate_ram_budget(&self) -> crate::utils::resources::RamBudget {
         self.images
             .values()
             .filter_map(|entry| entry.series.get(&self.active_series(entry)))
             .map(|series| {
                 let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
                 let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);
-                crate::resources::estimate_ram_budget(
+                crate::utils::resources::estimate_ram_budget(
                     tile_width,
                     tile_height,
                     series.channels.len(),
@@ -1451,7 +1460,7 @@ impl<'a> JobExecutor {
             })
             .max_by_key(|budget| budget.total_bytes())
             .unwrap_or_else(|| {
-                crate::resources::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
+                crate::utils::resources::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
             })
     }
 
@@ -3526,7 +3535,7 @@ mod estimate_ram_per_worker_bytes_tests {
         images.insert(PathBuf::from("large.tif"), image_entry(2048, 2048, 4));
         let job = job_with(images);
 
-        let expected = crate::resources::estimate_ram_budget(2048, 2048, 4).total_bytes();
+        let expected = crate::utils::resources::estimate_ram_budget(2048, 2048, 4).total_bytes();
         assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
     }
 
@@ -3540,7 +3549,7 @@ mod estimate_ram_per_worker_bytes_tests {
         images.insert(PathBuf::from("huge.tif"), image_entry(20_000, 20_000, 2));
         let job = job_with(images);
 
-        let expected = crate::resources::estimate_ram_budget(4096, 4096, 2).total_bytes();
+        let expected = crate::utils::resources::estimate_ram_budget(4096, 4096, 2).total_bytes();
         assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
     }
 

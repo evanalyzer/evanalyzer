@@ -1,3 +1,4 @@
+use crate::dataset::{DatasetStore, ObjectFilter, ObjectRow};
 use crate::object::{Intensity, Object};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
@@ -800,6 +801,10 @@ impl DuckDbExporter {
 }
 
 impl PipelineResultExporter for DuckDbExporter {
+    fn dataset_store(&self) -> Option<&dyn DatasetStore> {
+        Some(self)
+    }
+
     fn finish_run(&self, outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
         let (status, message) = match outcome {
             Ok(()) => ("finished", None),
@@ -902,6 +907,88 @@ impl PipelineResultExporter for DuckDbExporter {
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// DatasetStore impl
+// ---------------------------------------------------------------------------
+
+impl DatasetStore for DuckDbExporter {
+    fn objects(&self, filter: &ObjectFilter) -> Result<Vec<ObjectRow>, InternalErrors> {
+        let class_id = match filter.object_class {
+            Some(ObjectClass::Valid(n)) => Some(n as i32),
+            Some(ObjectClass::Unset) => return Ok(Vec::new()),
+            None => None,
+        };
+        let io = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let conn = self.lock_conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT object_id::VARCHAR, image_rel_path, t_stack, z_stack,
+                        centroid_x_px, centroid_y_px,
+                        bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+                        area_px, object_class_id, intensity_mean_normalized
+                 FROM objects
+                 WHERE (?1 IS NULL OR image_rel_path = ?1)
+                   AND (?2 IS NULL OR t_stack = ?2)
+                   AND (?3 IS NULL OR list_contains(object_class_id, ?3))
+                 ORDER BY image_rel_path, t_stack, object_id",
+            )
+            .map_err(io)?;
+        let rows = stmt
+            .query_map(
+                params![filter.image_rel_path, filter.t_stack, class_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        ObjectRow {
+                            id: ObjectId(0),
+                            image_rel_path: row.get(1)?,
+                            t_stack: row.get::<_, Option<i32>>(2)?.unwrap_or(0),
+                            z_stack: row.get::<_, Option<i32>>(3)?.unwrap_or(0),
+                            centroid_px: (row.get(4)?, row.get(5)?),
+                            bbox_px: [row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?],
+                            area_px: row.get(10)?,
+                            object_classes: list_values(row.get(11)?)
+                                .filter_map(|v| match v {
+                                    Value::Int(n) if n >= 0 => Some(ObjectClass::Valid(n as u32)),
+                                    _ => None,
+                                })
+                                .collect(),
+                            intensity_mean: list_values(row.get(12)?)
+                                .map(|v| match v {
+                                    Value::Double(x) => Some(x),
+                                    _ => None,
+                                })
+                                .collect(),
+                        },
+                    ))
+                },
+            )
+            .map_err(io)?;
+        rows.map(|row| {
+            let (id, mut row) = row.map_err(io)?;
+            row.id = parse_object_id(&id)?;
+            Ok(row)
+        })
+        .collect()
+    }
+}
+
+/// The items of a DuckDB list value (none for NULL).
+fn list_values(value: Value) -> impl Iterator<Item = Value> {
+    match value {
+        Value::List(items) | Value::Array(items) => items,
+        _ => Vec::new(),
+    }
+    .into_iter()
+}
+
+/// An [`ObjectId`] from its UUID text, as `object_id` stores it.
+fn parse_object_id(uuid: &str) -> Result<ObjectId, InternalErrors> {
+    u128::from_str_radix(&uuid.replace('-', ""), 16)
+        .map(ObjectId)
+        .map_err(|e| InternalErrors::Io(format!("invalid object id {uuid:?}: {e}")))
 }
 
 #[cfg(test)]
@@ -1236,5 +1323,105 @@ mod tests {
             )
             .unwrap();
         assert_eq!(without, ("[]".to_string(), "{}".to_string()));
+    }
+
+    // ---- reading objects back for dataset steps ----
+
+    fn test_exporter(path: &Path) -> DuckDbExporter {
+        DuckDbExporter::new(
+            path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap()
+    }
+
+    /// An object of class `class` in frame `t`, its id's high bits set so
+    /// the UUID round trip is checked over all 128 bits.
+    fn frame_object(id: u128, class: u32, t: i32) -> Object {
+        let mut object = object_in_classes(u128::MAX - id, &[class]);
+        object.plane = crate::ImagePlane { z: 2, c: 0, t };
+        object.bbox = [10, 20, 14, 30];
+        object.intensities.insert(
+            1,
+            Intensity {
+                sum_intensity: 2.0,
+                min_intensity: 0.25,
+                max_intensity: 0.75,
+                avg_intensity: 0.5,
+                pixel_values: Vec::new(),
+            },
+        );
+        object
+    }
+
+    #[test]
+    fn dataset_steps_read_the_exported_objects_back_filtered() {
+        let dir = tempfile::tempdir().unwrap();
+        let exporter = test_exporter(&dir.path().join("results.evadb"));
+        for (image, objects) in [
+            ("b.tif", vec![frame_object(3, 1, 1), frame_object(4, 2, 0)]),
+            ("a.tif", vec![frame_object(1, 1, 1), frame_object(2, 1, 0)]),
+        ] {
+            let mut cache = GlobalPipelineCache::default();
+            cache.image_rel_path = PathBuf::from(image);
+            cache.image_meta.nr_of_bits = 8;
+            for object in objects {
+                cache.object_cache.insert(object.id.clone(), object);
+            }
+            exporter.export(&cache).unwrap();
+        }
+        let store = exporter.dataset_store().expect("DuckDB results can be read back");
+        let ids = |filter: ObjectFilter| -> Vec<(String, i32, u128)> {
+            store
+                .objects(&filter)
+                .unwrap()
+                .into_iter()
+                .map(|row| (row.image_rel_path, row.t_stack, u128::MAX - row.id.0))
+                .collect()
+        };
+
+        assert_eq!(
+            ids(ObjectFilter::default()),
+            [("a.tif", 0, 2), ("a.tif", 1, 1), ("b.tif", 0, 4), ("b.tif", 1, 3)]
+                .map(|(image, t, id)| (image.to_string(), t, id)),
+            "ordered by image, then frame"
+        );
+        let in_b = ObjectFilter {
+            image_rel_path: Some("b.tif".into()),
+            ..Default::default()
+        };
+        assert_eq!(ids(in_b).len(), 2);
+        let frame_1_class_1 = ObjectFilter {
+            t_stack: Some(1),
+            object_class: Some(ObjectClass::Valid(1)),
+            ..Default::default()
+        };
+        assert_eq!(
+            ids(frame_1_class_1),
+            [("a.tif".to_string(), 1, 1), ("b.tif".to_string(), 1, 3)]
+        );
+        let unset = ObjectFilter {
+            object_class: Some(ObjectClass::Unset),
+            ..Default::default()
+        };
+        assert!(ids(unset).is_empty());
+
+        let row = &store.objects(&ObjectFilter::default()).unwrap()[0];
+        assert_eq!(row.z_stack, 2);
+        assert_eq!(row.centroid_px, (12.0, 25.0), "centre of the bounding box");
+        assert_eq!(row.bbox_px, [10, 20, 14, 30]);
+        assert_eq!(row.area_px, 4);
+        assert_eq!(row.object_classes, [ObjectClass::Valid(1)]);
+        assert_eq!(row.intensity_mean, [None, Some(0.5)], "channel 0 not measured");
     }
 }

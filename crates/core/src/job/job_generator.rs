@@ -1,8 +1,11 @@
 use crate::{
     DuckDbExporter, MemoryExporter,
-    algos::TileMerge,
+    algos::{ExecutionScope, TileMerge},
     image::PixelSizes,
-    job::job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
+    job::{
+        job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
+        pipeline_step::{PipelineStep, into_pipeline_step},
+    },
     pipeline::pipeline::{CorePipelineSettings, Pipeline},
     storage::PipelineResultExporter,
 };
@@ -369,12 +372,13 @@ fn generate_job_from_project_settings_intenal(
 
         for step in &pipeline_setting.steps {
             if step.enabled {
-                let step = super::algos_from_config::into_algorithm(step.command.clone())?;
-                match step.execution_scope() {
-                    crate::algos::ExecutionScope::Tile => pipeline_pre_process.add_command(step),
-                    crate::algos::ExecutionScope::WholeImage => {
-                        pipeline_post_process.add_command(step)
-                    }
+                match into_pipeline_step(step.command.clone())? {
+                    PipelineStep::Image(step) => match step.execution_scope() {
+                        ExecutionScope::Tile => pipeline_pre_process.add_command(step),
+                        ExecutionScope::WholeImage => pipeline_post_process.add_command(step),
+                    },
+                    // Runs once after every image, whatever its place in the pipeline.
+                    PipelineStep::Dataset(step) => job.add_dataset_step(step),
                 }
             }
         }

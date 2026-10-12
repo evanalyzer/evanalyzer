@@ -262,10 +262,11 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algos::ExecutionScope;
     use crate::image::Point2d;
     use crate::{
         ManagedImage, Object,
-        algos::{ExecutionScope, ExtractObjects, Voronoi},
+        algos::{ExtractObjects, Voronoi},
         pipeline::pipeline_cache::GlobalImageMeta,
     };
     use evanalyzer_cfg::core_types::{CitationMetadata, ImageAddress, ObjectClass, SizeUnits};

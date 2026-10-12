@@ -5,3 +5,4 @@ pub(crate) mod job_executor;
 pub(crate) mod job_generator;
 pub(crate) mod object_index;
 pub(crate) mod object_scratch;
+pub(crate) mod pipeline_step;

@@ -33,7 +33,7 @@ use crate::ImageTile;
 use crate::algos::{ExecutionScope, ImageAlgorithm};
 use crate::object::{Intensity, Object, ObjectInit};
 use crate::pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext};
-use crate::spatial_grid::BboxGrid;
+use crate::utils::spatial_grid::BboxGrid;
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass, ObjectId};
 use indexmap::IndexMap;

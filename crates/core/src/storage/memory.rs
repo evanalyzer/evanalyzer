@@ -1,6 +1,10 @@
+use crate::dataset::{DatasetStore, ObjectFilter, ObjectRow};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
-use evanalyzer_cfg::{core_types::InternalErrors, settings::object_settings::ObjectMetricSettings};
+use evanalyzer_cfg::{
+    core_types::{InternalErrors, ObjectClass},
+    settings::object_settings::ObjectMetricSettings,
+};
 use std::sync::{Arc, Mutex};
 
 /// Exports pipeline analysis results to a CSV file with comprehensive morphological,
@@ -36,6 +40,67 @@ impl PipelineResultExporter for MemoryExporter {
         mut_cache.extend(object_settings);
 
         Ok(()) // Lock is released immediately here
+    }
+
+    fn dataset_store(&self) -> Option<&dyn DatasetStore> {
+        Some(self)
+    }
+}
+
+/// The objects don't record their image, so this store has one image - a
+/// preview run's - with an empty `image_rel_path`, and an image filter
+/// matches only that.
+impl DatasetStore for MemoryExporter {
+    fn objects(&self, filter: &ObjectFilter) -> Result<Vec<ObjectRow>, InternalErrors> {
+        let objects = self
+            .out_objects
+            .lock()
+            .map_err(|_| InternalErrors::Io("Failed to acquire MemoryExporter lock".to_string()))?;
+        if !filter.image_rel_path.as_deref().is_none_or(str::is_empty) {
+            return Ok(Vec::new());
+        }
+        let mut rows: Vec<ObjectRow> = objects
+            .iter()
+            .filter(|o| filter.t_stack.is_none_or(|t| o.t_stack == t))
+            .map(object_row)
+            .filter(|row| filter.matches_classes(&row.object_classes))
+            .collect();
+        rows.sort_by(|a, b| (a.t_stack, &a.id).cmp(&(b.t_stack, &b.id)));
+        Ok(rows)
+    }
+}
+
+/// `object` as a dataset row - the same values the results database stores.
+fn object_row(object: &ObjectMetricSettings) -> ObjectRow {
+    let [x_min, y_min, x_max, y_max] = object.bbox;
+    let channels = object
+        .intensities
+        .keys()
+        .filter(|channel| **channel >= 0)
+        .max()
+        .map_or(0, |max| *max as usize + 1);
+    let mut object_classes: Vec<ObjectClass> = object
+        .object_class
+        .iter()
+        .filter(|c| **c != ObjectClass::Unset)
+        .copied()
+        .collect();
+    object_classes.sort();
+    ObjectRow {
+        id: object.id.clone(),
+        image_rel_path: String::new(),
+        t_stack: object.t_stack,
+        z_stack: object.z_stack,
+        centroid_px: (
+            (x_min as f64 + x_max as f64) / 2.0,
+            (y_min as f64 + y_max as f64) / 2.0,
+        ),
+        bbox_px: object.bbox,
+        area_px: object.area as u64,
+        object_classes,
+        intensity_mean: (0..channels)
+            .map(|c| object.intensities.get(&(c as i32)).map(|i| i.avg_intensity))
+            .collect(),
     }
 }
 
@@ -106,5 +171,66 @@ mod tests {
             2,
             "each export() call must append, not replace, the accumulated results"
         );
+    }
+
+    #[test]
+    fn dataset_steps_read_a_preview_runs_objects_like_the_results_database() {
+        let mut cache = GlobalPipelineCache::default();
+        for (id, t, class) in [(2u128, 1, 1u32), (1, 0, 1), (3, 0, 2)] {
+            let mut intensities = indexmap::IndexMap::new();
+            intensities.insert(
+                1,
+                crate::object::Intensity {
+                    avg_intensity: 0.5,
+                    ..Default::default()
+                },
+            );
+            cache.object_cache.insert(
+                ObjectId(id),
+                Object::new(ObjectInit {
+                    id: ObjectId(id),
+                    object_class: HashSet::from([ObjectClass::Valid(class)]),
+                    area: 4,
+                    bbox: [10, 20, 14, 30],
+                    plane: crate::ImagePlane { z: 0, c: 0, t },
+                    intensities,
+                    ..Default::default()
+                }),
+            );
+        }
+        let exporter = MemoryExporter {
+            out_objects: Arc::new(Mutex::new(Vec::new())),
+        };
+        exporter.export(&cache).unwrap();
+        let store = exporter.dataset_store().unwrap();
+        let ids = |filter: ObjectFilter| -> Vec<u128> {
+            store
+                .objects(&filter)
+                .unwrap()
+                .iter()
+                .map(|row| row.id.0)
+                .collect()
+        };
+
+        assert_eq!(ids(ObjectFilter::default()), [1, 3, 2], "by frame, then id");
+        let class_1 = ObjectFilter {
+            object_class: Some(ObjectClass::Valid(1)),
+            ..Default::default()
+        };
+        assert_eq!(ids(class_1), [1, 2]);
+        let frame_0 = ObjectFilter {
+            t_stack: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(ids(frame_0), [1, 3]);
+        let other_image = ObjectFilter {
+            image_rel_path: Some("a.tif".into()),
+            ..Default::default()
+        };
+        assert!(ids(other_image).is_empty(), "the preview image has no path");
+
+        let row = &store.objects(&ObjectFilter::default()).unwrap()[0];
+        assert_eq!(row.centroid_px, (12.0, 25.0));
+        assert_eq!(row.intensity_mean, [None, Some(0.5)]);
     }
 }
