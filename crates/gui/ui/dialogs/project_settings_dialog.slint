@@ -283,12 +283,17 @@ component SettingRow inherits VerticalLayout {
             alignment: center;
             spacing: 3px;
 
+            // `height` from the text's own width: inside a horizontal layout
+            // Slint measures wrapped text at the whole row's width, so it
+            // would count too few lines and the dialog's scroll range would
+            // end before the last setting.
             Text {
                 text: root.label;
                 font-size: 12px;
                 font-weight: 600;
                 color: root.enabled ? Theme.text : Theme.text-mute;
                 wrap: word-wrap;
+                height: self.preferred-height;
             }
 
             if root.description != "": Text {
@@ -296,6 +301,7 @@ component SettingRow inherits VerticalLayout {
                 font-size: 11px;
                 color: root.enabled ? Theme.text-dim : Theme.text-mute;
                 wrap: word-wrap;
+                height: self.preferred-height;
             }
         }
 
