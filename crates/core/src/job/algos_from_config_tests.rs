@@ -797,11 +797,15 @@ fn rolling_ball_settings_clamp_radius_to_min() {
 fn save_image_settings_convert_all_fields() {
     let settings = SaveImageSettings {
         name: "output".to_string(),
+        display_classes: vec![ObjectClass::Valid(4)],
         source: MathSaveImageImageSourceSettings::InstanceMap,
+        opacity: 30,
     };
     let result = SaveImage::from(settings);
     assert_eq!(result.name, "output");
+    assert_eq!(result.display_classes, vec![ObjectClass::Valid(4)]);
     assert!(result.source == ImageSource::InstanceMap);
+    assert_eq!(result.opacity, 30);
 }
 
 #[cfg(feature = "ai")]

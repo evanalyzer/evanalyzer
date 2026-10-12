@@ -1,8 +1,10 @@
 use crate::{
-    core_types::ImageAddress, settings::pipeline_command::PipelineCommand, types::ids::PipelineId,
+    core_types::ImageAddress, settings::pipeline_command::PipelineCommand,
+    types::classes::ObjectClass, types::ids::PipelineId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -35,4 +37,17 @@ pub struct PipelineSettings {
 
     /// The steps which are execute in the given order when the pipeline runs
     pub steps: Vec<PipelineStepSettings>,
+}
+
+impl PipelineSettings {
+    /// The object classes of every enabled step, each once - used by the
+    /// GUI's pipeline focus mode to show only the selected pipeline's
+    /// classes. See the generated [`PipelineCommand::object_classes`].
+    pub fn object_classes(&self) -> BTreeSet<ObjectClass> {
+        self.steps
+            .iter()
+            .filter(|step| step.enabled)
+            .flat_map(|step| step.command.object_classes())
+            .collect()
+    }
 }

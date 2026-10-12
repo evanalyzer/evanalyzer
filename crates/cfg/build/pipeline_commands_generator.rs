@@ -266,6 +266,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     out.push_str("// @generated - do not edit by hand\n");
     // out.push_str("use indexmap::IndexMap;\n");
     out.push_str("use crate::{core_types::{ImageAddress,ImageChannelIdx,MemoryId,PixelUnits, SizeUnits, SizeUnitsRel}, types::classes::{ObjectClass, SegmentationClass}};\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::types::classes::{ModelClass, ModelSegmentationClass};\n");
     out.push_str("use std::path::PathBuf;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
@@ -1647,6 +1648,25 @@ fn leaf_param_def_literal(
     ))
 }
 
+/// `ty` with the model-class aliases (`ModelClass`, `ModelSegmentationClass`,
+/// see `types/classes.rs`) replaced by the class type they alias, so they get
+/// the same picker and parsing. Only `object_classes()` tells them apart.
+fn class_base_type(ty: &str) -> String {
+    fn base(name: &str) -> &str {
+        match name {
+            "ModelClass" => "ObjectClass",
+            "ModelSegmentationClass" => "SegmentationClass",
+            other => other,
+        }
+    }
+    for wrapper in ["Vec<", "Option<"] {
+        if let Some(inner) = ty.strip_prefix(wrapper).and_then(|t| t.strip_suffix('>')) {
+            return format!("{wrapper}{}>", base(inner));
+        }
+    }
+    base(ty).to_string()
+}
+
 /// The type-dependent parts of a leaf `ParameterDef`: param type, value expression,
 /// options expression, per-option "advanced" flags expression, min, max.
 fn leaf_parts(
@@ -1655,6 +1675,8 @@ fn leaf_parts(
     access: &str,
     enums: &[EnumInfo],
 ) -> Option<(&'static str, String, String, String, f32, f32)> {
+    let ty = class_base_type(ty);
+    let ty = ty.as_str();
     let no_flags = || "vec![]".to_string();
     let (param_type, value_expr, options_expr, min, max) = match ty {
         "f32" | "f64" => {
@@ -2062,6 +2084,8 @@ fn tuple_variant_param_def_literal(
     description: &str,
     enums: &[EnumInfo],
 ) -> Option<String> {
+    let ty = class_base_type(ty);
+    let ty = ty.as_str();
     // A tuple variant's payload has no settings field (and so no default value or
     // visibility) of its own.
     let default_expr = "String::new()";
@@ -2118,7 +2142,7 @@ fn field_to_param_def(
     var: &str,
     name_prefix: &str,
 ) -> Vec<String> {
-    let ty = &field.ty;
+    let ty = &class_base_type(&field.ty);
     let name = &field.name;
     let meta = &field.meta;
 
@@ -2328,6 +2352,149 @@ fn collect_summary_exprs(
     vec![(label, expr)]
 }
 
+/// Statements pushing every project object class held by `expr` (of type
+/// `ty`) onto a `classes: Vec<ObjectClass>` - for
+/// `PipelineCommand::object_classes()`. Walks into group structs, lists,
+/// options and enum variant payloads, so a class field anywhere in a command
+/// is found without listing it by hand. The model-class aliases
+/// (`ModelClass`, `ModelSegmentationClass`) don't match and are skipped -
+/// they hold a trained model's own class IDs. `is_ref` says whether `expr` is a
+/// reference (a loop item or pattern binding) rather than a field place.
+/// `depth` keeps loop/binding names of nested levels apart.
+fn class_collect_stmts(
+    ty: &str,
+    expr: &str,
+    is_ref: bool,
+    enums: &[EnumInfo],
+    commands: &[CommandInfo],
+    depth: usize,
+) -> Vec<String> {
+    let value = if is_ref {
+        format!("*{expr}")
+    } else {
+        expr.to_string()
+    };
+    match ty {
+        "ObjectClass" => return vec![format!("classes.push({value});")],
+        "SegmentationClass" => {
+            return vec![format!(
+                "classes.push(ObjectClass::from_segmentation_class({value}));"
+            )];
+        }
+        _ => {}
+    }
+    // Lists and options of classes: `iter()` works on both.
+    let list_inner = ty
+        .strip_prefix("Vec<")
+        .or_else(|| ty.strip_prefix("Option<"))
+        .and_then(|t| t.strip_suffix('>'));
+    match list_inner {
+        Some("ObjectClass") => return vec![format!("classes.extend({expr}.iter().copied());")],
+        Some("SegmentationClass") => {
+            return vec![format!(
+                "classes.extend({expr}.iter().copied().map(ObjectClass::from_segmentation_class));"
+            )];
+        }
+        Some(inner) => {
+            let item = format!("item{depth}");
+            let body = class_collect_stmts(inner, &item, true, enums, commands, depth + 1);
+            if body.is_empty() {
+                return vec![];
+            }
+            return vec![format!(
+                "for {item} in {expr}.iter() {{ {} }}",
+                body.join(" ")
+            )];
+        }
+        None => {}
+    }
+    if let Some(nested) = commands.iter().find(|c| c.struct_name == ty) {
+        return nested
+            .fields
+            .iter()
+            .flat_map(|f| {
+                field_class_collect_stmts(
+                    f,
+                    &format!("{expr}.{}", f.name),
+                    false,
+                    enums,
+                    commands,
+                    depth,
+                )
+            })
+            .collect();
+    }
+    if let Some(enum_info) = enums.iter().find(|e| e.enum_name == ty) {
+        let settings_name = enum_info.settings_name();
+        let arms: Vec<String> = enum_info
+            .variants
+            .iter()
+            .filter_map(|v| {
+                if v.is_rich() {
+                    let mut bindings = Vec::new();
+                    let mut body = Vec::new();
+                    for f in &v.named_fields {
+                        let binding = format!("{}{depth}", f.name);
+                        let stmts = field_class_collect_stmts(
+                            f,
+                            &binding,
+                            true,
+                            enums,
+                            commands,
+                            depth + 1,
+                        );
+                        if !stmts.is_empty() {
+                            bindings.push(format!("{}: {binding}", f.name));
+                            body.extend(stmts);
+                        }
+                    }
+                    (!body.is_empty()).then(|| {
+                        format!(
+                            "{settings_name}::{} {{ {}, .. }} => {{ {} }}",
+                            v.name,
+                            bindings.join(", "),
+                            body.join(" ")
+                        )
+                    })
+                } else if let Some(data_ty) = &v.data_type {
+                    let binding = format!("payload{depth}");
+                    let body =
+                        class_collect_stmts(data_ty, &binding, true, enums, commands, depth + 1);
+                    (!body.is_empty()).then(|| {
+                        format!(
+                            "{settings_name}::{}({binding}) => {{ {} }}",
+                            v.name,
+                            body.join(" ")
+                        )
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if arms.is_empty() {
+            return vec![];
+        }
+        return vec![format!(
+            "#[allow(unreachable_patterns)] match &{expr} {{ {}, _ => {{}} }}",
+            arms.join(", ")
+        )];
+    }
+    vec![]
+}
+
+/// [`class_collect_stmts`] for one field.
+fn field_class_collect_stmts(
+    field: &FieldInfo,
+    expr: &str,
+    is_ref: bool,
+    enums: &[EnumInfo],
+    commands: &[CommandInfo],
+    depth: usize,
+) -> Vec<String> {
+    class_collect_stmts(&field.ty, expr, is_ref, enums, commands, depth)
+}
+
 fn field_to_apply_change(
     field: &FieldInfo,
     enums: &[EnumInfo],
@@ -2335,7 +2502,7 @@ fn field_to_apply_change(
     var: &str,
     name_prefix: &str,
 ) -> Vec<String> {
-    let ty = &field.ty;
+    let ty = &class_base_type(&field.ty);
     let name = &field.name;
     let display_name = format!("{}{}", name_prefix, name);
 
@@ -2471,6 +2638,8 @@ fn leaf_apply_change_branch(
     condition: &str,
     enums: &[EnumInfo],
 ) -> Option<String> {
+    let ty = class_base_type(ty);
+    let ty = ty.as_str();
     let body = match ty {
         "f32" => format!("if let Ok(v) = value.parse::<f32>() {{ {assign} = v; }}"),
         "f64" => format!("if let Ok(v) = value.parse::<f64>() {{ {assign} = v; }}"),
@@ -2679,6 +2848,8 @@ fn tuple_variant_apply_change_branch(
     condition: &str,
     enums: &[EnumInfo],
 ) -> Option<String> {
+    let ty = class_base_type(ty);
+    let ty = ty.as_str();
     if ty == "Vec<ObjectClass>" {
         return Some(format!(
             "if param_name == \"{condition}\" {{ \
@@ -2772,6 +2943,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("use crate::modules::pipeline_command_settings::*;\n");
     out.push_str("use crate::modules::parameter_def::{ParamType, ParameterDef};\n");
     out.push_str("use crate::types::classes::{ObjectClass, SegmentationClass};\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::types::classes::{ModelClass, ModelSegmentationClass};\n");
     out.push_str("#[allow(unused_imports)]\nuse crate::core_types::{ImageAddress, ImageChannelIdx, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel};\n");
     // Default values of `PathBuf` settings (`ParameterDef::default_value`).
     out.push_str("#[allow(unused_imports)]\nuse std::path::PathBuf;\n");
@@ -3057,6 +3229,45 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         }
     }
     out.push_str("        }\n    }\n\n");
+
+    // object_classes() - every project class a command creates, reads or filters on
+    out.push_str("    /// Every object class this command creates, reads or filters on.\n");
+    out.push_str("    /// Segmentation classes count as the object class Extract Objects turns\n");
+    out.push_str("    /// them into. `Unset`, Background, the manual-annotation marker and\n");
+    out.push_str("    /// `ModelClass`/`ModelSegmentationClass` fields (a trained model's own\n");
+    out.push_str("    /// class IDs) are left out - they never name a class of the project.\n");
+    out.push_str("    pub fn object_classes(&self) -> Vec<ObjectClass> {\n");
+    out.push_str("        let mut classes: Vec<ObjectClass> = Vec::new();\n");
+    out.push_str("        match self {\n");
+    for cmd in &algo_commands {
+        let stmts: Vec<String> = cmd
+            .fields
+            .iter()
+            .flat_map(|f| {
+                field_class_collect_stmts(f, &format!("s.{}", f.name), false, enums, commands, 0)
+            })
+            .collect();
+        if stmts.is_empty() {
+            out.push_str(&format!(
+                "            Self::{}(_) => {{}}\n",
+                cmd.struct_name
+            ));
+        } else {
+            out.push_str(&format!(
+                "            Self::{}(s) => {{ {} }}\n",
+                cmd.struct_name,
+                stmts.join(" ")
+            ));
+        }
+    }
+    out.push_str("        }\n");
+    out.push_str("        classes.retain(|c| {\n");
+    out.push_str("            !matches!(c, ObjectClass::Unset)\n");
+    out.push_str("                && *c != ObjectClass::BACKGROUND\n");
+    out.push_str("                && c.to_u32() != Some(SegmentationClass::MANUAL_ANNOTATED.0)\n");
+    out.push_str("        });\n");
+    out.push_str("        classes\n");
+    out.push_str("    }\n\n");
 
     // apply_param_change() - write a single leaf parameter value back to settings
     out.push_str("    pub fn apply_param_change(&mut self, param_name: &str, value: &str) {\n");

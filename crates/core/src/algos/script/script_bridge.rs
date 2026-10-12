@@ -892,6 +892,53 @@ mod tests {
     }
 
     #[test]
+    fn save_image_takes_display_classes_and_opacity_from_the_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let params = map(&[
+            ("name", Dynamic::from("overlay".to_string())),
+            ("display_classes", Dynamic::from(vec![Dynamic::from(4_i64)])),
+            ("opacity", Dynamic::from(100_i64)),
+        ]);
+        let mut undeclared = host();
+        undeclared.ctx.output_path = Some(dir.path().to_path_buf());
+        let err = undeclared.run_command("save_image", &params).unwrap_err();
+        assert!(err.contains("class 4"), "{err}");
+
+        // A 3x3 object of class 4 around the host image's center pixel.
+        let mut object = crate::object::Object::new(crate::object::ObjectInit {
+            id: evanalyzer_cfg::core_types::ObjectId::next(),
+            bbox: [2, 2, 4, 4],
+            mask_data: bitvec::prelude::BitVec::repeat(true, 9),
+            area: 9,
+            ..Default::default()
+        });
+        object.add_object_class(ObjectClass::Valid(4));
+        let mut declared = host();
+        declared.ctx.output_path = Some(dir.path().to_path_buf());
+        declared.classes = vec![ObjectClass::Valid(4)];
+        declared
+            .cache
+            .object_cache
+            .insert(object.id.clone(), object);
+        declared.cache.class_colors = std::sync::Arc::new(std::collections::HashMap::from([(
+            ObjectClass::Valid(4),
+            0x00FF00,
+        )]));
+        declared.run_command("save_image", &params).unwrap();
+
+        let saved = image::open(dir.path().join("images/overlay_x000000_y000000.png"))
+            .unwrap()
+            .into_rgb8();
+        assert_eq!(
+            saved.get_pixel(3, 3).0,
+            [0, 255, 0],
+            "filled at opacity 100"
+        );
+        assert_eq!(saved.get_pixel(2, 2).0, [0, 255, 0], "contour");
+        assert_eq!(saved.get_pixel(0, 0).0, [0, 0, 0], "outside the object");
+    }
+
+    #[test]
     fn whole_image_commands_are_rejected() {
         let err = host().run_command("voronoi", &Map::new()).unwrap_err();
         assert!(err.contains("per tile"), "{err}");

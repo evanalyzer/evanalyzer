@@ -8,12 +8,13 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
-use crate::image::ImageContainer;
-use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
-use image::{ImageBuffer, Luma, Rgb};
-use log::info;
+use crate::image::{ImageContainer, Point2d};
+use crate::object::Object;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass};
+use image::{DynamicImage, ImageBuffer, Luma, Rgb, RgbImage};
+use kornia_image::Image;
 use macros::CommandsMeta;
-use std::path::PathBuf;
+use std::collections::HashMap;
 
 #[derive(PartialEq)]
 pub enum ImageSource {
@@ -40,8 +41,18 @@ pub struct SaveImage {
     /// Name the image should be stord under
     pub name: String,
 
+    /// Shows the selected classes in the image
+    #[cmdsmeta(display_name = "Display Classes")]
+    pub display_classes: Vec<ObjectClass>,
+
     /// Which image from the pipeline should be stored
+    #[cmdsmeta(default=ImageSource::Image, visibility = Advanced)]
     pub source: ImageSource,
+
+    /// Opacity in percent of the filled `display_classes` objects (0 = only
+    /// the contours, 100 = solid). Contours are always drawn opaque.
+    #[cmdsmeta(default = 50, min = 0, max = 100, step = 5, display_name = "Opacity", visibility = Advanced)]
+    pub opacity: u32,
 }
 
 impl ImageAlgorithm for SaveImage {
@@ -87,57 +98,32 @@ impl ImageAlgorithm for SaveImage {
             self.name, tile_offset.x, tile_offset.y
         ));
 
-        // We look at ctx.image (the current state of the pipeline)
-        if self.source == ImageSource::Image {
-            match ctx.image.as_ref() {
-                // Handle Grayscale (1 Channel)
+        let image = match self.source {
+            // We look at ctx.image (the current state of the pipeline)
+            ImageSource::Image => match ctx.image.as_ref() {
+                // Grayscale (1 channel) and RGB (3 channel) are both scaled from
+                // f32 [0.0, 1.0] to u8 [0, 255]
                 ImageContainer::F32Gray(img) => {
                     let size = img.size();
-
-                    // Convert and scale the pixels from f32 [0.0, 1.0] to u8 [0, 255]
-                    // We use as_slice() to access the private Kornia data
-                    let u8_data: Vec<u8> = img
-                        .as_slice()
-                        .iter()
-                        .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
-                        .collect();
-
-                    // Create an image buffer compatible with the 'image' crate
+                    let u8_data: Vec<u8> = img.as_slice().iter().map(|&v| to_u8(v)).collect();
                     let buffer = ImageBuffer::<Luma<u8>, _>::from_raw(
                         size.width as u32,
                         size.height as u32,
                         u8_data,
                     )
                     .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
-
-                    // Save to disk
-                    buffer
-                        .save(&out_path)
-                        .map_err(|e| InternalErrors::Io(e.to_string()))?;
-                    return Ok(());
+                    DynamicImage::ImageLuma8(buffer)
                 }
-
-                // Handle RGB (3 Channel)
                 ImageContainer::F32Rgb(img) => {
                     let size = img.size();
-
-                    let u8_data: Vec<u8> = img
-                        .as_slice()
-                        .iter()
-                        .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
-                        .collect();
-
+                    let u8_data: Vec<u8> = img.as_slice().iter().map(|&v| to_u8(v)).collect();
                     let buffer = ImageBuffer::<Rgb<u8>, _>::from_raw(
                         size.width as u32,
                         size.height as u32,
                         u8_data,
                     )
                     .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
-
-                    buffer
-                        .save(&out_path)
-                        .map_err(|e| InternalErrors::Io(e.to_string()))?;
-                    return Ok(());
+                    DynamicImage::ImageRgb8(buffer)
                 }
                 _ => {
                     return Err(InternalErrors::FormatMismatch {
@@ -145,52 +131,24 @@ impl ImageAlgorithm for SaveImage {
                         found: format!("{:?}", ctx.image),
                     });
                 }
+            },
+            ImageSource::InstanceMap => DynamicImage::ImageRgb8(colorize(ctx.get_instance_map()?)?),
+            ImageSource::SegmentationMask => {
+                DynamicImage::ImageRgb8(colorize(ctx.get_segmentation_map()?)?)
             }
-        } else if self.source == ImageSource::InstanceMap {
-            let img = ctx.get_instance_map()?;
-            let size = img.size();
+        };
 
-            // We use as_slice() to access the private Kornia data
-            let rgb_data: Vec<u8> = img.as_slice().iter().flat_map(|&v| get_color(v)).collect();
-
-            let buffer = ImageBuffer::<Rgb<u8>, _>::from_raw(
-                size.width as u32,
-                size.height as u32,
-                rgb_data,
-            )
-            .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
-
-            // Save to disk
-            buffer
-                .save(&out_path)
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
-
-            return Ok(());
-        } else if self.source == ImageSource::SegmentationMask {
-            let img = ctx.get_segmentation_map()?;
-            let size = img.size();
-            // We use as_slice() to access the private Kornia data
-            let rgb_data: Vec<u8> = img.as_slice().iter().flat_map(|&v| get_color(v)).collect();
-
-            let buffer = ImageBuffer::<Rgb<u8>, _>::from_raw(
-                size.width as u32,
-                size.height as u32,
-                rgb_data,
-            )
-            .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
-
-            // Save to disk
-            buffer
-                .save(&out_path)
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
-
-            return Ok(());
+        let image = if self.display_classes.is_empty() {
+            image
         } else {
-            return Err(InternalErrors::FormatMismatch {
-                expected: "Unsupported image source".into(),
-                found: format!("{:?}", ctx.image),
-            });
-        }
+            let mut rgb = image.into_rgb8();
+            self.draw_classes(&mut rgb, tile_offset, cache);
+            DynamicImage::ImageRgb8(rgb)
+        };
+
+        image
+            .save(&out_path)
+            .map_err(|e| InternalErrors::Io(e.to_string()))
     }
 
     fn name(&self) -> &'static str {
@@ -204,6 +162,121 @@ impl ImageAlgorithm for SaveImage {
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::Tile
     }
+}
+
+impl SaveImage {
+    /// Paints every object of `display_classes` onto `image` (the current tile):
+    /// the area filled in the class color with `opacity`, the contour opaque.
+    ///
+    /// All fills are painted before any contour, so an overlapping neighbour's
+    /// fill never hides a contour. An object carrying several of the selected
+    /// classes is drawn in the color of the first one in `display_classes`.
+    fn draw_classes(
+        &self,
+        image: &mut RgbImage,
+        tile_offset: Point2d,
+        cache: &GlobalPipelineCache,
+    ) {
+        let alpha = self.opacity.min(100) as f32 / 100.0;
+        let objects: Vec<(&Object, [u8; 3])> = cache
+            .object_cache
+            .values()
+            .filter_map(|object| {
+                let class = self
+                    .display_classes
+                    .iter()
+                    .find(|class| object.has_object_class(class))?;
+                Some((object, class_color(class, &cache.class_colors)))
+            })
+            .collect();
+
+        for (object, color) in &objects {
+            for_each_object_pixel(object, image, tile_offset, |pixel, is_contour| {
+                if !is_contour {
+                    for (c, &fill) in pixel.0.iter_mut().zip(color) {
+                        *c = (*c as f32 * (1.0 - alpha) + fill as f32 * alpha).round() as u8;
+                    }
+                }
+            });
+        }
+        for (object, color) in &objects {
+            for_each_object_pixel(object, image, tile_offset, |pixel, is_contour| {
+                if is_contour {
+                    pixel.0 = *color;
+                }
+            });
+        }
+    }
+}
+
+/// Calls `f` for every mask pixel of `object` lying inside `image`, with
+/// whether it is a contour pixel (a 4-neighbour is outside the mask).
+///
+/// The object's bbox is in whole-image coordinates; `tile_offset` is where
+/// `image` sits in the whole image.
+fn for_each_object_pixel(
+    object: &Object,
+    image: &mut RgbImage,
+    tile_offset: Point2d,
+    mut f: impl FnMut(&mut Rgb<u8>, bool),
+) {
+    let [x_min, y_min, x_max, y_max] = object.bbox.map(i64::from);
+    let (tile_x, tile_y) = (tile_offset.x as i64, tile_offset.y as i64);
+    let (width, height) = (image.width() as i64, image.height() as i64);
+    if x_max < tile_x || y_max < tile_y || x_min >= tile_x + width || y_min >= tile_y + height {
+        return;
+    }
+
+    let bbox_w = x_max - x_min + 1;
+    let bbox_h = y_max - y_min + 1;
+    let in_mask = |lx: i64, ly: i64| {
+        lx >= 0
+            && ly >= 0
+            && lx < bbox_w
+            && ly < bbox_h
+            && object
+                .mask_data
+                .get((ly * bbox_w + lx) as usize)
+                .is_some_and(|b| *b)
+    };
+
+    for ly in 0..bbox_h {
+        let y = y_min + ly - tile_y;
+        if y < 0 || y >= height {
+            continue;
+        }
+        for lx in 0..bbox_w {
+            let x = x_min + lx - tile_x;
+            if x < 0 || x >= width || !in_mask(lx, ly) {
+                continue;
+            }
+            let is_contour = !in_mask(lx - 1, ly)
+                || !in_mask(lx + 1, ly)
+                || !in_mask(lx, ly - 1)
+                || !in_mask(lx, ly + 1);
+            f(image.get_pixel_mut(x as u32, y as u32), is_contour);
+        }
+    }
+}
+
+/// The project color of `class`, or a generated one if the project has none for it.
+fn class_color(class: &ObjectClass, class_colors: &HashMap<ObjectClass, u32>) -> [u8; 3] {
+    match class_colors.get(class) {
+        Some(&rgb) => [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8],
+        None => get_color(class.to_u32().unwrap_or(0)),
+    }
+}
+
+fn to_u8(v: f32) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0) as u8
+}
+
+/// Renders a label image (instance map / segmentation mask) with one color per label.
+fn colorize(img: &Image<u32, 1>) -> Result<RgbImage, InternalErrors> {
+    let size = img.size();
+    let rgb_data: Vec<u8> = img.as_slice().iter().flat_map(|&v| get_color(v)).collect();
+    ImageBuffer::from_raw(size.width as u32, size.height as u32, rgb_data)
+        .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))
 }
 
 fn get_color(val: u32) -> [u8; 3] {
@@ -254,7 +327,9 @@ mod tests {
         let mut cache = GlobalPipelineCache::default();
         let saver = SaveImage {
             name: "unused".into(),
+            display_classes: vec![],
             source: ImageSource::Image,
+            opacity: 50,
         };
 
         let result = saver.execute(&mut ctx, &mut cache);
@@ -303,7 +378,9 @@ mod tests {
         // 4. Run the command
         let saver = SaveImage {
             name: "test_output_deleteme".into(),
+            display_classes: vec![],
             source: ImageSource::Image,
+            opacity: 50,
         };
         let result = saver.execute(&mut ctx, &mut cache);
 
@@ -348,7 +425,9 @@ mod tests {
         // 2. Run the command
         let saver = SaveImage {
             name: "test_output_rgb_deleteme".into(),
+            display_classes: vec![],
             source: ImageSource::Image,
+            opacity: 50,
         };
         let result = saver.execute(&mut ctx, &mut cache);
 
@@ -376,7 +455,9 @@ mod tests {
         let mut cache = GlobalPipelineCache::default();
         let saver = SaveImage {
             name: "fail".into(),
+            display_classes: vec![],
             source: ImageSource::Image,
+            opacity: 50,
         };
 
         // 3. Assert that the operation returns a FormatMismatch error
@@ -434,7 +515,9 @@ mod tests {
         // Try saving to an illegal path (e.g., a directory that doesn't exist)
         let saver = SaveImage {
             name: "/non_existent_folder/file.png".into(),
+            display_classes: vec![],
             source: ImageSource::Image,
+            opacity: 50,
         };
 
         let result = saver.execute(&mut ctx, &mut cache);
@@ -495,7 +578,9 @@ mod tests {
 
         let saver = SaveImage {
             name: "test_output_instance_map_deleteme".into(),
+            display_classes: vec![],
             source: ImageSource::InstanceMap,
+            opacity: 50,
         };
         let result = saver.execute(&mut ctx, &mut cache);
 
@@ -524,7 +609,9 @@ mod tests {
 
         let saver = SaveImage {
             name: "test_output_seg_mask_deleteme".into(),
+            display_classes: vec![],
             source: ImageSource::SegmentationMask,
+            opacity: 50,
         };
         let result = saver.execute(&mut ctx, &mut cache);
 
@@ -548,11 +635,184 @@ mod tests {
         assert!(a.iter().all(|&c| c >= 50));
     }
 
+    const RED_CLASS: ObjectClass = ObjectClass::Valid(1);
+    const OTHER_CLASS: ObjectClass = ObjectClass::Valid(2);
+
+    /// A filled `size`x`size` square object whose top-left pixel is at (`x`, `y`)
+    /// in whole-image coordinates.
+    fn square_object(x: u32, y: u32, size: u32, class: ObjectClass) -> Object {
+        let mut object = Object::new(crate::object::ObjectInit {
+            id: evanalyzer_cfg::core_types::ObjectId::next(),
+            bbox: [x, y, x + size - 1, y + size - 1],
+            mask_data: bitvec::prelude::BitVec::repeat(true, (size * size) as usize),
+            area: (size * size) as usize,
+            ..Default::default()
+        });
+        object.add_object_class(class);
+        object
+    }
+
+    fn cache_with(objects: Vec<Object>) -> GlobalPipelineCache {
+        let mut cache = GlobalPipelineCache::default();
+        for object in objects {
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        cache.class_colors = std::sync::Arc::new(HashMap::from([(RED_CLASS, 0xFF0000)]));
+        cache
+    }
+
+    fn overlay_saver(display_classes: Vec<ObjectClass>, opacity: u32) -> SaveImage {
+        SaveImage {
+            name: "overlay".into(),
+            display_classes,
+            source: ImageSource::Image,
+            opacity,
+        }
+    }
+
+    #[test]
+    fn draw_classes_fills_with_opacity_and_draws_an_opaque_contour() {
+        let mut image = RgbImage::new(5, 5);
+        let cache = cache_with(vec![square_object(1, 1, 3, RED_CLASS)]);
+
+        overlay_saver(vec![RED_CLASS], 50).draw_classes(&mut image, Point2d { x: 0, y: 0 }, &cache);
+
+        // Inside: black blended 50% with the class color (127.5 rounds up).
+        assert_eq!(image.get_pixel(2, 2).0, [128, 0, 0]);
+        // Every mask pixel touching the mask's border is contour, drawn opaque.
+        for (x, y) in [(1, 1), (2, 1), (3, 1), (1, 2), (3, 2), (1, 3), (3, 3)] {
+            assert_eq!(
+                image.get_pixel(x, y).0,
+                [255, 0, 0],
+                "contour at ({x}, {y})"
+            );
+        }
+        // Outside the object nothing changes.
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 0]);
+        assert_eq!(image.get_pixel(4, 4).0, [0, 0, 0]);
+    }
+
+    #[test]
+    fn draw_classes_opacity_bounds_leave_or_replace_the_fill() {
+        let cache = cache_with(vec![square_object(1, 1, 3, RED_CLASS)]);
+
+        let mut image = RgbImage::from_pixel(5, 5, Rgb([10, 20, 30]));
+        overlay_saver(vec![RED_CLASS], 0).draw_classes(&mut image, Point2d { x: 0, y: 0 }, &cache);
+        assert_eq!(
+            image.get_pixel(2, 2).0,
+            [10, 20, 30],
+            "opacity 0 keeps the image"
+        );
+        assert_eq!(
+            image.get_pixel(1, 1).0,
+            [255, 0, 0],
+            "contour is drawn anyway"
+        );
+
+        let mut image = RgbImage::from_pixel(5, 5, Rgb([10, 20, 30]));
+        overlay_saver(vec![RED_CLASS], 100).draw_classes(
+            &mut image,
+            Point2d { x: 0, y: 0 },
+            &cache,
+        );
+        assert_eq!(image.get_pixel(2, 2).0, [255, 0, 0], "opacity 100 is solid");
+    }
+
+    #[test]
+    fn draw_classes_only_draws_objects_of_the_selected_classes() {
+        let mut image = RgbImage::new(5, 5);
+        let cache = cache_with(vec![square_object(1, 1, 3, OTHER_CLASS)]);
+
+        overlay_saver(vec![RED_CLASS], 50).draw_classes(&mut image, Point2d { x: 0, y: 0 }, &cache);
+
+        assert!(image.pixels().all(|p| p.0 == [0, 0, 0]));
+    }
+
+    #[test]
+    fn draw_classes_falls_back_to_a_generated_color_for_classes_without_one() {
+        let mut image = RgbImage::new(5, 5);
+        let cache = cache_with(vec![square_object(1, 1, 3, OTHER_CLASS)]);
+
+        overlay_saver(vec![OTHER_CLASS], 50).draw_classes(
+            &mut image,
+            Point2d { x: 0, y: 0 },
+            &cache,
+        );
+
+        assert_eq!(image.get_pixel(1, 1).0, get_color(2));
+    }
+
+    #[test]
+    fn draw_classes_maps_whole_image_coordinates_into_the_tile() {
+        // The object sits at (11, 11) of the whole image; the tile starts at (10, 10).
+        let mut image = RgbImage::new(5, 5);
+        let cache = cache_with(vec![square_object(11, 11, 3, RED_CLASS)]);
+
+        overlay_saver(vec![RED_CLASS], 50).draw_classes(
+            &mut image,
+            Point2d { x: 10, y: 10 },
+            &cache,
+        );
+
+        assert_eq!(image.get_pixel(1, 1).0, [255, 0, 0]);
+        assert_eq!(image.get_pixel(2, 2).0, [128, 0, 0]);
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 0]);
+    }
+
+    #[test]
+    fn draw_classes_contours_are_not_hidden_by_an_overlapping_fill() {
+        let mut image = RgbImage::new(6, 6);
+        // The second square's fill covers part of the first square's contour.
+        let mut cache = cache_with(vec![
+            square_object(0, 0, 3, RED_CLASS),
+            square_object(1, 1, 4, OTHER_CLASS),
+        ]);
+        std::sync::Arc::make_mut(&mut cache.class_colors).insert(OTHER_CLASS, 0x0000FF);
+
+        overlay_saver(vec![RED_CLASS, OTHER_CLASS], 100).draw_classes(
+            &mut image,
+            Point2d { x: 0, y: 0 },
+            &cache,
+        );
+
+        // (2, 2) is a contour pixel of the red square and inside the blue one.
+        assert_eq!(image.get_pixel(2, 2).0, [255, 0, 0]);
+    }
+
+    #[test]
+    fn execute_with_display_classes_saves_an_rgb_overlay() {
+        let input_img = Image::<f32, 1>::from_size_val(
+            ImageSize {
+                width: 5,
+                height: 5,
+            },
+            0.0,
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+        ctx.output_path = Some(dir.path().to_path_buf());
+        let mut cache = cache_with(vec![square_object(1, 1, 3, RED_CLASS)]);
+
+        overlay_saver(vec![RED_CLASS], 50)
+            .execute(&mut ctx, &mut cache)
+            .unwrap();
+
+        let saved = image::open(dir.path().join("images/overlay_x000000_y000000.png"))
+            .unwrap()
+            .into_rgb8();
+        assert_eq!(saved.get_pixel(0, 0).0, [0, 0, 0]);
+        assert_eq!(saved.get_pixel(1, 1).0, [255, 0, 0]);
+        assert_eq!(saved.get_pixel(2, 2).0, [128, 0, 0]);
+    }
+
     #[test]
     fn test_save_image_name() {
         let saver = SaveImage {
             name: "test".into(),
+            display_classes: vec![],
             source: ImageSource::Image,
+            opacity: 50,
         };
         assert_eq!(saver.name(), "Save Image");
         assert_eq!(saver.cite()[0].cite_key, "danmayr2026");

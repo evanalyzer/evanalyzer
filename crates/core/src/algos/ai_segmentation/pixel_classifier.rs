@@ -1,4 +1,6 @@
-use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
+use evanalyzer_cfg::core_types::{
+    CitationMetadata, InternalErrors, ModelSegmentationClass, SegmentationClass,
+};
 use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningClassifierSettings, PixelInputColor,
 };
@@ -22,7 +24,7 @@ use crate::{
 #[derive(CommandsMeta)]
 pub struct SegmentationMapping {
     /// Segmentation class predicted by the classifier model.
-    pub segmentation_class: SegmentationClass,
+    pub segmentation_class: ModelSegmentationClass,
 
     /// The project's own segmentation class pixels predicted as
     /// `segmentation_class` are written as.

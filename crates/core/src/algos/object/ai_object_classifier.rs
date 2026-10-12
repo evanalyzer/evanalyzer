@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use evanalyzer_cfg::core_types::{
-    CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass,
+    CitationMetadata, InternalErrors, ModelClass, ObjectClass, ObjectId, SegmentationClass,
 };
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningClassifierSettings;
 use macros::CommandsMeta;
@@ -23,7 +23,7 @@ use crate::{
 #[derive(CommandsMeta)]
 pub struct ClassificationMapping {
     /// Object class predicted by the classifier model.
-    pub object_class: ObjectClass,
+    pub object_class: ModelClass,
 
     /// The project's own object class objects predicted as `object_class`
     /// are assigned.

@@ -12,7 +12,9 @@ use crate::{
     storage::PipelineResultExporter,
 };
 use evanalyzer_cfg::{
-    core_types::{BreakpointMode, BreakpointSettings, ImageAddress, InternalErrors, PipelineId},
+    core_types::{
+        BreakpointMode, BreakpointSettings, ImageAddress, InternalErrors, ObjectClass, PipelineId,
+    },
     settings::{
         images_settings::{
             GlobalImageSettings, ImageEntry, TStackHandling, ZStackHandling, ZStackSettings,
@@ -25,7 +27,7 @@ use kornia_image::ImageSize;
 use log::{info, warn};
 use rayon::prelude::*;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ops::RangeInclusive,
     path::PathBuf,
     sync::{
@@ -181,6 +183,9 @@ pub struct JobExecutor {
 
     /// Debugging settings, if set the pipeline stops at this point and returns the actual image
     pub breakpoint: Option<BreakpointSettings>,
+
+    /// The project's class colors (`0xRRGGBB`), handed to every image's pipeline cache
+    pub class_colors: Arc<HashMap<ObjectClass, u32>>,
 }
 
 impl<'a> JobExecutor {
@@ -192,6 +197,7 @@ impl<'a> JobExecutor {
         global_image_settings: GlobalImageSettings,
         result_storage: Arc<dyn PipelineResultExporter>,
         override_pixel_sizes: Option<PixelSizes>,
+        class_colors: Arc<HashMap<ObjectClass, u32>>,
     ) -> Self {
         Self {
             pipelines_pre_process: IndexMap::new(),
@@ -205,6 +211,7 @@ impl<'a> JobExecutor {
             override_pixel_sizes,
             preview_tile_settings: None,
             breakpoint: None,
+            class_colors,
         }
     }
 
@@ -1161,6 +1168,7 @@ impl<'a> JobExecutor {
             object_cache: ObjectCache::default(),
             image_rel_path: image_rel_path.into(),
             annotated_objects: Default::default(),
+            class_colors: Arc::clone(&self.class_colors),
         })
     }
 
@@ -1483,6 +1491,7 @@ mod z_t_stack_precedence_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         )
     }
 
@@ -1700,6 +1709,7 @@ mod preview_visible_tile_count_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         );
         job.preview_tile_settings = preview_tile_settings;
         job
@@ -1786,6 +1796,7 @@ mod preview_tile_size_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         );
         job.preview_tile_settings = zoom.map(|zoom| PreviewTileSettings {
             offset_x: 0.0,
@@ -1856,6 +1867,7 @@ mod tile_iterator_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         )
     }
 
@@ -2016,6 +2028,7 @@ mod z_stack_iterator_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         )
     }
 
@@ -2157,6 +2170,7 @@ mod execution_order_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         )
     }
 
@@ -2415,6 +2429,7 @@ mod full_run_integration_tests {
             GlobalImageSettings::default(),
             Arc::new(MemoryExporter { out_objects }),
             None,
+            Default::default(),
         );
         job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
         job
@@ -2512,6 +2527,7 @@ mod full_run_integration_tests {
             GlobalImageSettings::default(),
             Arc::new(MemoryExporter { out_objects }),
             None,
+            Default::default(),
         );
         job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
         job
@@ -2913,6 +2929,7 @@ mod full_run_integration_tests {
                 out_objects: out_objects.clone(),
             }),
             None,
+            Default::default(),
         );
         // Built like `job_generator` does for a pipeline holding only this
         // command: an empty tile pipeline (nothing is segmented) plus the
@@ -3066,6 +3083,7 @@ mod tile_merge_end_to_end_tests {
             object_cache: Default::default(),
             image_rel_path: PathBuf::new(),
             annotated_objects: Default::default(),
+            class_colors: Default::default(),
             image_meta: GlobalImageMeta {
                 full_image_width: ImageSize {
                     width: full_width,
@@ -3497,6 +3515,7 @@ mod estimate_ram_per_worker_bytes_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         )
     }
 

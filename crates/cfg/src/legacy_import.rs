@@ -1061,6 +1061,7 @@ fn convert_save_image(s: &LegacyImageSaverSettings) -> PipelineCommand {
     PipelineCommand::SaveImage(SaveImageSettings {
         name,
         source: MathSaveImageImageSourceSettings::Image,
+        ..Default::default()
     })
 }
 

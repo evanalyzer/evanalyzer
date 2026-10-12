@@ -85,6 +85,8 @@ mod modules {
             "/src/modules/pipeline_command.rs"
         ));
     }
+    // Only the types are needed for the schema, not their helpers.
+    #[allow(dead_code)]
     pub mod pipeline_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

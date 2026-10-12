@@ -312,6 +312,13 @@ fn generate_job_from_project_settings_intenal(
         None => None,
     };
 
+    let class_colors = config
+        .classification
+        .classes()
+        .iter()
+        .map(|c| (c.id, c.color))
+        .collect();
+
     let mut job = JobExecutor::new(
         project_path,
         output_path,
@@ -320,6 +327,7 @@ fn generate_job_from_project_settings_intenal(
         config.images.settings,
         result_storage,
         pixel_sizes,
+        Arc::new(class_colors),
     );
 
     // If tile merged is enabled, add this command as first post process pipeline.

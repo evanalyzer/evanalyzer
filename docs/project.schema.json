@@ -2893,19 +2893,33 @@
       "description": "A command that exports the current image to a persistent file on disk.\n\nThis is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.\n\n# Examples\n\n```\nuse imagec::backend::algos::SaveImage;\nlet saver = SaveImage {path:\"output/processed_cell.png\"};\n```",
       "type": "object",
       "properties": {
+        "displayClasses": {
+          "description": "Shows the selected classes in the image",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
         "name": {
           "description": "Name the image should be stord under",
-          "type": "string"
+          "type": "string",
+          "default": ""
+        },
+        "opacity": {
+          "description": "Opacity in percent of the filled `display_classes` objects (0 = only\nthe contours, 100 = solid). Contours are always drawn opaque.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 50,
+          "maximum": 100,
+          "minimum": 0
         },
         "source": {
           "description": "Which image from the pipeline should be stored",
-          "$ref": "#/$defs/MathSaveImageImageSourceSettings"
+          "$ref": "#/$defs/MathSaveImageImageSourceSettings",
+          "default": "IMAGE"
         }
-      },
-      "required": [
-        "name",
-        "source"
-      ]
+      }
     },
     "ScriptSettings": {
       "description": "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.\n\nThe script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.\n\n# Examples\n\n```rhai\nprint(`Hello world from a ${image_width}x${image_height} tile`);\nrun(\"gaussian_blur\", #{ kernel_size: 5 });\n```",

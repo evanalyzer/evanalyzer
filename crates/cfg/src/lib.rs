@@ -60,6 +60,8 @@ pub mod core_types {
     pub use crate::types::breakpoint::BreakpointMode;
     pub use crate::types::breakpoint::BreakpointSettings;
     pub use crate::types::cite::CitationMetadata;
+    pub use crate::types::classes::ModelClass;
+    pub use crate::types::classes::ModelSegmentationClass;
     pub use crate::types::classes::ObjectClass;
     pub use crate::types::classes::SegmentationClass;
     pub use crate::types::errors::*;

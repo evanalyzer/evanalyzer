@@ -1,4 +1,6 @@
 // @generated - do not edit by hand
+#[allow(unused_imports)]
+use crate::types::classes::{ModelClass, ModelSegmentationClass};
 use crate::{
     core_types::{ImageAddress, ImageChannelIdx, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel},
     types::classes::{ObjectClass, SegmentationClass},
@@ -1345,13 +1347,31 @@ impl Default for RollingBallSettings {
 /// use imagec::backend::algos::SaveImage;
 /// let saver = SaveImage {path:"output/processed_cell.png"};
 /// ```
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveImageSettings {
     /// Name the image should be stord under
     pub name: String,
+    /// Shows the selected classes in the image
+    pub display_classes: Vec<ObjectClass>,
     /// Which image from the pipeline should be stored
     pub source: MathSaveImageImageSourceSettings,
+    /// Opacity in percent of the filled `display_classes` objects (0 = only
+    /// the contours, 100 = solid). Contours are always drawn opaque.
+    #[schemars(range(min = 0, max = 100))]
+    pub opacity: u32,
+}
+
+impl Default for SaveImageSettings {
+    fn default() -> Self {
+        Self {
+            name: String::default(),
+            display_classes: vec![],
+            source: MathSaveImageImageSourceSettings::Image,
+            opacity: 50u32,
+        }
+    }
 }
 
 fn _serde_default_script_classes() -> Vec<ObjectClass> {
@@ -1606,7 +1626,7 @@ pub struct PixelClassifierSettings {
 #[serde(rename_all = "camelCase")]
 pub struct SegmentationMappingSettings {
     /// Segmentation class predicted by the classifier model.
-    pub segmentation_class: SegmentationClass,
+    pub segmentation_class: ModelSegmentationClass,
     /// The project's own segmentation class pixels predicted as
     /// `segmentation_class` are written as.
     pub object_class_id: SegmentationClass,
@@ -2141,7 +2161,7 @@ impl Default for AiObjectClassifierSettings {
 #[serde(rename_all = "camelCase")]
 pub struct ClassificationMappingSettings {
     /// Object class predicted by the classifier model.
-    pub object_class: ObjectClass,
+    pub object_class: ModelClass,
     /// The project's own object class objects predicted as `object_class`
     /// are assigned.
     pub output_class: ObjectClass,

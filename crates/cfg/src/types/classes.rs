@@ -102,6 +102,16 @@ impl ObjectClass {
     }
 }
 
+/// An object class ID of a trained model (what the model predicts), not one
+/// of the project's classes - model class IDs are a snapshot taken at
+/// training time and only line up with the project's by chance. Fields of
+/// this type are left out of the generated `PipelineCommand::object_classes()`.
+pub type ModelClass = ObjectClass;
+
+/// The [`SegmentationClass`] counterpart of [`ModelClass`]: a segmentation
+/// class ID of a trained model, not one of the project's.
+pub type ModelSegmentationClass = SegmentationClass;
+
 impl Add for ObjectClass {
     type Output = Self;
 

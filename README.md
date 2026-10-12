@@ -506,6 +506,12 @@ type - no per-field opt-in needed:
   `crates/core/macros/src/lib.rs` for the full list of field-level
   `#[cmdsmeta(...)]` keys (`min`/`max`/`step`/`default`/`unit`/`regex`/
   `optional`/`visible`/`file_extensions`).
+- `ObjectClass` / `SegmentationClass` (also in `Vec`/`Option`, group
+  structs and enum variants) → a class picker **and** an entry in the
+  generated `PipelineCommand::object_classes()`, which pipeline focus mode
+  and script steps' declared-class check use. A field holding a trained
+  model's *own* class ID (not a project class) is typed `ModelClass` /
+  `ModelSegmentationClass` instead - same picker, but left out.
 
 One thing that *isn't* generated and needs a manual touch: `#[derive(...)]`
 assigns each `PipelineCommand` variant a numeric id in **alphabetical order

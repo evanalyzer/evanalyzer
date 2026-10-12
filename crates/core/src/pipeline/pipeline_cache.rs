@@ -4,9 +4,9 @@ use crate::{
     image::{ImageContainer, PixelSizes},
     pipeline::{image_cache::ImageCache, object_cache::ObjectCache, pipeline::PipelineImageMeta},
 };
-use evanalyzer_cfg::core_types::MemoryId;
+use evanalyzer_cfg::core_types::{MemoryId, ObjectClass};
 use kornia_image::{Image, ImageSize};
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheAddress {
@@ -50,6 +50,8 @@ pub struct GlobalPipelineCache {
     /// The objects the user annotated by hand on this image, for the plane being processed
     pub annotated_objects:
         std::sync::Arc<Vec<evanalyzer_cfg::settings::object_settings::ObjectMetricSettings>>,
+    /// The project's class colors (`0xRRGGBB`), for commands that draw objects
+    pub class_colors: Arc<HashMap<ObjectClass, u32>>,
 }
 
 mod tests {
