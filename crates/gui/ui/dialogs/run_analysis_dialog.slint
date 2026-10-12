@@ -1,4 +1,4 @@
-import { LineEdit } from "std-widgets.slint";
+import { CheckBox, ComboBox, LineEdit } from "std-widgets.slint";
 import { BaseDialog } from "dialog_base.slint";
 import { GlobalAppState, DialogType } from "../state.slint";
 import { AppButton } from "../components/app_button.slint";
@@ -6,6 +6,14 @@ import { Theme } from "../style.slint";
 
 export global RunAnalysisState {
     in-out property <string> job_name: "";
+    /// Run only the dataset steps, on a copy of an earlier analysis.
+    in-out property <bool> dataset_only: false;
+    /// Whether the project has enabled dataset steps to run.
+    in property <bool> has_dataset_steps: false;
+    /// The earlier analyses to choose from (names, and their databases).
+    in property <[string]> base_names: [];
+    in property <[string]> base_paths: [];
+    in-out property <int> base_index: 0;
 
     callback confirm();
     callback cancel();
@@ -14,7 +22,7 @@ export global RunAnalysisState {
 export component RunAnalysisDialog inherits BaseDialog {
     title-text: "Run Analysis";
     icon: "▶";
-    main-height: 220px;
+    main-height: RunAnalysisState.dataset_only ? 340px : 290px;
     main-width: 440px;
 
     VerticalLayout {
@@ -42,6 +50,34 @@ export component RunAnalysisDialog inherits BaseDialog {
                 wrap: word-wrap;
                 color: Theme.text-dim;
                 font-size: 11px;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 5px;
+
+            CheckBox {
+                text: "Only run the dataset steps";
+                enabled: RunAnalysisState.has_dataset_steps && RunAnalysisState.base_names.length > 0;
+                checked <=> RunAnalysisState.dataset_only;
+            }
+
+            Text {
+                text: !RunAnalysisState.has_dataset_steps
+                    ? "The pipelines have no dataset steps."
+                    : RunAnalysisState.base_names.length == 0
+                    ? "There are no earlier results to run them on yet."
+                    : RunAnalysisState.dataset_only
+                    ? "No image is analysed: the dataset steps run on a copy of these results, saved under the new job name."
+                    : "Analyses every image, then runs the dataset steps.";
+                wrap: word-wrap;
+                color: Theme.text-dim;
+                font-size: 11px;
+            }
+
+            if RunAnalysisState.dataset_only: ComboBox {
+                model: RunAnalysisState.base_names;
+                current-index <=> RunAnalysisState.base_index;
             }
         }
 

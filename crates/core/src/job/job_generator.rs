@@ -1,11 +1,11 @@
 use crate::{
     DuckDbExporter, MemoryExporter,
     algos::{ExecutionScope, TileMerge},
-    dataset::{DatasetAlgorithm, DatasetContext, run_dataset_steps},
+    dataset::DatasetAlgorithm,
     image::PixelSizes,
     job::{
         algos_from_config::into_pipeline_step,
-        job_executor::{JobExecutor, ProgressEvent, TILE_MERGE_PIPELINE_ID},
+        job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
         pipeline_step::PipelineStep,
     },
     pipeline::pipeline::{CorePipelineSettings, Pipeline},
@@ -23,7 +23,7 @@ use evanalyzer_cfg::{
 use log::{error, info, warn};
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, atomic::AtomicBool, mpsc::Sender},
+    sync::{Arc, Mutex},
 };
 
 /// Generate a job just for preview
@@ -101,21 +101,7 @@ pub fn generate_analyze_job_from_project_settings(
         })
         .collect();
 
-    let now = Utc::now();
-    let file_date = now.format("%Y%m%dT%H%M%SZ").to_string();
-    let job_name = job_name
-        .as_deref()
-        .map(sanitize_job_name)
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| petname::petname(2, "_").expect("Problem in random job name generator"));
-    let output_path = project_path
-        .join("results")
-        .join(format!("{file_date}__{job_name}"));
-    info!("Creating output directory: {:?}", output_path);
-    if let Err(e) = std::fs::create_dir_all(&output_path) {
-        error!("Failed to create output directory: {e}");
-        return Err(InternalErrors::Io(format!("{e}")));
-    }
+    let (output_path, job_name) = create_results_dir(&project_path, job_name)?;
 
     config.meta.app_version = env!("CARGO_PKG_VERSION").to_string();
 
@@ -134,6 +120,136 @@ pub fn generate_analyze_job_from_project_settings(
     write_project_snapshot(&config, &output_path, &job_name);
 
     generate_job_from_project_settings_intenal(config, project_path, output_path, database_storage)
+}
+
+/// Generates a job that runs only the dataset steps, on the objects of an
+/// earlier analysis - the image phase is skipped.
+///
+/// The earlier analysis is never changed: its results folder (the one
+/// holding `base_results_db`, which must lie in the project's `results`
+/// folder) is copied to a new one, named like a full analysis's
+/// (`job_name`, or a random name if `None`), and the dataset steps write
+/// into that copy. The copy's `.evaproj` is this run's settings as usual;
+/// the earlier analysis's is kept beside it as `<job_name>.base.evaproj`.
+pub fn generate_dataset_job_from_project_settings(
+    mut config: ProjectSettings,
+    project_path: PathBuf,
+    job_name: Option<String>,
+    base_results_db: &Path,
+) -> Result<JobExecutor, InternalErrors> {
+    // Before anything is created on disk.
+    if dataset_steps_from_project_settings(&config)?.is_empty() {
+        return Err(InternalErrors::InvalidArgument(
+            "The project has no enabled dataset steps to run".into(),
+        ));
+    }
+    let base_dir = checked_base_results_dir(&project_path, base_results_db)?;
+    let base_name = base_results_db
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| InternalErrors::InvalidArgument("Invalid results database name".into()))?
+        .to_string();
+
+    let (output_path, job_name) = create_results_dir(&project_path, job_name)?;
+    let job = (|| {
+        copy_results_folder(&base_dir, &base_name, &output_path, &job_name)?;
+        config.meta.app_version = env!("CARGO_PKG_VERSION").to_string();
+        let db = output_path.join(format!("{job_name}.{RESULTS_FILE_EXTENSION}"));
+        let storage = Arc::new(DuckDbExporter::continue_run(&db, &config.meta)?);
+        write_project_snapshot(&config, &output_path, &job_name);
+        let mut job = generate_job_from_project_settings_intenal(
+            config,
+            project_path,
+            output_path.clone(),
+            storage,
+        )?;
+        job.skip_image_phase = true;
+        Ok(job)
+    })();
+    if job.is_err() {
+        // A failed start leaves no half-copied results behind.
+        let _ = std::fs::remove_dir_all(&output_path);
+    }
+    job
+}
+
+/// Creates `<project_path>/results/<date>__<job_name>` for a new run; a
+/// blank `job_name` gets a random one. Returns the folder and the name.
+fn create_results_dir(
+    project_path: &Path,
+    job_name: Option<String>,
+) -> Result<(PathBuf, String), InternalErrors> {
+    let file_date = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let job_name = job_name
+        .as_deref()
+        .map(sanitize_job_name)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| petname::petname(2, "_").expect("Problem in random job name generator"));
+    let output_path = project_path
+        .join("results")
+        .join(format!("{file_date}__{job_name}"));
+    info!("Creating output directory: {:?}", output_path);
+    if let Err(e) = std::fs::create_dir_all(&output_path) {
+        error!("Failed to create output directory: {e}");
+        return Err(InternalErrors::Io(format!("{e}")));
+    }
+    Ok((output_path, job_name))
+}
+
+/// The folder of `base_results_db` - refused unless it is an existing
+/// results database inside the project's `results` folder (on a server, the
+/// path comes from a client).
+fn checked_base_results_dir(
+    project_path: &Path,
+    base_results_db: &Path,
+) -> Result<PathBuf, InternalErrors> {
+    let refuse = |why: &str| {
+        InternalErrors::InvalidArgument(format!(
+            "Can't use {} as the basis: {why}",
+            base_results_db.display()
+        ))
+    };
+    if base_results_db.extension().and_then(|e| e.to_str()) != Some(RESULTS_FILE_EXTENSION) {
+        return Err(refuse("not a results database"));
+    }
+    let db = base_results_db
+        .canonicalize()
+        .map_err(|_| refuse("it doesn't exist"))?;
+    let results = project_path
+        .join("results")
+        .canonicalize()
+        .map_err(|_| refuse("the project has no results"))?;
+    match db.parent() {
+        Some(dir) if dir.starts_with(&results) && dir != results => Ok(dir.to_path_buf()),
+        _ => Err(refuse("it isn't one of this project's results")),
+    }
+}
+
+/// Copies the files of the results folder `from` into `to`, renaming the
+/// run's own files from `from_name` to `to_name` (`<name>.evadb`,
+/// `<name>.evadb.wal`, ...). The earlier run's settings snapshot becomes
+/// `<to_name>.base.<ext>`.
+fn copy_results_folder(
+    from: &Path,
+    from_name: &str,
+    to: &Path,
+    to_name: &str,
+) -> Result<(), InternalErrors> {
+    let io = |e: std::io::Error| InternalErrors::Io(format!("Copying the results failed: {e}"));
+    for entry in std::fs::read_dir(from).map_err(io)? {
+        let entry = entry.map_err(io)?;
+        if !entry.file_type().map_err(io)?.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let target = match file_name.strip_prefix(&format!("{from_name}.")) {
+            Some(PROJECT_FILE_EXTENSIONS) => format!("{to_name}.base.{PROJECT_FILE_EXTENSIONS}"),
+            Some(rest) => format!("{to_name}.{rest}"),
+            None => file_name,
+        };
+        std::fs::copy(entry.path(), to.join(target)).map_err(io)?;
+    }
+    Ok(())
 }
 
 /// Refuses to start when an enabled pipeline reads an image channel some of
@@ -414,38 +530,6 @@ pub(crate) fn dataset_steps_from_project_settings(
         }
     }
     Ok(steps)
-}
-
-/// Runs `config`'s dataset steps again on the results database of an
-/// earlier analysis (`results_db`, a `.evadb` file), without analysing the
-/// images again. Returns how many steps ran.
-pub fn rerun_dataset_steps(
-    config: &ProjectSettings,
-    results_db: &Path,
-    progress: Option<Sender<ProgressEvent>>,
-    cancel: Arc<AtomicBool>,
-) -> Result<usize, InternalErrors> {
-    let steps = dataset_steps_from_project_settings(config)?;
-    run_dataset_steps_on(results_db, &steps, progress, cancel)?;
-    Ok(steps.len())
-}
-
-fn run_dataset_steps_on(
-    results_db: &Path,
-    steps: &[Box<dyn DatasetAlgorithm>],
-    progress: Option<Sender<ProgressEvent>>,
-    cancel: Arc<AtomicBool>,
-) -> Result<(), InternalErrors> {
-    if steps.is_empty() {
-        return Ok(());
-    }
-    let store = DuckDbExporter::open_existing(results_db)?;
-    let mut ctx = DatasetContext {
-        store: &store,
-        progress,
-        cancel,
-    };
-    run_dataset_steps(steps, &mut ctx)
 }
 
 #[cfg(test)]
@@ -1022,50 +1106,136 @@ mod tests {
         assert!(job.dataset_steps.is_empty());
     }
 
-    #[test]
-    fn dataset_steps_rerun_on_an_earlier_analysis_results() {
+    /// An earlier analysis `results/<date>__base/` with three objects, its
+    /// settings snapshot and one more file. Returns its database.
+    fn earlier_analysis(project_dir: &Path) -> PathBuf {
         use crate::object::{Object, ObjectInit};
         use crate::pipeline::pipeline_cache::GlobalPipelineCache;
         use evanalyzer_cfg::core_types::ObjectId;
 
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("results.evadb");
-        {
-            let exporter =
-                DuckDbExporter::new(&db, Default::default(), &Default::default()).unwrap();
-            let mut cache = GlobalPipelineCache::default();
-            cache.image_rel_path = PathBuf::from("a.tif");
-            cache.image_meta.nr_of_bits = 8;
-            for id in 1..=3u128 {
-                cache.object_cache.insert(
-                    ObjectId(id),
-                    Object::new(ObjectInit {
-                        id: ObjectId(id),
-                        area: 1,
-                        bbox: [0, 0, 1, 1],
-                        ..Default::default()
-                    }),
-                );
-            }
-            exporter.export(&cache).unwrap();
+        let dir = project_dir.join("results").join("20260101T000000Z__base");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join(format!("base.{RESULTS_FILE_EXTENSION}"));
+        let exporter = DuckDbExporter::new(&db, Default::default(), &Default::default()).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        cache.image_meta.nr_of_bits = 8;
+        for id in 1..=3u128 {
+            cache.object_cache.insert(
+                ObjectId(id),
+                Object::new(ObjectInit {
+                    id: ObjectId(id),
+                    area: 1,
+                    bbox: [0, 0, 1, 1],
+                    ..Default::default()
+                }),
+            );
         }
+        exporter.export(&cache).unwrap();
+        exporter.finish_run(&Ok(())).unwrap();
+        drop(exporter);
+        std::fs::write(dir.join(format!("base.{PROJECT_FILE_EXTENSIONS}")), "{}").unwrap();
+        std::fs::write(dir.join("notes.txt"), "kept").unwrap();
+        db
+    }
 
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let steps: Vec<Box<dyn DatasetAlgorithm>> =
-            vec![Box::new(crate::dataset::test_support::RecordingStep {
-                seen: seen.clone(),
-                fail: false,
-            })];
-        run_dataset_steps_on(&db, &steps, None, Arc::new(AtomicBool::new(false))).unwrap();
-        assert_eq!(*seen.lock().unwrap(), [3]);
+    fn run_status(db: &Path) -> String {
+        crate::storage::duckdb::shared_connection(db)
+            .unwrap()
+            .query_row("SELECT status FROM run", [], |row| row.get(0))
+            .unwrap()
+    }
 
-        let err = run_dataset_steps_on(
-            &dir.path().join("missing.evadb"),
-            &steps,
-            None,
-            Arc::new(AtomicBool::new(false)),
+    #[test]
+    fn a_dataset_only_run_works_on_a_renamed_copy_of_the_earlier_results() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let base_db = earlier_analysis(project_dir.path());
+        let project = project_with_dataset_steps(image_root.path().to_path_buf());
+
+        let mut job = generate_dataset_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+            Some("tracked".into()),
+            &base_db,
         )
-        .unwrap_err();
-        assert!(format!("{err}").contains("No results database"), "{err}");
+        .unwrap();
+        assert!(job.skip_image_phase);
+        assert_eq!(job.dataset_steps.len(), 1, "the project's tracker");
+
+        // The tracker can't run yet - record what a dataset step sees instead.
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        job.dataset_steps = vec![Box::new(crate::dataset::test_support::RecordingStep {
+            seen: seen.clone(),
+            fail: false,
+        })];
+        let copy = job.output_path.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+            .unwrap();
+
+        assert_eq!(*seen.lock().unwrap(), [3], "the earlier analysis's objects");
+        let started = rx.into_iter().find_map(|e| match e {
+            crate::ProgressEvent::Started { total } => Some(total),
+            _ => None,
+        });
+        assert_eq!(started, Some(0), "no image analysed");
+
+        let name = copy.file_name().unwrap().to_string_lossy().to_string();
+        assert!(name.ends_with("__tracked") && name != "20260101T000000Z__tracked");
+        let new_db = copy.join(format!("tracked.{RESULTS_FILE_EXTENSION}"));
+        assert_eq!(run_status(&new_db), "finished");
+        assert!(
+            copy.join(format!("tracked.{PROJECT_FILE_EXTENSIONS}"))
+                .is_file()
+        );
+        assert_eq!(
+            std::fs::read_to_string(copy.join(format!("tracked.base.{PROJECT_FILE_EXTENSIONS}")))
+                .unwrap(),
+            "{}",
+            "the earlier run's settings"
+        );
+        assert!(copy.join("notes.txt").is_file());
+        assert!(base_db.is_file(), "the earlier analysis is untouched");
+        assert_eq!(run_status(&base_db), "finished");
+    }
+
+    #[test]
+    fn a_dataset_only_run_is_refused_before_anything_is_created() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let base_db = earlier_analysis(project_dir.path());
+        let results = project_dir.path().join("results");
+        let runs = || std::fs::read_dir(&results).unwrap().count();
+        let start = |project: ProjectSettings, base: &Path| {
+            generate_dataset_job_from_project_settings(
+                project,
+                project_dir.path().to_path_buf(),
+                None,
+                base,
+            )
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default()
+        };
+
+        let no_dataset_steps = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![blur_step(true)])],
+        );
+        assert!(start(no_dataset_steps, &base_db).contains("no enabled dataset steps"));
+
+        let project = project_with_dataset_steps(image_root.path().to_path_buf());
+        let elsewhere = image_root
+            .path()
+            .join(format!("other.{RESULTS_FILE_EXTENSION}"));
+        std::fs::write(&elsewhere, "").unwrap();
+        assert!(start(project.clone(), &elsewhere).contains("isn't one of this project's results"));
+        let missing = results
+            .join("x")
+            .join(format!("x.{RESULTS_FILE_EXTENSION}"));
+        assert!(start(project, &missing).contains("doesn't exist"));
+
+        assert_eq!(runs(), 1, "only the earlier analysis");
     }
 }

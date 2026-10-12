@@ -175,6 +175,9 @@ pub struct JobExecutor {
     /// Dataset steps, in the order the pipelines and their steps are
     /// authored. They run once after every image has been analysed.
     pub dataset_steps: Vec<Box<dyn DatasetAlgorithm>>,
+    /// Run only the dataset steps, on the objects already in the results
+    /// storage (a copy of an earlier analysis's) - no image is analysed.
+    pub skip_image_phase: bool,
 
     pub image_base_path: PathBuf,
     pub images: IndexMap<PathBuf, ImageEntry>,
@@ -207,6 +210,7 @@ impl<'a> JobExecutor {
             pipelines_pre_process: IndexMap::new(),
             pipelines_post_process: IndexMap::new(),
             dataset_steps: Vec::new(),
+            skip_image_phase: false,
             project_path,
             output_path,
             image_base_path,
@@ -313,13 +317,20 @@ impl<'a> JobExecutor {
             .unwrap();
 
         let order = self.get_execution_order();
-        let total = self.images.len();
+        let total = if self.skip_image_phase {
+            0
+        } else {
+            self.images.len()
+        };
         let completed = AtomicUsize::new(0);
 
         progress.send(ProgressEvent::Started { total }).ok();
 
         let result = pool.install(|| {
-            if total == 1 {
+            if self.skip_image_phase {
+                info!("Image phase skipped: running the dataset steps only");
+                Ok(())
+            } else if total == 1 {
                 // Single image: parallelize over tiles instead of images
                 let (rel_path, image_info) = self.images.iter().next().unwrap();
                 let abs_path = self.image_base_path.join(rel_path);

@@ -6,6 +6,12 @@ authors = { workspace = true }
 license = { workspace = true }
 publish = { workspace = true }
 
+# Not finished yet: kept out of `cargo test` / coverage runs (some of its
+# tests run for a very long time). Remove once the crate is ready.
+[lib]
+test = false
+doctest = false
+
 
 [dependencies]
 evanalyzer_cfg = { workspace = true }

@@ -155,6 +155,7 @@ impl PipelineWorker {
                         project_path: task.project_path,
                         job_name: task.job_name,
                         threads: None,
+                        base_results: task.base_results,
                     }),
                 };
                 match started {
@@ -625,6 +626,7 @@ mod tests {
                 breakpoint: None,
                 job_name: Some("worker_test".into()),
                 attach: None,
+                base_results: None,
             }
         }
         fn running(&self) -> PipelineRunningState<'_> {
@@ -693,6 +695,7 @@ mod tests {
                 project_path: task.project_path.clone(),
                 job_name: Some("elsewhere".into()),
                 threads: Some(1),
+                base_results: None,
             })
             .unwrap();
         let id = job.id().unwrap().to_string();

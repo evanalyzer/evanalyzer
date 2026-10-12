@@ -242,6 +242,7 @@ fn request(dir: &Path) -> AnalysisRequest {
         project_path: dir.to_path_buf(),
         job_name: Some("plate-3".into()),
         threads: Some(1),
+        base_results: None,
     }
 }
 
@@ -406,6 +407,7 @@ fn a_real_analysis_is_tracked_too() {
             project_path: dir.path().to_path_buf(),
             job_name: Some("real".into()),
             threads: Some(1),
+            base_results: None,
         })
         .unwrap();
     let id = job.id().unwrap().to_string();

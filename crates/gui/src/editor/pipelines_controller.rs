@@ -12,6 +12,7 @@ use crate::{
     PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
+use crate::{ResultItemData, ResultsListState};
 use evanalyzer_app::ai_learning::load_classifier_settings;
 use evanalyzer_app::fs::FileSystem;
 use evanalyzer_app::project::ImageEntryExt;
@@ -1437,6 +1438,7 @@ impl PipelinesController {
             breakpoint,
             job_name: None,
             attach: None,
+            base_results: None,
         };
         drop(project);
 
@@ -1472,7 +1474,36 @@ impl PipelinesController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
-        ui.global::<RunAnalysisState>().set_job_name("".into());
+        let has_dataset_steps = self
+            .app_state
+            .get_project()
+            .settings
+            .pipelines
+            .iter()
+            .filter(|p| p.enabled)
+            .flat_map(|p| &p.steps)
+            .any(|s| s.enabled && matches!(s.command.category(), CommandCategory::Dataset));
+        // The earlier analyses, as the results list shows them (newest
+        // first); the one open there is the default basis.
+        let results = ui.global::<ResultsListState>();
+        let earlier: Vec<ResultItemData> = results.get_results_list().iter().collect();
+        let open = usize::try_from(results.get_selected_result_index())
+            .ok()
+            .filter(|i| *i < earlier.len())
+            .unwrap_or(0);
+        let names: Vec<SharedString> = earlier
+            .iter()
+            .map(|r| format!("{} ({})", r.name, r.modified).into())
+            .collect();
+        let paths: Vec<SharedString> = earlier.iter().map(|r| r.path.clone()).collect();
+
+        let state = ui.global::<RunAnalysisState>();
+        state.set_job_name("".into());
+        state.set_dataset_only(false);
+        state.set_has_dataset_steps(has_dataset_steps);
+        state.set_base_names(ModelRc::new(VecModel::from(names)));
+        state.set_base_paths(ModelRc::new(VecModel::from(paths)));
+        state.set_base_index(open as i32);
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::RunAnalysisConfirm);
     }
@@ -1483,15 +1514,27 @@ impl PipelinesController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
-        let job_name = ui.global::<RunAnalysisState>().get_job_name().to_string();
+        let state = ui.global::<RunAnalysisState>();
+        let job_name = state.get_job_name().to_string();
+        let base_results = state
+            .get_dataset_only()
+            .then(|| {
+                state
+                    .get_base_paths()
+                    .row_data(state.get_base_index() as usize)
+            })
+            .flatten()
+            .map(|path| PathBuf::from(path.as_str()));
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::None);
 
         let job_name = (!job_name.trim().is_empty()).then_some(job_name);
-        self.trigger_pipeline_full_run(job_name);
+        self.trigger_pipeline_full_run(job_name, base_results);
     }
 
-    fn trigger_pipeline_full_run(&self, job_name: Option<String>) {
+    /// Starts a full analysis - or, with `base_results`, a run of only the
+    /// dataset steps on a copy of that earlier analysis's results.
+    fn trigger_pipeline_full_run(&self, job_name: Option<String>, base_results: Option<PathBuf>) {
         let project = self.app_state.get_project();
 
         let Some(current_project) = &project.tmp_settings.current_project else {
@@ -1523,6 +1566,7 @@ impl PipelinesController {
             breakpoint: None,
             job_name,
             attach: None,
+            base_results,
         };
         drop(project);
 
@@ -4585,6 +4629,49 @@ mod tests {
         ui.global::<RunAnalysisState>().invoke_confirm();
         let task = controller.task_request.0.lock().unwrap().take().unwrap();
         assert_eq!(task.job_name, None);
+    }
+
+    #[test]
+    fn run_all_can_run_only_the_dataset_steps_on_earlier_results() {
+        let (ui, ui_state, controller) = selected(vec![step("SimpleTracker")]);
+        ui_state.get_project_write().tmp_settings.current_project =
+            Some(PathBuf::from("/data/exp/project.evaproj"));
+        let result = |name: &str| ResultItemData {
+            name: name.into(),
+            path: format!("/data/exp/results/x__{name}/{name}.evadb").into(),
+            file_size: "1 MB".into(),
+            modified: "today".into(),
+        };
+        let results = ui.global::<ResultsListState>();
+        results.set_results_list(ModelRc::new(VecModel::from(vec![
+            result("newest"),
+            result("older"),
+        ])));
+        results.set_selected_result_index(1);
+
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        let state = ui.global::<RunAnalysisState>();
+        assert!(state.get_has_dataset_steps());
+        assert!(!state.get_dataset_only(), "a full analysis by default");
+        assert_eq!(state.get_base_names().row_count(), 2);
+        assert_eq!(state.get_base_index(), 1, "the results open in the list");
+
+        state.set_dataset_only(true);
+        state.invoke_confirm();
+        let task = controller.task_request.0.lock().unwrap().take().unwrap();
+        assert_eq!(
+            task.base_results,
+            Some(PathBuf::from("/data/exp/results/x__older/older.evadb"))
+        );
+
+        // Reopened: a full analysis again; without dataset steps, no choice.
+        ui_state.get_project_write().pipelines[0].steps[0].enabled = false;
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        assert!(!state.get_dataset_only());
+        assert!(!state.get_has_dataset_steps());
+        state.invoke_confirm();
+        let task = controller.task_request.0.lock().unwrap().take().unwrap();
+        assert_eq!(task.base_results, None);
     }
 
     #[test]

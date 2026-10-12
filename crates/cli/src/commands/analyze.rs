@@ -41,6 +41,7 @@ pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalError
         project_path: project_dir,
         job_name: args.job_name.clone(),
         threads: args.threads,
+        base_results: None,
     })?;
     let output_path = job.output_path().clone();
     println!("Output:    {}", output_path.display());

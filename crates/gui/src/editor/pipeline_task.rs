@@ -19,6 +19,9 @@ pub struct PipelineTask {
     /// already running on the server (started before this window existed,
     /// or before the connection dropped).
     pub attach: Option<String>,
+    /// Run only the dataset steps, on a copy of this earlier analysis's
+    /// results database - see `AnalysisRequest::base_results`.
+    pub base_results: Option<PathBuf>,
 }
 
 impl Default for PipelineTask {
@@ -30,6 +33,7 @@ impl Default for PipelineTask {
             breakpoint: None,
             job_name: None,
             attach: None,
+            base_results: None,
         }
     }
 }

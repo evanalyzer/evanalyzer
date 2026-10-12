@@ -58,6 +58,7 @@ mod tests {
             dir.path().to_path_buf(),
             Some("app_job_test".into()),
             Some(1),
+            None,
         )
         .unwrap();
         assert_eq!(job.parallelism(), 1);
@@ -76,7 +77,7 @@ mod tests {
     #[test]
     fn start_analysis_picks_a_parallelism_when_none_is_given() {
         let (dir, settings) = project_with_fixture_image();
-        let job = start_analysis(settings, dir.path().to_path_buf(), None, None).unwrap();
+        let job = start_analysis(settings, dir.path().to_path_buf(), None, None, None).unwrap();
         assert!(job.parallelism() >= 1);
         drain(&job);
         job.wait().unwrap();
@@ -85,7 +86,7 @@ mod tests {
     #[test]
     fn analysis_cancelled_before_it_starts_returns_cancelled() {
         let (dir, settings) = project_with_fixture_image();
-        let job = start_analysis(settings, dir.path().to_path_buf(), None, Some(1)).unwrap();
+        let job = start_analysis(settings, dir.path().to_path_buf(), None, Some(1), None).unwrap();
         job.cancel_handle().cancel();
         drain(&job);
         // The job may already have finished its single image before seeing

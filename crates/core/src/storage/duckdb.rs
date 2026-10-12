@@ -222,6 +222,28 @@ impl DuckDbExporter {
         })
     }
 
+    /// [`Self::open_existing`] for a new run on the database's objects (a
+    /// copy of an earlier analysis's): its run is recorded as running again,
+    /// with this run's project details.
+    pub fn continue_run(path: &Path, project_meta: &MetaData) -> Result<Self, InternalErrors> {
+        let exporter = Self::open_existing(path)?;
+        exporter
+            .lock_conn()
+            .execute(
+                "UPDATE run SET status = 'running', message = NULL, finished_at = NULL,
+                     started_at = current_timestamp, title = ?, short_description = ?,
+                     description = ?, app_version = ?",
+                params![
+                    project_meta.name,
+                    project_meta.short_description,
+                    project_meta.description,
+                    project_meta.app_version,
+                ],
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        Ok(exporter)
+    }
+
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),

@@ -188,6 +188,7 @@ fn native_paths(request: Request) -> Request {
     match request {
         Request::StartAnalysis(mut req) => {
             req.project_path = native_path(req.project_path);
+            req.base_results = req.base_results.map(native_path);
             native_project_paths(&mut req.settings);
             Request::StartAnalysis(req)
         }
@@ -829,6 +830,7 @@ mod tests {
             project_path: PathBuf::from(r"/home/me\project"),
             job_name: None,
             threads: None,
+            base_results: None,
         })) else {
             panic!("expected an analysis");
         };
