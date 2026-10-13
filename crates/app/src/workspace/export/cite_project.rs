@@ -158,6 +158,7 @@ mod tests {
             image_source: ImageAddress::Scratchpad,
             enabled: true,
             steps: vec![PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::generate(),
                 enabled: true,
                 command: PipelineCommand::Threshold(ThresholdSettings {
                     thresholds: vec![
@@ -193,14 +194,17 @@ mod tests {
             enabled: true,
             steps: vec![
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::generate(),
                     enabled: true,
                     command: PipelineCommand::RollingBall(RollingBallSettings::default()),
                 },
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::generate(),
                     enabled: true,
                     command: PipelineCommand::GaussianBlur(GaussianBlurSettings::default()),
                 },
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::generate(),
                     enabled: false,
                     command: PipelineCommand::Blur(BlurSettings { kernel_size: 3 }),
                 },

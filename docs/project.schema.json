@@ -1748,9 +1748,8 @@
       ]
     },
     "ObjectId": {
-      "type": "integer",
-      "format": "uint128",
-      "minimum": 0
+      "description": "An object's id - a UUIDv7. Stored in JSON as the UUID string (as in the\nresults database), in binary formats as the number: project files are loaded through `serde_json::Value`, which\nkeeps numbers above 2^64 only as `f64`, so as a number the id came back\nwrong. Numbers are still read - from files written before; a rounded one\nrounds the same way everywhere in the file, so references between\nobjects (parent, children, coloc partners) still match.",
+      "type": "string"
     },
     "ObjectMathSettings": {
       "description": "Computes a boolean set operation between two object classes, object pair by\nobject pair.\n\nWhen more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
@@ -2731,6 +2730,11 @@
         "enabled": {
           "description": "If enabled, the command is executed, if not enabled, this command is skiped during pipeline execution",
           "type": "boolean"
+        },
+        "id": {
+          "description": "Randomly generated unique pipeline step id",
+          "$ref": "#/$defs/StepId",
+          "default": "01a136c509397b6090f8889e2d806502"
         }
       },
       "required": [
@@ -3457,6 +3461,10 @@
           "minimum": 0
         }
       }
+    },
+    "StepId": {
+      "description": "A pipeline step's id. Stored as a hex string, not a number: project files\nare loaded through `serde_json::Value`, which keeps numbers above 2^64 only\nas `f64` - a random 128-bit id would come back wrong (or not at all).",
+      "type": "string"
     },
     "StructureTensorSettings": {
       "description": "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.\n\nThis algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```",

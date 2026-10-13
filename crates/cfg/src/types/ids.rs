@@ -106,11 +106,157 @@ impl fmt::Display for PipelineId {
     }
 }
 
-// Object ID -----------------
 #[derive(
-    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, Hash, PartialOrd, Ord,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Default,
+    JsonSchema,
+    Ord,
+    PartialOrd,
 )]
-pub struct ObjectId(pub u128);
+pub struct GroupId(pub u32);
+
+impl fmt::Display for GroupId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Group({})", self.0) // Or just self.0
+    }
+}
+
+/// A group parameter's id, unique within its group definition. The values a
+/// group instance holds are keyed by it, so they survive reordering and
+/// relabelling the definition's parameters.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Default,
+    JsonSchema,
+    Ord,
+    PartialOrd,
+)]
+pub struct GroupParamId(pub u32);
+
+/// A pipeline step's id. Stored as a hex string, not a number: project files
+/// are loaded through `serde_json::Value`, which keeps numbers above 2^64 only
+/// as `f64` - a random 128-bit id would come back wrong (or not at all).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, JsonSchema, Ord, PartialOrd)]
+pub struct StepId(#[schemars(with = "String")] pub u128);
+
+impl Serialize for StepId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&format!("{:032x}", self.0))
+        } else {
+            serializer.serialize_u128(self.0)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for StepId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = StepId;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a step id: a hex string")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<StepId, E> {
+                u128::from_str_radix(v, 16).map(StepId).map_err(E::custom)
+            }
+            // A plain number, if someone writes one by hand.
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<StepId, E> {
+                Ok(StepId(v as u128))
+            }
+        }
+        if deserializer.is_human_readable() {
+            deserializer.deserialize_any(Visitor)
+        } else {
+            u128::deserialize(deserializer).map(StepId)
+        }
+    }
+}
+
+impl fmt::Display for StepId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "StepId({})", self.0) // Or just self.0
+    }
+}
+
+impl StepId {
+    /// A new, globally unique id (a UUIDv7, like [`ObjectId::next`]) - so
+    /// steps copied between projects or groups never clash.
+    pub fn generate() -> StepId {
+        StepId(fast_uuid_v7::gen_id_u128())
+    }
+}
+
+// Object ID -----------------
+/// An object's id - a UUIDv7. Stored in JSON as the UUID string (as in the
+/// results database), in binary formats as the number: project files are loaded through `serde_json::Value`, which
+/// keeps numbers above 2^64 only as `f64`, so as a number the id came back
+/// wrong. Numbers are still read - from files written before; a rounded one
+/// rounds the same way everywhere in the file, so references between
+/// objects (parent, children, coloc partners) still match.
+#[derive(Debug, Clone, Default, PartialEq, Eq, JsonSchema, Hash, PartialOrd, Ord)]
+pub struct ObjectId(#[schemars(with = "String")] pub u128);
+
+impl Serialize for ObjectId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Binary formats (e.g. the tile scratch files) keep the compact number.
+        if serializer.is_human_readable() {
+            serializer.collect_str(self)
+        } else {
+            serializer.serialize_u128(self.0)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ObjectId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = ObjectId;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("an object id: a UUID string")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<ObjectId, E> {
+                u128::from_str_radix(&v.replace('-', ""), 16)
+                    .map(ObjectId)
+                    .map_err(E::custom)
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<ObjectId, E> {
+                Ok(ObjectId(v as u128))
+            }
+            fn visit_u128<E: serde::de::Error>(self, v: u128) -> Result<ObjectId, E> {
+                Ok(ObjectId(v))
+            }
+            // Files written before: an id above 2^64 came through as `f64`.
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<ObjectId, E> {
+                if v.is_finite() && v >= 0.0 {
+                    Ok(ObjectId(v as u128))
+                } else {
+                    Err(E::custom(format!("invalid object id {v}")))
+                }
+            }
+        }
+        if deserializer.is_human_readable() {
+            deserializer.deserialize_any(Visitor)
+        } else {
+            u128::deserialize(deserializer).map(ObjectId)
+        }
+    }
+}
 
 #[allow(dead_code)]
 impl ObjectId {
@@ -372,5 +518,55 @@ mod tests {
     #[test]
     fn track_id_default_is_zero() {
         assert_eq!(TrackId::default(), TrackId(0));
+    }
+}
+
+#[cfg(test)]
+mod step_id_tests {
+    use super::*;
+
+    #[test]
+    fn generated_step_ids_are_unique_and_survive_a_json_round_trip() {
+        let ids: std::collections::HashSet<StepId> =
+            (0..1000).map(|_| StepId::generate()).collect();
+        assert_eq!(ids.len(), 1000);
+
+        let id = StepId::generate();
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(serde_json::from_str::<StepId>(&json).unwrap(), id);
+    }
+}
+
+#[cfg(test)]
+mod object_id_tests {
+    use super::*;
+
+    #[test]
+    fn object_ids_survive_loading_through_a_json_value() {
+        let id = ObjectId::next();
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(json, format!("\"{id}\""), "the UUID string");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::from_value::<ObjectId>(value).unwrap(), id);
+        assert_eq!(
+            serde_json::from_str::<ObjectId>(&format!("\"{:032x}\"", id.0)).unwrap(),
+            id,
+            "without dashes too"
+        );
+    }
+
+    #[test]
+    fn object_ids_of_files_written_before_still_load() {
+        assert_eq!(
+            serde_json::from_str::<ObjectId>("42").unwrap(),
+            ObjectId(42)
+        );
+        // A UUIDv7 written as a number arrives as f64: rounded, but the same
+        // number always rounds to the same id, so references still match.
+        let old = format!("{}", ObjectId::next().0);
+        let value: serde_json::Value = serde_json::from_str(&old).unwrap();
+        let a = serde_json::from_value::<ObjectId>(value.clone()).unwrap();
+        let b = serde_json::from_value::<ObjectId>(value).unwrap();
+        assert_eq!(a, b);
     }
 }

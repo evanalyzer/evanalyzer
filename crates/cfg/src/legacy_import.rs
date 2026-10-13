@@ -382,7 +382,11 @@ fn convert_pipeline(id: u32, old: &LegacyPipeline, warnings: &mut Vec<String>) -
 
         let enabled = !step.disabled;
         for command in convert_step(step, pipeline_default_class, &context, warnings) {
-            steps.push(PipelineStepSettings { enabled, command });
+            steps.push(PipelineStepSettings {
+                id: crate::types::ids::StepId::generate(),
+                enabled,
+                command,
+            });
         }
 
         if is_segmentation {
@@ -405,10 +409,12 @@ fn convert_pipeline(id: u32, old: &LegacyPipeline, warnings: &mut Vec<String>) -
 
 fn push_segmentation_followup(steps: &mut Vec<PipelineStepSettings>) {
     steps.push(PipelineStepSettings {
+        id: crate::types::ids::StepId::generate(),
         enabled: true,
         command: PipelineCommand::ConnectedComponents(ConnectedComponentsSettings { min_size: 0 }),
     });
     steps.push(PipelineStepSettings {
+        id: crate::types::ids::StepId::generate(),
         enabled: true,
         command: PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
     });

@@ -369,6 +369,7 @@ mod tests {
             enabled: true,
             steps: vec![
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::generate(),
                     enabled: true,
                     command: PipelineCommand::Threshold(ThresholdSettings {
                         thresholds: vec![ThresholdEntrySettings {
@@ -378,12 +379,14 @@ mod tests {
                     }),
                 },
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::generate(),
                     enabled: true,
                     command: PipelineCommand::ConnectedComponents(
                         ConnectedComponentsSettings::default(),
                     ),
                 },
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::generate(),
                     enabled: true,
                     command: PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
                 },

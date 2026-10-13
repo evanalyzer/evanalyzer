@@ -1547,14 +1547,22 @@ impl ProjectExt for ProjectWithRuntime {
             description: Some(template.meta.short_description),
             image_source: ImageAddress::default(),
             enabled: true,
-            steps: template.steps,
+            steps: super::utils::with_new_step_ids(template.steps),
         });
     }
 
     fn apply_project_template(&mut self, template: &ProjectTemplate) {
         self.classification = template.classification.clone();
         self.plate = template.plate.clone();
-        self.pipelines = template.pipelines.clone();
+        self.pipelines = template
+            .pipelines
+            .iter()
+            .cloned()
+            .map(|mut pipeline| {
+                pipeline.steps = super::utils::with_new_step_ids(pipeline.steps);
+                pipeline
+            })
+            .collect();
     }
 
     fn toggle_class_visibility(&mut self, class_id: ObjectClass) {
@@ -1747,6 +1755,12 @@ pub fn load_project(
     let raw: serde_json::Value =
         serde_json::from_str(&data).map_err(|e| InternalErrors::ParseError(e.to_string()))?;
     let mut inner: ProjectSettings = evanalyzer_cfg::load_project_settings(raw)?;
+
+    // Steps copied within a hand-written file share an id - each needs its own.
+    let renewed = super::utils::renew_duplicate_step_ids(&mut inner.pipelines);
+    if renewed > 0 {
+        warn!("{renewed} pipeline step(s) had an id another step already had - renewed");
+    }
 
     // Reverse of the relativization `save_project_as` does on write - resolve
     // AI command `model_path`s back to absolute now, using this project
@@ -2466,6 +2480,7 @@ mod tests {
         let mut project = ProjectWithRuntime::default();
         let mut step_pipeline = pipeline(1);
         step_pipeline.steps.push(PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::generate(),
             enabled: true,
             command: PipelineCommand::PixelClassifier(PixelClassifierSettings {
                 model_path: absolute_model_path.clone(),
@@ -2581,10 +2596,12 @@ mod tests {
         let mut p = pipeline(1);
         p.steps = vec![
             PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::generate(),
                 enabled: true,
                 command: PipelineCommand::Blur(Default::default()),
             },
             PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::generate(),
                 enabled: true,
                 command: PipelineCommand::Blur(Default::default()),
             },
@@ -2981,6 +2998,7 @@ mod tests {
             image_source: source,
             enabled: true,
             steps: vec![PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::generate(),
                 enabled: true,
                 command: PipelineCommand::TransformObjects(TransformObjectsSettings {
                     input_class: ObjectClass::Valid(input),
@@ -3542,6 +3560,7 @@ mod tests {
         let mut project = ProjectWithRuntime::default();
         let mut p = pipeline(1);
         p.steps = vec![PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::generate(),
             enabled: true,
             command: PipelineCommand::Blur(Default::default()),
         }];

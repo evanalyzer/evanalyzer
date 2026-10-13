@@ -2,7 +2,7 @@
 //! `evanalyzer_app::job::start_preview`, so it lives here rather than in core
 //! (see `events.rs` for the same reasoning on the response side).
 
-use crate::types::ids::PipelineId;
+use crate::types::ids::{PipelineId, StepId};
 use serde::{Deserialize, Serialize};
 
 /// Controls pipeline behaviour when a breakpoint step is reached.
@@ -19,6 +19,8 @@ pub enum BreakpointMode {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct BreakpointSettings {
     pub pipeline_id: PipelineId,
-    pub pipeline_step_id: i32,
+    /// The step to act at - its id, so the breakpoint stays on that step
+    /// when steps are inserted, moved or removed above it.
+    pub step_id: StepId,
     pub mode: BreakpointMode,
 }

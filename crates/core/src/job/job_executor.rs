@@ -807,9 +807,7 @@ impl<'a> JobExecutor {
                                 .breakpoint
                                 .as_ref()
                                 .filter(|b| b.pipeline_id == *pipe_id)
-                                .map(|b| {
-                                    (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot)
-                                })
+                                .map(|b| (Some(b.step_id), b.mode == BreakpointMode::Snapshot))
                                 .unwrap_or((None, false));
                             let result = p.run_commands(
                                 self.output_path.clone(),
@@ -962,7 +960,7 @@ impl<'a> JobExecutor {
                             .breakpoint
                             .as_ref()
                             .filter(|b| b.pipeline_id == *pipe_id)
-                            .map(|b| (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot))
+                            .map(|b| (Some(b.step_id), b.mode == BreakpointMode::Snapshot))
                             .unwrap_or((None, false));
                         let result = p.run_commands(
                             self.output_path.clone(),
@@ -2802,12 +2800,18 @@ mod full_run_integration_tests {
         assert_eq!(JobExecutor::breakpoint_target_tile(&[], None), None);
     }
 
+    /// The id of pipeline 1's first step (the Threshold of
+    /// `threshold_connected_components_extract_pipeline`).
+    fn threshold_step(job: &JobExecutor) -> evanalyzer_cfg::core_types::StepId {
+        job.pipelines_pre_process[&PipelineId(1)].commands[0].0
+    }
+
     fn breakpoint_events(mode: BreakpointMode) -> (Vec<ProgressEvent>, usize) {
         let out_objects = Arc::new(Mutex::new(Vec::new()));
         let mut job = make_single_image_job(out_objects.clone());
         job.breakpoint = Some(BreakpointSettings {
             pipeline_id: PipelineId(1),
-            pipeline_step_id: 0, // right after Threshold
+            step_id: threshold_step(&job), // right after Threshold
             mode,
         });
         let (tx, rx) = std::sync::mpsc::channel();
@@ -2862,7 +2866,7 @@ mod full_run_integration_tests {
         let mut job = make_multi_image_job(out_objects.clone(), vec![a.clone(), b.clone()]);
         job.breakpoint = Some(BreakpointSettings {
             pipeline_id: PipelineId(1),
-            pipeline_step_id: 0, // right after Threshold, before ConnectedComponents/ExtractObjects
+            step_id: threshold_step(&job), // right after Threshold, before ConnectedComponents/ExtractObjects
             mode: BreakpointMode::Stop,
         });
 
@@ -2895,7 +2899,7 @@ mod full_run_integration_tests {
         let mut job = make_multi_image_job(out_objects.clone(), vec![a, b]);
         job.breakpoint = Some(BreakpointSettings {
             pipeline_id: PipelineId(1),
-            pipeline_step_id: 0,
+            step_id: threshold_step(&job),
             mode: BreakpointMode::Snapshot,
         });
 

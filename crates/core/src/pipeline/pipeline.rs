@@ -7,7 +7,7 @@ use crate::{
         pipeline_context::PipelineContext,
     },
 };
-use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, PipelineId};
+use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, PipelineId, StepId};
 use kornia_image::ImageSize;
 use log::info;
 use std::sync::Arc;
@@ -58,16 +58,11 @@ pub struct Pipeline {
     pub id: PipelineId,
     pub dependencies: Vec<PipelineId>,
     pub settings: CorePipelineSettings,
-    /// `ExecutionScope::Tile` commands, each paired with its original
-    /// as-authored step index (see `add_command`) so a breakpoint targeting
-    /// a specific step still resolves correctly even though `Tile` and
-    /// `WholeImage` commands are split into two separately-run lists.
-    pub commands: Vec<(usize, Box<dyn ImageAlgorithm>)>,
-    /// Next as-authored step index to assign in `add_command`. Counts every
-    /// command added regardless of which scope it lands in, so the index
-    /// reflects the pipeline's authored order (what a breakpoint targets),
-    /// not either scope's own position.
-    next_step_index: usize,
+    /// The commands, each paired with the id of the project step it came
+    /// from (see `add_step`) - what a breakpoint targets, so it resolves
+    /// correctly although `Tile` and `WholeImage` commands are split into
+    /// two separately-run lists.
+    pub commands: Vec<(StepId, Box<dyn ImageAlgorithm>)>,
 }
 
 /// Pipeline execution pipeline implementation
@@ -90,17 +85,18 @@ impl Pipeline {
             dependencies: Vec::new(),
             settings,
             commands: Vec::new(),
-            next_step_index: 0,
         }
     }
 
-    /// Add a new command to the end of the pipeline, routing it to the
-    /// `Tile` or `WholeImage` list per its `execution_scope()` while
-    /// preserving its as-authored step index (see `next_step_index`).
+    /// Adds the command of project step `id` to the end of the pipeline.
+    pub fn add_step(&mut self, id: StepId, command: Box<dyn ImageAlgorithm>) {
+        self.commands.push((id, command));
+    }
+
+    /// Adds a command that isn't a project step (e.g. `TileMerge`), so no
+    /// breakpoint can target it.
     pub fn add_command(&mut self, command: Box<dyn ImageAlgorithm>) {
-        let step_index = self.next_step_index;
-        self.next_step_index += 1;
-        self.commands.push((step_index, command));
+        self.add_step(StepId::generate(), command);
     }
 
     // Add dependency
@@ -136,9 +132,8 @@ impl Pipeline {
     /// full object set - `ExecutionScope::WholeImage` commands never run
     /// here, see `run_whole_image`.
     ///
-    /// `breakpoint_step` identifies a step's *as-authored* index (see
-    /// `add_command`) at which to act; a step index belonging to a
-    /// `WholeImage` command never matches here. `snapshot_mode`:
+    /// `breakpoint_step` is the id of the step (see `add_step`) at which to
+    /// act; the id of a `WholeImage` command never matches here. `snapshot_mode`:
     ///   - `false` (Stop) — stop execution at that step and return early.
     ///   - `true`  (Snapshot) — capture the buffers at that step, then
     ///     continue to completion; the capture is returned in
@@ -148,7 +143,7 @@ impl Pipeline {
         output_path: PathBuf,
         tile: Option<ImageTile>,
         mut cache: GlobalPipelineCache,
-        breakpoint_step: Option<i32>,
+        breakpoint_step: Option<StepId>,
         snapshot_mode: bool,
     ) -> Result<PipelineResult, InternalErrors> {
         let tile = match tile {
@@ -190,8 +185,8 @@ impl Pipeline {
         let start = Instant::now();
         let mut breakpoint_capture: Option<BreakpointCapture> = None;
 
-        for (step_index, command) in &self.commands {
-            let step_index = *step_index;
+        for (step_id, command) in &self.commands {
+            let step_id = *step_id;
             let step_start = Instant::now();
             command.run(&mut ctx, &mut cache)?;
             let duration = step_start.elapsed();
@@ -200,11 +195,10 @@ impl Pipeline {
             // Only capture at the exact breakpoint step - `breakpoint_step`
             // is `None` whenever no breakpoint is set, so this never runs
             // (and never clones segmentation/instance buffers) for a normal
-            // run. Comparing against the command's as-authored `step_index`
-            // (not its position in `commands`) is what lets a breakpoint
-            // resolve correctly regardless of which scope's list it's run
-            // through.
-            if breakpoint_step == Some(step_index as i32) {
+            // run. Comparing against the command's step id (not its
+            // position in `commands`) is what lets a breakpoint resolve
+            // correctly regardless of which scope's list it's run through.
+            if breakpoint_step == Some(step_id) {
                 let capture = BreakpointCapture {
                     image: ctx.image.clone(),
                     segmentation: ctx.segmentation_map.as_ref().map(|s| {
@@ -230,7 +224,7 @@ impl Pipeline {
                     cache.clear_pipeline_context();
                     info!(
                         "Breakpoint (stop) at step {} of pipeline {} in {:?}",
-                        step_index,
+                        step_id,
                         self.id,
                         start.elapsed()
                     );

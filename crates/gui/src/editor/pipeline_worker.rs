@@ -107,13 +107,13 @@ impl PipelineWorker {
                         zoom: vp.zoom,
                     }
                 };
-                let breakpoint = task
-                    .breakpoint
-                    .map(|(pipeline_id, pipeline_step_id, mode)| BreakpointSettings {
-                        pipeline_id,
-                        pipeline_step_id,
-                        mode,
-                    });
+                let breakpoint =
+                    task.breakpoint
+                        .map(|(pipeline_id, step_id, mode)| BreakpointSettings {
+                            pipeline_id,
+                            step_id,
+                            mode,
+                        });
                 match self.app_state.backend().start_preview(PreviewRequest {
                     settings: task.project_settings,
                     project_path: task.project_path,

@@ -8,7 +8,11 @@ use evanalyzer_cfg::settings::pipeline_command_settings::*;
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 
 fn step(enabled: bool, command: PipelineCommand) -> PipelineStepSettings {
-    PipelineStepSettings { enabled, command }
+    PipelineStepSettings {
+        id: evanalyzer_cfg::core_types::StepId::generate(),
+        enabled,
+        command,
+    }
 }
 
 fn pipeline(steps: Vec<PipelineStepSettings>) -> PipelineSettings {

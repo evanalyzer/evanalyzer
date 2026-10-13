@@ -78,7 +78,12 @@ export struct CommandParameter {
     }
 
 export struct PipelineCommand {
+        // Position in the pipeline - what the step actions (remove, move,
+        // change a parameter) refer to; the list is rebuilt after each change.
         id: int,
+        // The step's stable id - for what must stay with the step when steps
+        // above it are inserted or removed (breakpoint, expanded state).
+        step-id: string,
         name: string,
         category: StepCategory,
         summary: string,        // "σ = 2.0 · per channel"
@@ -1922,7 +1927,7 @@ component StepRow inherits Rectangle {
                         // Click cycles: off → stop → snapshot → off
                         bp-btn := Rectangle {
                             // 0=off, 1=stop, 2=snapshot for this specific step
-                            property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.id) ? PipelinesPanelState.breakpoint-mode : 0;
+                            property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
                                 width: 22px;
                                 height: 22px;
                                 border-radius: 4px;
@@ -2256,7 +2261,7 @@ export global PipelinesPanelState {
 
         // -- Breakpoint state (-1 / 0 = none) --
     in-out property <int> breakpoint-pipeline-id: -1;
-        in-out property <int> breakpoint-step-id: -1;
+        in-out property <string> breakpoint-step-id: "";
     // 0 = off, 1 = Stop (pipeline halts at step), 2 = Snapshot (capture and continue)
     in-out property <int> breakpoint-mode: 0;
     // True while the viewport shows the breakpoint image instead of the original.
@@ -2271,7 +2276,7 @@ export global PipelinesPanelState {
 
         // -- Outbound callbacks --
     // mode: 1 = Stop (pipeline halts at step), 2 = Snapshot (capture and continue)
-    callback set-breakpoint(int, int, int);   // pipeline-id, step-id, mode
+    callback set-breakpoint(int, string, int);   // pipeline-id, step-id, mode
     callback clear-breakpoint();
     // Fired whenever the breakpoint-image toggle changes so Rust can
     // switch the viewport worker between original and breakpoint rendering.
@@ -2710,30 +2715,30 @@ export component PipelinesPanel inherits Rectangle {
                                     PipelinesPanelState.param-changed(cmd.id, n, v);
                                 }
                                 toggle-breakpoint => {
-                                    if PipelinesPanelState.breakpoint-pipeline-id == PipelinesPanelState.active-pipeline-id && PipelinesPanelState.breakpoint-step-id == cmd.id {
+                                    if PipelinesPanelState.breakpoint-pipeline-id == PipelinesPanelState.active-pipeline-id && PipelinesPanelState.breakpoint-step-id == cmd.step-id {
                                         if PipelinesPanelState.breakpoint-mode == 1 {
                                         // Stop → Snapshot (capture image, pipeline continues)
                                         PipelinesPanelState.breakpoint-mode = 2;
                                             PipelinesPanelState.show-breakpoint-image = false;
                                             PipelinesPanelState.show-breakpoint-image-changed(false);
                                             PipelinesPanelState.has-breakpoint-image = false;
-                                            PipelinesPanelState.set-breakpoint(PipelinesPanelState.active-pipeline-id, cmd.id, 2);
+                                            PipelinesPanelState.set-breakpoint(PipelinesPanelState.active-pipeline-id, cmd.step-id, 2);
                                         } else {
                                         // Snapshot → Off; captured image remains available.
                                         PipelinesPanelState.breakpoint-pipeline-id = -1;
-                                            PipelinesPanelState.breakpoint-step-id = -1;
+                                            PipelinesPanelState.breakpoint-step-id = "";
                                             PipelinesPanelState.breakpoint-mode = 0;
                                             PipelinesPanelState.clear-breakpoint();
                                         }
                                     } else {
                                     // Off → Stop (pipeline halts at step)
                                     PipelinesPanelState.breakpoint-pipeline-id = PipelinesPanelState.active-pipeline-id;
-                                        PipelinesPanelState.breakpoint-step-id = cmd.id;
+                                        PipelinesPanelState.breakpoint-step-id = cmd.step-id;
                                         PipelinesPanelState.breakpoint-mode = 1;
                                         PipelinesPanelState.show-breakpoint-image = false;
                                         PipelinesPanelState.show-breakpoint-image-changed(false);
                                         PipelinesPanelState.has-breakpoint-image = false;
-                                        PipelinesPanelState.set-breakpoint(PipelinesPanelState.active-pipeline-id, cmd.id, 1);
+                                        PipelinesPanelState.set-breakpoint(PipelinesPanelState.active-pipeline-id, cmd.step-id, 1);
                                     }
                                 }
                             }

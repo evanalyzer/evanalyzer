@@ -495,9 +495,10 @@ fn generate_job_from_project_settings_intenal(
         for step in &pipeline_setting.steps {
             if step.enabled {
                 match into_pipeline_step(step.command.clone())? {
-                    PipelineStep::Image(step) => match step.execution_scope() {
-                        ExecutionScope::Tile => pipeline_pre_process.add_command(step),
-                        ExecutionScope::WholeImage => pipeline_post_process.add_command(step),
+                    // Kept with its id: what a breakpoint targets.
+                    PipelineStep::Image(algo) => match algo.execution_scope() {
+                        ExecutionScope::Tile => pipeline_pre_process.add_step(step.id, algo),
+                        ExecutionScope::WholeImage => pipeline_post_process.add_step(step.id, algo),
                     },
                     // Runs once after every image, whatever its place in the pipeline.
                     PipelineStep::Dataset(step) => job.add_dataset_step(step),
@@ -543,6 +544,7 @@ mod tests {
 
     fn blur_step(enabled: bool) -> PipelineStepSettings {
         PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::generate(),
             enabled,
             command: PipelineCommand::Blur(BlurSettings::default()),
         }
@@ -1040,6 +1042,7 @@ mod tests {
 
     fn tracker_step(enabled: bool) -> PipelineStepSettings {
         PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::generate(),
             enabled,
             command: PipelineCommand::SimpleTracker(
                 evanalyzer_cfg::settings::pipeline_command_settings::SimpleTrackerSettings::default(
@@ -1090,6 +1093,32 @@ mod tests {
         assert_eq!(
             dataset_steps_from_project_settings(&project).unwrap().len(),
             1
+        );
+    }
+
+    #[test]
+    fn each_command_keeps_the_id_of_its_project_step() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let steps = vec![blur_step(true), blur_step(false), blur_step(true)];
+        let ids = [steps[0].id, steps[2].id];
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, steps)],
+        );
+
+        let (job, _out_objects) =
+            generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
+                .unwrap();
+
+        let built: Vec<_> = job.pipelines_pre_process[&PipelineId(1)]
+            .commands
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(
+            built, ids,
+            "what a breakpoint targets, whatever the position"
         );
     }
 

@@ -1,6 +1,7 @@
+use evanalyzer_cfg::core_types::StepId;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
-use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
+use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use pathdiff::diff_paths;
 use std::{
     fs,
@@ -96,6 +97,31 @@ pub fn resolve_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path
             }
         }
     }
+}
+
+/// `steps` with fresh ids - for steps copied into a project (duplicated,
+/// inserted from a template), which must not share ids with the originals.
+pub fn with_new_step_ids(mut steps: Vec<PipelineStepSettings>) -> Vec<PipelineStepSettings> {
+    for step in &mut steps {
+        step.id = StepId::generate();
+    }
+    steps
+}
+
+/// Gives a fresh id to every step whose id another step of `pipelines`
+/// already has - e.g. a step block copied within a hand-written project
+/// file. The first one keeps its id. Returns how many were renewed.
+pub fn renew_duplicate_step_ids(pipelines: &mut [PipelineSettings]) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    let mut renewed = 0;
+    for step in pipelines.iter_mut().flat_map(|p| p.steps.iter_mut()) {
+        if !seen.insert(step.id) {
+            step.id = StepId::generate();
+            seen.insert(step.id);
+            renewed += 1;
+        }
+    }
+    renewed
 }
 
 pub fn get_file_size(path: &Path) -> std::io::Result<u64> {
@@ -237,6 +263,21 @@ pub fn wavelength_to_rgb_float(wavelength: f32) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn copied_steps_get_ids_of_their_own() {
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
+        let step = PipelineStepSettings {
+            id: StepId::generate(),
+            enabled: true,
+            command: PipelineCommand::Blur(BlurSettings::default()),
+        };
+        let copies = super::with_new_step_ids(vec![step.clone(), step.clone()]);
+        assert_ne!(copies[0].id, step.id);
+        assert_ne!(copies[0].id, copies[1].id);
+    }
+
     use super::*;
 
     const RED: [f32; 3] = DEFAULT_CHANNEL_COLORS[0];
@@ -337,6 +378,7 @@ mod tests {
             enabled: true,
             steps: vec![
                 evanalyzer_cfg::settings::pipeline_settings::PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::generate(),
                     enabled: true,
                     command,
                 },
@@ -595,5 +637,37 @@ mod tests {
     #[test]
     fn wavelength_to_rgb_u32_white_for_an_unset_wavelength() {
         assert_eq!(wavelength_to_rgb_u32(0.0), 0x00FFFFFF);
+    }
+
+    #[test]
+    fn duplicate_step_ids_are_renewed_and_the_first_keeps_its_id() {
+        use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
+        use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
+        let step = PipelineStepSettings {
+            id: StepId(5),
+            enabled: true,
+            command: PipelineCommand::Blur(BlurSettings::default()),
+        };
+        let pipeline = |steps| PipelineSettings {
+            id: PipelineId(1),
+            name: String::new(),
+            description: None,
+            image_source: ImageAddress::default(),
+            enabled: true,
+            steps,
+        };
+        let mut pipelines = vec![
+            pipeline(vec![step.clone(), step.clone()]),
+            pipeline(vec![step]),
+        ];
+
+        assert_eq!(super::renew_duplicate_step_ids(&mut pipelines), 2);
+        assert_eq!(pipelines[0].steps[0].id, StepId(5));
+        let ids: std::collections::HashSet<_> = pipelines
+            .iter()
+            .flat_map(|p| &p.steps)
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(ids.len(), 3);
     }
 }

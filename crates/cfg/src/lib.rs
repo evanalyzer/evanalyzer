@@ -67,12 +67,15 @@ pub mod core_types {
     pub use crate::types::errors::*;
     pub use crate::types::events::TrainingProgressEvent;
     pub use crate::types::events::TrainingStats;
+    pub use crate::types::ids::GroupId;
+    pub use crate::types::ids::GroupParamId;
     pub use crate::types::ids::ImageAddress;
     pub use crate::types::ids::ImageChannelIdx;
     pub use crate::types::ids::MemoryId;
     pub use crate::types::ids::MemorySlot;
     pub use crate::types::ids::ObjectId;
     pub use crate::types::ids::PipelineId;
+    pub use crate::types::ids::StepId;
     pub use crate::types::ids::TrackId;
     pub use crate::types::image::ImagePlane;
     pub use crate::types::image::ImageTile;

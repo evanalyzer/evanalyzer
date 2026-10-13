@@ -205,6 +205,7 @@ mod tests {
             image_source: ImageAddress::Scratchpad,
             enabled: true,
             steps: vec![PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::generate(),
                 enabled: true,
                 command: PipelineCommand::TransformObjects(TransformObjectsSettings {
                     input_class: ObjectClass::Valid(class),

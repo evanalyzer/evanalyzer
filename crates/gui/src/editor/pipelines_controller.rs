@@ -80,8 +80,15 @@ pub struct PipelinesController {
     /// what to do with it.
     pub(crate) analysis_running: Arc<std::sync::atomic::AtomicBool>,
     /// Currently active breakpoint: (pipeline_id, step_id, mode).  `None` = no breakpoint.
-    pub(crate) breakpoint:
-        Arc<Mutex<Option<(u32, i32, evanalyzer_cfg::core_types::BreakpointMode)>>>,
+    pub(crate) breakpoint: Arc<
+        Mutex<
+            Option<(
+                u32,
+                evanalyzer_cfg::core_types::StepId,
+                evanalyzer_cfg::core_types::BreakpointMode,
+            )>,
+        >,
+    >,
 
     /// If true the trigger_pipeline_preview_execution is called on parameter change
     auto_preview_enabled: Mutex<bool>,
@@ -159,8 +166,8 @@ impl PipelinesController {
                     } else {
                         evanalyzer_cfg::core_types::BreakpointMode::Stop
                     };
-                    *manager.breakpoint.lock().unwrap() =
-                        Some((pipeline_id as u32, step_id, bp_mode));
+                    *manager.breakpoint.lock().unwrap() = parse_step_id(&step_id)
+                        .map(|step_id| (pipeline_id as u32, step_id, bp_mode));
                 },
             );
 
@@ -394,6 +401,7 @@ impl PipelinesController {
                                     project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
                                 let mut clone = p.clone();
                                 clone.id = PipelineId(next_id);
+                                clone.steps = evanalyzer_app::utils::with_new_step_ids(clone.steps);
                                 clone.name = format!("{} (Copy)", p.name);
                                 clone
                             })
@@ -639,7 +647,9 @@ impl PipelinesController {
                         }
                     }
                     manager.pipeline_settings_changed();
-                    manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), true);
+                    // The other cards keep their state: it's keyed by step id.
+                    manager
+                        .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
 
             // Duplicate step
@@ -658,7 +668,8 @@ impl PipelinesController {
                         {
                             let idx = step_idx as usize;
                             if idx < pipeline.steps.len() {
-                                let cloned = pipeline.steps[idx].clone();
+                                let mut cloned = pipeline.steps[idx].clone();
+                                cloned.id = evanalyzer_cfg::core_types::StepId::generate();
                                 pipeline.steps.insert(idx + 1, cloned);
                             }
                         }
@@ -798,13 +809,15 @@ impl PipelinesController {
                             warn!("picker confirm: unknown template id {}", command_id);
                             return;
                         };
-                        template.steps.clone()
+                        // Inserting it twice must not give two steps one id.
+                        evanalyzer_app::utils::with_new_step_ids(template.steps.clone())
                     } else {
                         let Some(cmd) = default_command(command_id) else {
                             warn!("picker confirm: unknown command id {}", command_id);
                             return;
                         };
                         vec![PipelineStepSettings {
+                            id: evanalyzer_cfg::core_types::StepId::generate(),
                             enabled: true,
                             command: cmd,
                         }]
@@ -873,6 +886,7 @@ impl PipelinesController {
                                 match result {
                                     Ok(configured) => {
                                         let step = PipelineStepSettings {
+                                            id: evanalyzer_cfg::core_types::StepId::generate(),
                                             enabled: true,
                                             command: configured.command,
                                         };
@@ -2147,6 +2161,7 @@ impl PipelinesController {
         // ModelRc (Rc-backed) must be created inside invoke_from_event_loop.
         struct StepData {
             idx: i32,
+            id: evanalyzer_cfg::core_types::StepId,
             name: String,
             summary: String,
             category: StepCategory,
@@ -2184,6 +2199,7 @@ impl PipelinesController {
                     .enumerate()
                     .map(|(idx, step)| StepData {
                         idx: idx as i32,
+                        id: step.id,
                         name: step.command.name().to_owned(),
                         summary: step.command.to_summary(),
                         category: step_category(*step.command.category()),
@@ -2224,19 +2240,28 @@ impl PipelinesController {
             if let Some(ui) = ui_weak.upgrade() {
                 let state = ui.global::<PipelinesPanelState>();
 
-                let expanded_by_id: std::collections::HashMap<i32, bool> = if !reset_expanded {
-                    let current = state.get_active_commands();
-                    (0..current.row_count())
-                        .filter_map(|i| current.row_data(i).map(|cmd| (cmd.id, cmd.expanded)))
-                        .collect()
-                } else {
-                    std::collections::HashMap::new()
-                };
+                // Keyed by the step's id, not its position: a step inserted
+                // or removed above must not move the state to another card.
+                let expanded_by_id: std::collections::HashMap<SharedString, bool> =
+                    if !reset_expanded {
+                        let current = state.get_active_commands();
+                        (0..current.row_count())
+                            .filter_map(|i| {
+                                current.row_data(i).map(|cmd| (cmd.step_id, cmd.expanded))
+                            })
+                            .collect()
+                    } else {
+                        std::collections::HashMap::new()
+                    };
                 // Same for each step's expanded advanced section.
-                let show_advanced_by_id: std::collections::HashMap<i32, bool> = {
+                let show_advanced_by_id: std::collections::HashMap<SharedString, bool> = {
                     let current = state.get_active_commands();
                     (0..current.row_count())
-                        .filter_map(|i| current.row_data(i).map(|cmd| (cmd.id, cmd.show_advanced)))
+                        .filter_map(|i| {
+                            current
+                                .row_data(i)
+                                .map(|cmd| (cmd.step_id, cmd.show_advanced))
+                        })
                         .collect()
                 };
                 let always_show_advanced = state.get_always_show_advanced();
@@ -2299,8 +2324,9 @@ impl PipelinesController {
                             .map(|(_, name)| name.clone())
                             .collect();
 
+                        let step_id = step_id_text(d.id);
                         let step_show_advanced =
-                            show_advanced_by_id.get(&d.idx).copied().unwrap_or(false);
+                            show_advanced_by_id.get(&step_id).copied().unwrap_or(false);
                         let show_advanced = always_show_advanced || step_show_advanced;
                         let (advanced_count, advanced_changed) = advanced_stats(&d.parameters);
                         let (advanced_defs, basic_defs): (Vec<ParameterDef>, Vec<ParameterDef>) =
@@ -2407,11 +2433,12 @@ impl PipelinesController {
                         };
                         SlintPipelineCommand {
                             id: d.idx,
+                            step_id: step_id.clone(),
                             name: d.name.into(),
                             category: d.category,
                             summary: d.summary.into(),
                             enabled: d.enabled,
-                            expanded: expanded_by_id.get(&d.idx).copied().unwrap_or(false),
+                            expanded: expanded_by_id.get(&step_id).copied().unwrap_or(false),
                             parameters: ModelRc::new(VecModel::from(params)),
                             advanced_parameters: ModelRc::new(VecModel::from(advanced_params)),
                             show_advanced: step_show_advanced,
@@ -2765,6 +2792,18 @@ fn advanced_stats(params: &[ParameterDef]) -> (usize, usize) {
 /// advanced dropdown options - except the selected one, so a field never
 /// shows a value missing from its list. (Top-level advanced settings are
 /// split off by the caller.)
+/// A step id as Slint carries it: the hex form it has in the project file.
+fn step_id_text(id: evanalyzer_cfg::core_types::StepId) -> SharedString {
+    format!("{:032x}", id.0).into()
+}
+
+/// The step id `text` (see [`step_id_text`]) names - `None` for none.
+fn parse_step_id(text: &str) -> Option<evanalyzer_cfg::core_types::StepId> {
+    u128::from_str_radix(text, 16)
+        .ok()
+        .map(evanalyzer_cfg::core_types::StepId)
+}
+
 fn filter_for_display(params: Vec<ParameterDef>, show_advanced: bool) -> Vec<ParameterDef> {
     params
         .into_iter()
@@ -3088,6 +3127,7 @@ mod tests {
     fn template_to_command_def_takes_its_category_from_the_first_step() {
         // id 6 is "ConnectedComponents" -> CommandCategory::InstanceSegmentation.
         let step = PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::generate(),
             enabled: true,
             command: default_command(6).unwrap(),
         };
@@ -3392,6 +3432,7 @@ mod tests {
                 image_source: ImageAddress::Channel(0),
                 enabled: true,
                 steps: vec![PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::generate(),
                     enabled: true,
                     command: PipelineCommand::Threshold(ThresholdSettings {
                         thresholds: vec![ThresholdEntrySettings {
@@ -3433,6 +3474,7 @@ mod tests {
                 image_source: ImageAddress::Channel(0),
                 enabled: true,
                 steps: vec![PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::generate(),
                     enabled: true,
                     command: PipelineCommand::Threshold(ThresholdSettings {
                         thresholds: vec![
@@ -3626,18 +3668,23 @@ mod tests {
         let (_ui_state, controller) = make_controller(ui.as_weak());
         controller.attach_callbacks();
 
+        let step = evanalyzer_cfg::core_types::StepId(0x2a);
         ui.global::<PipelinesPanelState>()
-            .invoke_set_breakpoint(7, 2, 1);
+            .invoke_set_breakpoint(7, step_id_text(step), 1);
         assert_eq!(
             *controller.breakpoint.lock().unwrap(),
-            Some((7, 2, evanalyzer_cfg::core_types::BreakpointMode::Stop))
+            Some((7, step, evanalyzer_cfg::core_types::BreakpointMode::Stop))
         );
 
         ui.global::<PipelinesPanelState>()
-            .invoke_set_breakpoint(7, 2, 2);
+            .invoke_set_breakpoint(7, step_id_text(step), 2);
         assert_eq!(
             *controller.breakpoint.lock().unwrap(),
-            Some((7, 2, evanalyzer_cfg::core_types::BreakpointMode::Snapshot)),
+            Some((
+                7,
+                step,
+                evanalyzer_cfg::core_types::BreakpointMode::Snapshot
+            )),
             "mode 2 must map to Snapshot"
         );
 
@@ -3734,6 +3781,7 @@ mod tests {
             .find(|m| m.name == command_name)
             .unwrap_or_else(|| panic!("no command {command_name}"));
         PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::generate(),
             enabled: true,
             command: default_command(meta.id).unwrap(),
         }
@@ -4212,6 +4260,46 @@ mod tests {
     }
 
     #[test]
+    fn a_steps_card_state_and_breakpoint_stay_with_it_when_a_step_above_is_removed() {
+        let (ui, ui_state, _controller) = selected(vec![step("Threshold"), step("Colocalization")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        let second = ui_state.get_project().pipelines[0].steps[1].id;
+        // Expand the second step and put the breakpoint on it.
+        let commands = panel.get_active_commands();
+        let mut cmd = commands.row_data(1).unwrap();
+        assert_eq!(cmd.step_id, step_id_text(second));
+        cmd.expanded = true;
+        commands.set_row_data(1, cmd);
+        panel.set_breakpoint_step_id(step_id_text(second));
+
+        panel.invoke_remove_step(0);
+        drain_ui_queue();
+
+        let first = panel.get_active_commands().row_data(0).unwrap();
+        assert_eq!(first.step_id, step_id_text(second), "it moved up");
+        assert!(first.expanded, "and is still expanded");
+        assert_eq!(panel.get_breakpoint_step_id(), first.step_id);
+    }
+
+    #[test]
+    fn step_ids_go_to_slint_and_back_unchanged() {
+        let id = evanalyzer_cfg::core_types::StepId::generate();
+        assert_eq!(parse_step_id(&step_id_text(id)), Some(id));
+        assert_eq!(parse_step_id(""), None);
+    }
+
+    #[test]
+    fn a_duplicated_step_gets_an_id_of_its_own() {
+        let (ui, ui_state, _controller) = selected(vec![step("Threshold")]);
+        ui.global::<PipelinesPanelState>().invoke_duplicate_step(0);
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        let steps = &project.pipelines[0].steps;
+        assert_eq!(steps.len(), 2);
+        assert_ne!(steps[0].id, steps[1].id);
+    }
+
+    #[test]
     fn duplicate_pipeline_appends_a_copy_and_selects_it() {
         let (ui, ui_state, _controller) = selected(vec![step("Threshold")]);
         let panel = ui.global::<PipelinesPanelState>();
@@ -4223,6 +4311,10 @@ mod tests {
             assert_eq!(project.pipelines[1].id, PipelineId(2));
             assert_eq!(project.pipelines[1].name, "Pipeline 1 (Copy)");
             assert_eq!(project.pipelines[1].steps.len(), 1);
+            assert_ne!(
+                project.pipelines[1].steps[0].id, project.pipelines[0].steps[0].id,
+                "the copy's steps have ids of their own"
+            );
         }
         assert_eq!(panel.get_active_pipeline_id(), 2);
         assert_eq!(panel.get_pipelines().row_count(), 2);
@@ -4716,8 +4808,11 @@ mod tests {
             with_image.settings.pipelines = project.settings.pipelines.clone();
             *project = with_image;
         }
-        *controller.breakpoint.lock().unwrap() =
-            Some((1, 0, evanalyzer_cfg::core_types::BreakpointMode::Stop));
+        *controller.breakpoint.lock().unwrap() = Some((
+            1,
+            evanalyzer_cfg::core_types::StepId(0),
+            evanalyzer_cfg::core_types::BreakpointMode::Stop,
+        ));
         dry_run();
         let task = controller
             .task_request
