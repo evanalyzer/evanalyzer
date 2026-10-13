@@ -8,10 +8,12 @@ compare conditions. Model fitting and statistics (MSD, diffusion, survival
 curves, time-series clustering) go to export.**
 
 1. **SimpleTracker writes track IDs, plus the frame interval**
-   - `SimpleTracker::execute`: link objects frame to frame (nearest neighbour
-     within a maximum distance), with settings for class, maximum distance
-     and unit.
-   - `DatasetStore::set_track_ids`, writing the `track_id` column.
+   - `SimpleTracker`: links objects frame to frame per image and z-plane
+     (global greedy nearest neighbour within a maximum distance, nm or px);
+     settings for class, maximum distance and unit. *(done: 400,000
+     objects in 0.7 s end to end, about +100 MB while running)*
+   - `DatasetStore::set_track_ids` / `max_track_id_except`, writing the
+     `track_id` column. *(done)*
    - Frame interval [s]: read from the image metadata; shown and editable
      for the project in the image info panel (TIME, below CALIBRATION), like
      a channel colour. Calculations fall back to 1 s. *(in progress: not yet

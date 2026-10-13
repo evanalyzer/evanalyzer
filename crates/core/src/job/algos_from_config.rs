@@ -797,7 +797,11 @@ impl From<SegmentationMappingSettings> for SegmentationMapping {
 
 impl From<SimpleTrackerSettings> for SimpleTracker {
     fn from(_s: SimpleTrackerSettings) -> Self {
-        SimpleTracker {}
+        SimpleTracker {
+            object_class: _s.object_class,
+            unit: _s.unit,
+            max_distance: _s.max_distance.max(0.0),
+        }
     }
 }
 

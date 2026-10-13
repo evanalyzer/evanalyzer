@@ -5,7 +5,7 @@
 mod dataset_context;
 pub mod tracking;
 
-pub use self::dataset_context::{DatasetContext, DatasetStore, ObjectFilter, ObjectRow};
+pub use self::dataset_context::DatasetContext;
 
 // Commands, flat like `crate::algos::*` - the generated code names them so.
 pub use self::tracking::simple_tracker::SimpleTracker;
@@ -46,6 +46,7 @@ pub(crate) fn run_dataset_steps(
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
+    use crate::storage::stored_object::ObjectFilter;
     use std::sync::{Arc, Mutex};
 
     /// A dataset step that records how many objects it saw - and fails,
@@ -57,7 +58,7 @@ pub(crate) mod test_support {
 
     impl DatasetAlgorithm for RecordingStep {
         fn execute(&self, ctx: &mut DatasetContext) -> Result<(), InternalErrors> {
-            let objects = ctx.store.objects(&ObjectFilter::default())?;
+            let objects = ctx.store.get_objects(&ObjectFilter::default())?;
             self.seen.lock().unwrap().push(objects.len());
             if self.fail {
                 return Err(InternalErrors::Generic("the dataset step failed".into()));

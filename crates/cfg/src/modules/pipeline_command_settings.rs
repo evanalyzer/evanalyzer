@@ -2612,6 +2612,32 @@ pub struct VoronoiSettings {
 // ============ DATASET ============
 
 /// Links each object to the nearest one in the next frame.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+///
+/// Objects of `object_class` in two consecutive frames of the same image and
+/// z-plane are linked closest pair first, each object once, if they are at
+/// most `max_distance` apart. Every object gets a track id; one that can't
+/// be linked starts a new track.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct SimpleTrackerSettings {}
+pub struct SimpleTrackerSettings {
+    /// Object class to track.
+    pub object_class: ObjectClass,
+    /// Unit in which `max_distance` is expressed (e.g. pixels, nm).
+    pub unit: SizeUnits,
+    /// How far an object may move from one frame to the next.
+    ///
+    /// Farther apart, it starts a new track.
+    #[schemars(range(min = 0))]
+    pub max_distance: f32,
+}
+
+impl Default for SimpleTrackerSettings {
+    fn default() -> Self {
+        Self {
+            object_class: ObjectClass::default(),
+            unit: SizeUnits::default(),
+            max_distance: 10000.0f32,
+        }
+    }
+}

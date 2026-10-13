@@ -1,7 +1,7 @@
-use crate::dataset::{DatasetStore, ObjectFilter, ObjectRow};
 use crate::object::{Intensity, Object};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
-use crate::storage::PipelineResultExporter;
+use crate::storage::stored_object::{ObjectFilter, StoredObject};
+use crate::storage::{DatasetStore, PipelineResultExporter};
 use duckdb::arrow::array::{
     ArrayBuilder, ArrayRef, BooleanBuilder, Float64Builder, Int32Builder, ListBuilder, MapBuilder,
     StringBuilder, UInt8Builder, UInt32Builder, UInt64Builder,
@@ -951,7 +951,7 @@ impl PipelineResultExporter for DuckDbExporter {
 // ---------------------------------------------------------------------------
 
 impl DatasetStore for DuckDbExporter {
-    fn objects(&self, filter: &ObjectFilter) -> Result<Vec<ObjectRow>, InternalErrors> {
+    fn get_objects(&self, filter: &ObjectFilter) -> Result<Vec<StoredObject>, InternalErrors> {
         let class_id = match filter.object_class {
             Some(ObjectClass::Valid(n)) => Some(n as i32),
             Some(ObjectClass::Unset) => return Ok(Vec::new()),
@@ -964,7 +964,8 @@ impl DatasetStore for DuckDbExporter {
                 "SELECT object_id::VARCHAR, image_rel_path, t_stack, z_stack,
                         centroid_x_px, centroid_y_px,
                         bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
-                        area_px, object_class_id, intensity_mean_normalized
+                        area_px, object_class_id, intensity_mean_normalized,
+                        NULLIF(pixel_size_x_nm, 0), NULLIF(track_id, 0)
                  FROM objects
                  WHERE (?1 IS NULL OR image_rel_path = ?1)
                    AND (?2 IS NULL OR t_stack = ?2)
@@ -978,12 +979,14 @@ impl DatasetStore for DuckDbExporter {
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        ObjectRow {
+                        StoredObject {
                             id: ObjectId(0),
                             image_rel_path: row.get(1)?,
                             t_stack: row.get::<_, Option<i32>>(2)?.unwrap_or(0),
                             z_stack: row.get::<_, Option<i32>>(3)?.unwrap_or(0),
                             centroid_px: (row.get(4)?, row.get(5)?),
+                            pixel_size_nm: row.get(13)?,
+                            track_id: row.get(14)?,
                             bbox_px: [row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?],
                             area_px: row.get(10)?,
                             object_classes: list_values(row.get(11)?)
@@ -1009,6 +1012,48 @@ impl DatasetStore for DuckDbExporter {
             Ok(row)
         })
         .collect()
+    }
+
+    fn max_track_id_except(&self, class: ObjectClass) -> Result<u64, InternalErrors> {
+        let class_id = match class {
+            ObjectClass::Valid(n) => n as i32,
+            ObjectClass::Unset => -1, // never stored: excludes nothing
+        };
+        self.lock_conn()
+            .query_row(
+                "SELECT COALESCE(MAX(track_id), 0) FROM objects
+                 WHERE NOT list_contains(object_class_id, ?)",
+                params![class_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+
+    fn set_track_ids(&self, tracks: &[(ObjectId, u64)]) -> Result<(), InternalErrors> {
+        let io = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let conn = self.lock_conn();
+        // All or nothing; `unchecked_transaction` is safe as in `export`.
+        let tx = conn.unchecked_transaction().map_err(io)?;
+        // One join instead of an UPDATE per object (there can be millions).
+        tx.execute_batch(
+            "CREATE OR REPLACE TEMP TABLE new_track_ids (object_id VARCHAR, track_id UBIGINT)",
+        )
+        .map_err(io)?;
+        {
+            let mut appender = tx.appender("new_track_ids").map_err(io)?;
+            for (id, track) in tracks {
+                appender
+                    .append_row(params![id.to_string(), track])
+                    .map_err(io)?;
+            }
+        }
+        tx.execute_batch(
+            "UPDATE objects SET track_id = n.track_id FROM new_track_ids n
+                 WHERE objects.object_id = CAST(n.object_id AS UUID);
+             DROP TABLE new_track_ids;",
+        )
+        .map_err(io)?;
+        tx.commit().map_err(io)
     }
 }
 
@@ -1422,7 +1467,7 @@ mod tests {
             .expect("DuckDB results can be read back");
         let ids = |filter: ObjectFilter| -> Vec<(String, i32, u128)> {
             store
-                .objects(&filter)
+                .get_objects(&filter)
                 .unwrap()
                 .into_iter()
                 .map(|row| (row.image_rel_path, row.t_stack, u128::MAX - row.id.0))
@@ -1460,7 +1505,7 @@ mod tests {
         };
         assert!(ids(unset).is_empty());
 
-        let row = &store.objects(&ObjectFilter::default()).unwrap()[0];
+        let row = &store.get_objects(&ObjectFilter::default()).unwrap()[0];
         assert_eq!(row.z_stack, 2);
         assert_eq!(row.centroid_px, (12.0, 25.0), "centre of the bounding box");
         assert_eq!(row.bbox_px, [10, 20, 14, 30]);

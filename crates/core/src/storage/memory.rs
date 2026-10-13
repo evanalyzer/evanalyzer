@@ -1,8 +1,8 @@
-use crate::dataset::{DatasetStore, ObjectFilter, ObjectRow};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
-use crate::storage::PipelineResultExporter;
+use crate::storage::stored_object::{ObjectFilter, StoredObject};
+use crate::storage::{DatasetStore, PipelineResultExporter};
 use evanalyzer_cfg::{
-    core_types::{InternalErrors, ObjectClass},
+    core_types::{InternalErrors, ObjectClass, ObjectId, TrackId},
     settings::object_settings::ObjectMetricSettings,
 };
 use std::sync::{Arc, Mutex};
@@ -51,7 +51,7 @@ impl PipelineResultExporter for MemoryExporter {
 /// preview run's - with an empty `image_rel_path`, and an image filter
 /// matches only that.
 impl DatasetStore for MemoryExporter {
-    fn objects(&self, filter: &ObjectFilter) -> Result<Vec<ObjectRow>, InternalErrors> {
+    fn get_objects(&self, filter: &ObjectFilter) -> Result<Vec<StoredObject>, InternalErrors> {
         let objects = self
             .out_objects
             .lock()
@@ -59,7 +59,7 @@ impl DatasetStore for MemoryExporter {
         if !filter.image_rel_path.as_deref().is_none_or(str::is_empty) {
             return Ok(Vec::new());
         }
-        let mut rows: Vec<ObjectRow> = objects
+        let mut rows: Vec<StoredObject> = objects
             .iter()
             .filter(|o| filter.t_stack.is_none_or(|t| o.t_stack == t))
             .map(object_row)
@@ -68,10 +68,38 @@ impl DatasetStore for MemoryExporter {
         rows.sort_by(|a, b| (a.t_stack, &a.id).cmp(&(b.t_stack, &b.id)));
         Ok(rows)
     }
+
+    fn max_track_id_except(&self, class: ObjectClass) -> Result<u64, InternalErrors> {
+        let objects = self
+            .out_objects
+            .lock()
+            .map_err(|_| InternalErrors::Io("Failed to acquire MemoryExporter lock".to_string()))?;
+        Ok(objects
+            .iter()
+            .filter(|o| !o.object_class.contains(&class))
+            .map(|o| o.track.id.0)
+            .max()
+            .unwrap_or(0))
+    }
+
+    fn set_track_ids(&self, tracks: &[(ObjectId, u64)]) -> Result<(), InternalErrors> {
+        let tracks: std::collections::HashMap<&ObjectId, u64> =
+            tracks.iter().map(|(id, track)| (id, *track)).collect();
+        let mut objects = self
+            .out_objects
+            .lock()
+            .map_err(|_| InternalErrors::Io("Failed to acquire MemoryExporter lock".to_string()))?;
+        for object in objects.iter_mut() {
+            if let Some(track) = tracks.get(&object.id) {
+                object.track.id = TrackId(*track);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `object` as a dataset row - the same values the results database stores.
-fn object_row(object: &ObjectMetricSettings) -> ObjectRow {
+fn object_row(object: &ObjectMetricSettings) -> StoredObject {
     let [x_min, y_min, x_max, y_max] = object.bbox;
     let channels = object
         .intensities
@@ -86,7 +114,7 @@ fn object_row(object: &ObjectMetricSettings) -> ObjectRow {
         .copied()
         .collect();
     object_classes.sort();
-    ObjectRow {
+    StoredObject {
         id: object.id.clone(),
         image_rel_path: String::new(),
         t_stack: object.t_stack,
@@ -95,6 +123,9 @@ fn object_row(object: &ObjectMetricSettings) -> ObjectRow {
             (x_min as f64 + x_max as f64) / 2.0,
             (y_min as f64 + y_max as f64) / 2.0,
         ),
+        // A preview's objects don't record the pixel size.
+        pixel_size_nm: None,
+        track_id: Some(object.track.id.0).filter(|id| *id != 0),
         bbox_px: object.bbox,
         area_px: object.area as u64,
         object_classes,
@@ -205,7 +236,7 @@ mod tests {
         let store = exporter.dataset_store().unwrap();
         let ids = |filter: ObjectFilter| -> Vec<u128> {
             store
-                .objects(&filter)
+                .get_objects(&filter)
                 .unwrap()
                 .iter()
                 .map(|row| row.id.0)
@@ -229,7 +260,7 @@ mod tests {
         };
         assert!(ids(other_image).is_empty(), "the preview image has no path");
 
-        let row = &store.objects(&ObjectFilter::default()).unwrap()[0];
+        let row = &store.get_objects(&ObjectFilter::default()).unwrap()[0];
         assert_eq!(row.centroid_px, (12.0, 25.0));
         assert_eq!(row.intensity_mean, [None, Some(0.5)]);
     }
