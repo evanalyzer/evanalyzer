@@ -44,6 +44,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+/// The frame interval [s] when neither the project nor the image sets one.
+pub const DEFAULT_FRAME_INTERVAL_S: f32 = 1.0;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProjectAction {
     /// Everything went fine, image added.
@@ -75,6 +78,13 @@ pub enum SaveProjectActions {
     PleaseSelectFile,
 
     Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigValueSource {
+    Project,
+    Image,
+    Default,
 }
 
 pub trait ProjectExt {
@@ -132,6 +142,15 @@ pub trait ProjectExt {
     fn get_selected_image_channel(&self) -> Option<&ChannelSettings>;
     fn set_image_t_stack(&mut self, t_stack: &TStackSettings);
     fn set_global_t_stack(&mut self, t_stack: &TStackSettings);
+    /// The frame interval [s] set for the project - `None`: the image's own.
+    fn get_frame_interval(&self) -> Option<f32>;
+    /// Sets (`Some`) or clears (`None`, back to the image's own) the
+    /// project's frame interval [s].
+    fn set_frame_interval(&mut self, seconds: Option<f32>);
+    /// The frame interval [s] to use for an image whose metadata says
+    /// `image_value`: the project's if set, else the image's, else
+    /// [`DEFAULT_FRAME_INTERVAL_S`]. Non-positive values count as unset.
+    fn get_effective_frame_interval(&self, image_value: Option<f32>) -> (f32, ConfigValueSource);
     fn set_image_pixel_size_settings(&mut self, px: f32, py: f32, pz: f32);
     fn set_global_pixel_size_settings(&mut self, px: f32, py: f32, pz: f32);
     fn reset_global_pixel_size_settings(&mut self);
@@ -788,6 +807,38 @@ impl ProjectExt for ProjectWithRuntime {
     /// Sets the global T-stack settings.
     fn set_global_t_stack(&mut self, t_stack: &TStackSettings) {
         self.images.settings.t_stack = Some(t_stack.clone());
+    }
+
+    fn get_frame_interval(&self) -> Option<f32> {
+        self.images
+            .settings
+            .t_stack
+            .as_ref()
+            .and_then(|t| t.frame_interval)
+    }
+
+    fn get_effective_frame_interval(&self, image_value: Option<f32>) -> (f32, ConfigValueSource) {
+        let valid = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0);
+        if let Some(v) = valid(self.get_frame_interval()) {
+            (v, ConfigValueSource::Project)
+        } else if let Some(v) = valid(image_value) {
+            (v, ConfigValueSource::Image)
+        } else {
+            (DEFAULT_FRAME_INTERVAL_S, ConfigValueSource::Default)
+        }
+    }
+
+    fn set_frame_interval(&mut self, seconds: Option<f32>) {
+        match (&mut self.images.settings.t_stack, seconds) {
+            (Some(t_stack), _) => t_stack.frame_interval = seconds,
+            (None, Some(_)) => {
+                self.images.settings.t_stack = Some(TStackSettings {
+                    frame_interval: seconds,
+                    ..Default::default()
+                })
+            }
+            (None, None) => {}
+        }
     }
 
     /// Sets the pixel size settings for the current image series.
@@ -1748,6 +1799,79 @@ fn read_text(files: &dyn FileSystem, path: &Path) -> Result<String, InternalErro
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_effective_frame_interval_is_the_projects_then_the_images_then_the_default() {
+        use super::*;
+        let mut project = ProjectWithRuntime {
+            settings: Default::default(),
+            tmp_settings: ProjectTmpSettings::default(),
+        };
+        assert_eq!(
+            project.get_effective_frame_interval(Some(5.0)),
+            (5.0, ConfigValueSource::Image)
+        );
+        assert_eq!(
+            project.get_effective_frame_interval(None),
+            (DEFAULT_FRAME_INTERVAL_S, ConfigValueSource::Default)
+        );
+        // Zero, negative or NaN mean "not set".
+        assert_eq!(
+            project.get_effective_frame_interval(Some(-1.0)).1,
+            ConfigValueSource::Default
+        );
+        project.set_frame_interval(Some(f32::NAN));
+        assert_eq!(
+            project.get_effective_frame_interval(Some(3.0)),
+            (3.0, ConfigValueSource::Image)
+        );
+        project.set_frame_interval(Some(0.0));
+        assert_eq!(
+            project.get_effective_frame_interval(None).1,
+            ConfigValueSource::Default
+        );
+        project.set_frame_interval(Some(2.0));
+        assert_eq!(
+            project.get_effective_frame_interval(Some(5.0)),
+            (2.0, ConfigValueSource::Project)
+        );
+    }
+
+    #[test]
+    fn the_frame_interval_is_set_and_cleared_without_touching_the_rest() {
+        use super::*;
+        let mut project = ProjectWithRuntime {
+            settings: Default::default(),
+            tmp_settings: ProjectTmpSettings::default(),
+        };
+        assert_eq!(project.get_frame_interval(), None);
+
+        project.set_frame_interval(Some(30.0));
+        assert_eq!(project.get_frame_interval(), Some(30.0));
+
+        project
+            .settings
+            .images
+            .settings
+            .t_stack
+            .as_mut()
+            .unwrap()
+            .t_stack = 4;
+        project.set_frame_interval(None);
+        assert_eq!(project.get_frame_interval(), None);
+        assert_eq!(
+            project
+                .settings
+                .images
+                .settings
+                .t_stack
+                .as_ref()
+                .unwrap()
+                .t_stack,
+            4
+        );
+    }
+
     use crate::backend::LocalBackend;
     use crate::backend::LocalFileSystem;
 
@@ -2785,6 +2909,7 @@ mod tests {
             stack_handling: TStackHandling::AllStacks,
             playback_speed: 1.0,
             t_stack: 0,
+            frame_interval: None,
         };
         project.set_global_t_stack(&global);
         assert_eq!(
@@ -2796,6 +2921,7 @@ mod tests {
             stack_handling: TStackHandling::SingleStack,
             playback_speed: 1.0,
             t_stack: 3,
+            frame_interval: None,
         };
         project.set_image_t_stack(&local);
         assert_eq!(

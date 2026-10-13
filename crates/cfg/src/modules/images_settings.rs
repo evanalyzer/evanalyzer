@@ -85,9 +85,15 @@ pub enum TStackHandling {
 #[serde(rename_all = "camelCase")]
 pub struct TStackSettings {
     pub stack_handling: TStackHandling,
-    pub playback_speed: f32, // Playback speed
-    pub t_stack: i32,        // Selected t stack
+    // Playback speed
+    pub playback_speed: f32,
+    // Selected t stack
+    pub t_stack: i32,
+    /// Time between two frames in seconds, set for the project
+    #[serde(default)]
+    pub frame_interval: Option<f32>,
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HistogramSettings {

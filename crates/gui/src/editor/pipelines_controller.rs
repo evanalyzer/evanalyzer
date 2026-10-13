@@ -1331,17 +1331,19 @@ impl PipelinesController {
     /// since `job_executor::prepare_t_stack_iterator` checks the series
     /// override first.
     fn force_all_t_stacks(settings: &mut ProjectSettings) {
-        let playback_speed = settings
+        let (playback_speed, frame_interval) = settings
             .images
             .settings
             .t_stack
             .as_ref()
-            .map(|t| t.playback_speed)
+            .map(|t| (t.playback_speed, t.frame_interval))
             .unwrap_or_default();
         settings.images.settings.t_stack = Some(TStackSettings {
             stack_handling: TStackHandling::AllStacks,
             playback_speed,
             t_stack: 0,
+            // The project's frame interval goes into the analysis as set.
+            frame_interval,
         });
         for image in settings.images.list.values_mut() {
             for series in image.series.values_mut() {
@@ -2880,6 +2882,7 @@ mod tests {
             stack_handling: TStackHandling::AllStacks,
             playback_speed: 2.0,
             t_stack: 4,
+            frame_interval: None,
         });
         let selected = project
             .images
@@ -2923,6 +2926,7 @@ mod tests {
             stack_handling: TStackHandling::AllStacks,
             playback_speed: 1.0,
             t_stack: 2,
+            frame_interval: None,
         });
         let mut selected = project
             .images
@@ -2934,6 +2938,7 @@ mod tests {
             stack_handling: TStackHandling::AllStacks,
             playback_speed: 1.0,
             t_stack: 7,
+            frame_interval: None,
         });
 
         let preview = PipelinesController::build_preview_project_settings(
@@ -2964,6 +2969,7 @@ mod tests {
             stack_handling: TStackHandling::SingleStack,
             playback_speed: 1.5,
             t_stack: 3,
+            frame_interval: Some(30.0),
         });
 
         PipelinesController::force_all_t_stacks(&mut project);
@@ -2974,6 +2980,7 @@ mod tests {
             global.playback_speed, 1.5,
             "unrelated fields like playback speed must survive the force"
         );
+        assert_eq!(global.frame_interval, Some(30.0), "the analysis gets it");
     }
 
     #[test]
@@ -2984,6 +2991,7 @@ mod tests {
                 stack_handling: TStackHandling::SingleStack,
                 playback_speed: 1.0,
                 t_stack: 5,
+                frame_interval: None,
             });
         }
 

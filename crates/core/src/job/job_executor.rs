@@ -1610,6 +1610,7 @@ mod z_t_stack_precedence_tests {
                 stack_handling: TStackHandling::AllStacks,
                 playback_speed: 1.0,
                 t_stack: 0,
+                frame_interval: None,
             }),
         );
         let entry = make_image_entry_with_default_series();
@@ -1631,6 +1632,7 @@ mod z_t_stack_precedence_tests {
                 stack_handling: TStackHandling::AllStacks,
                 playback_speed: 1.0,
                 t_stack: 0,
+                frame_interval: None,
             }),
         );
         let mut entry = make_image_entry_with_default_series();
@@ -1638,6 +1640,7 @@ mod z_t_stack_precedence_tests {
             stack_handling: TStackHandling::SingleStack,
             playback_speed: 1.0,
             t_stack: 3,
+            frame_interval: None,
         });
         let image_info = ImageInfo {
             nr_t_stacks: 5,
@@ -1657,6 +1660,7 @@ mod z_t_stack_precedence_tests {
                 stack_handling: TStackHandling::AllStacks,
                 playback_speed: 1.0,
                 t_stack: 0,
+                frame_interval: None,
             }),
         );
         let entry = make_image_entry_with_default_series();
@@ -1678,6 +1682,7 @@ mod z_t_stack_precedence_tests {
                 stack_handling: TStackHandling::SingleStack,
                 playback_speed: 1.0,
                 t_stack: 7,
+                frame_interval: None,
             }),
         );
         let entry = make_image_entry_with_default_series();
@@ -1720,6 +1725,7 @@ mod z_t_stack_precedence_tests {
                 stack_handling: TStackHandling::AllStacks,
                 playback_speed: 1.0,
                 t_stack: 0,
+                frame_interval: None,
             }),
         );
         let entry = ImageEntry {
@@ -3765,6 +3771,7 @@ mod tests {
             stack_handling: TStackHandling::AllStacks,
             playback_speed: 0.0,
             t_stack: 0,
+            frame_interval: None,
         });
 
         project.add_image();

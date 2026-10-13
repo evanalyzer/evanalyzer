@@ -51,6 +51,14 @@ export global ImageMetaData {
     callback reset_pixel_sizes();
     callback pixel_size_changed(float, float, float);
 
+    // Time between two frames [s], like a channel's colour: the image's
+    // own (empty if its metadata has none), or the project's once edited.
+    // Editing sets it for the whole project; reset goes back to the image's.
+    in property <string> frame_interval_text: "";
+    in property <bool> frame_interval_overridden: false;
+    callback frame_interval_changed(float);
+    callback reset_frame_interval();
+
     // Channel colour chooser (per channel index): the wavelengths offered,
     // set one for the project, or go back to the image's own.
     in property <[WavelengthOption]> wavelength_options: [];
@@ -132,6 +140,8 @@ export component MetaGroup inherits VerticalLayout {
 // ----------------------------------------------------------
 export component ImageMetaPanel inherits Rectangle {
     property <bool> editing_px: false;
+    property <bool> editing_frame_interval: false;
+    property <string> frame_interval_edit: "";
     // Channel whose colour chooser is open, -1 for none.
     property <int> editing_channel: -1;
 
@@ -727,6 +737,169 @@ export component ImageMetaPanel inherits Rectangle {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // ----- TIME (frame interval, with inline edit mode) -----
+        VerticalLayout {
+            spacing: 0px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                height: 26px;
+                Text {
+                    text: "TIME";
+                    font-size: 9.5px;
+                    font-weight: 600;
+                    letter-spacing: 0.8px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: end;
+
+                    if root.editing_frame_interval && ImageMetaData.frame_interval_overridden: Rectangle {
+                        height: 22px;
+                        min-width: 44px;
+                        border-radius: 4px;
+                        background: fi_reset_ta.has-hover ? Theme.raised : transparent;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        animate background { duration: 100ms; }
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            Text {
+                                text: "Reset";
+                                font-size: 10.5px;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        fi_reset_ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.editing_frame_interval = false;
+                                ImageMetaData.reset_frame_interval();
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 22px;
+                        min-width: 44px;
+                        border-radius: 4px;
+                        background: fi_edit_ta.has-hover ? Theme.raised : transparent;
+                        animate background { duration: 100ms; }
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 8px;
+                            spacing: 4px;
+                            alignment: center;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    source: root.editing_frame_interval ? @image-url("../icons/regular-white/check.svg") : @image-url("../icons/regular-white/pencil-simple.svg");
+                                    width: 10px;
+                                    height: 10px;
+                                    colorize: Theme.accent;
+                                }
+                            }
+
+                            Text {
+                                text: root.editing_frame_interval ? "Done" : "Edit";
+                                font-size: 10.5px;
+                                color: Theme.accent;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        fi_edit_ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                if (root.editing_frame_interval) {
+                                    // Only a positive number is stored; anything
+                                    // else leaves the value as it was.
+                                    if (root.frame_interval_edit.is-float() && root.frame_interval_edit.to-float() > 0) {
+                                        ImageMetaData.frame_interval_changed(root.frame_interval_edit.to-float());
+                                    }
+                                } else {
+                                    root.frame_interval_edit = ImageMetaData.frame_interval_text;
+                                }
+                                root.editing_frame_interval = !root.editing_frame_interval;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Read mode - like a channel row: "edited" once set for the project.
+            if !root.editing_frame_interval: Rectangle {
+                height: 26px;
+                HorizontalLayout {
+                    alignment: space-between;
+                    spacing: 12px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+
+                    Text {
+                        text: "Frame interval";
+                        font-size: 11.5px;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: end;
+
+                        if ImageMetaData.frame_interval_overridden: Text {
+                            text: "edited";
+                            font-size: 9.5px;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: ImageMetaData.frame_interval_text == "" ? "-" : ImageMetaData.frame_interval_text + " s";
+                            font-size: 11.5px;
+                            font-family: Theme.font-mono;
+                            color: ImageMetaData.frame_interval_overridden ? Theme.accent : ImageMetaData.frame_interval_text == "" ? Theme.text-mute : Theme.text;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
+                    }
+                }
+            }
+
+            // Edit mode - one input in seconds.
+            if root.editing_frame_interval: Rectangle {
+                background: Theme.raised;
+                border-width: 1px;
+                border-color: Theme.border-soft;
+                border-radius: Theme.radius-md;
+                height: 64px;
+
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 3px;
+
+                    Text {
+                        text: "Frame interval  (s)";
+                        font-size: 9.5px;
+                        letter-spacing: 0.5px;
+                        color: Theme.text-mute;
+                    }
+
+                    LineEdit {
+                        height: 28px;
+                        input-type: InputType.decimal;
+                        text <=> root.frame_interval_edit;
                     }
                 }
             }

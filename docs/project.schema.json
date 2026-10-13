@@ -3475,6 +3475,15 @@
     "TStackSettings": {
       "type": "object",
       "properties": {
+        "frameInterval": {
+          "description": "Time between two frames in seconds, set for the project",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float",
+          "default": null
+        },
         "playbackSpeed": {
           "type": "number",
           "format": "float"

@@ -622,10 +622,18 @@ impl ViewportImageController {
             z_range: z_range,
         });
 
+        // Frame navigation must not touch the project's frame interval.
+        let frame_interval = project
+            .images
+            .settings
+            .t_stack
+            .as_ref()
+            .and_then(|t| t.frame_interval);
         project.set_global_t_stack(&TStackSettings {
             playback_speed: playback_speed as f32,
             t_stack,
             stack_handling: TStackHandling::AllStacks,
+            frame_interval,
         });
 
         self.viewport_controller
@@ -1007,6 +1015,7 @@ mod tests {
     #[test]
     fn update_channel_options_stores_playback_speed_and_t_stack() {
         let (ui_state, controller) = make_controller();
+        ui_state.get_project_write().set_frame_interval(Some(30.0));
 
         controller.update_channel_options_in_project(
             vec![],
@@ -1020,6 +1029,7 @@ mod tests {
         let t = project.get_t_stack().expect("t-stack settings must be set");
         assert_eq!(t.t_stack, 7);
         assert_eq!(t.playback_speed, 2.5);
+        assert_eq!(t.frame_interval, Some(30.0), "frame navigation keeps it");
     }
 
     // -- update_active_channel_in_project ------------------------------------------
