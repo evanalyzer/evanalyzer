@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Column {
     ObjectId,
+    TrackId,
     ImageName,
     ObjectClass,
     Count,
@@ -37,6 +38,7 @@ impl Column {
     pub fn as_key(&self, classes: &[Class]) -> String {
         match self {
             Column::ObjectId => "object_id".to_string(),
+            Column::TrackId => "track_id".to_string(),
             Column::ImageName => "image_name".to_string(),
             Column::ObjectClass => "object_class_name".to_string(),
             Column::Count => "count".to_string(),
@@ -76,6 +78,7 @@ impl Column {
     pub fn display_label(&self, classes: &[Class]) -> String {
         match self {
             Column::ObjectId => "Object ID".to_string(),
+            Column::TrackId => "Track ID".to_string(),
             Column::ImageName => "Image".to_string(),
             Column::ObjectClass => "Class".to_string(),
             Column::Count => "Count".to_string(),
@@ -103,14 +106,14 @@ impl Column {
 
     /// Whether this column can be aggregated over a group of objects (per
     /// image, well, plate or heatmap tile): everything but an object's
-    /// identity (id, image, class). The one list the GUI's Images mode and
+    /// identity (id, track, image, class). The one list the GUI's Images mode and
     /// the export's grouped/grid documents filter their columns with -
     /// must match what `column_aggregate_expr` (results_generator.rs)
     /// accepts, plus `Count` (aggregated as `COUNT(*)`).
     pub fn is_aggregable(&self) -> bool {
         !matches!(
             self,
-            Column::ObjectId | Column::ImageName | Column::ObjectClass
+            Column::ObjectId | Column::TrackId | Column::ImageName | Column::ObjectClass
         )
     }
 
@@ -139,6 +142,7 @@ impl Column {
         }
         Some(match key {
             "object_id" => Column::ObjectId,
+            "track_id" => Column::TrackId,
             "image_name" => Column::ImageName,
             "object_class_name" => Column::ObjectClass,
             "count" => Column::Count,

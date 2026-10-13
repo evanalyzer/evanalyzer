@@ -2257,6 +2257,7 @@ impl ResultsGenerator {
         };
         let mut ret = vec![
             entry(Column::ObjectId, "General"),
+            entry(Column::TrackId, "General"),
             entry(Column::ImageName, "General"),
             entry(Column::ObjectClass, "General"),
             entry(Column::Count, "General"),
@@ -2366,6 +2367,8 @@ struct ObjectRow {
     circularity: f64,
     solidity: f64,
     eccentricity: f64,
+    /// The object's track, `None` if it isn't part of one (stored as 0).
+    track_id: Option<u64>,
     /// Colocalization partners: (partner class key, partner object ids) -
     /// see `coloc_partner_ids` in evanalyzer_core's duckdb.rs.
     coloc: Vec<(i32, Vec<String>)>,
@@ -2401,6 +2404,7 @@ struct ObjectColumnNeeds {
     circularity: bool,
     solidity: bool,
     eccentricity: bool,
+    track_id: bool,
     coloc: bool,
     intensities: bool,
 }
@@ -2417,6 +2421,7 @@ impl ObjectColumnNeeds {
             circularity: columns.contains(&Column::Circularity),
             solidity: columns.contains(&Column::Solidity),
             eccentricity: columns.contains(&Column::Eccentricity),
+            track_id: columns.contains(&Column::TrackId),
             coloc: columns.iter().any(|c| matches!(c, Column::ColocCount(_))),
             intensities: columns.iter().any(|c| {
                 matches!(
@@ -2491,6 +2496,12 @@ fn object_select_clause(need: ObjectColumnNeeds) -> String {
     } else {
         "0.0::DOUBLE"
     };
+    // 0 is "not tracked" (`TrackId`'s default; real tracks start at 1).
+    let select_track_id = if need.track_id {
+        "NULLIF(o.track_id, 0)"
+    } else {
+        "NULL::UBIGINT"
+    };
     let select_coloc = if need.coloc {
         "map_keys(o.coloc_partner_ids), CAST(map_values(o.coloc_partner_ids) AS VARCHAR[][])"
     } else {
@@ -2508,7 +2519,7 @@ fn object_select_clause(need: ObjectColumnNeeds) -> String {
                 {select_circularity}, {select_solidity}, {select_eccentricity},\n\
                 {select_coloc}, {select_intensities},\n\
                 o.image_rel_path, o.bbox_xmin_px, o.bbox_ymin_px, o.bbox_xmax_px, o.bbox_ymax_px,\n\
-                COALESCE(i.disabled, false)"
+                COALESCE(i.disabled, false), {select_track_id}"
     )
 }
 
@@ -2548,6 +2559,7 @@ fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
         bbox_xmax_px: row.get(20)?,
         bbox_ymax_px: row.get(21)?,
         disabled: row.get(22)?,
+        track_id: row.get(23)?,
     })
 }
 
@@ -2825,6 +2837,12 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::String(object.object_id.clone()),
             ..no_bg
         },
+        Column::TrackId => Cell {
+            value: object
+                .track_id
+                .map_or(CellValue::Empty, |id| CellValue::String(id.to_string())),
+            ..no_bg
+        },
         Column::ImageName => Cell {
             value: CellValue::String(object.image_name.clone()),
             ..no_bg
@@ -2983,7 +3001,11 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
         // arm here does, since it counts rows rather than reading a column
         // off them. Kept here (rather than left unreachable) only so this
         // match stays exhaustive.
-        Column::Count | Column::ObjectId | Column::ImageName | Column::ObjectClass => {
+        Column::Count
+        | Column::ObjectId
+        | Column::TrackId
+        | Column::ImageName
+        | Column::ObjectClass => {
             // No classes list handy here (this is a plain error-message
             // helper, not a `ResultsGenerator` method) — `as_key` already
             // falls back to the raw numeric id for `ColocCount` when it
@@ -3897,6 +3919,48 @@ mod tests {
         assert_eq!(result.row_locations.len(), 2);
     }
 
+    #[test]
+    fn get_object_list_shows_each_objects_track_and_nothing_when_untracked() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100).in_track(7),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 200),
+        ]);
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::TrackId, Column::AreaSizePx],
+                with_coloc_details: false,
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+
+        assert_eq!(result.column_names[0], "Track ID");
+        let mut tracks: Vec<String> = result
+            .rows
+            .iter()
+            .map(|row| match &row[0].value {
+                CellValue::String(id) => id.clone(),
+                CellValue::Empty => "-".into(),
+                _ => panic!("expected a text or empty cell"),
+            })
+            .collect();
+        tracks.sort();
+        assert_eq!(tracks, ["-", "7"]);
+    }
+
+    #[test]
+    fn the_track_id_column_round_trips_and_is_never_aggregated() {
+        let generator = open(&[]);
+        let columns = generator.get_available_columns().unwrap();
+        assert!(columns.iter().any(|c| c.key == Column::TrackId));
+        let key = Column::TrackId.as_key(&[]);
+        assert_eq!(Column::from_key(&key, &[]), Some(Column::TrackId));
+        assert!(!Column::TrackId.is_aggregable());
+    }
+
     /// Every cell in a row belongs to the same source object, so every one
     /// of them - not just an image-name/path column - must carry that
     /// object's own image's disabled flag, letting the GUI strike the whole
@@ -4174,6 +4238,7 @@ mod tests {
     fn column_is_aggregable_matches_what_the_aggregating_queries_accept() {
         let every_column = [
             Column::ObjectId,
+            Column::TrackId,
             Column::ImageName,
             Column::ObjectClass,
             Column::Count,

@@ -3684,6 +3684,7 @@ fn is_chartable_column(column: &Column) -> bool {
     !matches!(
         column,
         Column::ObjectId
+            | Column::TrackId
             | Column::ImageName
             | Column::ObjectClass
             | Column::Count
@@ -3702,7 +3703,7 @@ fn is_chartable_column(column: &Column) -> bool {
 fn is_matrix_column(column: &Column) -> bool {
     !matches!(
         column,
-        Column::ObjectId | Column::ImageName | Column::ObjectClass
+        Column::ObjectId | Column::TrackId | Column::ImageName | Column::ObjectClass
     )
 }
 
