@@ -31,7 +31,7 @@
       "$ref": "#/$defs/PlateSettings"
     },
     "schemaVersion": {
-      "description": "On-disk format version of this project template (`.evapt`). Absent on\nfiles written before versioning was introduced, which `serde(default)`\nreads as `0` - see `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION` and\n`load_project_template`, which migrates older ones forward.",
+      "description": "On-disk format version of this project template (`.evapt`). Absent on\nfiles written before versioning was introduced, which `serde(default)`\nreads as `0` - see `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`. Unlike\n`ProjectSettings.schema_version`, nothing currently rejects a too-new\nversion or migrates an old one forward on load - this field only\nreserves the seam for that.",
       "type": "integer",
       "format": "uint32",
       "default": 0,

@@ -1,7 +1,6 @@
 //! Migrates a [`ProjectSettings`](crate::settings::project_settings::ProjectSettings)
-//! document from schema version 3 to version 4 - also used for project
-//! templates (`.evapt`) from their version 2 to 3, as they hold the same
-//! `classification`.
+//! document from schema version 3 to version 4. (Project templates hold
+//! the same `classification` but aren't migrated - they may break.)
 //!
 //! Version 4 writes a class definition's id as a plain number: a class of
 //! the project is always a project class (`ObjectClass::Global`), so its

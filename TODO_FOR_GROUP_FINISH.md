@@ -49,8 +49,8 @@ before 14: most groups are made from existing steps).
        name, notes); `ParamKind` removed altogether (only `Exposed` was left).
        `Class.id` is a plain `u32` - the kind follows from where the class is
        defined (`Class::global()` / `Class::local()`). Old files converted on
-       open: project schema v4, project template schema v3
-       (`migration_v3_to_v4`).
+       open: project schema v4 (`migration_v3_to_v4`). Templates aren't
+       migrated (breaking changes allowed) - project template schema v3.
 
 **Phase B – scopes at runtime (the core)**
 

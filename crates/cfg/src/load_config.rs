@@ -19,11 +19,7 @@ use crate::migration::migration_v2_to_v3::migrate_from_v2_to_v3;
 use crate::migration::migration_v3_to_v4::migrate_from_v3_to_v4;
 use crate::settings::ai_learning_settings::AiLearningSettings;
 use crate::settings::project_settings::ProjectSettings;
-use crate::settings::templates::ProjectTemplate;
-use crate::{
-    CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION, CURRENT_PROJECT_SCHEMA_VERSION,
-    CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION,
-};
+use crate::{CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION, CURRENT_PROJECT_SCHEMA_VERSION};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -45,27 +41,6 @@ pub fn load_project_settings(raw: Value) -> Result<ProjectSettings, InternalErro
     let version = schema_version_of(&raw, "schemaVersion");
     reject_if_too_new(version, CURRENT_PROJECT_SCHEMA_VERSION, "project")?;
     migrate_and_deserialize(raw, version, PROJECT_MIGRATIONS)
-}
-
-/// Migration steps for [`ProjectTemplate`] (`.evapt`) - see
-/// [`PROJECT_MIGRATIONS`]. Templates hold the project's `classification`,
-/// so they share its class id change.
-const PROJECT_TEMPLATE_MIGRATIONS: &[MigrationStep] = &[
-    |_raw| {}, // 0 -> 1: nothing to do
-    |_raw| {}, // 1 -> 2: nothing to do
-    migrate_from_v3_to_v4, // 2 -> 3: the project's 3 -> 4
-];
-
-/// Loads a [`ProjectTemplate`] from its raw on-disk JSON, migrating it
-/// forward from whatever `schemaVersion` it was written with.
-pub fn load_project_template(raw: Value) -> Result<ProjectTemplate, InternalErrors> {
-    let version = schema_version_of(&raw, "schemaVersion");
-    reject_if_too_new(
-        version,
-        CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION,
-        "project template",
-    )?;
-    migrate_and_deserialize(raw, version, PROJECT_TEMPLATE_MIGRATIONS)
 }
 
 /// Migration steps for [`AiLearningSettings`] - see [`PROJECT_MIGRATIONS`].
@@ -176,19 +151,6 @@ mod tests {
         let settings = load_project_settings(raw).expect("a v3 project must load");
         let ids: Vec<u32> = settings.classification.classes().iter().map(|c| c.id).collect();
         assert_eq!(ids, [0, 2]);
-    }
-
-    #[test]
-    fn a_v2_project_template_gets_plain_class_ids_and_a_newer_one_is_refused() {
-        let mut raw = serde_json::to_value(ProjectTemplate::default()).unwrap();
-        raw["schemaVersion"] = serde_json::json!(2);
-        raw["classification"]["classes"][0]["id"] = serde_json::json!({ "VALID": 0 });
-        let template = load_project_template(raw.clone()).expect("a v2 template must load");
-        assert_eq!(template.classification.classes()[0].id, 0);
-
-        raw["schemaVersion"] = serde_json::json!(CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION + 1);
-        let err = load_project_template(raw).expect_err("newer version must be rejected");
-        assert!(err.to_string().contains("newer version"));
     }
 
     // Version-1-to-2 migration logic (camelCase "type" tags, bare-string
