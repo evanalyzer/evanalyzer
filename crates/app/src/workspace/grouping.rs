@@ -61,6 +61,9 @@ pub struct GroupingPlan {
     /// Image channels the steps load (Load Image Channel): exposed as group
     /// parameters.
     pub channels: BTreeSet<u32>,
+    /// The pipeline's memory slots only these steps use: they become the
+    /// group's own (each use of the group has its own).
+    pub group_slots: BTreeSet<u32>,
 }
 
 /// The project classes steps `range` of pipeline `pipeline_id` use, each with
@@ -129,7 +132,11 @@ pub fn plan_grouping(
             _ => None,
         })
         .collect();
-    Ok(GroupingPlan { classes, channels })
+    Ok(GroupingPlan {
+        classes,
+        channels,
+        group_slots: slots_only_used_by(project, pipeline_id, &range),
+    })
 }
 
 /// Turns steps `range` of pipeline `pipeline_id` into a command group named
@@ -152,6 +159,7 @@ pub fn group_steps(
         ));
     }
     let key = unique_key(project, name);
+    let group_slots = slots_only_used_by(project, pipeline_id, &range);
     let names: Vec<(ObjectClass, String, u32)> = roles
         .iter()
         .map(|(class, _)| {
@@ -282,6 +290,13 @@ pub fn group_steps(
                 .collect(),
         });
         next_parameter += 1;
+    }
+
+    // The pipeline's slots only these steps use become the group's own.
+    for step in &mut steps {
+        if let StepContent::Command(command) = &mut step.content {
+            *command = slots_to_group(command, &group_slots)?;
+        }
     }
 
     definition.steps = steps;
@@ -691,7 +706,48 @@ pub fn add_binding(
     if !parameter.bindings.contains(&binding) {
         parameter.bindings.push(binding);
     }
+    // The setting now shows the value it gets: the parameter's.
+    definition.steps = apply_defaults(definition);
     Ok(())
+}
+
+/// `definition`'s steps with each parameter's default written into the
+/// settings it sets - what a use of the group without values of its own
+/// runs. A bound setting's own value never runs: the parameter's replaces
+/// it. Unchanged if a default can't be applied (the checks report that).
+pub fn apply_defaults(definition: &GroupDefinition) -> Vec<PipelineStepSettings> {
+    let instance = GroupInstance {
+        key: definition.key.clone(),
+        values: Default::default(),
+    };
+    evanalyzer_core::group_steps_with_values(&instance, std::slice::from_ref(definition))
+        .unwrap_or_else(|_| definition.steps.clone())
+}
+
+/// Setting `path` of step `step_id` of `definition` was edited (in the
+/// opened group). If a parameter sets it, its new value becomes the
+/// parameter's default - else the edit would be lost, the parameter's value
+/// replaces it at every run - and every setting the parameter sets shows
+/// it. Returns whether a parameter sets it.
+pub fn bound_setting_edited(definition: &mut GroupDefinition, step_id: StepId, path: &str) -> bool {
+    let Some(id) = parameter_for_setting(definition, step_id, path) else {
+        return false;
+    };
+    let Some(value) = definition
+        .steps
+        .iter()
+        .find(|s| s.id == step_id)
+        .and_then(|s| s.command())
+        .and_then(|command| setting_at(command, path))
+        .map(|(setting, _)| setting.value)
+    else {
+        return false;
+    };
+    if let Some(parameter) = definition.parameters.iter_mut().find(|p| p.id == id) {
+        parameter.default = evanalyzer_core::value_from_text(&value);
+    }
+    definition.steps = apply_defaults(definition);
+    true
 }
 
 /// The settings of step `step_id` that are group parameters.
@@ -963,6 +1019,86 @@ fn commands_of(project: &ProjectSettings, step: &PipelineStepSettings) -> Vec<Pi
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The pipeline memory slots (`MemoryId::PipelineContext`) `command` reads
+/// or writes.
+fn pipeline_slots(command: &PipelineCommand) -> BTreeSet<u32> {
+    fn walk(value: &serde_json::Value, out: &mut BTreeSet<u32>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map.len() == 1
+                    && let Some(slot) = map.get("pipelineContext").and_then(|v| v.as_u64())
+                {
+                    out.insert(slot as u32);
+                    return;
+                }
+                map.values().for_each(|v| walk(v, out));
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = BTreeSet::new();
+    if let Ok(value) = serde_json::to_value(command) {
+        walk(&value, &mut out);
+    }
+    out
+}
+
+/// The memory slots of pipeline `pipeline_id` only its steps `range` use -
+/// not its other steps, nor a group among the steps (whose definition can't
+/// be rewritten here).
+fn slots_only_used_by(
+    project: &ProjectSettings,
+    pipeline_id: PipelineId,
+    range: &RangeInclusive<usize>,
+) -> BTreeSet<u32> {
+    let Some(pipeline) = project.pipelines.iter().find(|p| p.id == pipeline_id) else {
+        return BTreeSet::new();
+    };
+    let mut inside = BTreeSet::new();
+    let mut elsewhere = BTreeSet::new();
+    for (index, step) in pipeline.steps.iter().enumerate() {
+        let target = match (&step.content, range.contains(&index)) {
+            (StepContent::Command(_), true) => &mut inside,
+            _ => &mut elsewhere,
+        };
+        for command in commands_of(project, step) {
+            target.extend(pipeline_slots(&command));
+        }
+    }
+    inside.difference(&elsewhere).copied().collect()
+}
+
+/// `command` with the pipeline memory slots `slots` as group slots.
+fn slots_to_group(
+    command: &PipelineCommand,
+    slots: &BTreeSet<u32>,
+) -> Result<PipelineCommand, InternalErrors> {
+    fn rewrite(value: &mut serde_json::Value, slots: &BTreeSet<u32>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map.len() == 1
+                    && let Some(slot) = map.get("pipelineContext").and_then(|v| v.as_u64())
+                    && slots.contains(&(slot as u32))
+                {
+                    *value = serde_json::json!({ "groupContext": slot });
+                    return;
+                }
+                map.values_mut().for_each(|v| rewrite(v, slots));
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(|v| rewrite(v, slots)),
+            _ => {}
+        }
+    }
+    if slots.is_empty() {
+        return Ok(command.clone());
+    }
+    let mut value =
+        serde_json::to_value(command).map_err(|e| InternalErrors::Internal(e.to_string()))?;
+    rewrite(&mut value, slots);
+    serde_json::from_value(value).map_err(|e| InternalErrors::Internal(e.to_string()))
 }
 
 /// The classes the project uses outside steps `range` of pipeline
@@ -1392,6 +1528,56 @@ mod tests {
         );
     }
 
+    /// Steps storing to slot 2 and reading it back: slot 2 becomes the
+    /// group's. Slot 3 is read after the steps too, so it stays the
+    /// pipeline's.
+    #[test]
+    fn slots_only_the_grouped_steps_use_become_group_slots() {
+        use evanalyzer_cfg::core_types::MemoryId;
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ImageCacheSettings, MathImageCacheImageCacheModeSettings,
+        };
+        let cache = |mode, slot| {
+            PipelineCommand::ImageCache(ImageCacheSettings {
+                mode,
+                address: ImageAddress::Memory(MemoryId::PipelineContext(slot)),
+            })
+        };
+        let mut project = project();
+        project.pipelines[0].steps = vec![
+            step(1, cache(MathImageCacheImageCacheModeSettings::Store, 2)),
+            step(2, cache(MathImageCacheImageCacheModeSettings::Load, 2)),
+            step(3, cache(MathImageCacheImageCacheModeSettings::Store, 3)),
+            step(4, cache(MathImageCacheImageCacheModeSettings::Load, 3)),
+        ];
+        let plan = plan_grouping(&project, PipelineId(1), 0..=2).unwrap();
+        assert_eq!(plan.group_slots, BTreeSet::from([2]));
+
+        group_steps(&mut project, PipelineId(1), 0..=2, "Cache", &[]).unwrap();
+        let addresses: Vec<ImageAddress> = project.command_groups[0]
+            .steps
+            .iter()
+            .map(|s| match s.command() {
+                Some(PipelineCommand::ImageCache(c)) => c.address.clone(),
+                _ => panic!("image cache"),
+            })
+            .collect();
+        assert_eq!(
+            addresses,
+            [
+                ImageAddress::Memory(MemoryId::GroupContext(2)),
+                ImageAddress::Memory(MemoryId::GroupContext(2)),
+                ImageAddress::Memory(MemoryId::PipelineContext(3)),
+            ]
+        );
+        assert!(
+            crate::workspace::group_checks::check_groups(&project)
+                .iter()
+                .all(|p| p.severity != crate::workspace::group_checks::Severity::Error),
+            "the group is valid"
+        );
+    }
+
     #[test]
     fn only_this_step_gets_a_copy_of_the_group() {
         let mut project = grouped();
@@ -1575,6 +1761,47 @@ mod tests {
                 .any(|p| p.message.contains("different kinds of setting")),
             "{:?}",
             problems.iter().map(|p| &p.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// A setting a parameter sets: editing it in the opened group changes the
+    /// parameter's default (what runs), and the other settings it sets
+    /// follow.
+    #[test]
+    fn editing_a_bound_setting_changes_the_parameters_default() {
+        let mut project = grouped();
+        let definition = &mut project.command_groups[0];
+        toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
+        let id = parameter_for_setting(definition, StepId(4), "min_area").unwrap();
+        let step = definition
+            .steps
+            .iter_mut()
+            .find(|s| s.id == StepId(4))
+            .unwrap();
+        step.command_mut()
+            .unwrap()
+            .apply_param_change("min_area", "80");
+
+        assert!(bound_setting_edited(definition, StepId(4), "min_area"));
+        let parameter = definition.parameters.iter().find(|p| p.id == id).unwrap();
+        assert_eq!(parameter.default, ParamValue::Int(80));
+        // What runs for a use without values of its own.
+        let instance = GroupInstance {
+            key: definition.key.clone(),
+            values: Default::default(),
+        };
+        let steps =
+            evanalyzer_core::group_steps_with_values(&instance, std::slice::from_ref(&*definition))
+                .unwrap();
+        let classify = steps.iter().find(|s| s.id == StepId(4)).unwrap();
+        let Some(PipelineCommand::ClassifyObjects(c)) = classify.command() else {
+            panic!("classify")
+        };
+        assert_eq!(c.min_area, 80.0);
+
+        assert!(
+            !bound_setting_edited(definition, StepId(4), "max_area"),
+            "not set by a parameter"
         );
     }
 

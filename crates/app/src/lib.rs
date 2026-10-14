@@ -33,11 +33,11 @@ pub mod groups {
         update_from_library,
     };
     pub use crate::workspace::grouping::{
-        ClassRole, GroupingClass, GroupingPlan, add_binding, clone_group_for_step,
-        compatible_parameters, edit_parameter, exposed_settings, group_steps, group_uses,
-        list_entry_removed, move_parameter, parameter_for_setting, plan_grouping, remove_group,
-        remove_group_step, remove_parameter, remove_unused_groups, setting_at, toggle_exposed,
-        ungroup, unused_groups,
+        ClassRole, GroupingClass, GroupingPlan, add_binding, apply_defaults, bound_setting_edited,
+        clone_group_for_step, compatible_parameters, edit_parameter, exposed_settings, group_steps,
+        group_uses, list_entry_removed, move_parameter, parameter_for_setting, plan_grouping,
+        remove_group, remove_group_step, remove_parameter, remove_unused_groups, setting_at,
+        toggle_exposed, ungroup, unused_groups,
     };
     pub use evanalyzer_core::group_parameters;
     pub use evanalyzer_core::set_group_parameter;

@@ -314,6 +314,22 @@ before 14: most groups are made from existing steps).
         steps keep their room however many parameters there are. Every step
         card has a "?" with what it does: a command's summary and
         description, a group's short and long description.
+19. [x] Gaps found in the review (2026-10-14):
+        - **Editing a ◆ setting did nothing.** A setting a parameter sets
+          never runs with its own value - the parameter's (the instance's, or
+          the default) replaces it. In an opened group it stayed editable, so
+          a change was silently lost. Now editing it sets the parameter's
+          default (`bound_setting_edited`), every setting the parameter sets
+          follows, and an opened group shows its settings with the defaults
+          applied (`apply_defaults`) - also in groups saved with stale values.
+          Joining a parameter ("Add to …") shows its value at once.
+        - **Group memory couldn't be chosen.** Inside an opened group the slot
+          picker offers "Group memory" (each use of the group has its own)
+          next to "Memory" (the pipeline's) and "Shared".
+        - **Grouping didn't localise memory slots.** A pipeline slot only the
+          grouped steps use becomes group memory (`GroupingPlan::group_slots`,
+          the dialog says so), like an internal class; a slot other steps of
+          the pipeline or a nested group use stays the pipeline's.
 
 ## Scoping
 

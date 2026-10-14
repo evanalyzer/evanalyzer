@@ -1441,6 +1441,7 @@ component LeafParamRow inherits VerticalLayout {
     ImageAddressPicker {
             kind: p.options[0];
             number: p.options[1].to-float();
+            in-group: PipelinesPanelState.open-group-name != "";
             changed(v) => {
                 root.changed(v);
             }
@@ -1830,6 +1831,7 @@ component ParamRow inherits VerticalLayout {
     ImageAddressPicker {
             kind: p.options[0];
             number: p.options[1].to-float();
+            in-group: PipelinesPanelState.open-group-name != "";
             changed(v) => {
                 root.changed(v);
             }

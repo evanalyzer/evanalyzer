@@ -2030,6 +2030,7 @@ impl PipelinesController {
                             manager.pipeline_settings_changed();
                             return;
                         }
+                        let step_id = step.id;
                         let Some(command) = step.command_mut() else {
                             return;
                         };
@@ -2063,11 +2064,27 @@ impl PipelinesController {
                             }
                         }
 
-                        (
+                        let mut result = (
                             command.to_summary(),
                             command.to_parameters(),
                             needs_full_resync,
-                        )
+                        );
+                        // A setting of the opened group a parameter sets: the
+                        // new value becomes the parameter's default (else it
+                        // would never run), and the other settings it sets
+                        // show it too.
+                        if let Some(key) = manager.open_group_key(pipeline_id)
+                            && let Some(definition) =
+                                project.command_groups.iter_mut().find(|d| d.key == key)
+                            && evanalyzer_app::groups::bound_setting_edited(
+                                definition,
+                                step_id,
+                                &param_name,
+                            )
+                        {
+                            result.2 = true;
+                        }
+                        result
                     }; // write lock dropped here
 
                     if needs_full_resync {
@@ -3232,14 +3249,29 @@ impl PipelinesController {
                     .collect();
                 state.set_classes(ModelRc::new(VecModel::from(rows)));
                 let channels: Vec<String> = plan.channels.iter().map(|c| c.to_string()).collect();
-                state.set_channels_text(
+                let slots: Vec<String> = plan.group_slots.iter().map(|s| s.to_string()).collect();
+                let lines: Vec<String> = [
                     match channels.len() {
                         0 => String::new(),
                         1 => format!("Channel {} becomes a group parameter.", channels[0]),
                         _ => format!("Channels {} become group parameters.", channels.join(", ")),
-                    }
-                    .into(),
-                );
+                    },
+                    match slots.len() {
+                        0 => String::new(),
+                        1 => format!(
+                            "Memory slot {} is only used by these steps: it becomes group memory, each use of the group has its own.",
+                            slots[0]
+                        ),
+                        _ => format!(
+                            "Memory slots {} are only used by these steps: they become group memory, each use of the group has its own.",
+                            slots.join(", ")
+                        ),
+                    },
+                ]
+                .into_iter()
+                .filter(|line| !line.is_empty())
+                .collect();
+                state.set_channels_text(lines.join("\n").into());
             }
             Err(e) => {
                 state.set_classes(ModelRc::default());
@@ -3655,12 +3687,19 @@ impl PipelinesController {
                     ImageAddress::None => "None".to_string(),
                     ImageAddress::Channel(c) => format!("Channel {c}"),
                 };
-                let shown = self
-                    .shown_steps(&project, pipeline_id.0)
-                    .unwrap_or(&pipeline.steps);
                 let open_definition = open_group
                     .as_ref()
                     .and_then(|key| project.command_groups.iter().find(|d| &d.key == key));
+                // An opened group's settings as a use without values of its
+                // own runs them: a setting a parameter sets shows the
+                // parameter's default.
+                let with_defaults = open_definition.map(evanalyzer_app::groups::apply_defaults);
+                let shown = match &with_defaults {
+                    Some(steps) => steps,
+                    None => self
+                        .shown_steps(&project, pipeline_id.0)
+                        .unwrap_or(&pipeline.steps),
+                };
                 let steps: Vec<StepData> = shown
                     .iter()
                     .enumerate()
@@ -6473,6 +6512,76 @@ mod tests {
             1,
             "the exposed setting on the card"
         );
+    }
+
+    /// A ◆ setting's own value never runs - the parameter's replaces it - so
+    /// editing it in the opened group sets the parameter's default, and the
+    /// setting always shows that default.
+    #[test]
+    fn editing_an_exposed_setting_sets_the_parameters_default() {
+        let (ui, ui_state, _controller) = with_a_group();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_group(1);
+        drain_ui_queue();
+        panel.invoke_toggle_exposed(0, "kernel_size".into());
+        drain_ui_queue();
+
+        panel.invoke_param_changed(0, "kernel_size".into(), "7".into());
+        drain_ui_queue();
+        assert_eq!(
+            ui_state.get_project().command_groups[0].parameters[0].default,
+            ParamValue::Int(7)
+        );
+        assert_eq!(ui_param(&ui, 0, "kernel_size").value, "7");
+
+        // A group whose step still holds an old value shows the default.
+        {
+            let mut project = ui_state.get_project_write();
+            let blur = project.command_groups[0].steps[0].command_mut().unwrap();
+            blur.apply_param_change("kernel_size", "9");
+        }
+        panel.invoke_close_group();
+        panel.invoke_open_group(1);
+        drain_ui_queue();
+        assert_eq!(ui_param(&ui, 0, "kernel_size").value, "7");
+
+        // The card shows it as the default too.
+        panel.invoke_close_group();
+        drain_ui_queue();
+        let card = panel.get_active_commands().row_data(1).unwrap();
+        assert_eq!(card.parameters.row_data(0).unwrap().value, "7");
+    }
+
+    #[test]
+    fn a_step_in_an_opened_group_can_use_group_memory() {
+        use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
+        let (ui, ui_state, controller) = selected(vec![step("ImageCache"), step("Blur")]);
+        {
+            let mut project = ui_state.get_project_write();
+            evanalyzer_app::groups::group_steps(&mut project, PipelineId(1), 0..=0, "Keep", &[])
+                .unwrap();
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_group(0);
+        drain_ui_queue();
+
+        // "Group memory", slot 2 - as the picker reports it.
+        panel.invoke_param_changed(0, "address".into(), "group:2".into());
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        let Some(PipelineCommand::ImageCache(cache)) = project.command_groups[0].steps[0].command()
+        else {
+            panic!("image cache")
+        };
+        assert_eq!(
+            cache.address,
+            ImageAddress::Memory(MemoryId::GroupContext(2))
+        );
+        drop(project);
+        let shown = ui_param(&ui, 0, "address");
+        assert_eq!(shown.options.row_data(0).unwrap(), "group");
     }
 
     #[test]
