@@ -57,7 +57,7 @@ fn main() {
     ];
     let classes = [
         ("Unset", ObjectClass::Unset),
-        ("Valid(1)", ObjectClass::Valid(1)),
+        ("Valid(1)", ObjectClass::Global(1)),
     ];
 
     println!("iters={iters} (median / min)");

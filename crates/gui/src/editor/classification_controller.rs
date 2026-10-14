@@ -58,7 +58,7 @@ impl ClassificationController {
                     if let Some(id) = resolve_object_id(&project, object_id) {
                         // let class_id = project.get_selected_object_class();
                         if class_id >= 0 {
-                            let class_id = ObjectClass::Valid(class_id as u32);
+                            let class_id = ObjectClass::Global(class_id as u32);
                             project.add_class_to_object(id, class_id);
                         }
                     }
@@ -79,7 +79,7 @@ impl ClassificationController {
                     if let Some(id) = resolve_object_id(&project, object_id) {
                         // let class_id = project.get_selected_object_class();
                         if class_id >= 0 {
-                            let class_id = ObjectClass::Valid(class_id as u32);
+                            let class_id = ObjectClass::Global(class_id as u32);
                             project.replace_classes_of_object(id, class_id);
                         }
                     }
@@ -98,7 +98,7 @@ impl ClassificationController {
                 .on_object_remove_class(move |object_id, class_id| {
                     let mut project = manager.app_state.get_project_write();
                     if let Some(id) = resolve_object_id(&project, object_id) {
-                        let class_id = ObjectClass::Valid(class_id as u32);
+                        let class_id = ObjectClass::Global(class_id as u32);
                         project.remove_class_from_object(id, &class_id);
                     }
                     manager
@@ -493,7 +493,7 @@ mod tests {
         assert_eq!(project.classification.classes().len(), 2);
         assert_eq!(
             project.classification.classes()[1].id,
-            ObjectClass::Valid(1)
+            ObjectClass::Global(1)
         );
         assert_eq!(project.classification.classes()[1].name, "Nuclei");
     }
@@ -593,7 +593,7 @@ mod tests {
             let mut project = ui_state.get_project_write();
             project.classification.classes_mut().push(
                 evanalyzer_cfg::settings::classification_settings::Class {
-                    id: ObjectClass::Valid(1),
+                    id: ObjectClass::Global(1),
                     color: 0,
                     name: "Nuclei".to_string(),
                     notes: String::new(),
@@ -601,7 +601,7 @@ mod tests {
             );
             let mut with_class =
                 evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default();
-            with_class.object_class.insert(ObjectClass::Valid(1));
+            with_class.object_class.insert(ObjectClass::Global(1));
             project.add_object(&with_class);
             project.add_object(
                 &evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default(),
@@ -628,7 +628,7 @@ mod tests {
 
         ui_state
             .get_project_write()
-            .toggle_class_visibility(ObjectClass::Valid(1));
+            .toggle_class_visibility(ObjectClass::Global(1));
 
         assert!(!bridge_for(&ui_state).row_data(1).unwrap().visible);
     }
@@ -658,9 +658,9 @@ mod tests {
         let (_, controller) = make_controller();
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
 
-        controller.sync_class_settings_to_class_edit_dialog_slint(ObjectClass::Valid(1));
+        controller.sync_class_settings_to_class_edit_dialog_slint(ObjectClass::Global(1));
         // Unknown class id - takes the early `return` branch.
-        controller.sync_class_settings_to_class_edit_dialog_slint(ObjectClass::Valid(99));
+        controller.sync_class_settings_to_class_edit_dialog_slint(ObjectClass::Global(99));
     }
 
     // -- attach_callbacks (live AppWindow) -----------------------------------------
@@ -677,7 +677,7 @@ mod tests {
         ui.global::<ClassificationState>().invoke_class_selected(3);
         assert_eq!(
             ui_state.get_project().get_selected_object_class(),
-            ObjectClass::Valid(3)
+            ObjectClass::Global(3)
         );
 
         ui.global::<ClassificationState>().invoke_class_selected(-1);
@@ -734,7 +734,7 @@ mod tests {
         assert!(
             !ui_state
                 .get_project()
-                .is_class_visible(&ObjectClass::Valid(1))
+                .is_class_visible(&ObjectClass::Global(1))
         );
     }
 
@@ -775,7 +775,7 @@ mod tests {
             ..Default::default()
         };
         if has_class {
-            object.object_class.insert(ObjectClass::Valid(1));
+            object.object_class.insert(ObjectClass::Global(1));
         }
         object
     }
@@ -813,7 +813,7 @@ mod tests {
         mut project: evanalyzer_app::project::ProjectWithRuntime,
     ) -> evanalyzer_app::project::ProjectWithRuntime {
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(1),
+            id: ObjectClass::Global(1),
             color: 0,
             name: "Nuclei".to_string(),
             notes: String::new(),
@@ -831,7 +831,7 @@ mod tests {
         controller.attach_callbacks();
         ui_state
             .get_project_write()
-            .set_selected_object_class(ObjectClass::Valid(1));
+            .set_selected_object_class(ObjectClass::Global(1));
         let total = || {
             ui.global::<ClassificationState>()
                 .get_total_visible_objects()
@@ -882,7 +882,7 @@ mod tests {
         controller.attach_callbacks();
         ui_state
             .get_project_write()
-            .set_selected_object_class(ObjectClass::Valid(1));
+            .set_selected_object_class(ObjectClass::Global(1));
 
         // id 1 is the manual object even though a preview object also exists
         // in the combined list - regression coverage that the shared
@@ -893,7 +893,7 @@ mod tests {
         let project = ui_state.get_project();
         let manual_object = &project.get_objects().unwrap()[0];
         assert!(
-            manual_object.object_class.contains(&ObjectClass::Valid(1)),
+            manual_object.object_class.contains(&ObjectClass::Global(1)),
             "the manual object should have had the class applied"
         );
     }

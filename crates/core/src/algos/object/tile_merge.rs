@@ -566,7 +566,7 @@ mod tests {
         let object = rect_object(
             1,
             [0, 0, 9, 9],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 10, 10),
             false,
@@ -589,7 +589,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 9, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 10, 20),
             false,
@@ -597,7 +597,7 @@ mod tests {
         let b = rect_object(
             2,
             [10, 0, 19, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(10, 0, 10, 20),
             false,
@@ -635,7 +635,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 9, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             same_tile.clone(),
             false,
@@ -643,7 +643,7 @@ mod tests {
         let b = rect_object(
             2,
             [10, 0, 19, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             same_tile,
             false,
@@ -666,7 +666,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 4, 4],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 5, 5),
             false,
@@ -674,7 +674,7 @@ mod tests {
         let b = rect_object(
             2,
             [5, 5, 9, 9],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(5, 5, 5, 5),
             false,
@@ -694,7 +694,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 4, 4],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 5, 5),
             false,
@@ -702,7 +702,7 @@ mod tests {
         let b = rect_object(
             2,
             [5, 5, 9, 9],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(5, 5, 5, 5),
             false,
@@ -726,7 +726,7 @@ mod tests {
     #[test]
     fn four_tiles_meeting_at_one_corner_all_merge_into_one_object() {
         // Tiles: TL=[0,0]-[4,4], TR=[5,0]-[9,4], BL=[0,5]-[4,9], BR=[5,5]-[9,9].
-        let class = ObjectClass::Valid(1);
+        let class = ObjectClass::Global(1);
         let plane = ImagePlane::default();
         let tl = rect_object(1, [0, 0, 4, 4], class, plane, tile(0, 0, 5, 5), false);
         let tr = rect_object(2, [5, 0, 9, 4], class, plane, tile(5, 0, 5, 5), false);
@@ -752,7 +752,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 4, 4],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 5, 5),
             false,
@@ -760,7 +760,7 @@ mod tests {
         let b = rect_object(
             2,
             [1000, 1000, 1004, 1004],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(1000, 1000, 5, 5),
             false,
@@ -780,14 +780,14 @@ mod tests {
         let object = rect_object(
             1,
             [0, 0, 4, 4],
-            ObjectClass::Valid(99),
+            ObjectClass::Global(99),
             ImagePlane::default(),
             tile(0, 0, 5, 5),
             false,
         );
         let mut cache = cache_with(vec![object]);
         let mut denylisted = tile_merge(Connectivity::EightConnected);
-        denylisted.classes_to_not_merge = vec![ObjectClass::Valid(99)];
+        denylisted.classes_to_not_merge = vec![ObjectClass::Global(99)];
 
         run(&mut cache, denylisted);
 
@@ -805,7 +805,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 4, 9],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 5, 10),
             false,
@@ -813,14 +813,14 @@ mod tests {
         let b = rect_object(
             2,
             [5, 0, 9, 9],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(5, 0, 5, 10),
             false,
         );
         let mut cache = cache_with(vec![a, b]);
         let mut denylisted = tile_merge(Connectivity::EightConnected);
-        denylisted.classes_to_not_merge = vec![ObjectClass::Valid(2)]; // unrelated class
+        denylisted.classes_to_not_merge = vec![ObjectClass::Global(2)]; // unrelated class
 
         run(&mut cache, denylisted);
 
@@ -839,7 +839,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 9, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane { z: 0, c: 0, t: 0 },
             tile(0, 0, 10, 20),
             false,
@@ -847,7 +847,7 @@ mod tests {
         let b = rect_object(
             2,
             [10, 0, 19, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane { z: 0, c: 1, t: 0 },
             tile(10, 0, 10, 20),
             false,
@@ -867,7 +867,7 @@ mod tests {
             objects.push(rect_object(
                 i + 1,
                 [x0, 0, x0 + 4, 4],
-                ObjectClass::Valid(1),
+                ObjectClass::Global(1),
                 ImagePlane::default(),
                 tile(x0 as usize, 0, 5, 5),
                 false,

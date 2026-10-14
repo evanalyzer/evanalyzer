@@ -2616,10 +2616,10 @@ fn field_to_apply_change(
                         if {var}.{name}.iter().any(|c| c.to_u32().map_or(false, |v| v == id)) {{ \
                             {var}.{name}.retain(|c| c.to_u32().map_or(true, |v| v != id)); \
                         }} else {{ \
-                            {var}.{name}.push(ObjectClass::Valid(id)); \
+                            {var}.{name}.push(ObjectClass::Global(id)); \
                         }} \
                     }} else {{ \
-                        {var}.{name} = value.split(',').filter(|x| !x.is_empty()).filter_map(|x| x.trim().parse::<u32>().ok()).map(|v| ObjectClass::Valid(v)).collect(); \
+                        {var}.{name} = value.split(',').filter(|x| !x.is_empty()).filter_map(|x| x.trim().parse::<u32>().ok()).map(|v| ObjectClass::Global(v)).collect(); \
                     }} \
                 }}"
             );
@@ -2750,7 +2750,7 @@ fn leaf_apply_change_branch(
         "PathBuf" => format!("{assign} = std::path::PathBuf::from(value);"),
         "ObjectClass" => format!(
             "if value == \"-1\" {{ {assign} = ObjectClass::Unset; }} \
-             else if let Ok(v) = value.parse::<u32>() {{ {assign} = ObjectClass::Valid(v); }}"
+             else if let Ok(v) = value.parse::<u32>() {{ {assign} = ObjectClass::Global(v); }}"
         ),
         "SegmentationClass" => {
             format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = SegmentationClass(v); }}")
@@ -2954,10 +2954,10 @@ fn tuple_variant_apply_change_branch(
                     if {assign}.iter().any(|c| c.to_u32().map_or(false, |v| v == id)) {{ \
                         {assign}.retain(|c| c.to_u32().map_or(true, |v| v != id)); \
                     }} else {{ \
-                        {assign}.push(ObjectClass::Valid(id)); \
+                        {assign}.push(ObjectClass::Global(id)); \
                     }} \
                 }} else {{ \
-                    *{assign} = value.split(',').filter(|x| !x.is_empty()).filter_map(|x| x.trim().parse::<u32>().ok()).map(ObjectClass::Valid).collect(); \
+                    *{assign} = value.split(',').filter(|x| !x.is_empty()).filter_map(|x| x.trim().parse::<u32>().ok()).map(ObjectClass::Global).collect(); \
                 }} \
             }}"
         ));

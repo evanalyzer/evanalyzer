@@ -73,7 +73,7 @@ impl CsvExporter {
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),
-            ObjectClass::Valid(n) => {
+            ObjectClass::Global(n) => {
                 if let Some(name) = self.class_names.get(class) {
                     format!("{} ({})", name, n)
                 } else {
@@ -570,7 +570,7 @@ mod tests {
 
         // Only class Valid(5) has a human-readable name configured.
         let mut class_names = HashMap::new();
-        class_names.insert(ObjectClass::Valid(5), "Positive".to_string());
+        class_names.insert(ObjectClass::Global(5), "Positive".to_string());
 
         let exporter =
             CsvExporter::new(output_path.clone(), class_names).expect("exporter init failed");
@@ -581,7 +581,7 @@ mod tests {
         let named_id = ObjectId::next();
         let named = crate::object::Object::new(crate::object::ObjectInit {
             id: named_id.clone(),
-            object_class: HashSet::from([ObjectClass::Valid(5)]),
+            object_class: HashSet::from([ObjectClass::Global(5)]),
             area: 10,
             bbox: [0, 0, 3, 3],
             ..Default::default()
@@ -590,7 +590,7 @@ mod tests {
         let unnamed_id = ObjectId::next();
         let unnamed = crate::object::Object::new(crate::object::ObjectInit {
             id: unnamed_id.clone(),
-            object_class: HashSet::from([ObjectClass::Valid(7)]),
+            object_class: HashSet::from([ObjectClass::Global(7)]),
             area: 10,
             bbox: [0, 0, 3, 3],
             ..Default::default()
@@ -649,7 +649,7 @@ mod tests {
         let output_path = temp_dir.path().join("test_coloc.csv");
 
         let mut class_names = HashMap::new();
-        class_names.insert(ObjectClass::Valid(9), "Nuclei".to_string());
+        class_names.insert(ObjectClass::Global(9), "Nuclei".to_string());
 
         let exporter =
             CsvExporter::new(output_path.clone(), class_names).expect("exporter init failed");
@@ -666,7 +666,7 @@ mod tests {
             area: 10,
             bbox: [0, 0, 3, 3],
             colocalized_with: IndexMap::from([(
-                ObjectClass::Valid(9),
+                ObjectClass::Global(9),
                 vec![partner_a.clone(), partner_b.clone()],
             )]),
             ..Default::default()

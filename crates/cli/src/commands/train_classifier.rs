@@ -208,12 +208,12 @@ mod tests {
 
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(1),
+            id: ObjectClass::Global(1),
             name: "A".into(),
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(2),
+            id: ObjectClass::Global(2),
             name: "B".into(),
             ..Default::default()
         });
@@ -221,12 +221,12 @@ mod tests {
         let mut series = SeriesSettings::default();
         series.objects.push(ObjectMetricSettings {
             area: 10,
-            object_class: [ObjectClass::Valid(1)].into(),
+            object_class: [ObjectClass::Global(1)].into(),
             ..Default::default()
         });
         series.objects.push(ObjectMetricSettings {
             area: 1000,
-            object_class: [ObjectClass::Valid(2)].into(),
+            object_class: [ObjectClass::Global(2)].into(),
             ..Default::default()
         });
         let mut entry = ImageEntry::default();
@@ -251,11 +251,11 @@ mod tests {
                 },
                 class_labels: vec![
                     ObjectClassLabel {
-                        class: ObjectClass::Valid(1),
+                        class: ObjectClass::Global(1),
                         name: "A".into(),
                     },
                     ObjectClassLabel {
-                        class: ObjectClass::Valid(2),
+                        class: ObjectClass::Global(2),
                         name: "B".into(),
                     },
                 ],

@@ -1213,14 +1213,14 @@ impl PipelineCommand {
                                     if value == "-1" {
                                         item.object_class = ObjectClass::Unset;
                                     } else if let Ok(v) = value.parse::<u32>() {
-                                        item.object_class = ObjectClass::Valid(v);
+                                        item.object_class = ObjectClass::Global(v);
                                     }
                                 }
                                 if nested_name == "output_class" {
                                     if value == "-1" {
                                         item.output_class = ObjectClass::Unset;
                                     } else if let Ok(v) = value.parse::<u32>() {
-                                        item.output_class = ObjectClass::Valid(v);
+                                        item.output_class = ObjectClass::Global(v);
                                     }
                                 }
                             }
@@ -1239,14 +1239,14 @@ impl PipelineCommand {
                             s.input_classes
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.input_classes.push(ObjectClass::Valid(id));
+                            s.input_classes.push(ObjectClass::Global(id));
                         }
                     } else {
                         s.input_classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
+                            .map(|v| ObjectClass::Global(v))
                             .collect();
                     }
                 }
@@ -1339,14 +1339,14 @@ impl PipelineCommand {
                             s.input_classes
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.input_classes.push(ObjectClass::Valid(id));
+                            s.input_classes.push(ObjectClass::Global(id));
                         }
                     } else {
                         s.input_classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
+                            .map(|v| ObjectClass::Global(v))
                             .collect();
                     }
                 }
@@ -1357,14 +1357,14 @@ impl PipelineCommand {
                     if value == "-1" {
                         s.output_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.output_class = ObjectClass::Valid(v);
+                        s.output_class = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "overlapping_with" {
                     if value == "-1" {
                         s.overlapping_with = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.overlapping_with = ObjectClass::Valid(v);
+                        s.overlapping_with = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "min_intersection_area" {
@@ -1508,14 +1508,14 @@ impl PipelineCommand {
                             s.classes_to_coloc
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.classes_to_coloc.push(ObjectClass::Valid(id));
+                            s.classes_to_coloc.push(ObjectClass::Global(id));
                         }
                     } else {
                         s.classes_to_coloc = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
+                            .map(|v| ObjectClass::Global(v))
                             .collect();
                     }
                 }
@@ -1523,7 +1523,7 @@ impl PipelineCommand {
                     if value == "-1" {
                         s.class_for_overlapping_areas = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.class_for_overlapping_areas = ObjectClass::Valid(v);
+                        s.class_for_overlapping_areas = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "multiplicity" {
@@ -1554,14 +1554,14 @@ impl PipelineCommand {
                             {
                                 __inner.retain(|c| c.to_u32().map_or(true, |v| v != id));
                             } else {
-                                __inner.push(ObjectClass::Valid(id));
+                                __inner.push(ObjectClass::Global(id));
                             }
                         } else {
                             *__inner = value
                                 .split(',')
                                 .filter(|x| !x.is_empty())
                                 .filter_map(|x| x.trim().parse::<u32>().ok())
-                                .map(ObjectClass::Valid)
+                                .map(ObjectClass::Global)
                                 .collect();
                         }
                     }
@@ -1590,14 +1590,14 @@ impl PipelineCommand {
                             s.exclude_classes
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.exclude_classes.push(ObjectClass::Valid(id));
+                            s.exclude_classes.push(ObjectClass::Global(id));
                         }
                     } else {
                         s.exclude_classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
+                            .map(|v| ObjectClass::Global(v))
                             .collect();
                     }
                 }
@@ -1865,14 +1865,14 @@ impl PipelineCommand {
                             s.input_classes
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.input_classes.push(ObjectClass::Valid(id));
+                            s.input_classes.push(ObjectClass::Global(id));
                         }
                     } else {
                         s.input_classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
+                            .map(|v| ObjectClass::Global(v))
                             .collect();
                     }
                 }
@@ -1880,7 +1880,7 @@ impl PipelineCommand {
                     if value == "-1" {
                         s.output_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.output_class = ObjectClass::Valid(v);
+                        s.output_class = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "keep_annotated_classes" {
@@ -1937,14 +1937,14 @@ impl PipelineCommand {
                     if value == "-1" {
                         s.input_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.input_class = ObjectClass::Valid(v);
+                        s.input_class = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "other_class" {
                     if value == "-1" {
                         s.other_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.other_class = ObjectClass::Valid(v);
+                        s.other_class = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "other_filter_classes" {
@@ -1959,14 +1959,14 @@ impl PipelineCommand {
                             s.other_filter_classes
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.other_filter_classes.push(ObjectClass::Valid(id));
+                            s.other_filter_classes.push(ObjectClass::Global(id));
                         }
                     } else {
                         s.other_filter_classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
+                            .map(|v| ObjectClass::Global(v))
                             .collect();
                     }
                 }
@@ -1985,7 +1985,7 @@ impl PipelineCommand {
                     if value == "-1" {
                         s.output_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.output_class = ObjectClass::Valid(v);
+                        s.output_class = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "keep_unmatched" {
@@ -2078,14 +2078,14 @@ impl PipelineCommand {
                             s.display_classes
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.display_classes.push(ObjectClass::Valid(id));
+                            s.display_classes.push(ObjectClass::Global(id));
                         }
                     } else {
                         s.display_classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
+                            .map(|v| ObjectClass::Global(v))
                             .collect();
                     }
                 }
@@ -2115,14 +2115,14 @@ impl PipelineCommand {
                         {
                             s.classes.retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.classes.push(ObjectClass::Valid(id));
+                            s.classes.push(ObjectClass::Global(id));
                         }
                     } else {
                         s.classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
+                            .map(|v| ObjectClass::Global(v))
                             .collect();
                     }
                 }
@@ -2135,7 +2135,7 @@ impl PipelineCommand {
                     if value == "-1" {
                         s.object_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.object_class = ObjectClass::Valid(v);
+                        s.object_class = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "unit" {
@@ -2393,14 +2393,14 @@ impl PipelineCommand {
                     if value == "-1" {
                         s.input_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.input_class = ObjectClass::Valid(v);
+                        s.input_class = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "output_class" {
                     if value == "-1" {
                         s.output_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.output_class = ObjectClass::Valid(v);
+                        s.output_class = ObjectClass::Global(v);
                     }
                 }
             }
@@ -2450,7 +2450,7 @@ impl PipelineCommand {
                     if value == "-1" {
                         s.centers = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.centers = ObjectClass::Valid(v);
+                        s.centers = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "center_filter_classes" {
@@ -2465,14 +2465,14 @@ impl PipelineCommand {
                             s.center_filter_classes
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.center_filter_classes.push(ObjectClass::Valid(id));
+                            s.center_filter_classes.push(ObjectClass::Global(id));
                         }
                     } else {
                         s.center_filter_classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
+                            .map(|v| ObjectClass::Global(v))
                             .collect();
                     }
                 }
@@ -2480,7 +2480,7 @@ impl PipelineCommand {
                     if value == "-1" {
                         s.mask = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.mask = ObjectClass::Valid(v);
+                        s.mask = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "mask_filter_classes" {
@@ -2495,14 +2495,14 @@ impl PipelineCommand {
                             s.mask_filter_classes
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.mask_filter_classes.push(ObjectClass::Valid(id));
+                            s.mask_filter_classes.push(ObjectClass::Global(id));
                         }
                     } else {
                         s.mask_filter_classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
+                            .map(|v| ObjectClass::Global(v))
                             .collect();
                     }
                 }
@@ -2510,7 +2510,7 @@ impl PipelineCommand {
                     if value == "-1" {
                         s.output_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.output_class = ObjectClass::Valid(v);
+                        s.output_class = ObjectClass::Global(v);
                     }
                 }
                 if param_name == "unit" {

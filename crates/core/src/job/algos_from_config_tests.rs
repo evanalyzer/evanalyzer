@@ -459,9 +459,9 @@ fn cellpose_settings_clamp_negative_probability_threshold_to_zero() {
 fn classify_objects_settings_convert_identity_fields() {
     let settings = ClassifyObjectsSettings {
         origin_segmentation: vec![SegmentationClass(1), SegmentationClass(2)],
-        input_classes: vec![ObjectClass::Valid(3)],
-        output_class: ObjectClass::Valid(4),
-        overlapping_with: ObjectClass::Valid(5),
+        input_classes: vec![ObjectClass::Global(3)],
+        output_class: ObjectClass::Global(4),
+        overlapping_with: ObjectClass::Global(5),
         allow_edge_touching: false,
         ..Default::default()
     };
@@ -470,9 +470,9 @@ fn classify_objects_settings_convert_identity_fields() {
         result.origin_segmentation,
         vec![SegmentationClass(1), SegmentationClass(2)]
     );
-    assert_eq!(result.input_classes, vec![ObjectClass::Valid(3)]);
-    assert_eq!(result.output_class, ObjectClass::Valid(4));
-    assert_eq!(result.overlapping_with, ObjectClass::Valid(5));
+    assert_eq!(result.input_classes, vec![ObjectClass::Global(3)]);
+    assert_eq!(result.output_class, ObjectClass::Global(4));
+    assert_eq!(result.overlapping_with, ObjectClass::Global(5));
     assert!(!result.allow_edge_touching);
 }
 
@@ -495,10 +495,10 @@ fn classify_objects_settings_clamp_area_and_circularity_fields() {
 #[test]
 fn colocalization_settings_convert_all_fields() {
     let settings = ColocalizationSettings {
-        classes_to_coloc: vec![ObjectClass::Valid(1), ObjectClass::Valid(2)],
-        filter_classes: vec![ObjectClass::Valid(3)],
-        class_for_overlapping_areas: ObjectClass::Valid(9),
-        exclude_classes: vec![ObjectClass::Valid(4)],
+        classes_to_coloc: vec![ObjectClass::Global(1), ObjectClass::Global(2)],
+        filter_classes: vec![ObjectClass::Global(3)],
+        class_for_overlapping_areas: ObjectClass::Global(9),
+        exclude_classes: vec![ObjectClass::Global(4)],
         multiplicity: ObjectColocObjectsColocMultiplicitySettings::ManyToMany,
         size_unit: SizeUnitsRel::Pixels,
         min_coloc_area: 12.5,
@@ -506,11 +506,11 @@ fn colocalization_settings_convert_all_fields() {
     let result = Colocalization::from(settings);
     assert_eq!(
         result.classes_to_coloc,
-        vec![ObjectClass::Valid(1), ObjectClass::Valid(2)]
+        vec![ObjectClass::Global(1), ObjectClass::Global(2)]
     );
-    assert_eq!(result.filter_classes, vec![ObjectClass::Valid(3)]);
-    assert_eq!(result.class_for_overlapping_areas, ObjectClass::Valid(9));
-    assert_eq!(result.exclude_classes, vec![ObjectClass::Valid(4)]);
+    assert_eq!(result.filter_classes, vec![ObjectClass::Global(3)]);
+    assert_eq!(result.class_for_overlapping_areas, ObjectClass::Global(9));
+    assert_eq!(result.exclude_classes, vec![ObjectClass::Global(4)]);
     assert_eq!(result.multiplicity, ColocMultiplicity::ManyToMany);
     assert_eq!(result.size_unit, SizeUnitsRel::Pixels);
     assert_eq!(result.min_coloc_area, 12.5);
@@ -751,22 +751,22 @@ fn rank_filter_settings_convert_all_fields() {
 fn object_math_settings_convert_all_fields() {
     let settings = ObjectMathSettings {
         operation: ObjectObjectMathObjectSetOperationSettings::Subtract,
-        input_class: ObjectClass::Valid(1),
-        other_class: ObjectClass::Valid(2),
-        other_filter_classes: vec![ObjectClass::Valid(3)],
+        input_class: ObjectClass::Global(1),
+        other_class: ObjectClass::Global(2),
+        other_filter_classes: vec![ObjectClass::Global(3)],
         size_unit: SizeUnits::Pixels,
         min_overlap_area: 4.0,
-        output_class: ObjectClass::Valid(5),
+        output_class: ObjectClass::Global(5),
         keep_unmatched: false,
     };
     let result = ObjectMath::from(settings);
     assert!(matches!(result.operation, ObjectSetOperation::Subtract));
-    assert_eq!(result.input_class, ObjectClass::Valid(1));
-    assert_eq!(result.other_class, ObjectClass::Valid(2));
-    assert_eq!(result.other_filter_classes, vec![ObjectClass::Valid(3)]);
+    assert_eq!(result.input_class, ObjectClass::Global(1));
+    assert_eq!(result.other_class, ObjectClass::Global(2));
+    assert_eq!(result.other_filter_classes, vec![ObjectClass::Global(3)]);
     assert_eq!(result.size_unit, SizeUnits::Pixels);
     assert_eq!(result.min_overlap_area, 4.0);
-    assert_eq!(result.output_class, ObjectClass::Valid(5));
+    assert_eq!(result.output_class, ObjectClass::Global(5));
     assert!(!result.keep_unmatched);
 }
 
@@ -797,13 +797,13 @@ fn rolling_ball_settings_clamp_radius_to_min() {
 fn save_image_settings_convert_all_fields() {
     let settings = SaveImageSettings {
         name: "output".to_string(),
-        display_classes: vec![ObjectClass::Valid(4)],
+        display_classes: vec![ObjectClass::Global(4)],
         source: MathSaveImageImageSourceSettings::InstanceMap,
         opacity: 30,
     };
     let result = SaveImage::from(settings);
     assert_eq!(result.name, "output");
-    assert_eq!(result.display_classes, vec![ObjectClass::Valid(4)]);
+    assert_eq!(result.display_classes, vec![ObjectClass::Global(4)]);
     assert!(result.source == ImageSource::InstanceMap);
     assert_eq!(result.opacity, 30);
 }
@@ -889,16 +889,16 @@ fn threshold_entry_settings_convert_and_clamp_thresholds() {
 fn transform_objects_settings_convert_all_fields() {
     let settings = TransformObjectsSettings {
         function: ObjectTransformObjectsTransformFunctionSettings::FittingEllipse { scale: 1.2 },
-        input_class: ObjectClass::Valid(1),
-        output_class: ObjectClass::Valid(2),
+        input_class: ObjectClass::Global(1),
+        output_class: ObjectClass::Global(2),
     };
     let result = TransformObjects::from(settings);
     match result.function {
         TransformFunction::FittingEllipse { scale } => assert_eq!(scale, 1.2),
         _ => panic!("expected FittingEllipse variant"),
     }
-    assert_eq!(result.input_class, ObjectClass::Valid(1));
-    assert_eq!(result.output_class, ObjectClass::Valid(2));
+    assert_eq!(result.input_class, ObjectClass::Global(1));
+    assert_eq!(result.output_class, ObjectClass::Global(2));
 }
 
 #[cfg(feature = "ai")]
@@ -929,22 +929,22 @@ fn unet_settings_convert_and_clamp_probability_threshold() {
 #[test]
 fn voronoi_settings_convert_all_fields() {
     let settings = VoronoiSettings {
-        centers: ObjectClass::Valid(1),
-        center_filter_classes: vec![ObjectClass::Valid(2)],
-        mask: ObjectClass::Valid(3),
-        mask_filter_classes: vec![ObjectClass::Valid(4)],
-        output_class: ObjectClass::Valid(5),
+        centers: ObjectClass::Global(1),
+        center_filter_classes: vec![ObjectClass::Global(2)],
+        mask: ObjectClass::Global(3),
+        mask_filter_classes: vec![ObjectClass::Global(4)],
+        output_class: ObjectClass::Global(5),
         unit: SizeUnits::Pixels,
         max_radius: 50.0,
         exclude_areas_at_the_edges: true,
         exclude_areas_with_no_center: true,
     };
     let result = Voronoi::from(settings);
-    assert_eq!(result.centers, ObjectClass::Valid(1));
-    assert_eq!(result.center_filter_classes, vec![ObjectClass::Valid(2)]);
-    assert_eq!(result.mask, ObjectClass::Valid(3));
-    assert_eq!(result.mask_filter_classes, vec![ObjectClass::Valid(4)]);
-    assert_eq!(result.output_class, ObjectClass::Valid(5));
+    assert_eq!(result.centers, ObjectClass::Global(1));
+    assert_eq!(result.center_filter_classes, vec![ObjectClass::Global(2)]);
+    assert_eq!(result.mask, ObjectClass::Global(3));
+    assert_eq!(result.mask_filter_classes, vec![ObjectClass::Global(4)]);
+    assert_eq!(result.output_class, ObjectClass::Global(5));
     assert_eq!(result.unit, SizeUnits::Pixels);
     assert_eq!(result.max_radius, 50.0);
     assert!(result.exclude_areas_at_the_edges);

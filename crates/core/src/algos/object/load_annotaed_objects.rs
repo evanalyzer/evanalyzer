@@ -74,7 +74,7 @@ impl ImageAlgorithm for LoadAnnotatedObjects {
             if !self.keep_annotated_classes {
                 object.object_class.clear();
             }
-            if matches!(self.output_class, ObjectClass::Valid(_)) {
+            if matches!(self.output_class, ObjectClass::Global(_)) {
                 object.add_object_class(self.output_class);
             }
             // The stored values may be stale (or were never measured for an
@@ -126,9 +126,9 @@ mod tests {
     };
     const CHANNEL: i32 = 0;
     const VALUE: f64 = 7.0;
-    const NUCLEUS: ObjectClass = ObjectClass::Valid(1);
-    const CELL: ObjectClass = ObjectClass::Valid(2);
-    const LOADED: ObjectClass = ObjectClass::Valid(50);
+    const NUCLEUS: ObjectClass = ObjectClass::Global(1);
+    const CELL: ObjectClass = ObjectClass::Global(2);
+    const LOADED: ObjectClass = ObjectClass::Global(50);
     // Far above the ObjectId::next() counter so a reused id would be visible.
     const STORED_ID: u128 = 900_000;
 

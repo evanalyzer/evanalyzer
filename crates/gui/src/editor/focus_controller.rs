@@ -209,8 +209,8 @@ mod tests {
                 enabled: true,
                 content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
                     PipelineCommand::TransformObjects(TransformObjectsSettings {
-                        input_class: ObjectClass::Valid(class),
-                        output_class: ObjectClass::Valid(class),
+                        input_class: ObjectClass::Global(class),
+                        output_class: ObjectClass::Global(class),
                         ..Default::default()
                     }),
                 ),

@@ -47,9 +47,9 @@ fn peak_rss_mb() -> f64 {
 
 fn object(id: u128) -> Object {
     let class = (id % 21) as u32 + 1;
-    let mut object_class: HashSet<ObjectClass> = HashSet::from([ObjectClass::Valid(class)]);
+    let mut object_class: HashSet<ObjectClass> = HashSet::from([ObjectClass::Global(class)]);
     if id % 20 == 0 {
-        object_class.insert(ObjectClass::Valid(class % 21 + 1));
+        object_class.insert(ObjectClass::Global(class % 21 + 1));
     }
     let intensities: IndexMap<i32, Intensity> = (0..6)
         .map(|channel| {
@@ -76,7 +76,7 @@ fn object(id: u128) -> Object {
         } else {
             vec![ObjectId(id - 1)]
         };
-        colocalized_with.insert(ObjectClass::Valid(class % 21 + 2), partners);
+        colocalized_with.insert(ObjectClass::Global(class % 21 + 2), partners);
     }
     let x = (id % 1000) as u32 * 4;
     let y = (id / 1000 % 1000) as u32 * 4;
@@ -104,7 +104,7 @@ fn main() {
     let _ = std::fs::remove_file(format!("{}.wal", out.display()));
 
     let class_names: HashMap<ObjectClass, (String, u32)> = (1..=22)
-        .map(|c| (ObjectClass::Valid(c), (format!("Class {c}"), 0)))
+        .map(|c| (ObjectClass::Global(c), (format!("Class {c}"), 0)))
         .collect();
     let exporter = DuckDbExporter::new(
         &out,

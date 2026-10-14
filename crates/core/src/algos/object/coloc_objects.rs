@@ -356,8 +356,8 @@ impl ImageAlgorithm for Colocalization {
                 }
 
                 // Compute the N-way intersection area (chain of pairwise intersections).
-                if let ObjectClass::Valid(overlap_class_id) = self.class_for_overlapping_areas {
-                    let overlap_class = ObjectClass::Valid(overlap_class_id);
+                if let ObjectClass::Global(overlap_class_id) = self.class_for_overlapping_areas {
+                    let overlap_class = ObjectClass::Global(overlap_class_id);
                     let mut states: Vec<(Object, Vec<ObjectId>)> = Vec::new();
 
                     let mut matches_iter = class_matches.iter();
@@ -584,10 +584,10 @@ mod tests {
         object
     }
 
-    const CLASS_A: ObjectClass = ObjectClass::Valid(1);
-    const CLASS_B: ObjectClass = ObjectClass::Valid(2);
-    const CLASS_C: ObjectClass = ObjectClass::Valid(3);
-    const CLASS_OVERLAP: ObjectClass = ObjectClass::Valid(99);
+    const CLASS_A: ObjectClass = ObjectClass::Global(1);
+    const CLASS_B: ObjectClass = ObjectClass::Global(2);
+    const CLASS_C: ObjectClass = ObjectClass::Global(3);
+    const CLASS_OVERLAP: ObjectClass = ObjectClass::Global(99);
 
     // object IDs are set far above the ObjectId::next() counter range so that
     // counter-generated IDs from overlaps() never collide with test IDs in parallel runs.

@@ -220,7 +220,7 @@ mod tests {
                 ObjectId(id),
                 Object::new(ObjectInit {
                     id: ObjectId(id),
-                    object_class: HashSet::from([ObjectClass::Valid(class)]),
+                    object_class: HashSet::from([ObjectClass::Global(class)]),
                     area: 4,
                     bbox: [10, 20, 14, 30],
                     plane: crate::ImagePlane { z: 0, c: 0, t },
@@ -245,7 +245,7 @@ mod tests {
 
         assert_eq!(ids(ObjectFilter::default()), [1, 3, 2], "by frame, then id");
         let class_1 = ObjectFilter {
-            object_class: Some(ObjectClass::Valid(1)),
+            object_class: Some(ObjectClass::Global(1)),
             ..Default::default()
         };
         assert_eq!(ids(class_1), [1, 2]);

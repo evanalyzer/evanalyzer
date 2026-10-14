@@ -342,9 +342,9 @@ mod tests {
         object
     }
 
-    const CELL: ObjectClass = ObjectClass::Valid(10);
-    const NUCLEUS: ObjectClass = ObjectClass::Valid(11);
-    const OUT: ObjectClass = ObjectClass::Valid(12);
+    const CELL: ObjectClass = ObjectClass::Global(10);
+    const NUCLEUS: ObjectClass = ObjectClass::Global(11);
+    const OUT: ObjectClass = ObjectClass::Global(12);
 
     fn default_cmd(operation: ObjectSetOperation, output_class: ObjectClass) -> ObjectMath {
         ObjectMath {
@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn unions_multiple_overlapping_partners_before_combining() {
-        const DEBRIS: ObjectClass = ObjectClass::Valid(13);
+        const DEBRIS: ObjectClass = ObjectClass::Global(13);
         let mut cmd = default_cmd(ObjectSetOperation::Subtract, ObjectClass::Unset);
         cmd.other_class = DEBRIS;
         let mut cache = GlobalPipelineCache::default();

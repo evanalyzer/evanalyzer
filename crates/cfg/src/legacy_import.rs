@@ -168,7 +168,7 @@ fn resolve_class(
         "$" => pipeline_default,
         "" | "None" | "Undefined" => ObjectClass::Unset,
         other => match parse_numeric_class_id(other) {
-            Some(n) => ObjectClass::Valid(n),
+            Some(n) => ObjectClass::Global(n),
             None => {
                 warnings.push(format!(
                     "{context}: {field} uses unsupported legacy class id '{other}' (temp/model class) - left unset"
@@ -1142,7 +1142,7 @@ mod tests {
         // `ClassificationSettings::new_from_existing`.
         assert_eq!(p.classification.classes().len(), 3);
         assert_eq!(p.classification.classes()[0].id, ObjectClass::BACKGROUND);
-        assert_eq!(p.classification.classes()[1].id, ObjectClass::Valid(1));
+        assert_eq!(p.classification.classes()[1].id, ObjectClass::Global(1));
         assert_eq!(p.classification.classes()[1].color, 0x3399FF);
         assert_eq!(p.classification.classes()[2].id, ObjectClass::Unset);
 
@@ -1215,7 +1215,7 @@ mod tests {
             .expect("a ClassifyObjects step");
 
         assert_eq!(classify.min_area, 50.0);
-        assert_eq!(classify.output_class, ObjectClass::Valid(1));
+        assert_eq!(classify.output_class, ObjectClass::Global(1));
         assert_eq!(classify.origin_segmentation, vec![SegmentationClass(1)]);
     }
 
@@ -1269,8 +1269,8 @@ mod tests {
                 _ => None,
             })
             .expect("a TransformObjects step");
-        assert_eq!(transform.input_class, ObjectClass::Valid(7));
-        assert_eq!(transform.output_class, ObjectClass::Valid(7));
+        assert_eq!(transform.input_class, ObjectClass::Global(7));
+        assert_eq!(transform.output_class, ObjectClass::Global(7));
     }
 
     #[test]
@@ -1443,8 +1443,8 @@ mod tests {
     #[test]
     fn resolve_class_substitutes_the_pipeline_default_for_the_dollar_placeholder() {
         let mut warnings = Vec::new();
-        let resolved = resolve_class("$", ObjectClass::Valid(5), "ctx", "field", &mut warnings);
-        assert_eq!(resolved, ObjectClass::Valid(5));
+        let resolved = resolve_class("$", ObjectClass::Global(5), "ctx", "field", &mut warnings);
+        assert_eq!(resolved, ObjectClass::Global(5));
         assert!(warnings.is_empty());
     }
 
@@ -1453,7 +1453,7 @@ mod tests {
         let mut warnings = Vec::new();
         for s in ["", "None", "Undefined"] {
             assert_eq!(
-                resolve_class(s, ObjectClass::Valid(5), "ctx", "field", &mut warnings),
+                resolve_class(s, ObjectClass::Global(5), "ctx", "field", &mut warnings),
                 ObjectClass::Unset
             );
         }
@@ -1464,8 +1464,8 @@ mod tests {
     fn resolve_class_parses_a_plain_number_directly() {
         let mut warnings = Vec::new();
         assert_eq!(
-            resolve_class("12", ObjectClass::Valid(5), "ctx", "field", &mut warnings),
-            ObjectClass::Valid(12)
+            resolve_class("12", ObjectClass::Global(5), "ctx", "field", &mut warnings),
+            ObjectClass::Global(12)
         );
         assert!(warnings.is_empty());
     }
@@ -1475,7 +1475,7 @@ mod tests {
         let mut warnings = Vec::new();
         let resolved = resolve_class(
             "M01",
-            ObjectClass::Valid(5),
+            ObjectClass::Global(5),
             "my-context",
             "my-field",
             &mut warnings,
@@ -2088,11 +2088,11 @@ mod tests {
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
             PipelineCommand::Voronoi(s) => {
-                assert_eq!(s.centers, ObjectClass::Valid(1));
-                assert_eq!(s.center_filter_classes, vec![ObjectClass::Valid(2)]);
-                assert_eq!(s.mask, ObjectClass::Valid(4));
-                assert_eq!(s.mask_filter_classes, vec![ObjectClass::Valid(5)]);
-                assert_eq!(s.output_class, ObjectClass::Valid(3));
+                assert_eq!(s.centers, ObjectClass::Global(1));
+                assert_eq!(s.center_filter_classes, vec![ObjectClass::Global(2)]);
+                assert_eq!(s.mask, ObjectClass::Global(4));
+                assert_eq!(s.mask_filter_classes, vec![ObjectClass::Global(5)]);
+                assert_eq!(s.output_class, ObjectClass::Global(3));
                 assert_eq!(s.max_radius, 12.5);
                 assert!(s.exclude_areas_with_no_center);
                 assert!(!s.exclude_areas_at_the_edges);

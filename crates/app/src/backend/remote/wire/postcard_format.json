@@ -1,5 +1,5 @@
 {
-  "protocol_version": 11,
+  "protocol_version": 12,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -600,7 +600,7 @@
           "UNSET": "UNIT"
         },
         "1": {
-          "VALID": {
+          "GLOBAL": {
             "NEWTYPE": "U32"
           }
         }

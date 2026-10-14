@@ -1465,7 +1465,7 @@ impl ZOrder {
 
     /// Bigger = further on top.
     pub(crate) fn key(&self, classes: &HashSet<ObjectClass>, is_selected_object: bool) -> u32 {
-        let in_selected_class = matches!(self.selected_class, ObjectClass::Valid(_))
+        let in_selected_class = matches!(self.selected_class, ObjectClass::Global(_))
             && classes.contains(&self.selected_class);
         let best_rank = classes
             .iter()

@@ -426,11 +426,11 @@ mod tests {
             },
         );
         stage2.add_command(Box::new(Voronoi {
-            centers: ObjectClass::Valid(1),
+            centers: ObjectClass::Global(1),
             center_filter_classes: vec![],
             mask: ObjectClass::Unset,
             mask_filter_classes: vec![],
-            output_class: ObjectClass::Valid(99),
+            output_class: ObjectClass::Global(99),
             unit: SizeUnits::Pixels,
             max_radius: 0.0,
             exclude_areas_at_the_edges: false,
@@ -470,7 +470,7 @@ mod tests {
         let mut regions: Vec<&Object> = cache
             .object_cache
             .values()
-            .filter(|r| r.has_object_class(&ObjectClass::Valid(99)))
+            .filter(|r| r.has_object_class(&ObjectClass::Global(99)))
             .collect();
         regions.sort_by_key(|r| r.bbox[0]);
         assert_eq!(

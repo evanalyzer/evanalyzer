@@ -305,8 +305,8 @@ mod tests {
     use bitvec::prelude::*;
     use kornia_image::{Image, ImageSize};
 
-    const CLASS_IN: ObjectClass = ObjectClass::Valid(1);
-    const CLASS_OUT: ObjectClass = ObjectClass::Valid(2);
+    const CLASS_IN: ObjectClass = ObjectClass::Global(1);
+    const CLASS_OUT: ObjectClass = ObjectClass::Global(2);
     const ID_A: u128 = 100_000;
 
     fn make_ctx(size: ImageSize) -> PipelineContext {

@@ -887,7 +887,7 @@ mod tests {
         assert!(err.contains("class 4"), "{err}");
 
         let mut declared = host();
-        declared.classes = vec![ObjectClass::Valid(4)];
+        declared.classes = vec![ObjectClass::Global(4)];
         declared.run_command("threshold", &params).unwrap();
     }
 
@@ -912,16 +912,16 @@ mod tests {
             area: 9,
             ..Default::default()
         });
-        object.add_object_class(ObjectClass::Valid(4));
+        object.add_object_class(ObjectClass::Global(4));
         let mut declared = host();
         declared.ctx.output_path = Some(dir.path().to_path_buf());
-        declared.classes = vec![ObjectClass::Valid(4)];
+        declared.classes = vec![ObjectClass::Global(4)];
         declared
             .cache
             .object_cache
             .insert(object.id.clone(), object);
         declared.cache.class_colors = std::sync::Arc::new(std::collections::HashMap::from([(
-            ObjectClass::Valid(4),
+            ObjectClass::Global(4),
             0x00FF00,
         )]));
         declared.run_command("save_image", &params).unwrap();

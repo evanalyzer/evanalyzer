@@ -4883,7 +4883,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .object_classe,
-            ObjectClass::Valid(2)
+            ObjectClass::Global(2)
         );
 
         state.invoke_matrix_regex_changed(r"^(([A-H])([0-9]{1,2}))_([0-9]+)\.".into());
@@ -5169,7 +5169,7 @@ mod tests {
         state.invoke_chart_class_selected("ClassA".into(), true);
         assert_eq!(
             controller.chart_filter.lock().unwrap().object_class,
-            Some(ObjectClass::Valid(1))
+            Some(ObjectClass::Global(1))
         );
 
         state.invoke_chart_kind_selected(ResultsChartKind2::Histogram);

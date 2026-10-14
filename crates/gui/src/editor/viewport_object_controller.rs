@@ -635,7 +635,7 @@ mod tests {
         let mut project = ui_state.get_project_write();
         let mut class = |name: &str| {
             project.classification.add_class(Class {
-                id: ObjectClass::Valid(0),
+                id: ObjectClass::Global(0),
                 color: 0xff0000,
                 name: name.into(),
                 notes: String::new(),
@@ -792,7 +792,7 @@ mod tests {
             .get_project_write()
             .classification
             .add_class(Class {
-                id: ObjectClass::Valid(1),
+                id: ObjectClass::Global(1),
                 color: 0xff0000,
                 name: "cl1".into(),
                 notes: "note".into(),
@@ -838,7 +838,7 @@ mod tests {
         };
         assert!(matches!(
             nuclei,
-            evanalyzer_cfg::core_types::ObjectClass::Valid(_)
+            evanalyzer_cfg::core_types::ObjectClass::Global(_)
         ));
         let (controller, viewport_cache) = controller_for(ui.as_weak(), &ui_state);
         seed_image_cache(&viewport_cache);
@@ -943,7 +943,7 @@ mod tests {
             .get_project_write()
             .classification
             .add_class(Class {
-                id: ObjectClass::Valid(1),
+                id: ObjectClass::Global(1),
                 color: 0xff0000,
                 name: "cl1".into(),
                 notes: "note".into(),

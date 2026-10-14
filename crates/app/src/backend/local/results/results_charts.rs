@@ -46,7 +46,7 @@ impl ResultCharts {
                 let ids: Vec<u32> = wanted
                     .iter()
                     .filter_map(|id| match id {
-                        ObjectClass::Valid(n) => Some(*n),
+                        ObjectClass::Global(n) => Some(*n),
                         ObjectClass::Unset => None,
                     })
                     .collect();
@@ -115,7 +115,7 @@ impl ResultCharts {
         let boxes = rows
             .into_iter()
             .map(|(class_id, min_v, q1, median, q3, max_v, n, outliers)| {
-                let object_class = ObjectClass::Valid(class_id);
+                let object_class = ObjectClass::Global(class_id);
                 let color = classes
                     .iter()
                     .find(|class| class.id == object_class)
@@ -348,7 +348,7 @@ fn chart_where_clause(
         let ids: Vec<u32> = wanted
             .iter()
             .filter_map(|id| match id {
-                ObjectClass::Valid(n) => Some(*n),
+                ObjectClass::Global(n) => Some(*n),
                 ObjectClass::Unset => None,
             })
             .collect();
@@ -505,7 +505,7 @@ mod tests {
                 &BoxplotFilter {
                     plane: plane(),
                     images: None,
-                    object_classes: Some(vec![ObjectClass::Valid(1)]),
+                    object_classes: Some(vec![ObjectClass::Global(1)]),
                     column: Column::AreaSizePx,
                 },
             )
@@ -868,7 +868,7 @@ mod tests {
             ObjectSpec::new("img1.tif", "ClassB", 2, 999),
         ];
         let generator = open(&objects);
-        let filter_classes = Some(vec![ObjectClass::Valid(1)]);
+        let filter_classes = Some(vec![ObjectClass::Global(1)]);
 
         let histogram = ResultCharts {}
             .paint_histogram(

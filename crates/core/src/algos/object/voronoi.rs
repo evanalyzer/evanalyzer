@@ -541,9 +541,9 @@ mod tests {
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
     use kornia_image::{Image, ImageSize};
 
-    const CENTER_CLASS: ObjectClass = ObjectClass::Valid(1);
-    const MASK_CLASS: ObjectClass = ObjectClass::Valid(2);
-    const OUTPUT_CLASS: ObjectClass = ObjectClass::Valid(10);
+    const CENTER_CLASS: ObjectClass = ObjectClass::Global(1);
+    const MASK_CLASS: ObjectClass = ObjectClass::Global(2);
+    const OUTPUT_CLASS: ObjectClass = ObjectClass::Global(10);
     const ID_A: u128 = 100_000;
     const ID_B: u128 = 200_000;
     const ID_MASK: u128 = 300_000;
@@ -1001,7 +1001,7 @@ mod tests {
 
     #[test]
     fn center_filter_class_excludes_unmatched_centers() {
-        const FILTER_CLASS: ObjectClass = ObjectClass::Valid(3);
+        const FILTER_CLASS: ObjectClass = ObjectClass::Global(3);
         let mut ctx = make_ctx(10, 10);
         let mut cache = GlobalPipelineCache::default();
 

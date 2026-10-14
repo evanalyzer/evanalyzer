@@ -571,7 +571,7 @@
         {
           "type": "object",
           "properties": {
-            "VALID": {
+            "GLOBAL": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
@@ -579,7 +579,7 @@
           },
           "additionalProperties": false,
           "required": [
-            "VALID"
+            "GLOBAL"
           ]
         }
       ]

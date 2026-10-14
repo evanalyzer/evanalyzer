@@ -2051,7 +2051,7 @@ mod tests {
 
     fn class(id: u32, name: &str) -> Class {
         Class {
-            id: ObjectClass::Valid(id),
+            id: ObjectClass::Global(id),
             name: name.into(),
             ..Default::default()
         }
@@ -2098,18 +2098,18 @@ mod tests {
             ..Default::default()
         });
 
-        project.add_class_to_object(ObjectId(1), ObjectClass::Valid(3));
+        project.add_class_to_object(ObjectId(1), ObjectClass::Global(3));
         assert!(
             project.get_objects().unwrap()[0]
                 .object_class
-                .contains(&ObjectClass::Valid(3))
+                .contains(&ObjectClass::Global(3))
         );
 
-        project.remove_class_from_object(ObjectId(1), &ObjectClass::Valid(3));
+        project.remove_class_from_object(ObjectId(1), &ObjectClass::Global(3));
         assert!(
             !project.get_objects().unwrap()[0]
                 .object_class
-                .contains(&ObjectClass::Valid(3))
+                .contains(&ObjectClass::Global(3))
         );
     }
 
@@ -2121,9 +2121,13 @@ mod tests {
         project.classification.classes_mut().push(class(1, "A"));
         project.classification.classes_mut().push(class(2, "B"));
 
-        let found = project.get_class_from_id(&ObjectClass::Valid(2)).unwrap();
+        let found = project.get_class_from_id(&ObjectClass::Global(2)).unwrap();
         assert_eq!(found.name, "B");
-        assert!(project.get_class_from_id(&ObjectClass::Valid(99)).is_none());
+        assert!(
+            project
+                .get_class_from_id(&ObjectClass::Global(99))
+                .is_none()
+        );
     }
 
     #[test]
@@ -2141,14 +2145,14 @@ mod tests {
     fn selected_object_class_round_trips() {
         let mut project = ProjectWithRuntime::default();
         assert_eq!(project.get_selected_object_class(), ObjectClass::default());
-        project.set_selected_object_class(ObjectClass::Valid(4));
-        assert_eq!(project.get_selected_object_class(), ObjectClass::Valid(4));
+        project.set_selected_object_class(ObjectClass::Global(4));
+        assert_eq!(project.get_selected_object_class(), ObjectClass::Global(4));
     }
 
     #[test]
     fn toggle_class_visibility_is_a_flip_flop() {
         let mut project = ProjectWithRuntime::default();
-        let c = ObjectClass::Valid(1);
+        let c = ObjectClass::Global(1);
         assert!(
             project.is_class_visible(&c),
             "classes are visible by default"
@@ -2174,7 +2178,7 @@ mod tests {
     #[test]
     fn count_objects_for_class_counts_both_series_and_preview_objects() {
         let mut project = project_with_one_image();
-        let target = ObjectClass::Valid(5);
+        let target = ObjectClass::Global(5);
 
         project.add_object(&ObjectMetricSettings {
             id: ObjectId(1),
@@ -2195,7 +2199,10 @@ mod tests {
             });
 
         assert_eq!(project.count_objects_for_class(&target), 2);
-        assert_eq!(project.count_objects_for_class(&ObjectClass::Valid(999)), 0);
+        assert_eq!(
+            project.count_objects_for_class(&ObjectClass::Global(999)),
+            0
+        );
     }
 
     // -- Pixel sizes: series-level, then global override, then reset ------
@@ -2480,7 +2487,7 @@ mod tests {
         project.add_object(&ObjectMetricSettings {
             id: ObjectId(1),
             area: 1234,
-            object_class: [ObjectClass::Valid(1)].into(),
+            object_class: [ObjectClass::Global(1)].into(),
             ..Default::default()
         });
         project.save_project_as(&fs(), &path).unwrap();
@@ -3060,8 +3067,8 @@ mod tests {
                 enabled: true,
                 content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
                     PipelineCommand::TransformObjects(TransformObjectsSettings {
-                        input_class: ObjectClass::Valid(input),
-                        output_class: ObjectClass::Valid(output),
+                        input_class: ObjectClass::Global(input),
+                        output_class: ObjectClass::Global(output),
                         ..Default::default()
                     }),
                 ),
@@ -3088,9 +3095,9 @@ mod tests {
         let channels = project.get_image_channel_visibilities();
         assert_eq!(channels.get(&0), Some(&false));
         assert_eq!(channels.get(&1), Some(&true));
-        assert!(project.is_class_visible(&ObjectClass::Valid(3)));
-        assert!(project.is_class_visible(&ObjectClass::Valid(4)));
-        assert!(!project.is_class_visible(&ObjectClass::Valid(5)));
+        assert!(project.is_class_visible(&ObjectClass::Global(3)));
+        assert!(project.is_class_visible(&ObjectClass::Global(4)));
+        assert!(!project.is_class_visible(&ObjectClass::Global(5)));
     }
 
     #[test]
@@ -3104,35 +3111,35 @@ mod tests {
                 .values()
                 .all(|&v| v)
         );
-        assert!(project.is_class_visible(&ObjectClass::Valid(6)));
-        assert!(!project.is_class_visible(&ObjectClass::Valid(3)));
+        assert!(project.is_class_visible(&ObjectClass::Global(6)));
+        assert!(!project.is_class_visible(&ObjectClass::Global(3)));
     }
 
     #[test]
     fn clearing_the_focus_restores_the_users_settings_exactly() {
         let mut project = project_with_focus_pipelines();
         project.set_global_preferences(&BTreeMap::from([(0, true), (1, false)]));
-        project.toggle_class_visibility(ObjectClass::Valid(7));
+        project.toggle_class_visibility(ObjectClass::Global(7));
         let channels_before = project.get_image_channel_visibilities();
 
         project.focus_pipeline(PipelineId(1));
         // Changes while focused only touch the focus overlay ...
         project.set_global_preferences(&BTreeMap::from([(0, true), (1, true)]));
-        project.toggle_class_visibility(ObjectClass::Valid(3));
+        project.toggle_class_visibility(ObjectClass::Global(3));
         assert!(
             project
                 .get_image_channel_visibilities()
                 .values()
                 .all(|&v| v)
         );
-        assert!(!project.is_class_visible(&ObjectClass::Valid(3)));
+        assert!(!project.is_class_visible(&ObjectClass::Global(3)));
 
         // ... so leaving the focus brings back what the user had.
         project.clear_pipeline_focus();
         assert_eq!(project.focused_pipeline(), None);
         assert_eq!(project.get_image_channel_visibilities(), channels_before);
-        assert!(!project.is_class_visible(&ObjectClass::Valid(7)));
-        assert!(project.is_class_visible(&ObjectClass::Valid(3)));
+        assert!(!project.is_class_visible(&ObjectClass::Global(7)));
+        assert!(project.is_class_visible(&ObjectClass::Global(3)));
     }
 
     #[test]
@@ -3147,19 +3154,19 @@ mod tests {
     fn refresh_keeps_tweaks_until_the_pipelines_classes_change() {
         let mut project = project_with_focus_pipelines();
         project.focus_pipeline(PipelineId(1));
-        project.toggle_class_visibility(ObjectClass::Valid(3));
+        project.toggle_class_visibility(ObjectClass::Global(3));
 
         // An edit that doesn't change the classes keeps the user's tweak.
         project.pipelines[0].name = "renamed".into();
         project.refresh_pipeline_focus();
-        assert!(!project.is_class_visible(&ObjectClass::Valid(3)));
+        assert!(!project.is_class_visible(&ObjectClass::Global(3)));
 
         // A new class in the pipeline resets the focus to the new classes.
         project.pipelines[0] = focus_test_pipeline(1, ImageAddress::Channel(1), 3, 8);
         project.refresh_pipeline_focus();
-        assert!(project.is_class_visible(&ObjectClass::Valid(3)));
-        assert!(project.is_class_visible(&ObjectClass::Valid(8)));
-        assert!(!project.is_class_visible(&ObjectClass::Valid(4)));
+        assert!(project.is_class_visible(&ObjectClass::Global(3)));
+        assert!(project.is_class_visible(&ObjectClass::Global(8)));
+        assert!(!project.is_class_visible(&ObjectClass::Global(4)));
     }
 
     #[test]

@@ -315,11 +315,11 @@ fn two_class_object_settings() -> AiLearningSettings {
             },
             class_labels: vec![
                 ObjectClassLabel {
-                    class: ObjectClass::Valid(1),
+                    class: ObjectClass::Global(1),
                     name: "A".into(),
                 },
                 ObjectClassLabel {
-                    class: ObjectClass::Valid(2),
+                    class: ObjectClass::Global(2),
                     name: "B".into(),
                 },
             ],
@@ -334,7 +334,7 @@ fn project_with_labeled_objects(classes: &[u32]) -> ProjectSettings {
     for (i, class) in classes.iter().enumerate() {
         series.objects.push(ObjectMetricSettings {
             area: 10 + 1000 * i,
-            object_class: [ObjectClass::Valid(*class)].into(),
+            object_class: [ObjectClass::Global(*class)].into(),
             ..Default::default()
         });
     }

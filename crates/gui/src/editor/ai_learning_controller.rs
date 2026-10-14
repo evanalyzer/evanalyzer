@@ -1958,7 +1958,7 @@ mod tests {
         let (ui, _results_ui) = test_ui_windows();
         let mut project = project_with_one_image();
         project.classification.classes_mut().push(Class {
-            id: evanalyzer_cfg::core_types::ObjectClass::Valid(1),
+            id: evanalyzer_cfg::core_types::ObjectClass::Global(1),
             name: "Cell".into(),
             ..Default::default()
         });
@@ -1986,7 +1986,7 @@ mod tests {
         let obj = &project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0];
         assert!(
             obj.object_class
-                .contains(&evanalyzer_cfg::core_types::ObjectClass::Valid(1))
+                .contains(&evanalyzer_cfg::core_types::ObjectClass::Global(1))
         );
         drop(project);
 
@@ -2171,8 +2171,8 @@ mod tests {
     use crate::editor::test_support::{choose_file, ui_state_with_windows};
     use crate::helper::ui_thread::drain_ui_queue;
 
-    const CELL: ObjectClass = ObjectClass::Valid(1);
-    const NUCLEUS: ObjectClass = ObjectClass::Valid(2);
+    const CELL: ObjectClass = ObjectClass::Global(1);
+    const NUCLEUS: ObjectClass = ObjectClass::Global(2);
 
     /// One image with labeled objects of two classes (areas well apart),
     /// plus a second, unselected image with one labeled object.

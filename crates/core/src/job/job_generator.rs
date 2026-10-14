@@ -99,7 +99,7 @@ pub fn generate_analyze_job_from_project_settings(
         .filter_map(|c| {
             c.id.to_u32().map(|n| {
                 (
-                    evanalyzer_cfg::core_types::ObjectClass::Valid(n),
+                    evanalyzer_cfg::core_types::ObjectClass::Global(n),
                     (c.name.clone(), c.color),
                 )
             })

@@ -32,7 +32,7 @@ impl Column {
     ///
     /// `classes` (typically `ResultsGenerator::get_object_classes()`, cached
     /// there so this is cheap to call repeatedly) resolves
-    /// `ColocCount(ObjectClass::Valid(id))`'s class name for the key — falls
+    /// `ColocCount(ObjectClass::Global(id))`'s class name for the key — falls
     /// back to the raw numeric id if `classes` doesn't (yet, or any longer)
     /// recognize that id, e.g. stale GUI state after switching databases.
     pub fn as_key(&self, classes: &[Class]) -> String {
@@ -49,10 +49,10 @@ impl Column {
             Column::Circularity => "circularity".to_string(),
             Column::Solidity => "solidity".to_string(),
             Column::Eccentricity => "eccentricity".to_string(),
-            Column::ColocCount(ObjectClass::Valid(class_id)) => {
+            Column::ColocCount(ObjectClass::Global(class_id)) => {
                 let name = classes
                     .iter()
-                    .find(|class| class.id == ObjectClass::Valid(*class_id))
+                    .find(|class| class.id == ObjectClass::Global(*class_id))
                     .map(|class| class.name.clone())
                     .unwrap_or_else(|| class_id.to_string());
                 format!("n_colocalized_class_{name}")
@@ -94,7 +94,7 @@ impl Column {
                 .find(|class| class.id == *class_id)
                 .map(|class| format!("Coloc with {}", class.name))
                 .unwrap_or_else(|| match class_id {
-                    ObjectClass::Valid(n) => format!("Coloc with class {n}"),
+                    ObjectClass::Global(n) => format!("Coloc with class {n}"),
                     ObjectClass::Unset => "Coloc with unset".to_string(),
                 }),
             Column::IntensityAvg(channel) => format!("Avg Intensity (Ch {channel})"),

@@ -635,8 +635,8 @@ mod tests {
         assert!(a.iter().all(|&c| c >= 50));
     }
 
-    const RED_CLASS: ObjectClass = ObjectClass::Valid(1);
-    const OTHER_CLASS: ObjectClass = ObjectClass::Valid(2);
+    const RED_CLASS: ObjectClass = ObjectClass::Global(1);
+    const OTHER_CLASS: ObjectClass = ObjectClass::Global(2);
 
     /// A filled `size`x`size` square object whose top-left pixel is at (`x`, `y`)
     /// in whole-image coordinates.

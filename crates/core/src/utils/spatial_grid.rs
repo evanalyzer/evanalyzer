@@ -127,7 +127,7 @@ mod tests {
             plane: ImagePlane::default(),
             ..Default::default()
         });
-        object.add_object_class(ObjectClass::Valid(1));
+        object.add_object_class(ObjectClass::Global(1));
         object
     }
 

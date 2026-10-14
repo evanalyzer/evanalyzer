@@ -510,7 +510,7 @@ fn a_training_whose_client_disconnected_saves_its_model_itself() {
     for (i, class) in [1, 2].into_iter().enumerate() {
         series.objects.push(ObjectMetricSettings {
             area: 10 + 1000 * i,
-            object_class: [ObjectClass::Valid(class)].into(),
+            object_class: [ObjectClass::Global(class)].into(),
             ..Default::default()
         });
     }
@@ -519,7 +519,7 @@ fn a_training_whose_client_disconnected_saves_its_model_itself() {
     let mut project = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
     project.images.list.insert(PathBuf::from("img.tif"), entry);
     let label = |class, name: &str| ObjectClassLabel {
-        class: ObjectClass::Valid(class),
+        class: ObjectClass::Global(class),
         name: name.into(),
     };
     let settings = AiLearningSettings {

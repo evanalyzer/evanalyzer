@@ -696,8 +696,8 @@ mod tests {
         object
     }
 
-    const CLASS_A: ObjectClass = ObjectClass::Valid(1);
-    const CLASS_B: ObjectClass = ObjectClass::Valid(2);
+    const CLASS_A: ObjectClass = ObjectClass::Global(1);
+    const CLASS_B: ObjectClass = ObjectClass::Global(2);
     const ID_A: u128 = 100_000;
     const ID_B: u128 = 200_000;
 
@@ -879,8 +879,8 @@ mod tests {
     /// classes (not all of them).
     #[test]
     fn input_classes_select_objects_carrying_any_of_them() {
-        const CLASS_C: ObjectClass = ObjectClass::Valid(3);
-        const CLASS_OUT: ObjectClass = ObjectClass::Valid(9);
+        const CLASS_C: ObjectClass = ObjectClass::Global(3);
+        const CLASS_OUT: ObjectClass = ObjectClass::Global(9);
         let cmd = ClassifyObjects {
             input_classes: vec![CLASS_A, CLASS_B],
             output_class: CLASS_OUT,
@@ -911,7 +911,7 @@ mod tests {
     /// object classifier.
     #[test]
     fn origin_segmentation_restricts_the_classified_objects() {
-        const CLASS_OUT: ObjectClass = ObjectClass::Valid(9);
+        const CLASS_OUT: ObjectClass = ObjectClass::Global(9);
         let cmd = ClassifyObjects {
             origin_segmentation: vec![SegmentationClass(2)],
             output_class: CLASS_OUT,

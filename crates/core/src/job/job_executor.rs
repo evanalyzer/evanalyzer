@@ -3000,10 +3000,10 @@ mod full_run_integration_tests {
     #[test]
     fn load_annotated_objects_runs_without_segmentation_and_only_loads_the_analyzed_plane() {
         use crate::algos::LoadAnnotatedObjects;
-        const ANALYZED: ObjectClass = ObjectClass::Valid(1);
-        const OTHER_Z: ObjectClass = ObjectClass::Valid(2);
-        const OTHER_T: ObjectClass = ObjectClass::Valid(3);
-        const LOADED: ObjectClass = ObjectClass::Valid(4);
+        const ANALYZED: ObjectClass = ObjectClass::Global(1);
+        const OTHER_Z: ObjectClass = ObjectClass::Global(2);
+        const OTHER_T: ObjectClass = ObjectClass::Global(3);
+        const LOADED: ObjectClass = ObjectClass::Global(4);
 
         let out_objects = Arc::new(Mutex::new(Vec::new()));
         let rel_path = PathBuf::from("multi-channel-4D-series.ome.tif");
@@ -3421,8 +3421,8 @@ mod tile_merge_end_to_end_tests {
             .cache
     }
 
-    const CENTER_CLASS: ObjectClass = ObjectClass::Valid(1);
-    const VORONOI_CLASS: ObjectClass = ObjectClass::Valid(2);
+    const CENTER_CLASS: ObjectClass = ObjectClass::Global(1);
+    const VORONOI_CLASS: ObjectClass = ObjectClass::Global(2);
 
     fn default_voronoi() -> Voronoi {
         Voronoi {

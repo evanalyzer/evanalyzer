@@ -253,11 +253,11 @@ mod tests {
                 },
                 class_labels: vec![
                     ObjectClassLabel {
-                        class: ObjectClass::Valid(1),
+                        class: ObjectClass::Global(1),
                         name: "A".into(),
                     },
                     ObjectClassLabel {
-                        class: ObjectClass::Valid(2),
+                        class: ObjectClass::Global(2),
                         name: "B".into(),
                     },
                 ],
@@ -272,7 +272,7 @@ mod tests {
         for (i, class) in classes.iter().enumerate() {
             series.objects.push(ObjectMetricSettings {
                 area: 10 + 1000 * i,
-                object_class: [ObjectClass::Valid(*class)].into(),
+                object_class: [ObjectClass::Global(*class)].into(),
                 ..Default::default()
             });
         }
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn resolve_pixel_label_matches_the_one_configured_class() {
         let labels = vec![class_label(1, "Cell"), class_label(2, "Background")];
-        let object_class = HashSet::from([ObjectClass::Valid(1)]);
+        let object_class = HashSet::from([ObjectClass::Global(1)]);
         assert_eq!(
             resolve_pixel_label(&labels, &object_class),
             Some(SegmentationClass(1))
@@ -296,14 +296,14 @@ mod tests {
     #[test]
     fn resolve_pixel_label_is_none_for_an_unconfigured_class() {
         let labels = vec![class_label(1, "Cell")];
-        let object_class = HashSet::from([ObjectClass::Valid(99)]);
+        let object_class = HashSet::from([ObjectClass::Global(99)]);
         assert_eq!(resolve_pixel_label(&labels, &object_class), None);
     }
 
     #[test]
     fn resolve_pixel_label_is_none_when_ambiguous() {
         let labels = vec![class_label(1, "Cell"), class_label(2, "Background")];
-        let object_class = HashSet::from([ObjectClass::Valid(1), ObjectClass::Valid(2)]);
+        let object_class = HashSet::from([ObjectClass::Global(1), ObjectClass::Global(2)]);
         assert_eq!(resolve_pixel_label(&labels, &object_class), None);
     }
 
@@ -312,7 +312,7 @@ mod tests {
         let mut project = ProjectSettings::default();
         project.images.root = Some(PathBuf::from("/data/images"));
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(1),
+            id: ObjectClass::Global(1),
             name: "Cell".into(),
             ..Default::default()
         });
@@ -326,7 +326,7 @@ mod tests {
                 series: std::collections::BTreeMap::from([(
                     0,
                     SeriesSettings {
-                        objects: vec![labeled_object(1, ObjectClass::Valid(1))],
+                        objects: vec![labeled_object(1, ObjectClass::Global(1))],
                         ..Default::default()
                     },
                 )]),
@@ -343,7 +343,7 @@ mod tests {
             },
         );
 
-        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let selected = HashSet::from([ObjectClass::Global(1)]);
         let class_labels = pixel_class_labels_from_project(&project, &selected);
         let images = gather_pixel_training_images(&project, &class_labels).unwrap();
 
@@ -359,7 +359,7 @@ mod tests {
     fn gather_pixel_training_images_errors_when_no_image_root_is_set_but_data_is_labeled() {
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(1),
+            id: ObjectClass::Global(1),
             name: "Cell".into(),
             ..Default::default()
         });
@@ -373,14 +373,14 @@ mod tests {
                 series: std::collections::BTreeMap::from([(
                     0,
                     SeriesSettings {
-                        objects: vec![labeled_object(1, ObjectClass::Valid(1))],
+                        objects: vec![labeled_object(1, ObjectClass::Global(1))],
                         ..Default::default()
                     },
                 )]),
             },
         );
 
-        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let selected = HashSet::from([ObjectClass::Global(1)]);
         let class_labels = pixel_class_labels_from_project(&project, &selected);
         let Err(err) = gather_pixel_training_images(&project, &class_labels) else {
             panic!("labeled data with no image root must error, not train on 0 samples");
@@ -405,7 +405,7 @@ mod tests {
                     0,
                     SeriesSettings {
                         objects: vec![
-                            labeled_object(1, ObjectClass::Valid(1)),
+                            labeled_object(1, ObjectClass::Global(1)),
                             ObjectMetricSettings {
                                 id: ObjectId(2),
                                 ..Default::default()
@@ -426,7 +426,7 @@ mod tests {
     fn gather_labeled_objects_skips_a_labeled_object_marked_excluded() {
         let mut project = ProjectSettings::default();
         let path = PathBuf::from("a.tif");
-        let mut excluded = labeled_object(1, ObjectClass::Valid(1));
+        let mut excluded = labeled_object(1, ObjectClass::Global(1));
         excluded.exclude_from_training = true;
         project.images.list.insert(
             path.clone(),
@@ -437,7 +437,7 @@ mod tests {
                 series: std::collections::BTreeMap::from([(
                     0,
                     SeriesSettings {
-                        objects: vec![excluded, labeled_object(2, ObjectClass::Valid(1))],
+                        objects: vec![excluded, labeled_object(2, ObjectClass::Global(1))],
                         ..Default::default()
                     },
                 )]),
@@ -455,12 +455,12 @@ mod tests {
         let mut project = ProjectSettings::default();
         project.images.root = Some(PathBuf::from("/data/images"));
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(1),
+            id: ObjectClass::Global(1),
             name: "Cell".into(),
             ..Default::default()
         });
         let path = PathBuf::from("a.tif");
-        let mut excluded = labeled_object(1, ObjectClass::Valid(1));
+        let mut excluded = labeled_object(1, ObjectClass::Global(1));
         excluded.exclude_from_training = true;
         project.images.list.insert(
             path.clone(),
@@ -478,7 +478,7 @@ mod tests {
             },
         );
 
-        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let selected = HashSet::from([ObjectClass::Global(1)]);
         let class_labels = pixel_class_labels_from_project(&project, &selected);
         let images = gather_pixel_training_images(&project, &class_labels).unwrap();
 

@@ -68,7 +68,7 @@ mod tests {
     fn project_with_class(id: u32, hex_color: u32) -> ProjectWithRuntime {
         let mut project = ProjectWithRuntime::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(id),
+            id: ObjectClass::Global(id),
             color: hex_color,
             name: format!("class-{id}"),
             ..Default::default()
@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn get_colors_from_class_uses_the_registered_classs_color_and_given_transparency() {
         let project = project_with_class(1, 0x00FF00); // pure green
-        let classes = HashSet::from([ObjectClass::Valid(1)]);
+        let classes = HashSet::from([ObjectClass::Global(1)]);
         let color = get_colors_from_class(&project, 64, &classes);
         assert_eq!(
             (color.red(), color.green(), color.blue(), color.alpha()),
@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn get_colors_from_class_falls_back_to_red_for_an_unknown_class() {
         let project = ProjectWithRuntime::default(); // no classes registered
-        let classes = HashSet::from([ObjectClass::Valid(99)]);
+        let classes = HashSet::from([ObjectClass::Global(99)]);
         let color = get_colors_from_class(&project, 200, &classes);
         assert_eq!(
             (color.red(), color.green(), color.blue(), color.alpha()),
@@ -112,16 +112,16 @@ mod tests {
     fn get_colors_from_class_averages_multiple_classes() {
         let mut project = ProjectWithRuntime::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(1),
+            id: ObjectClass::Global(1),
             color: 0xFF0000, // red
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(2),
+            id: ObjectClass::Global(2),
             color: 0x0000FF, // blue
             ..Default::default()
         });
-        let classes = HashSet::from([ObjectClass::Valid(1), ObjectClass::Valid(2)]);
+        let classes = HashSet::from([ObjectClass::Global(1), ObjectClass::Global(2)]);
         let color = get_colors_from_class(&project, 255, &classes);
         // (255+0)/2 = 127 (integer division), (0+255)/2 = 127
         assert_eq!(color.red(), 127);

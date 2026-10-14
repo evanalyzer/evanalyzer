@@ -135,7 +135,7 @@ impl DuckDbExporter {
                 .appender("classes")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
             for (class, (name, color)) in &class_names {
-                if let ObjectClass::Valid(n) = class {
+                if let ObjectClass::Global(n) = class {
                     app.append_row(params![*n, name, color])
                         .map_err(|e| InternalErrors::Io(e.to_string()))?;
                 }
@@ -247,7 +247,7 @@ impl DuckDbExporter {
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),
-            ObjectClass::Valid(n) => match self.class_names.get(class) {
+            ObjectClass::Global(n) => match self.class_names.get(class) {
                 Some((name, _color)) => name.clone(),
                 None => format!("class_{}", n),
             },
@@ -421,7 +421,7 @@ impl ObjectColumns {
     ) -> Result<(), InternalErrors> {
         for (class, ids) in colocalized_with {
             self.coloc_partner_ids.keys().append_value(match class {
-                ObjectClass::Valid(n) => *n as i32,
+                ObjectClass::Global(n) => *n as i32,
                 ObjectClass::Unset => COLOC_UNSET_CLASS_KEY,
             });
             let partners = self.coloc_partner_ids.values();
@@ -783,7 +783,7 @@ impl DuckDbExporter {
             c.object_class_name
                 .append_value(json_string_array(&object_class_names));
             for class in &object.object_class {
-                if let ObjectClass::Valid(n) = class {
+                if let ObjectClass::Global(n) = class {
                     c.object_class_id.values().append_value(*n as i32);
                 }
             }
@@ -953,7 +953,7 @@ impl PipelineResultExporter for DuckDbExporter {
 impl DatasetStore for DuckDbExporter {
     fn get_objects(&self, filter: &ObjectFilter) -> Result<Vec<StoredObject>, InternalErrors> {
         let class_id = match filter.object_class {
-            Some(ObjectClass::Valid(n)) => Some(n as i32),
+            Some(ObjectClass::Global(n)) => Some(n as i32),
             Some(ObjectClass::Unset) => return Ok(Vec::new()),
             None => None,
         };
@@ -991,7 +991,7 @@ impl DatasetStore for DuckDbExporter {
                             area_px: row.get(10)?,
                             object_classes: list_values(row.get(11)?)
                                 .filter_map(|v| match v {
-                                    Value::Int(n) if n >= 0 => Some(ObjectClass::Valid(n as u32)),
+                                    Value::Int(n) if n >= 0 => Some(ObjectClass::Global(n as u32)),
                                     _ => None,
                                 })
                                 .collect(),
@@ -1016,7 +1016,7 @@ impl DatasetStore for DuckDbExporter {
 
     fn max_track_id_except(&self, class: ObjectClass) -> Result<u64, InternalErrors> {
         let class_id = match class {
-            ObjectClass::Valid(n) => n as i32,
+            ObjectClass::Global(n) => n as i32,
             ObjectClass::Unset => -1, // never stored: excludes nothing
         };
         self.lock_conn()
@@ -1085,7 +1085,7 @@ mod tests {
             id: ObjectId(id),
             object_class: classes
                 .iter()
-                .map(|c| ObjectClass::Valid(*c))
+                .map(|c| ObjectClass::Global(*c))
                 .collect::<HashSet<_>>(),
             bbox: [0, 0, 1, 1],
             mask_data: BitVec::<u64, Lsb0>::repeat(true, 4),
@@ -1374,7 +1374,7 @@ mod tests {
         }
         object
             .colocalized_with
-            .insert(ObjectClass::Valid(7), vec![ObjectId(2), ObjectId(3)]);
+            .insert(ObjectClass::Global(7), vec![ObjectId(2), ObjectId(3)]);
         cache.object_cache.insert(ObjectId(1), object);
         cache
             .object_cache
@@ -1499,7 +1499,7 @@ mod tests {
         assert_eq!(ids(in_b).len(), 2);
         let frame_1_class_1 = ObjectFilter {
             t_stack: Some(1),
-            object_class: Some(ObjectClass::Valid(1)),
+            object_class: Some(ObjectClass::Global(1)),
             ..Default::default()
         };
         assert_eq!(
@@ -1517,7 +1517,7 @@ mod tests {
         assert_eq!(row.centroid_px, (12.0, 25.0), "centre of the bounding box");
         assert_eq!(row.bbox_px, [10, 20, 14, 30]);
         assert_eq!(row.area_px, 4);
-        assert_eq!(row.object_classes, [ObjectClass::Valid(1)]);
+        assert_eq!(row.object_classes, [ObjectClass::Global(1)]);
         assert_eq!(
             row.intensity_mean,
             [None, Some(0.5)],

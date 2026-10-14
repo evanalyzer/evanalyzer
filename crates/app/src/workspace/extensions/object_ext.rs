@@ -100,8 +100,8 @@ mod tests {
     #[test]
     fn add_object_class_inserts_a_valid_class_but_rejects_unset() {
         let mut object = ObjectMetricSettings::default();
-        object.add_object_class(ObjectClass::Valid(1));
-        assert!(object.object_class.contains(&ObjectClass::Valid(1)));
+        object.add_object_class(ObjectClass::Global(1));
+        assert!(object.object_class.contains(&ObjectClass::Global(1)));
 
         object.add_object_class(ObjectClass::Unset);
         assert!(
@@ -114,28 +114,28 @@ mod tests {
     #[test]
     fn add_object_class_is_idempotent() {
         let mut object = ObjectMetricSettings::default();
-        object.add_object_class(ObjectClass::Valid(5));
-        object.add_object_class(ObjectClass::Valid(5));
+        object.add_object_class(ObjectClass::Global(5));
+        object.add_object_class(ObjectClass::Global(5));
         assert_eq!(object.object_class.len(), 1);
     }
 
     #[test]
     fn remove_object_class_only_removes_the_given_class() {
         let mut object = ObjectMetricSettings::default();
-        object.add_object_class(ObjectClass::Valid(1));
-        object.add_object_class(ObjectClass::Valid(2));
+        object.add_object_class(ObjectClass::Global(1));
+        object.add_object_class(ObjectClass::Global(2));
 
-        object.remove_object_class(&ObjectClass::Valid(1));
+        object.remove_object_class(&ObjectClass::Global(1));
 
-        assert!(!object.object_class.contains(&ObjectClass::Valid(1)));
-        assert!(object.object_class.contains(&ObjectClass::Valid(2)));
+        assert!(!object.object_class.contains(&ObjectClass::Global(1)));
+        assert!(object.object_class.contains(&ObjectClass::Global(2)));
     }
 
     #[test]
     fn remove_object_class_on_a_missing_class_is_a_no_op() {
         let mut object = ObjectMetricSettings::default();
-        object.add_object_class(ObjectClass::Valid(2));
-        object.remove_object_class(&ObjectClass::Valid(99));
+        object.add_object_class(ObjectClass::Global(2));
+        object.remove_object_class(&ObjectClass::Global(99));
         assert_eq!(object.object_class.len(), 1);
     }
 }

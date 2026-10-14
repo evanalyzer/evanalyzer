@@ -836,7 +836,7 @@ mod tests {
         let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
         let classified = || {
             let mut object = ObjectMetricSettings::default();
-            object.object_class.insert(ObjectClass::Valid(1));
+            object.object_class.insert(ObjectClass::Global(1));
             object
         };
         {
@@ -844,7 +844,7 @@ mod tests {
             project.images.root = Some(PathBuf::from("/data/images"));
             project.classification.classes_mut().push(
                 evanalyzer_cfg::settings::classification_settings::Class {
-                    id: ObjectClass::Valid(1),
+                    id: ObjectClass::Global(1),
                     name: "Nuclei".into(),
                     ..Default::default()
                 },

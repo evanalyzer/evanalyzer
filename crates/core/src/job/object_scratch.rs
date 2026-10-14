@@ -123,7 +123,7 @@ mod tests {
     fn write_then_read_round_trips_the_tile_and_every_object_field() {
         let store = TileObjectStore::new().expect("scratch dir must be creatable");
         let original_tile = tile(20, 0, 20, 20);
-        let object = rect_object(1, [21, 1, 24, 4], ObjectClass::Valid(7));
+        let object = rect_object(1, [21, 1, 24, 4], ObjectClass::Global(7));
 
         store
             .write_tile(0, original_tile.clone(), vec![object.clone()])
@@ -147,8 +147,8 @@ mod tests {
     #[test]
     fn different_tiles_in_the_same_store_do_not_collide() {
         let store = TileObjectStore::new().expect("scratch dir must be creatable");
-        let a = rect_object(1, [0, 0, 4, 4], ObjectClass::Valid(1));
-        let b = rect_object(2, [0, 0, 4, 4], ObjectClass::Valid(2));
+        let a = rect_object(1, [0, 0, 4, 4], ObjectClass::Global(1));
+        let b = rect_object(2, [0, 0, 4, 4], ObjectClass::Global(2));
 
         store
             .write_tile(0, tile(0, 0, 5, 5), vec![a])
@@ -161,9 +161,9 @@ mod tests {
         let (tile1, objects1) = store.read_tile(1).expect("read tile 1 must succeed");
 
         assert_eq!(tile0.offset_x, 0);
-        assert_eq!(objects0[0].object_class, [ObjectClass::Valid(1)].into());
+        assert_eq!(objects0[0].object_class, [ObjectClass::Global(1)].into());
         assert_eq!(tile1.offset_x, 5);
-        assert_eq!(objects1[0].object_class, [ObjectClass::Valid(2)].into());
+        assert_eq!(objects1[0].object_class, [ObjectClass::Global(2)].into());
     }
 
     #[test]

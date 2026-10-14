@@ -128,14 +128,14 @@ mod tests {
             .write_tile(
                 0,
                 tile(0, 0, 10, 10),
-                vec![rect_object(1, [1, 1, 4, 4], ObjectClass::Valid(1))],
+                vec![rect_object(1, [1, 1, 4, 4], ObjectClass::Global(1))],
             )
             .expect("write tile 0");
         store
             .write_tile(
                 1,
                 tile(10, 0, 10, 10),
-                vec![rect_object(2, [11, 1, 14, 4], ObjectClass::Valid(2))],
+                vec![rect_object(2, [11, 1, 14, 4], ObjectClass::Global(2))],
             )
             .expect("write tile 1");
 
@@ -145,7 +145,7 @@ mod tests {
         let meta1 = index.get(&ObjectId(1)).expect("object 1 must be indexed");
         assert_eq!(meta1.tile_index, 0);
         assert_eq!(meta1.bbox, [1, 1, 4, 4]);
-        assert_eq!(meta1.object_class, [ObjectClass::Valid(1)].into());
+        assert_eq!(meta1.object_class, [ObjectClass::Global(1)].into());
 
         let meta2 = index.get(&ObjectId(2)).expect("object 2 must be indexed");
         assert_eq!(meta2.tile_index, 1);
@@ -167,8 +167,8 @@ mod tests {
                 0,
                 tile(0, 0, 10, 10),
                 vec![
-                    rect_object(1, [1, 1, 4, 4], ObjectClass::Valid(1)),
-                    rect_object(2, [5, 5, 8, 8], ObjectClass::Valid(1)),
+                    rect_object(1, [1, 1, 4, 4], ObjectClass::Global(1)),
+                    rect_object(2, [5, 5, 8, 8], ObjectClass::Global(1)),
                 ],
             )
             .expect("write tile 0");

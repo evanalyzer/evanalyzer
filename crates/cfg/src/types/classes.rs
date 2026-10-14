@@ -77,27 +77,28 @@ impl std::fmt::Display for SegmentationClass {
 pub enum ObjectClass {
     #[default]
     Unset,
-    Valid(u32),
+    #[serde(alias = "VALID")]
+    Global(u32),
 }
 
 #[allow(dead_code)]
 impl ObjectClass {
-    pub const BACKGROUND: Self = ObjectClass::Valid(0);
+    pub const BACKGROUND: Self = ObjectClass::Global(0);
 
     pub fn from_segmentation_class(class: SegmentationClass) -> Self {
-        ObjectClass::Valid(class.0)
+        ObjectClass::Global(class.0)
     }
 
     pub fn to_u32(&self) -> Option<u32> {
         match self {
-            ObjectClass::Valid(val) => Some(*val),
+            ObjectClass::Global(val) => Some(*val),
             ObjectClass::Unset => None,
         }
     }
     pub fn to_i32(&self) -> i32 {
         match self {
             ObjectClass::Unset => -1,
-            ObjectClass::Valid(val) => *val as i32,
+            ObjectClass::Global(val) => *val as i32,
         }
     }
 }
@@ -118,9 +119,9 @@ impl Add for ObjectClass {
     fn add(self, other: Self) -> Self {
         match (self, other) {
             // Case 1: Both are valid numbers
-            (ObjectClass::Valid(a), ObjectClass::Valid(b)) => {
+            (ObjectClass::Global(a), ObjectClass::Global(b)) => {
                 // Using wrapping_add to prevent panics on overflow
-                ObjectClass::Valid(a.wrapping_add(b))
+                ObjectClass::Global(a.wrapping_add(b))
             }
             // Case 2: If either one is 'Special', the result is 'Special'
             _ => ObjectClass::Unset,
@@ -130,6 +131,21 @@ impl Add for ObjectClass {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn project_classes_are_written_as_global_and_old_valid_ones_still_load() {
+        let json = serde_json::to_string(&ObjectClass::Global(3)).unwrap();
+        assert_eq!(json, r#"{"GLOBAL":3}"#);
+        let old: ObjectClass = serde_json::from_str(r#"{"VALID":3}"#).unwrap();
+        assert_eq!(old, ObjectClass::Global(3), "files written before");
+        // Projects load through `serde_json::Value`.
+        let value: serde_json::Value = serde_json::from_str(r#"{"VALID":3}"#).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ObjectClass>(value).unwrap(),
+            ObjectClass::Global(3)
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -181,42 +197,42 @@ mod tests {
     fn object_class_from_segmentation_class_wraps_the_id_as_valid() {
         assert_eq!(
             ObjectClass::from_segmentation_class(SegmentationClass(3)),
-            ObjectClass::Valid(3)
+            ObjectClass::Global(3)
         );
     }
 
     #[test]
     fn object_class_to_u32_is_some_for_valid_and_none_for_unset() {
-        assert_eq!(ObjectClass::Valid(4).to_u32(), Some(4));
+        assert_eq!(ObjectClass::Global(4).to_u32(), Some(4));
         assert_eq!(ObjectClass::Unset.to_u32(), None);
     }
 
     #[test]
     fn object_class_to_i32_is_the_id_for_valid_and_negative_one_for_unset() {
-        assert_eq!(ObjectClass::Valid(4).to_i32(), 4);
+        assert_eq!(ObjectClass::Global(4).to_i32(), 4);
         assert_eq!(ObjectClass::Unset.to_i32(), -1);
     }
 
     #[test]
     fn adding_two_valid_object_classes_wrapping_adds_their_ids() {
         assert_eq!(
-            ObjectClass::Valid(2) + ObjectClass::Valid(3),
-            ObjectClass::Valid(5)
+            ObjectClass::Global(2) + ObjectClass::Global(3),
+            ObjectClass::Global(5)
         );
         assert_eq!(
-            ObjectClass::Valid(u32::MAX) + ObjectClass::Valid(1),
-            ObjectClass::Valid(0)
+            ObjectClass::Global(u32::MAX) + ObjectClass::Global(1),
+            ObjectClass::Global(0)
         );
     }
 
     #[test]
     fn adding_an_unset_object_class_to_anything_yields_unset() {
         assert_eq!(
-            ObjectClass::Valid(2) + ObjectClass::Unset,
+            ObjectClass::Global(2) + ObjectClass::Unset,
             ObjectClass::Unset
         );
         assert_eq!(
-            ObjectClass::Unset + ObjectClass::Valid(2),
+            ObjectClass::Unset + ObjectClass::Global(2),
             ObjectClass::Unset
         );
         assert_eq!(ObjectClass::Unset + ObjectClass::Unset, ObjectClass::Unset);

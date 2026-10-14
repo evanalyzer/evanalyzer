@@ -368,7 +368,7 @@ fn flags_to_classes(flags: &slint::ModelRc<slint::SharedString>) -> Vec<ObjectCl
         .iter()
         .enumerate()
         .filter(|(_, f)| f.as_str() == "1")
-        .map(|(i, _)| ObjectClass::Valid(i as u32))
+        .map(|(i, _)| ObjectClass::Global(i as u32))
         .collect()
 }
 
@@ -686,9 +686,9 @@ mod tests {
     #[test]
     fn classes_to_flags_sets_only_the_given_classes_and_drops_out_of_range_ids() {
         let flags = classes_to_flags(&[
-            ObjectClass::Valid(1),
-            ObjectClass::Valid(3),
-            ObjectClass::Valid(99), // out of the 0-32 picker range, dropped
+            ObjectClass::Global(1),
+            ObjectClass::Global(3),
+            ObjectClass::Global(99), // out of the 0-32 picker range, dropped
         ]);
         assert_eq!(flags.len(), 33);
         assert_eq!(flags[1], "1");
@@ -702,7 +702,7 @@ mod tests {
 
     #[test]
     fn flags_to_classes_is_the_inverse_of_classes_to_flags() {
-        let classes = vec![ObjectClass::Valid(2), ObjectClass::Valid(5)];
+        let classes = vec![ObjectClass::Global(2), ObjectClass::Global(5)];
         let flags = classes_to_flags(&classes);
         let model: slint::ModelRc<slint::SharedString> =
             slint::ModelRc::new(slint::VecModel::from(flags));
@@ -731,8 +731,8 @@ mod tests {
         settings.tile_merge_enabled = true;
         settings.tile_merge_classes_to_not_merge_flags =
             slint::ModelRc::new(slint::VecModel::from(classes_to_flags(&[
-                ObjectClass::Valid(1),
-                ObjectClass::Valid(2),
+                ObjectClass::Global(1),
+                ObjectClass::Global(2),
             ])));
         settings.tile_merge_connectivity = 0;
         settings.tile_merge_max_fragments_per_group = 500;
@@ -743,7 +743,7 @@ mod tests {
         assert!(project.tile_merge.enabled);
         assert_eq!(
             project.tile_merge.classes_to_not_merge,
-            vec![ObjectClass::Valid(1), ObjectClass::Valid(2)]
+            vec![ObjectClass::Global(1), ObjectClass::Global(2)]
         );
         assert_eq!(
             project.tile_merge.connectivity,

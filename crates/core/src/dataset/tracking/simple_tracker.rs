@@ -210,7 +210,7 @@ mod tests {
             track_id: None,
             bbox_px: [0, 0, 1, 1],
             area_px: 1,
-            object_classes: vec![ObjectClass::Valid(1)],
+            object_classes: vec![ObjectClass::Global(1)],
             intensity_mean: Vec::new(),
         }
     }
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn the_maximum_distance_in_nm_is_converted_with_the_images_pixel_size() {
         let tracker = SimpleTracker {
-            object_class: ObjectClass::Valid(1),
+            object_class: ObjectClass::Global(1),
             unit: SizeUnits::NanoMeter,
             max_distance: 1000.0,
         };
@@ -293,7 +293,7 @@ mod store_tests {
     fn cell(id: u128, class: u32, t: i32, x: u32, track: u64) -> Object {
         let mut object = Object::new(ObjectInit {
             id: ObjectId(id),
-            object_class: HashSet::from([ObjectClass::Valid(class)]),
+            object_class: HashSet::from([ObjectClass::Global(class)]),
             area: 4,
             bbox: [x, 10, x + 2, 12],
             plane: ImagePlane { z: 0, c: 0, t },
@@ -329,7 +329,7 @@ mod store_tests {
         exporter.export(&cache).unwrap();
 
         let tracker = SimpleTracker {
-            object_class: ObjectClass::Valid(1),
+            object_class: ObjectClass::Global(1),
             unit: SizeUnits::Pixels,
             max_distance: 10.0,
         };
@@ -378,7 +378,7 @@ mod store_tests {
             cancel: Arc::new(AtomicBool::new(false)),
         };
         let tracker = SimpleTracker {
-            object_class: ObjectClass::Valid(1),
+            object_class: ObjectClass::Global(1),
             unit: SizeUnits::Pixels,
             max_distance: 0.0,
         };

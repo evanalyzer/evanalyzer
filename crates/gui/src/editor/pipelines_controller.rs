@@ -3332,8 +3332,8 @@ mod tests {
     fn reconcile_ai_object_classifier_mapping_clears_the_mapping_when_model_path_is_empty() {
         let mut settings = AiObjectClassifierSettings {
             segmentation_mapping: vec![ClassificationMappingSettings {
-                object_class: ObjectClass::Valid(1),
-                output_class: ObjectClass::Valid(2),
+                object_class: ObjectClass::Global(1),
+                output_class: ObjectClass::Global(2),
             }],
             ..Default::default()
         };

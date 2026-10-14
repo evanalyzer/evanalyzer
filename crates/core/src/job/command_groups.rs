@@ -295,8 +295,8 @@ mod tests {
         };
         assert_eq!(blur.kernel_size, 3, "the definition's default");
         // One group parameter, two inner parameters - always the same value.
-        assert_eq!(voronoi(&commands[1].1).centers, ObjectClass::Valid(4));
-        assert_eq!(voronoi(&commands[1].1).output_class, ObjectClass::Valid(4));
+        assert_eq!(voronoi(&commands[1].1).centers, ObjectClass::Global(4));
+        assert_eq!(voronoi(&commands[1].1).output_class, ObjectClass::Global(4));
         // A breakpoint on the group stops after it.
         assert_eq!(commands[0].0, StepId::UNASSIGNED);
         assert_eq!(commands[1].0, StepId(9));
@@ -328,7 +328,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(commands.len(), 3);
-        assert_eq!(voronoi(&commands[1].1).centers, ObjectClass::Valid(7));
+        assert_eq!(voronoi(&commands[1].1).centers, ObjectClass::Global(7));
         assert_eq!(commands[2].0, StepId(4));
     }
 
