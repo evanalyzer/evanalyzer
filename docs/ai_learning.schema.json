@@ -480,6 +480,15 @@
           "items": {
             "type": "string"
           }
+        },
+        "version": {
+          "description": "The author's version of this group or template",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       },
       "required": [

@@ -1,4 +1,5 @@
 use crate::modules::classification_settings::ClassificationSettings;
+use crate::modules::command_groups::GroupDefinition;
 use crate::modules::meta_data::MetaData;
 use crate::modules::pipeline_settings::PipelineSettings;
 use crate::modules::pipeline_settings::PipelineStepSettings;
@@ -50,4 +51,9 @@ pub struct ProjectTemplate {
 
     /// Pipelines to execute
     pub pipelines: Vec<PipelineSettings>,
+
+    /// The command group definitions the pipelines use. Absent in templates
+    /// saved before groups existed.
+    #[serde(default)]
+    pub command_groups: Vec<GroupDefinition>,
 }

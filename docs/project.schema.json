@@ -6,6 +6,14 @@
     "classification": {
       "$ref": "#/$defs/ClassificationSettings"
     },
+    "commandGroups": {
+      "description": "The command group definitions; pipelines use them as instances\n(by `key`). Absent in projects saved before groups existed.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/GroupDefinition"
+      }
+    },
     "images": {
       "description": "The collection of images and their associated processing states.",
       "$ref": "#/$defs/ImageSettings"
@@ -941,6 +949,123 @@
         "channels"
       ]
     },
+    "GroupDefinition": {
+      "description": "A group as defined in the project: its steps and the parameters it shows.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "Unique group key, prefere SCREAMING_SNAKE_CASE",
+          "type": "string"
+        },
+        "meta": {
+          "description": "Metadata of this group",
+          "$ref": "#/$defs/MetaData"
+        },
+        "origin": {
+          "description": "The library file this definition was inserted from, if any.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GroupOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameters": {
+          "description": "The group's parameters: shown to the user ([`ParamKind::Exposed`])\nor set per instance behind the scenes ([`ParamKind::InternalClass`]).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GroupParameterDef"
+          }
+        },
+        "steps": {
+          "description": "The steps which are executed in the given order",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PipelineStepSettings"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "meta",
+        "steps",
+        "parameters"
+      ]
+    },
+    "GroupOrigin": {
+      "description": "Where a definition came from: a group library file.",
+      "type": "object",
+      "properties": {
+        "library": {
+          "description": "The library file's name (`.evagroup`).",
+          "type": "string"
+        },
+        "originGroupKey": {
+          "description": "If this is a copy form an existing group, this is the origin group key.\nThis allows to reset the group default settings.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The definition's version in that file when it was inserted.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "originGroupKey",
+        "library",
+        "version"
+      ]
+    },
+    "GroupParamId": {
+      "description": "A group parameter's id, unique within its group definition. The values a\ngroup instance holds are keyed by it, so they survive reordering and\nrelabelling the definition's parameters.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "GroupParameterDef": {
+      "description": "One parameter of a group: what it sets inside the group, and its default.",
+      "type": "object",
+      "properties": {
+        "bindings": {
+          "description": "The inner parameters this one sets - all of the same type. Type,\noptions and range are those of the bound parameters (not stored here,\nso they can't go stale when a command changes).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParamBinding"
+          }
+        },
+        "default": {
+          "description": "The value an instance starts with.",
+          "$ref": "#/$defs/ParamValue"
+        },
+        "description": {
+          "description": "Explanation shown to the user.",
+          "type": "string",
+          "default": ""
+        },
+        "id": {
+          "description": "Unique within the group definition.",
+          "$ref": "#/$defs/GroupParamId"
+        },
+        "kind": {
+          "$ref": "#/$defs/ParamKind"
+        },
+        "label": {
+          "description": "Name shown to the user, e.g. \"Cell class\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "default",
+        "kind",
+        "bindings"
+      ]
+    },
     "GroupingMode": {
       "description": "How images are grouped into wells.",
       "oneOf": [
@@ -1545,6 +1670,15 @@
           "items": {
             "type": "string"
           }
+        },
+        "version": {
+          "description": "The author's version of this group or template",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       },
       "required": [
@@ -2146,6 +2280,66 @@
             "margin",
             "unit"
           ]
+        }
+      ]
+    },
+    "ParamBinding": {
+      "description": "An inner parameter a group parameter sets.",
+      "type": "object",
+      "properties": {
+        "param": {
+          "description": "The parameter's path in that step's command, as `ParameterDef::name`\ngives it (e.g. \"class_out\", \"method.classes\"). A path into a list\nentry (\"thresholds.2.min\") breaks when entries are added or removed.",
+          "type": "string"
+        },
+        "step": {
+          "description": "The step of the group that owns the parameter.",
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "step",
+        "param"
+      ]
+    },
+    "ParamKind": {
+      "description": "Whether the user sees a group parameter.",
+      "oneOf": [
+        {
+          "description": "Shown on the group card and set by the user.",
+          "type": "string",
+          "const": "EXPOSED"
+        },
+        {
+          "description": "A class only used inside the group (e.g. \"Seed\"): hidden, and each\ninstance gets a class of its own, so two instances never share it.",
+          "type": "string",
+          "const": "INTERNAL_CLASS"
+        }
+      ]
+    },
+    "ParamValue": {
+      "description": "A group parameter's value - written as plain JSON (`4`, `4.5`, `true`,\n`\"PARABOLOID\"`, `[1, 2]`). Typed by JSON kind only: what it means (a\nclass, a channel, a dropdown option) and which values are valid come\nfrom the bound inner parameters.",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "description": "Dropdown options, units, paths ...",
+          "type": "string"
+        },
+        {
+          "description": "Several values, e.g. a multi-class or multi-channel selection.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParamValue"
+          }
         }
       ]
     },

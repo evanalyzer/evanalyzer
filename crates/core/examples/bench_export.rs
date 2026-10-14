@@ -115,6 +115,7 @@ fn main() {
             description: "Long description".into(),
             authors: vec![],
             creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+            version: None,
             category: "Test category".into(),
             tags: vec![],
             app_version: "v1.0.0".into(),

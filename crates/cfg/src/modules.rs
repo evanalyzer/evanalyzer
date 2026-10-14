@@ -2,6 +2,7 @@ pub mod ai_learning_object_settings;
 pub mod ai_learning_pixel_settings;
 pub mod ai_learning_settings;
 pub mod classification_settings;
+pub mod command_groups;
 pub mod images_settings;
 pub mod meta_data;
 pub mod object_settings;
@@ -10,7 +11,6 @@ pub mod parameter_def;
 pub mod pipeline_command;
 #[allow(dead_code, unused_variables, unused_imports)]
 pub mod pipeline_command_settings;
-pub mod pipeline_groups;
 pub mod pipeline_settings;
 pub mod plate_settings;
 pub mod project_settings;

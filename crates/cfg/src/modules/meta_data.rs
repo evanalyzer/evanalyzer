@@ -32,6 +32,10 @@ pub struct MetaData {
     /// Creation time
     pub creation_time: chrono::DateTime<chrono::Utc>,
 
+    /// The author's version of this group or template
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+
     /// Category used to group templates in pickers (e.g. "Cell Biology / Uptake")
     #[serde(default)]
     pub category: String,
@@ -45,4 +49,29 @@ pub struct MetaData {
     /// existed, or built by hand rather than saved from the app.
     #[serde(default)]
     pub app_version: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_version_is_optional_and_only_written_when_set() {
+        let meta: MetaData =
+            serde_json::from_str(r#"{"name":"X","shortDescription":"","description":"","creationTime":"2026-10-14T00:00:00Z"}"#)
+                .unwrap();
+        assert_eq!(meta.version, None);
+        assert!(!serde_json::to_string(&meta).unwrap().contains("version\""));
+
+        let versioned = MetaData {
+            version: Some(3),
+            ..meta
+        };
+        let json = serde_json::to_string(&versioned).unwrap();
+        assert!(json.contains(r#""version":3"#), "{json}");
+        assert_eq!(
+            serde_json::from_str::<MetaData>(&json).unwrap().version,
+            Some(3)
+        );
+    }
 }

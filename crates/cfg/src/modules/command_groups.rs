@@ -1,10 +1,11 @@
-//! Command groups: a reusable command made of other commands (e.g. "Cell
-//! reconstruction"), showing only its own parameters.
-//!
-//! A group is defined once in the project ([`GroupDefinition`]) and used in
-//! pipelines as instances ([`GroupInstance`]) - changing the definition
-//! changes every instance. An instance only holds what differs per use: its
-//! parameter values. See VISION_GROUP.md.
+// Command groups: a reusable command made of other commands (e.g. "Cell
+// reconstruction"), showing only its own parameters.
+//
+// A group is defined once in the project ([`GroupDefinition`]) and used in
+// pipelines as instances ([`GroupInstance`]) - changing the definition
+// changes every instance. An instance only holds what differs per use: its
+// parameter values. See VISION_GROUP.md.
+// (Plain comments: build.rs include!s this file, where `//!` isn't allowed.)
 
 use crate::{
     modules::{meta_data::MetaData, pipeline_settings::PipelineStepSettings},

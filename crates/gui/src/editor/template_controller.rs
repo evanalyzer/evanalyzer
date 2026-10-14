@@ -157,6 +157,8 @@ impl TemplateController {
             description: meta_slint.description.to_string(),
             authors,
             creation_time: chrono::Utc::now(),
+            // The save dialog doesn't ask for a version (yet).
+            version: None,
             category: meta_slint.category.to_string(),
             tags,
             // Stamped for real by `save_project_as_template`/

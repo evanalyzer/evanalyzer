@@ -1,3 +1,4 @@
+use crate::modules::command_groups::GroupDefinition;
 use crate::{
     modules::meta_data::MetaData,
     settings::{
@@ -110,4 +111,9 @@ pub struct ProjectSettings {
 
     /// Pipelines to execute
     pub pipelines: Vec<PipelineSettings>,
+
+    /// The command group definitions; pipelines use them as instances
+    /// (by `key`). Absent in projects saved before groups existed.
+    #[serde(default)]
+    pub command_groups: Vec<GroupDefinition>,
 }

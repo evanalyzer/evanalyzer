@@ -86,6 +86,7 @@ fn convert_project(old: &LegacyAnalyzeSettings, warnings: &mut Vec<String>) -> P
         images,
         pipelines: convert_pipelines(old, warnings),
         tile_merge: crate::settings::project_settings::TileMergeSettings::default(),
+        command_groups: vec![],
     }
 }
 
@@ -133,6 +134,7 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         description,
         authors,
         creation_time,
+        version: None,
         category: String::new(),
         tags: Vec::new(),
         // Stamped for real by `save_project_as` once the imported project is

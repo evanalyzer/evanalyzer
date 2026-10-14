@@ -1,4 +1,5 @@
-use evanalyzer_cfg::core_types::StepId;
+use evanalyzer_cfg::core_types::{InternalErrors, StepId};
+use evanalyzer_cfg::settings::command_groups::GroupDefinition;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
@@ -116,6 +117,24 @@ pub fn assign_step_ids(steps: &mut [PipelineStepSettings]) -> usize {
         }
     }
     assigned
+}
+
+/// Numbers the steps of a group definition that have no id yet, like
+/// [`assign_step_ids`] - but two steps with the same id are an error, not
+/// renumbered: the group's bindings refer to steps by id, so which of the
+/// two one means can't be known. Returns how many got an id.
+pub fn assign_group_step_ids(group: &mut GroupDefinition) -> Result<usize, InternalErrors> {
+    let mut seen = std::collections::HashSet::new();
+    for step in &group.steps {
+        if step.id != StepId::UNASSIGNED && !seen.insert(step.id) {
+            return Err(InternalErrors::ParseError(format!(
+                "Command group {}: two steps have the id {} - its parameters can't tell \
+                 which one they set",
+                group.key, step.id
+            )));
+        }
+    }
+    Ok(assign_step_ids(&mut group.steps))
 }
 
 /// `steps` without their ids - copies to add to another list (a template's
@@ -645,5 +664,33 @@ mod tests {
         assert_eq!(super::assign_step_ids(&mut steps), 0, "nothing left to do");
         let copies = super::unassigned(steps.clone());
         assert!(copies.iter().all(|s| s.id == StepId::UNASSIGNED));
+    }
+
+    #[test]
+    fn a_groups_missing_step_ids_are_assigned_but_a_duplicate_is_an_error() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
+        let step = |id| PipelineStepSettings {
+            id: StepId(id),
+            enabled: true,
+            command: PipelineCommand::Blur(BlurSettings::default()),
+        };
+        let mut group = GroupDefinition {
+            key: "CELL_RECONSTRUCTION".into(),
+            meta: Default::default(),
+            steps: vec![step(2), step(0)],
+            parameters: Vec::new(),
+            origin: None,
+        };
+        assert_eq!(super::assign_group_step_ids(&mut group).unwrap(), 1);
+        assert_eq!(group.steps[1].id, StepId(3));
+
+        group.steps.push(step(2));
+        let err = super::assign_group_step_ids(&mut group)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("CELL_RECONSTRUCTION") && err.contains("id 2"),
+            "{err}"
+        );
     }
 }

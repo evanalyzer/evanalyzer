@@ -1346,6 +1346,7 @@ impl PipelinesController {
             },
             pipelines: project.pipelines.clone(),
             tile_merge: project.tile_merge.clone(),
+            command_groups: project.command_groups.clone(),
         }
     }
 
@@ -3067,7 +3068,16 @@ mod tests {
 
     #[test]
     fn build_preview_project_settings_preserves_every_other_project_field() {
-        let project = project_with_images(&[("a.tif", 1)]);
+        let mut project = project_with_images(&[("a.tif", 1)]);
+        project
+            .command_groups
+            .push(evanalyzer_cfg::settings::command_groups::GroupDefinition {
+                key: "CELL_RECONSTRUCTION".into(),
+                meta: Default::default(),
+                steps: Vec::new(),
+                parameters: Vec::new(),
+                origin: None,
+            });
         let selected = project
             .images
             .list
@@ -3083,6 +3093,11 @@ mod tests {
 
         assert_eq!(preview.meta.name, "test-project");
         assert_eq!(preview.images.root, project.images.root);
+        assert_eq!(
+            preview.command_groups.len(),
+            1,
+            "the preview runs group instances too"
+        );
     }
 
     #[test]

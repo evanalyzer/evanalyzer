@@ -1418,6 +1418,7 @@ impl ProjectExt for ProjectWithRuntime {
             classification: self.classification.clone(),
             plate: self.plate.clone(),
             pipelines: self.pipelines.clone(),
+            command_groups: self.command_groups.clone(),
         };
 
         let mut final_path = path.clone();
@@ -1564,6 +1565,12 @@ impl ProjectExt for ProjectWithRuntime {
                 pipeline
             })
             .collect();
+        self.command_groups = template.command_groups.clone();
+        for group in &mut self.command_groups {
+            if let Err(e) = super::utils::assign_group_step_ids(group) {
+                warn!("Project template {}: {e}", template.meta.name);
+            }
+        }
     }
 
     fn toggle_class_visibility(&mut self, class_id: ObjectClass) {
@@ -1757,6 +1764,11 @@ pub fn load_project(
         serde_json::from_str(&data).map_err(|e| InternalErrors::ParseError(e.to_string()))?;
     let mut inner: ProjectSettings = evanalyzer_cfg::load_project_settings(raw)?;
 
+    // A group definition's steps are a list of their own (see
+    // `assign_group_step_ids`).
+    for group in &mut inner.command_groups {
+        super::utils::assign_group_step_ids(group)?;
+    }
     // Steps written without an id (or copied within a hand-written file,
     // sharing one) get the next number of their pipeline.
     for pipeline in &mut inner.pipelines {
@@ -2692,9 +2704,30 @@ mod tests {
                 steps: vec![],
                 image_source: ImageAddress::Scratchpad
             }],
+            command_groups: vec![evanalyzer_cfg::settings::command_groups::GroupDefinition {
+                key: "CELL_RECONSTRUCTION".into(),
+                meta: Default::default(),
+                steps: vec![PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                    enabled: true,
+                    command: PipelineCommand::Blur(Default::default()),
+                }],
+                parameters: vec![],
+                origin: None,
+            }],
             ..Default::default()
         };
         project.apply_project_template(&template);
+        assert_eq!(
+            project.command_groups.len(),
+            1,
+            "the definitions come along"
+        );
+        assert_eq!(
+            project.command_groups[0].steps[0].id,
+            evanalyzer_cfg::core_types::StepId(1),
+            "numbered within the definition"
+        );
 
         // classes()[0] is the auto-prepended Background class.
         assert_eq!(project.classification.classes().len(), 2);
