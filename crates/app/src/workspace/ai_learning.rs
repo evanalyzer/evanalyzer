@@ -63,12 +63,10 @@ pub fn pixel_class_labels_from_project(
         .classification
         .classes()
         .iter()
-        .filter(|class| class.id == ObjectClass::BACKGROUND || selected.contains(&class.id))
-        .filter_map(|class| {
-            class.id.to_u32().map(|id| PixelClassLabel {
-                class: SegmentationClass(id),
-                name: class.name.clone(),
-            })
+        .filter(|class| class.global() == ObjectClass::BACKGROUND || selected.contains(&class.global()))
+        .map(|class| PixelClassLabel {
+            class: SegmentationClass(class.id),
+            name: class.name.clone(),
         })
         .collect()
 }
@@ -91,9 +89,9 @@ pub fn object_class_labels_from_project(
         .classification
         .classes()
         .iter()
-        .filter(|class| class.id == ObjectClass::BACKGROUND || selected.contains(&class.id))
+        .filter(|class| class.global() == ObjectClass::BACKGROUND || selected.contains(&class.global()))
         .map(|class| ObjectClassLabel {
-            class: class.id,
+            class: class.global(),
             name: class.name.clone(),
         })
         .collect()
@@ -198,12 +196,12 @@ mod tests {
     fn pixel_class_labels_from_project_only_includes_the_selected_classes() {
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             name: "Cell".into(),
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(2),
+            id: 2,
             name: "Nucleus".into(),
             ..Default::default()
         });
@@ -248,7 +246,7 @@ mod tests {
         // `object_class_labels_from_project`, which never restricted this.
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             name: "Not Yet Painted".into(),
             ..Default::default()
         });
@@ -273,12 +271,12 @@ mod tests {
         // *selected* class happens to be.
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(4),
+            id: 4,
             name: "Cell".into(),
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(8),
+            id: 8,
             name: "Nucleus".into(),
             ..Default::default()
         });
@@ -298,12 +296,12 @@ mod tests {
     fn object_class_labels_from_project_only_includes_the_selected_classes() {
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             name: "Cell".into(),
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(2),
+            id: 2,
             name: "Nucleus".into(),
             ..Default::default()
         });
@@ -345,12 +343,12 @@ mod tests {
     fn object_class_labels_from_project_always_includes_background_at_index_zero() {
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(4),
+            id: 4,
             name: "Cell".into(),
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(8),
+            id: 8,
             name: "Nucleus".into(),
             ..Default::default()
         });

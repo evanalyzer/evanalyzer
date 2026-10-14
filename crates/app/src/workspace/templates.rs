@@ -15,8 +15,29 @@ pub fn load_project_template_from_file(
     path: &Path,
 ) -> Result<ProjectTemplate, InternalErrors> {
     let data = files.read_file(path)?;
-    serde_json::from_slice(&data)
+    let json = String::from_utf8(data)
+        .map_err(|e| InternalErrors::Internal(format!("Failed to parse project template: {e}")))?;
+    ProjectTemplate::parse(&json)
         .map_err(|e| InternalErrors::Internal(format!("Failed to parse project template: {e}")))
+}
+
+/// A template file type: how its JSON is read.
+trait TemplateFile: Sized {
+    fn parse(json: &str) -> Result<Self, String>;
+}
+
+impl TemplateFile for PipelineTemplate {
+    fn parse(json: &str) -> Result<Self, String> {
+        serde_json::from_str(json).map_err(|e| e.to_string())
+    }
+}
+
+impl TemplateFile for ProjectTemplate {
+    /// Through `load_project_template`, which migrates older versions.
+    fn parse(json: &str) -> Result<Self, String> {
+        let raw = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        evanalyzer_cfg::load_project_template(raw).map_err(|e| e.to_string())
+    }
 }
 
 /// Loads all `PipelineTemplate`s found in the backend's user and app
@@ -37,7 +58,7 @@ pub fn load_project_templates(backend: &dyn Backend) -> Vec<(PathBuf, ProjectTem
     load_templates(backend, PROJECT_FILE_TEMPLATE_EXTENSIONS)
 }
 
-fn load_templates<T: serde::de::DeserializeOwned>(
+fn load_templates<T: TemplateFile>(
     backend: &dyn Backend,
     extension: &str,
 ) -> Vec<(PathBuf, T)> {
@@ -53,7 +74,7 @@ fn load_templates<T: serde::de::DeserializeOwned>(
     templates
 }
 
-fn load_templates_from_folder<T: serde::de::DeserializeOwned>(
+fn load_templates_from_folder<T: TemplateFile>(
     files: &dyn FileSystem,
     folder: &Path,
     extension: &str,
@@ -74,7 +95,7 @@ fn load_templates_from_folder<T: serde::de::DeserializeOwned>(
         else {
             continue;
         };
-        match serde_json::from_str::<T>(&data) {
+        match T::parse(&data) {
             Ok(template) => out.push((path, template)),
             Err(e) => log::warn!("Failed to load template {}: {}", path.display(), e),
         }

@@ -187,22 +187,44 @@ fn convert_classification(
     old: &LegacyClassification,
     warnings: &mut Vec<String>,
 ) -> ClassificationSettings {
+    let ids: Vec<Option<u32>> = old
+        .classes
+        .iter()
+        .map(|c| {
+            resolve_class(
+                &c.class_id,
+                ObjectClass::Unset,
+                "classification",
+                "classId",
+                warnings,
+            )
+            .to_u32()
+        })
+        .collect();
+    // A class without a usable number gets the next free one - a project
+    // class always has one.
+    let mut next_free = ids.iter().flatten().max().map_or(1, |max| max + 1).max(1);
     let classes = old
         .classes
         .iter()
-        .map(|c| convert_class(c, warnings))
+        .zip(ids)
+        .map(|(c, id)| {
+            let id = id.unwrap_or_else(|| {
+                let id = next_free;
+                next_free += 1;
+                warnings.push(format!(
+                    "classification: class '{}' has no class id ('{}') - given id {id}",
+                    c.name, c.class_id
+                ));
+                id
+            });
+            convert_class(c, id)
+        })
         .collect();
     ClassificationSettings::new_from_existing(classes)
 }
 
-fn convert_class(old: &LegacyClass, warnings: &mut Vec<String>) -> Class {
-    let id = resolve_class(
-        &old.class_id,
-        ObjectClass::Unset,
-        "classification",
-        "classId",
-        warnings,
-    );
+fn convert_class(old: &LegacyClass, id: u32) -> Class {
     let color = parse_hex_color(&old.color).unwrap_or(0x9933FF);
     Class {
         id,
@@ -1141,10 +1163,16 @@ mod tests {
         // classes()[0] is always the auto-prepended Background class - see
         // `ClassificationSettings::new_from_existing`.
         assert_eq!(p.classification.classes().len(), 3);
-        assert_eq!(p.classification.classes()[0].id, ObjectClass::BACKGROUND);
-        assert_eq!(p.classification.classes()[1].id, ObjectClass::Global(1));
+        assert_eq!(p.classification.classes()[0].global(), ObjectClass::BACKGROUND);
+        assert_eq!(p.classification.classes()[1].id, 1);
         assert_eq!(p.classification.classes()[1].color, 0x3399FF);
-        assert_eq!(p.classification.classes()[2].id, ObjectClass::Unset);
+        // "None" isn't a class id: the class gets the next free one.
+        assert_eq!(p.classification.classes()[2].id, 2);
+        assert!(
+            outcome.warnings.iter().any(|w| w.contains("given id 2")),
+            "{:?}",
+            outcome.warnings
+        );
 
         assert_eq!(p.plate.grouping_mode, GroupingMode::Folder);
         assert_eq!(p.plate.well_layout, WellLayout::Fixed { rows: 2, cols: 2 });

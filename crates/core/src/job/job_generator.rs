@@ -96,14 +96,7 @@ pub fn generate_analyze_job_from_project_settings(
         .classification
         .classes()
         .iter()
-        .filter_map(|c| {
-            c.id.to_u32().map(|n| {
-                (
-                    evanalyzer_cfg::core_types::ObjectClass::Global(n),
-                    (c.name.clone(), c.color),
-                )
-            })
-        })
+        .map(|c| (c.global(), (c.name.clone(), c.color)))
         .collect();
 
     let (output_path, job_name) = create_results_dir(&project_path, job_name)?;
@@ -446,7 +439,7 @@ fn generate_job_from_project_settings_intenal(
         .classification
         .classes()
         .iter()
-        .map(|c| (c.id, c.color))
+        .map(|c| (c.global(), c.color))
         .collect();
 
     let mut job = JobExecutor::new(
@@ -1118,6 +1111,7 @@ mod tests {
             .push(evanalyzer_cfg::settings::command_groups::GroupDefinition {
                 key: "TWO_BLURS".into(),
                 meta: Default::default(),
+                classes: vec![],
                 steps: vec![blur_step(true), blur_step(true)],
                 parameters: vec![],
                 origin: None,

@@ -392,7 +392,7 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     fn get_class_from_id(&self, id: &ObjectClass) -> Option<&Class> {
-        self.classification.classes().iter().find(|c| c.id == *id)
+        self.classification.classes().iter().find(|c| c.global() == *id)
     }
 
     /// Internal helper to get the relative key of the currently active image.
@@ -974,7 +974,7 @@ impl ProjectExt for ProjectWithRuntime {
                         .channels
                         .iter()
                         .map(|(channel_id, ch)| Class {
-                            id: ObjectClass::Unset,
+                            id: 0, // `add_class` gives it the next free one
                             color: rgb_to_u32(colors[channel_id]),
                             name: channel_display_name(&ch.name, *channel_id),
                             notes: "".into(),
@@ -2051,7 +2051,7 @@ mod tests {
 
     fn class(id: u32, name: &str) -> Class {
         Class {
-            id: ObjectClass::Global(id),
+            id: id,
             name: name.into(),
             ..Default::default()
         }
@@ -2136,7 +2136,7 @@ mod tests {
         project.classification.classes_mut().push(class(1, "A"));
         project.delete_all_classes();
         assert!(project.classification.classes().len() == 1);
-        assert!(project.classification.classes()[0].id == ObjectClass::BACKGROUND);
+        assert!(project.classification.classes()[0].global() == ObjectClass::BACKGROUND);
         assert!(project.classification.classes()[0].color == 0x97978F);
         assert!(project.classification.classes()[0].name == "Background");
     }
@@ -2729,6 +2729,7 @@ mod tests {
             command_groups: vec![evanalyzer_cfg::settings::command_groups::GroupDefinition {
                 key: "CELL_RECONSTRUCTION".into(),
                 meta: Default::default(),
+                classes: vec![],
                 steps: vec![PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
@@ -3352,7 +3353,7 @@ mod tests {
             .classification
             .classes()
             .iter()
-            .filter_map(|c| c.id.to_u32())
+            .filter_map(|c| Some(c.id))
             .collect();
         assert_eq!(
             ids.len(),
@@ -3675,7 +3676,7 @@ mod tests {
         // class and nothing else.
         assert_eq!(fresh.classification.classes().len(), 1);
         assert_eq!(
-            fresh.classification.classes()[0].id,
+            fresh.classification.classes()[0].global(),
             ObjectClass::BACKGROUND
         );
         assert!(fresh.images.list.is_empty());
@@ -3698,7 +3699,7 @@ mod tests {
         // class and nothing else.
         assert_eq!(created.classification.classes().len(), 1);
         assert_eq!(
-            created.classification.classes()[0].id,
+            created.classification.classes()[0].global(),
             ObjectClass::BACKGROUND
         );
     }

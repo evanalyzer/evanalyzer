@@ -279,11 +279,8 @@ impl ResultsGenerator {
             Some(wanted) => {
                 let ids: Vec<u32> = wanted
                     .iter()
-                    .filter_map(|id| classes.iter().find(|class| &class.id == id))
-                    .filter_map(|class| match class.id {
-                        ObjectClass::Global(n) => Some(n),
-                        ObjectClass::Unset => None,
-                    })
+                    .filter_map(|id| classes.iter().find(|class| &class.global() == id))
+                    .map(|class| class.id)
                     .collect();
                 if ids.is_empty() {
                     return Ok(empty_result(column_names.clone()));
@@ -492,7 +489,7 @@ impl ResultsGenerator {
                 .iter()
                 .filter_map(|id| match id {
                     ObjectClass::Global(n) => Some(*n),
-                    ObjectClass::Unset => None,
+                    ObjectClass::Unset | ObjectClass::Local(_) => None,
                 })
                 .collect()
         });
@@ -636,7 +633,7 @@ impl ResultsGenerator {
                 let label = class_display_label(object_class, &classes);
                 let color = classes
                     .iter()
-                    .find(|class| class.id == object_class)
+                    .find(|class| class.global() == object_class)
                     .map(|class| class.color)
                     .unwrap_or(0);
                 let mut cells = vec![
@@ -2185,7 +2182,7 @@ impl ResultsGenerator {
                 let class_id: u32 = row.get(0)?;
                 let color: Option<u32> = row.get(2)?;
                 Ok(Class {
-                    id: ObjectClass::Global(class_id),
+                    id: class_id,
                     name: row.get(1)?,
                     color: color.unwrap_or(0),
                     notes: String::new(),
@@ -2615,10 +2612,10 @@ pub(crate) fn class_display_label(class: ObjectClass, classes: &[Class]) -> Stri
     match class {
         ObjectClass::Global(n) => classes
             .iter()
-            .find(|c| c.id == ObjectClass::Global(n))
+            .find(|c| c.id == n)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| format!("class {n}")),
-        ObjectClass::Unset => "unset".to_string(),
+        ObjectClass::Unset | ObjectClass::Local(_) => "unset".to_string(),
     }
 }
 
@@ -2627,13 +2624,7 @@ pub(crate) fn class_display_label(class: ObjectClass, classes: &[Class]) -> Stri
 fn class_blocks(selected: Option<&[u32]>, classes: &[Class]) -> Vec<u32> {
     let mut ids: Vec<u32> = match selected {
         Some(ids) => ids.to_vec(),
-        None => classes
-            .iter()
-            .filter_map(|class| match class.id {
-                ObjectClass::Global(n) => Some(n),
-                ObjectClass::Unset => None,
-            })
-            .collect(),
+        None => classes.iter().map(|class| class.id).collect(),
     };
     ids.sort_unstable();
     ids.dedup();
@@ -2932,7 +2923,7 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
 fn coloc_class_key(class: ObjectClass) -> i32 {
     match class {
         ObjectClass::Global(n) => n as i32,
-        ObjectClass::Unset => -1,
+        ObjectClass::Unset | ObjectClass::Local(_) => -1,
     }
 }
 
@@ -4976,7 +4967,7 @@ mod tests {
     #[test]
     fn column_as_key_and_from_key_round_trip_for_coloc_count() {
         let classes = vec![Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             name: "ClassA".to_string(),
             color: 0,
             notes: String::new(),
@@ -5025,7 +5016,7 @@ mod tests {
     #[test]
     fn class_display_label_uses_the_registered_class_name_when_known() {
         let classes = vec![Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             name: "Nuclei".to_string(),
             color: 0,
             notes: String::new(),

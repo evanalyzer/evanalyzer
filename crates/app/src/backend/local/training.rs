@@ -312,7 +312,7 @@ mod tests {
         let mut project = ProjectSettings::default();
         project.images.root = Some(PathBuf::from("/data/images"));
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             name: "Cell".into(),
             ..Default::default()
         });
@@ -359,7 +359,7 @@ mod tests {
     fn gather_pixel_training_images_errors_when_no_image_root_is_set_but_data_is_labeled() {
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             name: "Cell".into(),
             ..Default::default()
         });
@@ -455,7 +455,7 @@ mod tests {
         let mut project = ProjectSettings::default();
         project.images.root = Some(PathBuf::from("/data/images"));
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             name: "Cell".into(),
             ..Default::default()
         });

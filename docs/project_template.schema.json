@@ -31,7 +31,7 @@
       "$ref": "#/$defs/PlateSettings"
     },
     "schemaVersion": {
-      "description": "On-disk format version of this project template (`.evapt`). Absent on\nfiles written before versioning was introduced, which `serde(default)`\nreads as `0` - see `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`. Unlike\n`ProjectSettings.schema_version`, nothing currently rejects a too-new\nversion or migrates an old one forward on load - this field only\nreserves the seam for that.",
+      "description": "On-disk format version of this project template (`.evapt`). Absent on\nfiles written before versioning was introduced, which `serde(default)`\nreads as `0` - see `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION` and\n`load_project_template`, which migrates older ones forward.",
       "type": "integer",
       "format": "uint32",
       "default": 0,
@@ -212,7 +212,9 @@
           "type": "string"
         },
         "id": {
-          "$ref": "#/$defs/ObjectClass"
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
         },
         "name": {
           "type": "string"
@@ -841,6 +843,14 @@
       "description": "A group as defined in the project: its steps and the parameters it shows.",
       "type": "object",
       "properties": {
+        "classes": {
+          "description": "Local classes used by the group. These classes are scoped to the group only",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Class"
+          }
+        },
         "key": {
           "description": "Unique group key, prefere SCREAMING_SNAKE_CASE",
           "type": "string"
@@ -862,7 +872,7 @@
           "default": null
         },
         "parameters": {
-          "description": "The group's parameters: shown to the user ([`ParamKind::Exposed`])\nor set per instance behind the scenes ([`ParamKind::InternalClass`]).",
+          "description": "The group's parameters, shown on the group card.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/GroupParameterDef"
@@ -962,9 +972,6 @@
           "description": "Unique within the group definition.",
           "$ref": "#/$defs/GroupParamId"
         },
-        "kind": {
-          "$ref": "#/$defs/ParamKind"
-        },
         "label": {
           "description": "Name shown to the user, e.g. \"Cell class\".",
           "type": "string"
@@ -974,7 +981,6 @@
         "id",
         "label",
         "default",
-        "kind",
         "bindings"
       ]
     },
@@ -1587,6 +1593,21 @@
           "required": [
             "GLOBAL"
           ]
+        },
+        {
+          "description": "A class of a command group (`GroupDefinition::classes`): only valid\ninside the group, each instance has its own.",
+          "type": "object",
+          "properties": {
+            "LOCAL": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "LOCAL"
+          ]
         }
       ]
     },
@@ -1944,21 +1965,6 @@
       "required": [
         "step",
         "param"
-      ]
-    },
-    "ParamKind": {
-      "description": "Whether the user sees a group parameter.",
-      "oneOf": [
-        {
-          "description": "Shown on the group card and set by the user.",
-          "type": "string",
-          "const": "EXPOSED"
-        },
-        {
-          "description": "A class only used inside the group (e.g. \"Seed\"): hidden, and each\ninstance gets a class of its own, so two instances never share it.",
-          "type": "string",
-          "const": "INTERNAL_CLASS"
-        }
       ]
     },
     "ParamValue": {

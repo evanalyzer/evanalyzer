@@ -247,6 +247,8 @@ impl DuckDbExporter {
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),
+            // Never stored: a group's scope ends before its objects are written.
+            ObjectClass::Local(n) => format!("local_{n}"),
             ObjectClass::Global(n) => match self.class_names.get(class) {
                 Some((name, _color)) => name.clone(),
                 None => format!("class_{}", n),
@@ -422,7 +424,7 @@ impl ObjectColumns {
         for (class, ids) in colocalized_with {
             self.coloc_partner_ids.keys().append_value(match class {
                 ObjectClass::Global(n) => *n as i32,
-                ObjectClass::Unset => COLOC_UNSET_CLASS_KEY,
+                ObjectClass::Unset | ObjectClass::Local(_) => COLOC_UNSET_CLASS_KEY,
             });
             let partners = self.coloc_partner_ids.values();
             for id in ids {
@@ -954,7 +956,7 @@ impl DatasetStore for DuckDbExporter {
     fn get_objects(&self, filter: &ObjectFilter) -> Result<Vec<StoredObject>, InternalErrors> {
         let class_id = match filter.object_class {
             Some(ObjectClass::Global(n)) => Some(n as i32),
-            Some(ObjectClass::Unset) => return Ok(Vec::new()),
+            Some(ObjectClass::Unset | ObjectClass::Local(_)) => return Ok(Vec::new()),
             None => None,
         };
         let io = |e: duckdb::Error| InternalErrors::Io(e.to_string());
@@ -1017,7 +1019,7 @@ impl DatasetStore for DuckDbExporter {
     fn max_track_id_except(&self, class: ObjectClass) -> Result<u64, InternalErrors> {
         let class_id = match class {
             ObjectClass::Global(n) => n as i32,
-            ObjectClass::Unset => -1, // never stored: excludes nothing
+            ObjectClass::Unset | ObjectClass::Local(_) => -1, // never stored: excludes nothing
         };
         self.lock_conn()
             .query_row(

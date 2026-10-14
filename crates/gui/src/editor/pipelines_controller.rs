@@ -3111,6 +3111,7 @@ mod tests {
             .push(evanalyzer_cfg::settings::command_groups::GroupDefinition {
                 key: "CELL_RECONSTRUCTION".into(),
                 meta: Default::default(),
+                classes: vec![],
                 steps: Vec::new(),
                 parameters: Vec::new(),
                 origin: None,
@@ -4402,6 +4403,7 @@ mod tests {
                     name: "Cell reconstruction".into(),
                     ..Default::default()
                 },
+                classes: vec![],
                 steps: Vec::new(),
                 parameters: Vec::new(),
                 origin: None,

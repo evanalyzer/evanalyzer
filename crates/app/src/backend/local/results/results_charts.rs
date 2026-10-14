@@ -47,7 +47,7 @@ impl ResultCharts {
                     .iter()
                     .filter_map(|id| match id {
                         ObjectClass::Global(n) => Some(*n),
-                        ObjectClass::Unset => None,
+                        ObjectClass::Unset | ObjectClass::Local(_) => None,
                     })
                     .collect();
                 if ids.is_empty() {
@@ -118,7 +118,7 @@ impl ResultCharts {
                 let object_class = ObjectClass::Global(class_id);
                 let color = classes
                     .iter()
-                    .find(|class| class.id == object_class)
+                    .find(|class| class.global() == object_class)
                     .map(|class| class.color)
                     .unwrap_or(0);
                 BoxplotBox {
@@ -349,7 +349,7 @@ fn chart_where_clause(
             .iter()
             .filter_map(|id| match id {
                 ObjectClass::Global(n) => Some(*n),
-                ObjectClass::Unset => None,
+                ObjectClass::Unset | ObjectClass::Local(_) => None,
             })
             .collect();
         if ids.is_empty() {

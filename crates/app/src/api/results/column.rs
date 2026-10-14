@@ -52,12 +52,12 @@ impl Column {
             Column::ColocCount(ObjectClass::Global(class_id)) => {
                 let name = classes
                     .iter()
-                    .find(|class| class.id == ObjectClass::Global(*class_id))
+                    .find(|class| class.id == *class_id)
                     .map(|class| class.name.clone())
                     .unwrap_or_else(|| class_id.to_string());
                 format!("n_colocalized_class_{name}")
             }
-            Column::ColocCount(ObjectClass::Unset) => "n_colocalized_unset".to_string(),
+            Column::ColocCount(ObjectClass::Unset | ObjectClass::Local(_)) => "n_colocalized_unset".to_string(),
             Column::IntensityAvg(channel) => format!("intensity_mean_gray_ch{channel}"),
             Column::IntensitySum(channel) => format!("intensity_sum_gray_ch{channel}"),
             Column::IntensityMin(channel) => format!("intensity_min_gray_ch{channel}"),
@@ -91,11 +91,11 @@ impl Column {
             Column::Eccentricity => "Eccentricity".to_string(),
             Column::ColocCount(class_id) => classes
                 .iter()
-                .find(|class| class.id == *class_id)
+                .find(|class| class.global() == *class_id)
                 .map(|class| format!("Coloc with {}", class.name))
                 .unwrap_or_else(|| match class_id {
                     ObjectClass::Global(n) => format!("Coloc with class {n}"),
-                    ObjectClass::Unset => "Coloc with unset".to_string(),
+                    ObjectClass::Unset | ObjectClass::Local(_) => "Coloc with unset".to_string(),
                 }),
             Column::IntensityAvg(channel) => format!("Avg Intensity (Ch {channel})"),
             Column::IntensitySum(channel) => format!("Sum Intensity (Ch {channel})"),
@@ -122,7 +122,7 @@ impl Column {
     /// `None` if `name` isn't (or no longer is) a registered class.
     pub fn from_key(key: &str, classes: &[Class]) -> Option<Self> {
         if let Some(name) = key.strip_prefix("n_colocalized_class_") {
-            let class_id = classes.iter().find(|class| class.name == name)?.id;
+            let class_id = classes.iter().find(|class| class.name == name)?.global();
             return Some(Column::ColocCount(class_id));
         }
         if key == "n_colocalized_unset" {

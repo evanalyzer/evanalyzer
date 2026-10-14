@@ -189,6 +189,7 @@ mod tests {
                     name: "Segment nuclei".into(),
                     ..Default::default()
                 },
+                classes: vec![],
                 steps: vec![threshold(SegmentationThresholdThresholdMethodSettings::Li)],
                 parameters: vec![],
                 origin: None,

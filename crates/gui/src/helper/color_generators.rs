@@ -68,7 +68,7 @@ mod tests {
     fn project_with_class(id: u32, hex_color: u32) -> ProjectWithRuntime {
         let mut project = ProjectWithRuntime::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(id),
+            id,
             color: hex_color,
             name: format!("class-{id}"),
             ..Default::default()
@@ -112,12 +112,12 @@ mod tests {
     fn get_colors_from_class_averages_multiple_classes() {
         let mut project = ProjectWithRuntime::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             color: 0xFF0000, // red
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(2),
+            id: 2,
             color: 0x0000FF, // blue
             ..Default::default()
         });

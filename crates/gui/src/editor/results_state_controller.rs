@@ -460,7 +460,7 @@ impl ResultsStateController {
                         .expect("Poisened")
                         .iter()
                         .find(|class| class.name == class_name)
-                        .map(|class| class.id)
+                        .map(|class| class.global())
                     else {
                         warn!("Unknown class selected: {class_name}");
                         return;
@@ -667,7 +667,7 @@ impl ResultsStateController {
                         .expect("Poisened")
                         .iter()
                         .find(|class| class.name == class_name)
-                        .map(|class| class.id)
+                        .map(|class| class.global())
                     else {
                         warn!("Unknown class selected: {class_name}");
                         return;
@@ -1189,7 +1189,7 @@ impl ResultsStateController {
                         .expect("Poisened")
                         .iter()
                         .find(|class| class.name == class_name)
-                        .map(|class| class.id)
+                        .map(|class| class.global())
                     else {
                         warn!("Unknown class selected: {class_name}");
                         return;
@@ -1744,7 +1744,7 @@ impl ResultsStateController {
                 let mut default_object_classes = Vec::new();
                 match results.get_object_classes() {
                     Ok(classes) => {
-                        default_object_classes = classes.iter().map(|class| class.id).collect();
+                        default_object_classes = classes.iter().map(|class| class.global()).collect();
                         *self.classes.lock().expect("Poisened") = classes.clone();
                         self.set_object_classes_in_slint(&classes);
                     }
@@ -3093,7 +3093,7 @@ impl ResultsStateController {
         let classes = self.classes.lock().expect("Poisened");
         let items = class_filter_items(&classes, true);
         let total = classes.len();
-        let ids = classes.iter().map(|class| class.id).collect();
+        let ids = classes.iter().map(|class| class.global()).collect();
         drop(classes);
         self.list_filter.lock().expect("Poisened").object_classes = ids;
         self.push_class_items(items, list_summary(total, total, "Classes"));
@@ -3281,7 +3281,7 @@ impl ResultsStateController {
                 value: class.name.as_str().into(),
                 color: bg_color_to_slint(class.color),
                 group: "".into(),
-                selected: object_classes.is_empty() || object_classes.contains(&class.id),
+                selected: object_classes.is_empty() || object_classes.contains(&class.global()),
             })
             .collect();
 
@@ -3420,7 +3420,7 @@ impl ResultsStateController {
             let Some(class) = classes.iter().find(|class| class.name == key.as_str()) else {
                 return Err(format!("Unknown class \"{key}\" selected for export."));
             };
-            object_classes.push(class.id);
+            object_classes.push(class.global());
         }
         drop(classes);
 

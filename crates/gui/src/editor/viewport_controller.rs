@@ -1454,7 +1454,7 @@ impl ZOrder {
             .get_object_classes()
             .iter()
             .enumerate()
-            .map(|(i, c)| (c.id, i))
+            .map(|(i, c)| (c.global(), i))
             .collect();
         Self {
             class_count: rank.len().max(1),

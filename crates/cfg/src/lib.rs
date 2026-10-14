@@ -7,7 +7,7 @@ mod types;
 mod utils;
 
 pub use legacy_import::{LegacyImportError, LegacyImportOutcome, import_legacy_project};
-pub use load_config::{load_ai_learning_settings, load_project_settings};
+pub use load_config::{load_ai_learning_settings, load_project_settings, load_project_template};
 
 // Constants
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
@@ -25,7 +25,7 @@ pub const LEGACY_PROJECT_FILE_EXTENSION: &str = &"icproj";
 /// of `.evaproj` files written by an older version of the app - e.g. a
 /// renamed field/enum variant that isn't just an additive
 /// `#[serde(default)]` field.
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 4;
 
 /// Current on-disk format version for
 /// [`settings::ai_learning_settings::AiLearningSettings`] - both the
@@ -37,17 +37,16 @@ pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 3;
 pub const CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 /// Current on-disk format version for
-/// [`settings::templates::ProjectTemplate`] (`.evapt` files). Unlike
-/// `ProjectSettings`/`AiLearningSettings`, nothing currently loads templates
-/// through a version-checked/migrated path (see that struct's
-/// `schema_version` doc comment) - this only reserves the version number for
-/// when that's added.
-pub const CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION: u32 = 2;
+/// [`settings::templates::ProjectTemplate`] (`.evapt` files). Bump alongside a
+/// new step in `load_config::PROJECT_TEMPLATE_MIGRATIONS`, like
+/// `CURRENT_PROJECT_SCHEMA_VERSION`.
+pub const CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION: u32 = 3;
 
 /// Current on-disk format version for
 /// [`settings::templates::PipelineTemplate`] (`.evapipe` files, and each
-/// entry of a `ProjectTemplate`'s `pipelines`). See
-/// `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`.
+/// entry of a `ProjectTemplate`'s `pipelines`). Unlike project templates,
+/// nothing loads pipeline templates through a version-checked/migrated path
+/// yet - this only reserves the version number for when that's needed.
 pub const CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION: u32 = 2;
 
 // Project Settings structs

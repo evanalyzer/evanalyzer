@@ -3,7 +3,7 @@ use evanalyzer_cfg::settings::command_groups::GroupDefinition;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_settings::{
-    PipelineSettings, PipelineStepSettings, StepContent,
+    PipelineSettings, PipelineStepSettings,
 };
 use pathdiff::diff_paths;
 use std::{
@@ -552,6 +552,7 @@ mod tests {
         let mut groups = vec![GroupDefinition {
             key: "SEGMENT".into(),
             meta: Default::default(),
+            classes: vec![],
             steps: pipeline_with(PipelineCommand::Cellpose(CellposeSettings {
                 model_path: original.clone(),
                 ..Default::default()
@@ -738,6 +739,7 @@ mod tests {
         let mut group = GroupDefinition {
             key: "CELL_RECONSTRUCTION".into(),
             meta: Default::default(),
+            classes: vec![],
             steps: vec![step(2), step(0)],
             parameters: Vec::new(),
             origin: None,

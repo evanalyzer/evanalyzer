@@ -369,7 +369,7 @@ impl ResultExport {
 
         let classes_all = database.get_object_classes()?;
         let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
-            classes_all.iter().map(|class| class.id).collect()
+            classes_all.iter().map(|class| class.global()).collect()
         } else {
             self.object_classes.clone()
         };
@@ -561,7 +561,7 @@ impl ResultExport {
 
         let classes_all = database.get_object_classes()?;
         let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
-            classes_all.iter().map(|class| class.id).collect()
+            classes_all.iter().map(|class| class.global()).collect()
         } else {
             self.object_classes.clone()
         };
@@ -798,7 +798,7 @@ impl ResultExport {
     ) -> Result<(), InternalErrors> {
         let classes_all = database.get_object_classes()?;
         let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
-            classes_all.iter().map(|class| class.id).collect()
+            classes_all.iter().map(|class| class.global()).collect()
         } else {
             self.object_classes.clone()
         };

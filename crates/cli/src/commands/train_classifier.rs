@@ -208,12 +208,12 @@ mod tests {
 
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             name: "A".into(),
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(2),
+            id: 2,
             name: "B".into(),
             ..Default::default()
         });

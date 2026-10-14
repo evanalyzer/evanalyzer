@@ -284,8 +284,8 @@ impl ClassificationController {
                     .classification
                     .classes()
                     .iter()
-                    .filter(|c| project.is_class_visible(&c.id))
-                    .map(|c| project.count_objects_for_class(&c.id) as i32)
+                    .filter(|c| project.is_class_visible(&c.global()))
+                    .map(|c| project.count_objects_for_class(&c.global()) as i32)
                     .sum();
                 let hide_unclassified = project.hide_unclassified_objects();
                 drop(project);
@@ -326,7 +326,8 @@ impl ClassificationController {
         let mut project = self.app_state.get_project_write();
 
         let new_class = Class {
-            id: AssignObjectClass!(class_settings.class_id),
+            // Negative for a new class - `add_class` gives it its id.
+            id: class_settings.class_id.max(0) as u32,
             color: class_settings.color.as_argb_encoded(),
             name: class_settings.name.into(),
             notes: class_settings.notes.into(),
@@ -365,7 +366,7 @@ impl ClassificationController {
 
                 let class_settings_state = ui.global::<ClassificationSettingsState>();
                 let mut class_settings_slint: ClassSettingsSlint = ClassSettingsSlint::default();
-                class_settings_slint.class_id = class.id.to_i32();
+                class_settings_slint.class_id = class.id as i32;
                 class_settings_slint.color = Color::from_rgb_u8(r, g, b);
                 class_settings_slint.name = class.name.clone().into();
                 class_settings_slint.notes = class.notes.clone().into();
@@ -418,10 +419,10 @@ impl Model for ClassificationModelBridge {
             let r = ((c.color >> 16) & 0xff) as u8;
             let g = ((c.color >> 8) & 0xff) as u8;
             let b = (c.color & 0xff) as u8;
-            let count = project.count_objects_for_class(&c.id) as i32;
-            let visible = project.is_class_visible(&c.id);
+            let count = project.count_objects_for_class(&c.global()) as i32;
+            let visible = project.is_class_visible(&c.global());
             ClassItemData {
-                id: c.id.to_i32(),
+                id: c.id as i32,
                 name: (&c.name).into(),
                 color: Color::from_rgb_u8(r, g, b),
                 count,
@@ -493,7 +494,7 @@ mod tests {
         assert_eq!(project.classification.classes().len(), 2);
         assert_eq!(
             project.classification.classes()[1].id,
-            ObjectClass::Global(1)
+            1
         );
         assert_eq!(project.classification.classes()[1].name, "Nuclei");
     }
@@ -593,7 +594,7 @@ mod tests {
             let mut project = ui_state.get_project_write();
             project.classification.classes_mut().push(
                 evanalyzer_cfg::settings::classification_settings::Class {
-                    id: ObjectClass::Global(1),
+                    id: 1,
                     color: 0,
                     name: "Nuclei".to_string(),
                     notes: String::new(),
@@ -813,7 +814,7 @@ mod tests {
         mut project: evanalyzer_app::project::ProjectWithRuntime,
     ) -> evanalyzer_app::project::ProjectWithRuntime {
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             color: 0,
             name: "Nuclei".to_string(),
             notes: String::new(),

@@ -635,7 +635,7 @@ mod tests {
         let mut project = ui_state.get_project_write();
         let mut class = |name: &str| {
             project.classification.add_class(Class {
-                id: ObjectClass::Global(0),
+                id: 0,
                 color: 0xff0000,
                 name: name.into(),
                 notes: String::new(),
@@ -792,7 +792,7 @@ mod tests {
             .get_project_write()
             .classification
             .add_class(Class {
-                id: ObjectClass::Global(1),
+                id: 1,
                 color: 0xff0000,
                 name: "cl1".into(),
                 notes: "note".into(),
@@ -943,7 +943,7 @@ mod tests {
             .get_project_write()
             .classification
             .add_class(Class {
-                id: ObjectClass::Global(1),
+                id: 1,
                 color: 0xff0000,
                 name: "cl1".into(),
                 notes: "note".into(),

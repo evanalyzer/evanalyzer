@@ -844,7 +844,7 @@ mod tests {
             project.images.root = Some(PathBuf::from("/data/images"));
             project.classification.classes_mut().push(
                 evanalyzer_cfg::settings::classification_settings::Class {
-                    id: ObjectClass::Global(1),
+                    id: 1,
                     name: "Nuclei".into(),
                     ..Default::default()
                 },

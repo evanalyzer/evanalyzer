@@ -1,7 +1,8 @@
 //! Validates that every `.evapipe`/`.evapt` file under a given directory
 //! (searched recursively) still deserializes as `PipelineTemplate`/
-//! `ProjectTemplate` - the same types and the same `serde_json::from_str`
-//! call the GUI/CLI actually use to load them. This is stronger than
+//! `ProjectTemplate` - the same types and the same loading (for project
+//! templates `load_project_template`, which migrates older versions) the
+//! GUI/CLI actually use. This is stronger than
 //! validating against `docs/pipeline_template.schema.json`/
 //! `docs/project_template.schema.json` with a generic JSON Schema
 //! validator: a `#[serde(alias = ...)]` or an enum's tagging behavior can
@@ -17,7 +18,8 @@
 //!
 //! Usage: `cargo run -p evanalyzer_cfg --example check_templates -- <dir>`
 
-use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
+use evanalyzer_cfg::load_project_template;
+use evanalyzer_cfg::settings::templates::PipelineTemplate;
 use std::path::Path;
 
 fn main() {
@@ -54,7 +56,10 @@ fn main() {
             }
         } else {
             checked_evapt += 1;
-            if let Err(e) = serde_json::from_str::<ProjectTemplate>(&json) {
+            let loaded = serde_json::from_str(&json)
+                .map_err(|e| e.to_string())
+                .and_then(|raw| load_project_template(raw).map_err(|e| e.to_string()));
+            if let Err(e) = loaded {
                 failures.push(format!(
                     "{}: failed to deserialize as ProjectTemplate: {e}",
                     path.display()

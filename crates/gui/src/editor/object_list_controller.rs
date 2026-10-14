@@ -720,7 +720,7 @@ mod tests {
         color: u32,
     ) -> evanalyzer_cfg::settings::classification_settings::Class {
         evanalyzer_cfg::settings::classification_settings::Class {
-            id: ObjectClass::Global(id),
+            id,
             color,
             name: name.to_string(),
             notes: String::new(),

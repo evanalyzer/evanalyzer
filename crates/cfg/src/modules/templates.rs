@@ -33,10 +33,8 @@ pub struct PipelineTemplate {
 pub struct ProjectTemplate {
     /// On-disk format version of this project template (`.evapt`). Absent on
     /// files written before versioning was introduced, which `serde(default)`
-    /// reads as `0` - see `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`. Unlike
-    /// `ProjectSettings.schema_version`, nothing currently rejects a too-new
-    /// version or migrates an old one forward on load - this field only
-    /// reserves the seam for that.
+    /// reads as `0` - see `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION` and
+    /// `load_project_template`, which migrates older ones forward.
     #[serde(default)]
     pub schema_version: u32,
 

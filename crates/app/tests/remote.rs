@@ -771,7 +771,7 @@ fn remote_grouped_matrix_and_chart_queries_match_local_ones() {
         .get_object_classes()
         .unwrap()
         .first()
-        .map(|c| c.id)
+        .map(|c| c.global())
         .unwrap_or(evanalyzer_cfg::core_types::ObjectClass::Unset);
     let image = remote_db.get_images().unwrap()[0].rel_path.clone();
 

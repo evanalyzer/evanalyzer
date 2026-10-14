@@ -83,7 +83,7 @@ fn main() {
     }
     project.classification.classes_mut().push(
         evanalyzer_cfg::settings::classification_settings::Class {
-            id: evanalyzer_cfg::core_types::ObjectClass::Global(1),
+            id: 1,
             color: 0xFF0000,
             name: "Spots".into(),
             notes: String::new(),

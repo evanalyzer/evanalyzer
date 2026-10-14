@@ -1,5 +1,5 @@
 {
-  "protocol_version": 12,
+  "protocol_version": 13,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -172,9 +172,7 @@
     "Class": {
       "STRUCT": [
         {
-          "id": {
-            "TYPENAME": "ObjectClass"
-          }
+          "id": "U32"
         },
         {
           "color": "STR"
@@ -601,6 +599,11 @@
         },
         "1": {
           "GLOBAL": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "2": {
+          "LOCAL": {
             "NEWTYPE": "U32"
           }
         }

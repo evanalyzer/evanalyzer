@@ -581,6 +581,21 @@
           "required": [
             "GLOBAL"
           ]
+        },
+        {
+          "description": "A class of a command group (`GroupDefinition::classes`): only valid\ninside the group, each instance has its own.",
+          "type": "object",
+          "properties": {
+            "LOCAL": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "LOCAL"
+          ]
         }
       ]
     },

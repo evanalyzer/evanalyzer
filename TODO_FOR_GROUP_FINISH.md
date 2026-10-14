@@ -36,12 +36,21 @@ before 14: most groups are made from existing steps).
 1. [x] **Rename `ObjectClass::Valid` → `Global`** – `#[serde(alias =
        "VALID")]`, protocol version bump (postcard). Mechanical: 503 places
        in 56 files. *Done when:* old projects load, all suites pass.
-2. [ ] **Add `ObjectClass::Local(u32)`** – last in the enum (postcard), text
+2. [x] **Add `ObjectClass::Local(u32)`** – last in the enum (postcard), text
        form in the generated code (`"L1"`), handled in every `match`; `Local`
        outside a group is a validation error. *Done when:* `{"LOCAL": 1}`
        round-trips, a local class in a pipeline is refused.
-3. [ ] **`local_classes` in `GroupDefinition`** (id, name); remove
-       `ParamKind::InternalClass`.
+       Done: text form via `ObjectClass::to_text`/`from_text`; generated
+       `local_classes()`; `expand_step` refuses `Local` outside a group and
+       undeclared local classes inside one. Protocol version 13.
+       Open: a nested group's `Local` value set from the outer group is read
+       in the inner group's scope - decide with scopes (step 4).
+3. [x] **`classes` in `GroupDefinition`** (reuses `Class`: id, colour,
+       name, notes); `ParamKind` removed altogether (only `Exposed` was left).
+       `Class.id` is a plain `u32` - the kind follows from where the class is
+       defined (`Class::global()` / `Class::local()`). Old files converted on
+       open: project schema v4, project template schema v3
+       (`migration_v3_to_v4`).
 
 **Phase B – scopes at runtime (the core)**
 

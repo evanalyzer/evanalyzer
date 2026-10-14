@@ -1923,7 +1923,7 @@ fn leaf_parts(
         "ObjectClass" => (
             "ParamType::ObjClass",
             format!(
-                "match {access}.to_u32() {{ Some(v) => format!(\"{{}}\", v), None => \"-1\".to_string() }}"
+                "{access}.to_text()"
             ),
             "vec![]".to_string(),
             0.0_f32,
@@ -2193,7 +2193,7 @@ fn tuple_variant_param_def_literal(
     // special-cased Vec forms and `leaf_param_def_literal`'s leaf types are supported).
     if ty == "Vec<ObjectClass>" {
         let value_expr = format!(
-            "{access}.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(\",\")"
+            "{access}.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(\",\")"
         );
         let flags_expr = format!(
             "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
@@ -2285,7 +2285,7 @@ fn field_to_param_def(
         // popup reads options[i] instead of doing a string.contains() check.
         if inner_ty == "ObjectClass" {
             let value_expr = format!(
-                "{access}.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(\",\")"
+                "{access}.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(\",\")"
             );
             let default_expr = value_expr.replace(&access, &format!("({default_list})"));
             let flags_expr = format!(
@@ -2612,14 +2612,14 @@ fn field_to_apply_change(
         if inner == "ObjectClass" {
             let branch = format!(
                 "if param_name == \"{display_name}\" {{ \
-                    if let Some(id) = value.strip_prefix(\"toggle:\").and_then(|x| x.trim().parse::<u32>().ok()) {{ \
-                        if {var}.{name}.iter().any(|c| c.to_u32().map_or(false, |v| v == id)) {{ \
-                            {var}.{name}.retain(|c| c.to_u32().map_or(true, |v| v != id)); \
+                    if let Some(id) = value.strip_prefix(\"toggle:\").and_then(ObjectClass::from_text) {{ \
+                        if {var}.{name}.contains(&id) {{ \
+                            {var}.{name}.retain(|c| *c != id); \
                         }} else {{ \
-                            {var}.{name}.push(ObjectClass::Global(id)); \
+                            {var}.{name}.push(id); \
                         }} \
                     }} else {{ \
-                        {var}.{name} = value.split(',').filter(|x| !x.is_empty()).filter_map(|x| x.trim().parse::<u32>().ok()).map(|v| ObjectClass::Global(v)).collect(); \
+                        {var}.{name} = value.split(',').filter(|x| !x.trim().is_empty()).filter_map(ObjectClass::from_text).filter(|c| *c != ObjectClass::Unset).collect(); \
                     }} \
                 }}"
             );
@@ -2749,8 +2749,7 @@ fn leaf_apply_change_branch(
         "String" => format!("{assign} = value.to_string();"),
         "PathBuf" => format!("{assign} = std::path::PathBuf::from(value);"),
         "ObjectClass" => format!(
-            "if value == \"-1\" {{ {assign} = ObjectClass::Unset; }} \
-             else if let Ok(v) = value.parse::<u32>() {{ {assign} = ObjectClass::Global(v); }}"
+            "if let Some(v) = ObjectClass::from_text(value) {{ {assign} = v; }}"
         ),
         "SegmentationClass" => {
             format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = SegmentationClass(v); }}")
@@ -2950,14 +2949,14 @@ fn tuple_variant_apply_change_branch(
     if ty == "Vec<ObjectClass>" {
         return Some(format!(
             "if param_name == \"{condition}\" {{ \
-                if let Some(id) = value.strip_prefix(\"toggle:\").and_then(|x| x.trim().parse::<u32>().ok()) {{ \
-                    if {assign}.iter().any(|c| c.to_u32().map_or(false, |v| v == id)) {{ \
-                        {assign}.retain(|c| c.to_u32().map_or(true, |v| v != id)); \
+                if let Some(id) = value.strip_prefix(\"toggle:\").and_then(ObjectClass::from_text) {{ \
+                    if {assign}.contains(&id) {{ \
+                        {assign}.retain(|c| *c != id); \
                     }} else {{ \
-                        {assign}.push(ObjectClass::Global(id)); \
+                        {assign}.push(id); \
                     }} \
                 }} else {{ \
-                    *{assign} = value.split(',').filter(|x| !x.is_empty()).filter_map(|x| x.trim().parse::<u32>().ok()).map(ObjectClass::Global).collect(); \
+                    *{assign} = value.split(',').filter(|x| !x.trim().is_empty()).filter_map(ObjectClass::from_text).filter(|c| *c != ObjectClass::Unset).collect(); \
                 }} \
             }}"
         ));
@@ -3345,10 +3344,27 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     // object_classes() - every project class a command creates, reads or filters on
     out.push_str("    /// Every object class this command creates, reads or filters on.\n");
     out.push_str("    /// Segmentation classes count as the object class Extract Objects turns\n");
-    out.push_str("    /// them into. `Unset`, Background, the manual-annotation marker and\n");
+    out.push_str("    /// them into. `Unset`, a group's `Local` classes, Background, the\n");
+    out.push_str("    /// manual-annotation marker and\n");
     out.push_str("    /// `ModelClass`/`ModelSegmentationClass` fields (a trained model's own\n");
     out.push_str("    /// class IDs) are left out - they never name a class of the project.\n");
     out.push_str("    pub fn object_classes(&self) -> Vec<ObjectClass> {\n");
+    out.push_str("        let mut classes = self.all_object_classes();\n");
+    out.push_str("        classes.retain(|c| {\n");
+    out.push_str("            !matches!(c, ObjectClass::Unset | ObjectClass::Local(_))\n");
+    out.push_str("                && *c != ObjectClass::BACKGROUND\n");
+    out.push_str("                && c.to_u32() != Some(SegmentationClass::MANUAL_ANNOTATED.0)\n");
+    out.push_str("        });\n");
+    out.push_str("        classes\n");
+    out.push_str("    }\n\n");
+    out.push_str("    /// The command group local classes (`ObjectClass::Local`) this command\n");
+    out.push_str("    /// uses - only allowed inside a group.\n");
+    out.push_str("    pub fn local_classes(&self) -> Vec<ObjectClass> {\n");
+    out.push_str("        let mut classes = self.all_object_classes();\n");
+    out.push_str("        classes.retain(|c| matches!(c, ObjectClass::Local(_)));\n");
+    out.push_str("        classes\n");
+    out.push_str("    }\n\n");
+    out.push_str("    fn all_object_classes(&self) -> Vec<ObjectClass> {\n");
     out.push_str("        let mut classes: Vec<ObjectClass> = Vec::new();\n");
     out.push_str("        match self {\n");
     for cmd in &algo_commands {
@@ -3373,11 +3389,6 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         }
     }
     out.push_str("        }\n");
-    out.push_str("        classes.retain(|c| {\n");
-    out.push_str("            !matches!(c, ObjectClass::Unset)\n");
-    out.push_str("                && *c != ObjectClass::BACKGROUND\n");
-    out.push_str("                && c.to_u32() != Some(SegmentationClass::MANUAL_ANNOTATED.0)\n");
-    out.push_str("        });\n");
     out.push_str("        classes\n");
     out.push_str("    }\n\n");
 

@@ -79,6 +79,9 @@ pub enum ObjectClass {
     Unset,
     #[serde(alias = "VALID")]
     Global(u32),
+    /// A class of a command group (`GroupDefinition::classes`): only valid
+    /// inside the group, each instance has its own.
+    Local(u32),
 }
 
 #[allow(dead_code)]
@@ -92,12 +95,35 @@ impl ObjectClass {
     pub fn to_u32(&self) -> Option<u32> {
         match self {
             ObjectClass::Global(val) => Some(*val),
-            ObjectClass::Unset => None,
+            ObjectClass::Unset | ObjectClass::Local(_) => None,
         }
     }
+    /// The class as a command parameter's text value (`ParameterDef::value`,
+    /// `apply_param_change`): `"-1"` unset, `"3"` a project class, `"L3"` a
+    /// group's local class.
+    pub fn to_text(&self) -> String {
+        match self {
+            ObjectClass::Unset => "-1".to_string(),
+            ObjectClass::Global(n) => n.to_string(),
+            ObjectClass::Local(n) => format!("L{n}"),
+        }
+    }
+
+    /// Reads [`Self::to_text`]'s form back; `None` if `text` isn't one.
+    pub fn from_text(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if text == "-1" {
+            return Some(ObjectClass::Unset);
+        }
+        match text.strip_prefix('L') {
+            Some(local) => local.parse().ok().map(ObjectClass::Local),
+            None => text.parse().ok().map(ObjectClass::Global),
+        }
+    }
+
     pub fn to_i32(&self) -> i32 {
         match self {
-            ObjectClass::Unset => -1,
+            ObjectClass::Unset | ObjectClass::Local(_) => -1,
             ObjectClass::Global(val) => *val as i32,
         }
     }
@@ -147,6 +173,34 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn the_text_form_reads_back_and_tells_local_from_global() {
+        for class in [
+            ObjectClass::Unset,
+            ObjectClass::Global(0),
+            ObjectClass::Global(3),
+            ObjectClass::Local(3),
+        ] {
+            assert_eq!(ObjectClass::from_text(&class.to_text()), Some(class));
+        }
+        assert_eq!(ObjectClass::Local(1).to_text(), "L1");
+        assert_eq!(ObjectClass::from_text(" 4 "), Some(ObjectClass::Global(4)));
+        for bad in ["", "L", "x1", "L-1", "-2"] {
+            assert_eq!(ObjectClass::from_text(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn local_classes_are_written_with_their_kind() {
+        let json = serde_json::to_string(&ObjectClass::Local(2)).unwrap();
+        assert_eq!(json, r#"{"LOCAL":2}"#);
+        assert_eq!(
+            serde_json::from_str::<ObjectClass>(&json).unwrap(),
+            ObjectClass::Local(2)
+        );
+        assert_eq!(ObjectClass::Local(2).to_u32(), None, "not a project class");
+    }
 
     #[test]
     fn segmentation_class_constants_have_the_expected_values() {

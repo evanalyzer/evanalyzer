@@ -1,5 +1,4 @@
 use evanalyzer_cfg::{
-    AssignObjectClass,
     core_types::{InternalErrors, ObjectClass},
     settings::classification_settings::{Class, ClassificationSettings},
 };
@@ -46,7 +45,7 @@ pub trait ClassificationExt {
 impl ClassificationExt for ClassificationSettings {
     fn add_class(&mut self, mut new_class: Class) -> ObjectClass {
         new_class.id = next_id(&self.classes());
-        let id = new_class.id;
+        let id = new_class.global();
         self.classes_mut().push(new_class);
         id
     }
@@ -62,11 +61,11 @@ impl ClassificationExt for ClassificationSettings {
     }
 
     fn get_class(&self, class_id: ObjectClass) -> Option<&Class> {
-        self.classes().iter().find(|c| c.id == class_id)
+        self.classes().iter().find(|c| c.global() == class_id)
     }
 
     fn move_up(&mut self, class_id: ObjectClass) {
-        if let Some(i) = self.classes().iter().position(|c| c.id == class_id) {
+        if let Some(i) = self.classes().iter().position(|c| c.global() == class_id) {
             if i > 1 {
                 // Background class must always be on top, therefore 1 and not 0
                 self.classes_mut().swap(i, i - 1);
@@ -75,7 +74,7 @@ impl ClassificationExt for ClassificationSettings {
     }
 
     fn move_down(&mut self, class_id: ObjectClass) {
-        if let Some(i) = self.classes().iter().position(|c| c.id == class_id) {
+        if let Some(i) = self.classes().iter().position(|c| c.global() == class_id) {
             if i < self.classes().len() - 1 {
                 self.classes_mut().swap(i, i + 1);
             }
@@ -87,7 +86,7 @@ impl ClassificationExt for ClassificationSettings {
             // Background class is not allowed to be deleted
             return;
         }
-        self.classes_mut().retain(|c| c.id != class_id);
+        self.classes_mut().retain(|c| c.global() != class_id);
     }
 }
 
@@ -95,13 +94,8 @@ impl ClassificationExt for ClassificationSettings {
 ///
 /// Calculates `max(existing_ids) + 1`, or `1` if the list is empty.
 /// This ensures IDs are never reused after deletions.
-fn next_id(classes: &[Class]) -> ObjectClass {
-    classes
-        .iter()
-        .map(|c| c.id)
-        .max()
-        .map(|max| max + AssignObjectClass!(1))
-        .unwrap_or(AssignObjectClass!(1))
+fn next_id(classes: &[Class]) -> u32 {
+    classes.iter().map(|c| c.id).max().map_or(1, |max| max + 1)
 }
 
 #[cfg(test)]
@@ -110,7 +104,7 @@ mod tests {
 
     fn class(id: u32, name: &str) -> Class {
         Class {
-            id: ObjectClass::Global(id),
+            id,
             name: name.into(),
             ..Default::default()
         }
@@ -129,7 +123,7 @@ mod tests {
         assert_eq!(id, ObjectClass::Global(1));
         // classes()[0] is always the auto-prepended Background class.
         assert_eq!(s.classes().len(), 2);
-        assert_eq!(s.classes()[1].id, ObjectClass::Global(1));
+        assert_eq!(s.classes()[1].id, 1);
     }
 
     #[test]
@@ -180,7 +174,7 @@ mod tests {
     fn update_class_replaces_the_class_with_a_matching_id() {
         let mut s = settings(vec![class(1, "Old")]);
         let updated = Class {
-            id: ObjectClass::Global(1),
+            id: 1,
             name: "New".into(),
             ..Default::default()
         };

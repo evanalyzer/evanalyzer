@@ -8,7 +8,10 @@
 // (Plain comments: build.rs include!s this file, where `//!` isn't allowed.)
 
 use crate::{
-    modules::{meta_data::MetaData, pipeline_settings::PipelineStepSettings},
+    modules::{
+        classification_settings::Class, meta_data::MetaData,
+        pipeline_settings::PipelineStepSettings,
+    },
     types::ids::{GroupParamId, StepId},
 };
 use schemars::JsonSchema;
@@ -41,11 +44,14 @@ pub struct GroupDefinition {
     /// Metadata of this group
     pub meta: MetaData,
 
+    /// Local classes used by the group. These classes are scoped to the group only
+    #[serde(default)]
+    pub classes: Vec<Class>,
+
     /// The steps which are executed in the given order
     pub steps: Vec<PipelineStepSettings>,
 
-    /// The group's parameters: shown to the user ([`ParamKind::Exposed`])
-    /// or set per instance behind the scenes ([`ParamKind::InternalClass`]).
+    /// The group's parameters, shown on the group card.
     pub parameters: Vec<GroupParameterDef>,
 
     /// The library file this definition was inserted from, if any.
@@ -70,24 +76,10 @@ pub struct GroupParameterDef {
     /// The value an instance starts with.
     pub default: ParamValue,
 
-    pub kind: ParamKind,
-
     /// The inner parameters this one sets - all of the same type. Type,
     /// options and range are those of the bound parameters (not stored here,
     /// so they can't go stale when a command changes).
     pub bindings: Vec<ParamBinding>,
-}
-
-/// Whether the user sees a group parameter.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ParamKind {
-    /// Shown on the group card and set by the user.
-    #[default]
-    Exposed,
-    /// A class only used inside the group (e.g. "Seed"): hidden, and each
-    /// instance gets a class of its own, so two instances never share it.
-    InternalClass,
 }
 
 /// An inner parameter a group parameter sets.
@@ -183,7 +175,7 @@ mod tests {
     #[test]
     fn a_parameter_definition_has_a_typed_default() {
         let parameter: GroupParameterDef = serde_json::from_str(
-            r#"{"id":1,"label":"Blur size","default":3,"kind":"EXPOSED",
+            r#"{"id":1,"label":"Blur size","default":3,
                 "bindings":[{"step":2,"param":"kernel_size"}]}"#,
         )
         .unwrap();
@@ -195,5 +187,21 @@ mod tests {
                 param: "kernel_size".into()
             }]
         );
+    }
+
+    #[test]
+    fn a_definition_without_classes_needs_no_classes_entry() {
+        let definition = GroupDefinition {
+            key: "BLUR".into(),
+            meta: MetaData::default(),
+            classes: vec![],
+            steps: vec![],
+            parameters: vec![],
+            origin: None,
+        };
+        let mut json = serde_json::to_value(&definition).unwrap();
+        json.as_object_mut().unwrap().remove("classes");
+        let loaded: GroupDefinition = serde_json::from_value(json).unwrap();
+        assert!(loaded.classes.is_empty());
     }
 }

@@ -29,7 +29,15 @@ pub fn expand_step(
     definitions: &[GroupDefinition],
 ) -> Result<Vec<(StepId, PipelineCommand)>, InternalErrors> {
     match &step.content {
-        StepContent::Command(command) => Ok(vec![(step.id, command.clone())]),
+        StepContent::Command(command) => {
+            if let Some(class) = command.local_classes().first() {
+                return Err(InternalErrors::InvalidArgument(format!(
+                    "uses the group class {}, which only exists inside a command group",
+                    class.to_text()
+                )));
+            }
+            Ok(vec![(step.id, command.clone())])
+        }
         StepContent::Group(instance) => {
             let commands = expand_group(instance, definitions, &mut Vec::new())?;
             let last = commands.len().saturating_sub(1);
@@ -107,7 +115,23 @@ fn expand_group(
     let mut commands = Vec::new();
     for step in steps.iter().filter(|s| s.enabled) {
         match &step.content {
-            StepContent::Command(command) => commands.push(command.clone()),
+            StepContent::Command(command) => {
+                let undeclared = command
+                    .local_classes()
+                    .into_iter()
+                    .find(|class| !definition.classes.iter().any(|c| c.local() == *class));
+                if let Some(class) = undeclared {
+                    return Err(group_error(
+                        &definition.key,
+                        format!(
+                            "step {} uses the group class {}, which the group doesn't define",
+                            step.id,
+                            class.to_text()
+                        ),
+                    ));
+                }
+                commands.push(command.clone())
+            }
             StepContent::Group(inner) => commands.extend(expand_group(inner, definitions, open)?),
         }
     }
@@ -193,7 +217,8 @@ fn group_error(key: &str, what: String) -> InternalErrors {
 mod tests {
     use super::*;
     use evanalyzer_cfg::core_types::ObjectClass;
-    use evanalyzer_cfg::settings::command_groups::{GroupParameterDef, ParamBinding, ParamKind};
+    use evanalyzer_cfg::settings::classification_settings::Class;
+    use evanalyzer_cfg::settings::command_groups::{GroupParameterDef, ParamBinding};
     use evanalyzer_cfg::settings::pipeline_command_settings::{BlurSettings, VoronoiSettings};
     use std::collections::BTreeMap;
 
@@ -225,7 +250,6 @@ mod tests {
             label: format!("Parameter {id}"),
             description: String::new(),
             default,
-            kind: ParamKind::Exposed,
             bindings: bindings
                 .iter()
                 .map(|(step, param)| ParamBinding {
@@ -244,6 +268,7 @@ mod tests {
         GroupDefinition {
             key: key.into(),
             meta: Default::default(),
+            classes: vec![],
             steps,
             parameters,
             origin: None,
@@ -384,5 +409,50 @@ mod tests {
         );
         assert!(same_value("4", "4.0"));
         assert!(!same_value("nm", "px"));
+    }
+
+    fn local_class(id: u32) -> Class {
+        Class {
+            id,
+            name: format!("Local {id}"),
+            ..Default::default()
+        }
+    }
+
+    fn voronoi_with_center(class: ObjectClass) -> PipelineCommand {
+        PipelineCommand::Voronoi(VoronoiSettings {
+            centers: class,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn a_local_class_outside_a_group_is_refused() {
+        let step = command_step(4, voronoi_with_center(ObjectClass::Local(1)));
+        let error = expand_step(&step, &[]).unwrap_err().to_string();
+        assert!(error.contains("group class L1"), "{error}");
+    }
+
+    #[test]
+    fn a_group_may_only_use_the_local_classes_it_defines() {
+        let undeclared = definition(
+            "SEEDS",
+            vec![command_step(1, voronoi_with_center(ObjectClass::Local(2)))],
+            vec![],
+        );
+        let error = expand_step(&group_step(1, "SEEDS", &[]), &[undeclared])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("step 1 uses the group class L2"), "{error}");
+
+        // Declared, and set through a group parameter in its text form.
+        let mut declared = definition(
+            "SEEDS",
+            vec![command_step(1, voronoi_with_center(ObjectClass::Global(4)))],
+            vec![parameter(1, ParamValue::Text("L2".into()), &[(1, "centers")])],
+        );
+        declared.classes = vec![local_class(2)];
+        let commands = expand_step(&group_step(1, "SEEDS", &[]), &[declared]).unwrap();
+        assert_eq!(voronoi(&commands[0].1).centers, ObjectClass::Local(2));
     }
 }
