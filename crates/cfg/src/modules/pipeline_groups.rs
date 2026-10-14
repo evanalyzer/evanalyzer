@@ -7,12 +7,28 @@
 //! parameter values. See VISION_GROUP.md.
 
 use crate::{
-    modules::pipeline_settings::PipelineStepSettings,
-    types::ids::{GroupId, GroupParamId, StepId},
+    modules::{meta_data::MetaData, pipeline_settings::PipelineStepSettings},
+    types::ids::{GroupParamId, StepId},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+/// A group parameter's value - written as plain JSON (`4`, `4.5`, `true`,
+/// `"PARABOLOID"`, `[1, 2]`). Typed by JSON kind only: what it means (a
+/// class, a channel, a dropdown option) and which values are valid come
+/// from the bound inner parameters.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum ParamValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    /// Dropdown options, units, paths ...
+    Text(String),
+    /// Several values, e.g. a multi-class or multi-channel selection.
+    List(Vec<ParamValue>),
+}
 
 /// A group as defined in the project: its steps and the parameters it shows.
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
@@ -21,16 +37,8 @@ pub struct GroupDefinition {
     /// Unique group key, prefere SCREAMING_SNAKE_CASE
     pub key: String,
 
-    /// Group name
-    pub name: String,
-
-    /// Description of what the group is doing
-    pub description: Option<String>,
-
-    /// Counts up on every change of the definition - lets copies (other
-    /// projects, the library) tell an older from a newer definition.
-    #[serde(default)]
-    pub version: u32,
+    /// Metadata of this group
+    pub meta: MetaData,
 
     /// The steps which are executed in the given order
     pub steps: Vec<PipelineStepSettings>,
@@ -58,10 +66,8 @@ pub struct GroupParameterDef {
     #[serde(default)]
     pub description: String,
 
-    /// The value an instance starts with - formatted like
-    /// `ParameterDef::value` (what `PipelineCommand::apply_param_change`
-    /// takes).
-    pub default: String,
+    /// The value an instance starts with.
+    pub default: ParamValue,
 
     pub kind: ParamKind,
 
@@ -100,6 +106,10 @@ pub struct ParamBinding {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupOrigin {
+    /// If this is a copy form an existing group, this is the origin group key.
+    /// This allows to reset the group default settings.
+    pub origin_group_key: String,
+
     /// The library file's name (`.evagroup`).
     pub library: String,
 
@@ -108,86 +118,81 @@ pub struct GroupOrigin {
 }
 
 /// A use of a group in a pipeline: which definition, with which values.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupInstance {
-    /// The group's definition in the project.
-    pub definition: GroupId,
+    /// The group's key in the project.
+    pub key: String,
 
     /// This instance's parameter values. A parameter missing here has its
     /// definition's default (e.g. one the definition gained later).
     #[serde(default)]
-    pub values: BTreeMap<GroupParamId, String>,
+    pub values: BTreeMap<GroupParamId, ParamValue>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::pipeline_command::PipelineCommand;
-    use crate::settings::pipeline_command_settings::BlurSettings;
 
-    fn definition() -> GroupDefinition {
-        let step = StepId::UNASSIGNED;
-        GroupDefinition {
-            key: "CELL_RECONSTRUCTION".into(),
-            name: "Cell reconstruction".into(),
-            description: None,
-            version: 3,
-            steps: vec![PipelineStepSettings {
-                id: step,
-                enabled: true,
-                command: PipelineCommand::Blur(BlurSettings::default()),
-            }],
-            parameters: vec![GroupParameterDef {
-                id: GroupParamId(1),
-                label: "Blur size".into(),
-                description: String::new(),
-                default: "3".into(),
-                kind: ParamKind::Exposed,
-                bindings: vec![ParamBinding {
-                    step,
-                    param: "kernel_size".into(),
-                }],
-            }],
-            origin: Some(GroupOrigin {
-                library: "cells.evagroup".into(),
-                version: 3,
-            }),
+    fn value(json: &str) -> ParamValue {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn values_are_plain_json_of_their_kind() {
+        assert_eq!(value("true"), ParamValue::Bool(true));
+        assert_eq!(value("4"), ParamValue::Int(4));
+        assert_eq!(value("-2"), ParamValue::Int(-2));
+        assert_eq!(value("4.5"), ParamValue::Float(4.5));
+        assert_eq!(
+            value(r#""PARABOLOID""#),
+            ParamValue::Text("PARABOLOID".into())
+        );
+        assert_eq!(
+            value("[1, 2]"),
+            ParamValue::List(vec![ParamValue::Int(1), ParamValue::Int(2)])
+        );
+        // And written back the same way - no wrapper around the value.
+        for json in ["true", "4", "4.5", r#""PARABOLOID""#, "[1,2]"] {
+            assert_eq!(serde_json::to_string(&value(json)).unwrap(), json);
         }
     }
 
     #[test]
-    fn a_definition_and_an_instance_survive_a_json_round_trip() {
-        let definition = definition();
-        let json = serde_json::to_string(&definition).unwrap();
-        let back: GroupDefinition = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.steps[0].id, definition.steps[0].id);
+    fn an_instance_reads_naturally_and_survives_loading_through_a_json_value() {
+        let json = r#"{"key":"CELL_RECONSTRUCTION","values":{"1":3,"2":"PARABOLOID","3":4.5}}"#;
+        // Projects load through `serde_json::Value`.
+        let raw: serde_json::Value = serde_json::from_str(json).unwrap();
+        let instance: GroupInstance = serde_json::from_value(raw).unwrap();
+        assert_eq!(instance.values[&GroupParamId(1)], ParamValue::Int(3));
         assert_eq!(
-            back.parameters[0].bindings,
-            definition.parameters[0].bindings
+            instance.values[&GroupParamId(2)],
+            ParamValue::Text("PARABOLOID".into())
         );
-        assert_eq!(back.origin, definition.origin);
+        assert_eq!(instance.values[&GroupParamId(3)], ParamValue::Float(4.5));
+        assert_eq!(serde_json::to_string(&instance).unwrap(), json);
 
-        let instance = GroupInstance {
-            definition: GroupId(1),
-            values: BTreeMap::from([(GroupParamId(1), "5".to_string())]),
-        };
-        let json = serde_json::to_string(&instance).unwrap();
-        assert_eq!(
-            serde_json::from_str::<GroupInstance>(&json).unwrap(),
-            instance
+        let no_values: GroupInstance = serde_json::from_str(r#"{"key":"X"}"#).unwrap();
+        assert!(
+            no_values.values.is_empty(),
+            "every parameter at its default"
         );
     }
 
     #[test]
-    fn optional_parts_may_be_missing() {
-        let instance: GroupInstance = serde_json::from_str(r#"{"definition":1}"#).unwrap();
-        assert!(instance.values.is_empty(), "every parameter at its default");
-
+    fn a_parameter_definition_has_a_typed_default() {
         let parameter: GroupParameterDef = serde_json::from_str(
-            r#"{"id":1,"label":"Seed","default":"","kind":"INTERNAL_CLASS","bindings":[]}"#,
+            r#"{"id":1,"label":"Blur size","default":3,"kind":"EXPOSED",
+                "bindings":[{"step":2,"param":"kernel_size"}]}"#,
         )
         .unwrap();
-        assert_eq!(parameter.kind, ParamKind::InternalClass);
+        assert_eq!(parameter.default, ParamValue::Int(3));
+        assert_eq!(
+            parameter.bindings,
+            [ParamBinding {
+                step: StepId(2),
+                param: "kernel_size".into()
+            }]
+        );
     }
 }

@@ -21,6 +21,8 @@ mod types {
     pub mod classes {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/types/classes.rs"));
     }
+    // The schema only needs some of the ids; the rest are unused here.
+    #[allow(dead_code)]
     pub mod ids {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/types/ids.rs"));
     }
