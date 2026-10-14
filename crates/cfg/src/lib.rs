@@ -35,25 +35,25 @@ pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 4;
 /// migration step in `load_config::AI_LEARNING_SETTINGS_MIGRATIONS` whenever a
 /// change to `AiLearningSettings` would break deserialization of a file
 /// written by an older version of the app.
-pub const CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION: u32 = 4;
 
 /// Current on-disk format version for
 /// [`settings::templates::ProjectTemplate`] (`.evapt` files). Unlike
 /// `ProjectSettings`/`AiLearningSettings`, nothing loads templates through a
 /// version-checked/migrated path: breaking changes to templates are allowed,
 /// old templates are updated by hand. The number only marks the format.
-pub const CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 /// Current on-disk format version for
 /// [`settings::templates::PipelineTemplate`] (`.evapipe` files, and each
 /// entry of a `ProjectTemplate`'s `pipelines`). See
 /// `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`.
-pub const CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 /// Current on-disk format version for
 /// [`settings::templates::GroupTemplate`] (`.evagroup` files). See
 /// `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`.
-pub const CURRENT_GROUP_TEMPLATE_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_GROUP_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 // Project Settings structs
 pub mod settings {
