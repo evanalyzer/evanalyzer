@@ -157,6 +157,20 @@ export component ClassEditDialog inherits Rectangle {
                     HorizontalLayout {
                         spacing: 10px;
                         Text {
+                            text: "Notes:";
+                            vertical-alignment: center;
+                            width: 110px;
+                        }
+
+                        LineEdit {
+                            placeholder-text: "Optional description...";
+                            text <=> ClassificationSettingsState.settings.notes;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text {
                             text: "Class ID:";
                             vertical-alignment: center;
                             width: 110px;
@@ -181,20 +195,6 @@ export component ClassEditDialog inherits Rectangle {
                     HorizontalLayout {
                         spacing: 10px;
                         Text {
-                            text: "Notes:";
-                            vertical-alignment: center;
-                            width: 110px;
-                        }
-
-                        LineEdit {
-                            placeholder-text: "Optional description...";
-                            text <=> ClassificationSettingsState.settings.notes;
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Text {
                             text: "Color:";
                             font-weight: 700;
                             width: 110px;
@@ -214,104 +214,114 @@ export component ClassEditDialog inherits Rectangle {
                                     #ADFF2F,
                                     #00FA9A,
                                     #87CEFA,
-                                    #FF66CC
+                                    #FF66CC,
+                                    #FF1493, // Added: Deep Pink
                                 ]: ColorTile {
-                                    item_color: c;
+                                        item_color: c;
+                                    }
+                                }
+
+                                Row {
+                                    for c in [
+                                        #FFD700,
+                                        #FF4500,
+                                        #FF69B4,
+                                        #F08080,
+                                        #FFA07A,
+                                        #DA70D6,
+                                        #FF007F,
+                                        #FFCC00,
+                                        #EEDD82,
+                                        #BC8F8F,
+                                        #FF8C00,
+                                        #FF7F50, // Added: Coral
+                                ]: ColorTile {
+                                            item_color: c;
+                                        }
+                                    }
+
+                                    Row {
+                                        for c in [
+                                            #00CED1,
+                                            #1E90FF,
+                                            #9370DB,
+                                            #40E0D0,
+                                            #7B68EE,
+                                            #48D1CC,
+                                            #00BFFF,
+                                            #AFEEEE,
+                                            #B0C4DE,
+                                            #66CDAA,
+                                            #9932CC,
+                                            #20B2AA, // Added: Light Sea Green
+                                ]: ColorTile {
+                                                item_color: c;
+                                            }
+                                        }
+
+                                        Row {
+                                            for c in [
+                                                #FFCCFF,
+                                                #99FFFF,
+                                                #FFE4B5,
+                                                #EEE8AA,
+                                                #CCFFCC,
+                                                #E6E6FA,
+                                                #FFFAC8,
+                                                #F0FFF0,
+                                                #F5FFFA,
+                                                #F0F8FF,
+                                                #FFFFFF,
+                                                #FFF0F5, // Added: Lavender Blush
+                                ]: ColorTile {
+                                                    item_color: c;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        vertical-stretch: 1;
+                                    }
                                 }
                             }
 
-                            Row {
-                                for c in [
-                                    #FFD700,
-                                    #FF4500,
-                                    #FF69B4,
-                                    #F08080,
-                                    #FFA07A,
-                                    #DA70D6,
-                                    #FF007F,
-                                    #FFCC00,
-                                    #EEDD82,
-                                    #BC8F8F,
-                                    #FF8C00
-                                ]: ColorTile {
-                                    item_color: c;
-                                }
-                            }
+                            Rectangle {
+                                height: 56px;
+                                background: Theme.bg;
+                                border-color: Theme.border-soft;
+                                HorizontalLayout {
+                                    padding-left: 20px;
+                                    padding-right: 16px;
+                                    spacing: 12px;
+                                    alignment: end;
 
-                            Row {
-                                for c in [
-                                    #00CED1,
-                                    #1E90FF,
-                                    #9370DB,
-                                    #40E0D0,
-                                    #7B68EE,
-                                    #48D1CC,
-                                    #00BFFF,
-                                    #AFEEEE,
-                                    #B0C4DE,
-                                    #66CDAA,
-                                    #9932CC
-                                ]: ColorTile {
-                                    item_color: c;
-                                }
-                            }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        AppButton {
+                                            text: "Cancel";
+                                            clicked => {
+                                                GlobalAppState.active-dialog = DialogType.none;
+                                                ClassificationSettingsState.reset_to_zero();
+                                            }
+                                        }
+                                    }
 
-                            Row {
-                                for c in [
-                                    #FFCCFF,
-                                    #99FFFF,
-                                    #FFE4B5,
-                                    #EEE8AA,
-                                    #CCFFCC,
-                                    #E6E6FA,
-                                    #FFFAC8,
-                                    #F0FFF0,
-                                    #F5FFFA,
-                                    #F0F8FF,
-                                    #FFFFFF
-                                ]: ColorTile {
-                                    item_color: c;
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        vertical-stretch: 1;
-                    }
-                }
-            }
-
-            Rectangle {
-                height: 56px;
-                background: Theme.bg;
-                border-color: Theme.border-soft;
-                HorizontalLayout {
-                    padding-left: 20px;
-                    padding-right: 16px;
-                    spacing: 12px;
-                    alignment: end;
-
-                    AppButton {
-                        text: "Cancel";
-                        clicked => {
-                            GlobalAppState.active-dialog = DialogType.none;
-                            ClassificationSettingsState.reset_to_zero();
-                        }
-                    }
-
-                    AppButton {
-                        text: "Apply Settings";
-                        primary: true;
-                        clicked => {
+                                    VerticalLayout {
+                                        alignment: center;
+                                        AppButton {
+                                            text: "Apply";
+                                            primary: true;
+                                            clicked => {
                             // Index 0 is "Auto" for a new class, the own id for an edited one.
                             ClassificationSettingsState.settings.new-id = ClassificationSettingsState.id-index == 0 ? (ClassificationSettingsState.settings.class-id < 0 ? -1 : ClassificationSettingsState.settings.class-id) : ClassificationSettingsState.id-options[ClassificationSettingsState.id-index].to-float();
-                            ClassificationSettingsState.apply_classification_settings(ClassificationSettingsState.settings);
-                            GlobalAppState.active-dialog = DialogType.none;
+                                                ClassificationSettingsState.apply_classification_settings(ClassificationSettingsState.settings);
+                                                GlobalAppState.active-dialog = DialogType.none;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
-    }
-}
