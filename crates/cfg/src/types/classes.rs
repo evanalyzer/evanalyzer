@@ -59,6 +59,10 @@ impl std::fmt::Display for SegmentationClass {
 
 // Object class -----------------
 
+/// The highest project class id the editor's class choices offer: they show
+/// the classes 1 to 32 (and multi-class settings carry 33 flags, 0 to 32).
+pub const MAX_CLASS_ID: u32 = 32;
+
 #[derive(
     Default,
     Debug,

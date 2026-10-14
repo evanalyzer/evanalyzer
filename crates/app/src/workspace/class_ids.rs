@@ -3,7 +3,7 @@
 
 use crate::workspace::grouping::{setting_at, uses_segmentation_class};
 use evanalyzer_cfg::{
-    core_types::{GroupParamId, InternalErrors, ObjectClass, SegmentationClass},
+    core_types::{GroupParamId, InternalErrors, MAX_CLASS_ID, ObjectClass, SegmentationClass},
     settings::{
         classification_settings::ClassificationSettings,
         command_groups::{GroupDefinition, ParamValue},
@@ -15,9 +15,6 @@ use evanalyzer_cfg::{
     },
 };
 use std::collections::{BTreeMap, BTreeSet};
-
-/// How many ids above the highest one are offered as free.
-const SPARE_IDS: u32 = 10;
 
 /// The id "Auto" gives a new class: one above the highest, so a deleted
 /// class's id isn't reused (old pipelines and results may still refer to
@@ -31,14 +28,12 @@ pub fn next_class_id(classification: &ClassificationSettings) -> u32 {
         .map_or(1, |max| max + 1)
 }
 
-/// The ids no class has, from 1 to a few above the highest - for choosing
-/// one by hand. 0 is the background's.
+/// The ids no class has, from 1 to [`MAX_CLASS_ID`] - the ones the
+/// editor's class choices offer - for choosing one by hand. 0 is the
+/// background's.
 pub fn free_class_ids(classification: &ClassificationSettings) -> Vec<u32> {
     let used: BTreeSet<u32> = classification.classes().iter().map(|c| c.id).collect();
-    let max = used.iter().max().copied().unwrap_or(0);
-    (1..=max + SPARE_IDS)
-        .filter(|id| !used.contains(id))
-        .collect()
+    (1..=MAX_CLASS_ID).filter(|id| !used.contains(id)).collect()
 }
 
 /// What [`change_class_id`] changed besides the class itself.
@@ -374,13 +369,14 @@ mod tests {
     }
 
     #[test]
-    fn free_ids_are_the_gaps_and_a_few_above_the_highest() {
+    fn free_ids_are_the_unused_ones_up_to_the_highest_choosable_id() {
         let project = project();
         // Background 0, 1 and 3 are taken.
         let free = free_class_ids(&project.classification);
         assert_eq!(free.first(), Some(&2));
         assert!(!free.contains(&0) && !free.contains(&1) && !free.contains(&3));
-        assert_eq!(free.last(), Some(&13));
+        assert_eq!(free.last(), Some(&MAX_CLASS_ID));
+        assert_eq!(free.len(), 30);
         assert_eq!(next_class_id(&project.classification), 4);
     }
 

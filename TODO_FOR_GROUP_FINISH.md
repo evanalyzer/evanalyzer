@@ -228,8 +228,13 @@ before 14: most groups are made from existing steps).
         (steps keep their ids), local classes rewritten to `L1`, `L2`, ...
         (an Extract Objects among the steps maps the segmentation class when
         a step there makes it), parameters bound to every single-class
-        setting with the class (also a list with only it, and the matching
-        segmentation class); a list with other classes too stays as it is.
+        setting with the class (also a list with only it; single-class
+        settings first, so the card shows a single-class choice); a list with
+        other classes too stays as it is. A segmentation class with the
+        class's number isn't bound - it stays the group's own (fixed
+        2026-10-14: binding it made the check report "different kinds of
+        setting"). One parameter may set a class and class lists, not the
+        other way round (`same_kind`, used by the check and by "Add to …").
         Load Image Channel steps' channels become parameters. The dialog
         says internal classes don't reach the results. Tested: with no
         internal classes the group runs exactly the commands the steps ran.
