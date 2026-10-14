@@ -252,3 +252,89 @@ export component GroupStepsDialog inherits Rectangle {
         height: layout.preferred-height;
     }
 }
+
+// -- "Edit for all" or "Only this step" -------------------------
+
+/// Asked when opening a group that other steps use too.
+export global GroupEditChoiceState {
+    in property <int> pipeline-id: 0;
+    in property <int> step-idx: 0;
+    in property <string> group-name: "";
+    in property <int> uses: 0;
+    callback edit-all();
+    callback only-this();
+    callback cancel();
+}
+
+export component GroupEditChoiceDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    TouchArea {
+        clicked => {
+            GroupEditChoiceState.cancel();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+
+            Text {
+                text: "Open \{GroupEditChoiceState.group-name}";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text;
+            }
+
+            Text {
+                text: "This group is used by \{GroupEditChoiceState.uses} steps. Changes to it apply to all of them - or make a copy just for this step.";
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        GroupEditChoiceState.cancel();
+                    }
+                }
+
+                AppButton {
+                    text: "Only this step";
+                    clicked => {
+                        GroupEditChoiceState.only-this();
+                    }
+                }
+
+                AppButton {
+                    text: "Edit for all";
+                    primary: true;
+                    clicked => {
+                        GroupEditChoiceState.edit-all();
+                    }
+                }
+            }
+        }
+
+        height: layout.preferred-height;
+    }
+}

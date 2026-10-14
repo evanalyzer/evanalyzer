@@ -10,8 +10,7 @@ the job generator expands each group into its commands
       "Scoping" below. Replaces the earlier plans "internal classes per
       instance" (created at insertion) and "renumber memory slots".
 - [x] **Groups in the command picker** – step 12 (library part with step 16).
-- [ ] **Creating groups in the editor** – "Group steps" done (step 13);
-      "Open group", "Expose", "Ungroup" next (step 14).
+- [x] **Creating groups in the editor** – steps 13 and 14.
 - [ ] **Focus classes for group steps** – `PipelineSettings::object_classes`
       ignores group steps (marked TODO); they should contribute the classes
       their commands use.
@@ -215,8 +214,28 @@ before 14: most groups are made from existing steps).
         Load Image Channel steps' channels become parameters. The dialog
         says internal classes don't reach the results. Tested: with no
         internal classes the group runs exactly the commands the steps ran.
-14. [ ] "Open group" with breadcrumb, "Expose as group parameter",
+14. [x] "Open group" with breadcrumb, "Expose as group parameter",
         "Ungroup".
+        Done (2026-10-14): a group card has "Open" and "Ungroup". Open shows
+        the definition's steps in the panel with a bar "‹ Back · Pipeline ›
+        ◆ Group · changes apply to every use"; the step handlers (toggle,
+        remove, duplicate, insert, values, list entries, file browse) work on
+        `shown_steps(_mut)` - the opened group's or the pipeline's. Used by
+        several steps: "Edit for all" / "Only this step"
+        (`clone_group_for_step`: "Name (2)", own key, origin cleared).
+        ◇/◆ on each setting of an opened group exposes it as a group
+        parameter (its current value the default) or hides it again
+        (`toggle_exposed`; a parameter goes with its last binding).
+        Removing a step of a group removes the bindings to it
+        (`remove_group_step`). Ungroup (`ungroup`): the steps with the
+        instance's values back in the pipeline; the group's classes become
+        new project classes, its memory slots pipeline slots (rewritten in
+        the steps' file form); the definition stays. Inside an opened group:
+        no breakpoints, no "Group…" (groups in groups only from the
+        pipeline, for now), a group can't be inserted into itself. A group
+        that's gone (undo) closes. Not done: list-entry settings
+        ("thresholds.0.min") can't be exposed from the card yet; adding a
+        binding to an existing parameter of the same type.
 15. [ ] Focus classes for group steps.
 16. [ ] Group library (`.evagroup`): save, insert, update while keeping the
         user's values.

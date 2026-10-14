@@ -84,6 +84,8 @@ import {
     GroupStepsDialog,
     GroupStepsState,
     GroupClassRow,
+    GroupEditChoiceDialog,
+    GroupEditChoiceState,
 } from "dialogs/group_steps_dialog.slint";
 import {
     PipelineRunningDialog,
@@ -195,6 +197,7 @@ export {
     PipelineEditState,
     GroupStepsState,
     GroupClassRow,
+    GroupEditChoiceState,
     PipelineDeleteConfirmState,
     PipelineRunningState,
     TemplateMetaState,
@@ -443,6 +446,10 @@ export component AppWindow inherits Window {
                 height: 100%;
             }
             if (GlobalAppState.active_dialog == DialogType.group-steps): GroupStepsDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.group-edit-choice): GroupEditChoiceDialog {
                 width: 100%;
                 height: 100%;
             }

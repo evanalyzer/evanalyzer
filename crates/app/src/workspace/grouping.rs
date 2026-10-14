@@ -290,6 +290,253 @@ pub fn group_steps(
     Ok(key)
 }
 
+/// How often the project uses group `key`: steps in its pipelines and in
+/// other groups.
+pub fn group_uses(project: &ProjectSettings, key: &str) -> usize {
+    project
+        .pipelines
+        .iter()
+        .flat_map(|p| p.steps.iter())
+        .chain(project.command_groups.iter().flat_map(|d| d.steps.iter()))
+        .filter(|step| matches!(&step.content, StepContent::Group(i) if i.key == key))
+        .count()
+}
+
+/// "Only this step": gives step `step_index` of pipeline `pipeline_id` (a
+/// group step) a copy of its group - "Name (2)" with a key of its own - so
+/// changes to it don't affect the group's other uses. Returns the copy's key.
+pub fn clone_group_for_step(
+    project: &mut ProjectSettings,
+    pipeline_id: PipelineId,
+    step_index: usize,
+) -> Result<String, InternalErrors> {
+    let key = group_key_of(project, pipeline_id, step_index)?;
+    let mut copy = project
+        .command_groups
+        .iter()
+        .find(|d| d.key == key)
+        .cloned()
+        .ok_or_else(|| InternalErrors::InvalidArgument(format!("no command group {key}")))?;
+    let base = copy.meta.name.clone();
+    let name = (2..)
+        .map(|n| format!("{base} ({n})"))
+        .find(|name| !project.command_groups.iter().any(|d| d.meta.name == *name))
+        .expect("some number is free");
+    copy.key = unique_key(project, &name);
+    copy.meta.name = name;
+    copy.meta.creation_time = Utc::now();
+    // Not the library file's version any more.
+    copy.origin = None;
+    let new_key = copy.key.clone();
+    project.command_groups.push(copy);
+    if let StepContent::Group(instance) = &mut step_mut(project, pipeline_id, step_index)?.content {
+        instance.key = new_key.clone();
+    }
+    Ok(new_key)
+}
+
+/// "Ungroup": replaces step `step_index` of pipeline `pipeline_id` (a group
+/// step) by its group's steps, with the step's values applied. The group's
+/// own classes become new project classes (same name and colour) and its
+/// memory slots pipeline slots - both only exist inside a group. The
+/// definition stays in the project.
+pub fn ungroup(
+    project: &mut ProjectSettings,
+    pipeline_id: PipelineId,
+    step_index: usize,
+) -> Result<(), InternalErrors> {
+    let key = group_key_of(project, pipeline_id, step_index)?;
+    let StepContent::Group(instance) = &step_mut(project, pipeline_id, step_index)?.content else {
+        unreachable!("checked by group_key_of");
+    };
+    let instance = instance.clone();
+    let steps = evanalyzer_core::group_steps_with_values(&instance, &project.command_groups)?;
+    let definition = project
+        .command_groups
+        .iter()
+        .find(|d| d.key == key)
+        .expect("expanded above")
+        .clone();
+
+    // Each local class → a new project class.
+    let mut next_id = project
+        .classification
+        .classes()
+        .iter()
+        .map(|c| c.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let mut to_global = std::collections::BTreeMap::new();
+    for class in &definition.classes {
+        project.classification.classes_mut().push(Class {
+            id: next_id,
+            color: class.color,
+            name: class.name.clone(),
+            notes: class.notes.clone(),
+        });
+        to_global.insert(class.id, next_id);
+        next_id += 1;
+    }
+
+    let mut steps: Vec<PipelineStepSettings> = steps
+        .into_iter()
+        .map(|mut step| {
+            step.id = StepId::UNASSIGNED;
+            if let StepContent::Command(command) = &mut step.content {
+                *command = outside_the_group(command, &to_global)?;
+            }
+            Ok(step)
+        })
+        .collect::<Result<_, InternalErrors>>()?;
+    let pipeline = project
+        .pipelines
+        .iter_mut()
+        .find(|p| p.id == pipeline_id)
+        .expect("checked by group_key_of");
+    pipeline
+        .steps
+        .splice(step_index..=step_index, steps.drain(..));
+    assign_step_ids(&mut pipeline.steps);
+    Ok(())
+}
+
+/// `command` as it reads outside its group: its local classes the project
+/// classes `to_global` names, its group memory slots pipeline slots.
+/// Rewritten in its file form, so every setting holding them is covered.
+fn outside_the_group(
+    command: &PipelineCommand,
+    to_global: &std::collections::BTreeMap<u32, u32>,
+) -> Result<PipelineCommand, InternalErrors> {
+    fn rewrite(value: &mut serde_json::Value, to_global: &std::collections::BTreeMap<u32, u32>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map.len() == 1 {
+                    if let Some(local) = map.get("LOCAL").and_then(|v| v.as_u64()) {
+                        let global = to_global
+                            .get(&(local as u32))
+                            .copied()
+                            .unwrap_or(local as u32);
+                        *value = serde_json::json!({ "GLOBAL": global });
+                        return;
+                    }
+                    if let Some(slot) = map.remove("groupContext") {
+                        map.insert("pipelineContext".into(), slot);
+                        return;
+                    }
+                }
+                map.values_mut().for_each(|v| rewrite(v, to_global));
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(|v| rewrite(v, to_global)),
+            _ => {}
+        }
+    }
+    let mut value =
+        serde_json::to_value(command).map_err(|e| InternalErrors::Internal(e.to_string()))?;
+    rewrite(&mut value, to_global);
+    serde_json::from_value(value).map_err(|e| InternalErrors::Internal(e.to_string()))
+}
+
+/// Exposes setting `path` of step `step_id` as a parameter of `definition`
+/// (`label`, its current `value` as default) - or, if it is exposed, hides
+/// it again: the binding goes, and the parameter once nothing is bound to
+/// it. Returns whether it's exposed now.
+pub fn toggle_exposed(
+    definition: &mut GroupDefinition,
+    step_id: StepId,
+    path: &str,
+    label: &str,
+    value: &str,
+) -> bool {
+    let bound = |b: &ParamBinding| b.step == step_id && b.param == path;
+    if definition
+        .parameters
+        .iter()
+        .any(|p| p.bindings.iter().any(bound))
+    {
+        for parameter in &mut definition.parameters {
+            parameter.bindings.retain(|b| !bound(b));
+        }
+        definition.parameters.retain(|p| !p.bindings.is_empty());
+        return false;
+    }
+    let id = definition
+        .parameters
+        .iter()
+        .map(|p| p.id.0)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    definition.parameters.push(GroupParameterDef {
+        id: GroupParamId(id),
+        label: label.to_string(),
+        description: String::new(),
+        default: evanalyzer_core::value_from_text(value),
+        bindings: vec![ParamBinding {
+            step: step_id,
+            param: path.to_string(),
+        }],
+    });
+    true
+}
+
+/// The settings of step `step_id` that are group parameters.
+pub fn exposed_settings(definition: &GroupDefinition, step_id: StepId) -> Vec<String> {
+    definition
+        .parameters
+        .iter()
+        .flat_map(|p| p.bindings.iter())
+        .filter(|b| b.step == step_id)
+        .map(|b| b.param.clone())
+        .collect()
+}
+
+/// Removes step `index` of `definition` and every binding to it (and a
+/// parameter left without bindings) - so the group still works.
+pub fn remove_group_step(definition: &mut GroupDefinition, index: usize) {
+    if index >= definition.steps.len() {
+        return;
+    }
+    let removed = definition.steps.remove(index).id;
+    for parameter in &mut definition.parameters {
+        parameter.bindings.retain(|b| b.step != removed);
+    }
+    definition.parameters.retain(|p| !p.bindings.is_empty());
+}
+
+fn step_mut(
+    project: &mut ProjectSettings,
+    pipeline_id: PipelineId,
+    step_index: usize,
+) -> Result<&mut PipelineStepSettings, InternalErrors> {
+    project
+        .pipelines
+        .iter_mut()
+        .find(|p| p.id == pipeline_id)
+        .and_then(|p| p.steps.get_mut(step_index))
+        .ok_or_else(|| {
+            InternalErrors::InvalidArgument(format!(
+                "pipeline {pipeline_id} has no step {}",
+                step_index + 1
+            ))
+        })
+}
+
+/// The key of the group step `step_index` of pipeline `pipeline_id` uses.
+fn group_key_of(
+    project: &mut ProjectSettings,
+    pipeline_id: PipelineId,
+    step_index: usize,
+) -> Result<String, InternalErrors> {
+    match &step_mut(project, pipeline_id, step_index)?.content {
+        StepContent::Group(instance) => Ok(instance.key.clone()),
+        StepContent::Command(_) => Err(InternalErrors::InvalidArgument(format!(
+            "step {} isn't a command group",
+            step_index + 1
+        ))),
+    }
+}
+
 /// How a setting refers to a class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PathKind {
@@ -800,5 +1047,167 @@ mod tests {
         assert!(group_steps(&mut project, PipelineId(1), 0..=0, "  ", &none).is_err());
         assert!(group_steps(&mut project, PipelineId(1), 0..=9, "Too many", &none).is_err());
         assert!(plan_grouping(&project, PipelineId(9), 0..=0).is_err());
+    }
+
+    // ---- Open, ungroup, expose ----
+
+    /// `project()` with steps 3-5 of pipeline 1 grouped - "Seeds" internal.
+    fn grouped() -> ProjectSettings {
+        let mut project = project();
+        let plan = plan_grouping(&project, PipelineId(1), 2..=4).unwrap();
+        group_steps(
+            &mut project,
+            PipelineId(1),
+            2..=4,
+            "Cell reconstruction",
+            &roles(&plan),
+        )
+        .unwrap();
+        project
+    }
+
+    #[test]
+    fn ungrouping_puts_the_steps_back_with_the_groups_classes_as_project_classes() {
+        let mut project = grouped();
+        ungroup(&mut project, PipelineId(1), 2).unwrap();
+
+        let steps = &project.pipelines[0].steps;
+        assert_eq!(steps.len(), 5);
+        let seeds = project
+            .classification
+            .classes()
+            .iter()
+            .find(|c| c.name == "Seeds" && c.id != 2)
+            .expect("a new project class for the group's \"Seeds\"");
+        let PipelineCommand::ClassifyObjects(classify) = steps[3].command().unwrap() else {
+            panic!("classify")
+        };
+        assert_eq!(classify.output_class, ObjectClass::Global(seeds.id));
+        let PipelineCommand::Voronoi(voronoi) = steps[4].command().unwrap() else {
+            panic!("voronoi")
+        };
+        assert_eq!(
+            (voronoi.centers, voronoi.output_class),
+            (ObjectClass::Global(seeds.id), CELLS)
+        );
+        let ids: BTreeSet<StepId> = steps.iter().map(|s| s.id).collect();
+        assert_eq!(ids.len(), 5, "every step its own id");
+        assert_eq!(project.command_groups.len(), 1, "the definition stays");
+    }
+
+    #[test]
+    fn ungrouping_turns_group_memory_slots_into_pipeline_slots() {
+        use evanalyzer_cfg::core_types::MemoryId;
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ImageCacheSettings, MathImageCacheImageCacheModeSettings,
+        };
+        let mut project = project();
+        project.command_groups.push(GroupDefinition {
+            key: "STORE".into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: vec![step(
+                1,
+                PipelineCommand::ImageCache(ImageCacheSettings {
+                    mode: MathImageCacheImageCacheModeSettings::Store,
+                    address: ImageAddress::Memory(MemoryId::GroupContext(2)),
+                }),
+            )],
+            parameters: vec![],
+            origin: None,
+        });
+        project.pipelines[1].steps.push(PipelineStepSettings {
+            id: StepId(9),
+            enabled: true,
+            content: StepContent::Group(GroupInstance {
+                key: "STORE".into(),
+                values: Default::default(),
+            }),
+        });
+        ungroup(&mut project, PipelineId(2), 1).unwrap();
+        let PipelineCommand::ImageCache(cache) = project.pipelines[1].steps[1].command().unwrap()
+        else {
+            panic!("image cache")
+        };
+        assert_eq!(
+            cache.address,
+            ImageAddress::Memory(MemoryId::PipelineContext(2))
+        );
+    }
+
+    #[test]
+    fn only_this_step_gets_a_copy_of_the_group() {
+        let mut project = grouped();
+        let mut second_use = project.pipelines[0].steps[2].clone();
+        second_use.id = StepId(1);
+        project.pipelines[1].steps.push(second_use);
+        assert_eq!(group_uses(&project, "CELL_RECONSTRUCTION"), 2);
+
+        let key = clone_group_for_step(&mut project, PipelineId(2), 1).unwrap();
+        assert_eq!(key, "CELL_RECONSTRUCTION_2");
+        assert_eq!(
+            project.command_groups[1].meta.name,
+            "Cell reconstruction (2)"
+        );
+        assert_eq!(
+            group_uses(&project, "CELL_RECONSTRUCTION"),
+            1,
+            "the other use keeps it"
+        );
+        assert_eq!(group_uses(&project, &key), 1);
+    }
+
+    #[test]
+    fn a_setting_is_exposed_and_hidden_again() {
+        let mut project = grouped();
+        let definition = &mut project.command_groups[0];
+        let before = definition.parameters.len();
+
+        assert!(toggle_exposed(
+            definition,
+            StepId(4),
+            "min_area",
+            "Minimum size",
+            "50"
+        ));
+        assert_eq!(definition.parameters.len(), before + 1);
+        let added = definition.parameters.last().unwrap();
+        assert_eq!(
+            (added.label.as_str(), &added.default),
+            ("Minimum size", &ParamValue::Int(50))
+        );
+        assert!(exposed_settings(definition, StepId(4)).contains(&"min_area".to_string()));
+
+        assert!(!toggle_exposed(
+            definition,
+            StepId(4),
+            "min_area",
+            "Minimum size",
+            "50"
+        ));
+        assert_eq!(
+            definition.parameters.len(),
+            before,
+            "nothing bound to it any more"
+        );
+    }
+
+    #[test]
+    fn removing_a_step_of_a_group_removes_the_bindings_to_it() {
+        let mut project = grouped();
+        let definition = &mut project.command_groups[0];
+        // "Cells" is bound to the Voronoi (step 5) only.
+        let index = definition
+            .steps
+            .iter()
+            .position(|s| s.id == StepId(5))
+            .unwrap();
+        remove_group_step(definition, index);
+        let labels: Vec<&str> = definition
+            .parameters
+            .iter()
+            .map(|p| p.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Nuclei"]);
     }
 }

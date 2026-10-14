@@ -75,6 +75,8 @@ export struct CommandParameter {
         // Computed in Rust rather than matched on `name`/`display-name` here,
         // so this is the one place that knows which commands these are.
         has-model-info: bool,
+        // Inside an opened command group: this setting is a group parameter.
+        exposed: bool,
     }
 
 export struct PipelineCommand {
@@ -1409,6 +1411,7 @@ component ParamRow inherits VerticalLayout {
         callback add-item();
         callback remove-item(int);
         callback show-model-info();
+        callback toggle-exposed();
         // This row's pending file-browser request (see `browse-file`).
         property <int> browse-token: -1;
         // This row's pending script-editor request (see `ScriptEditorState`).
@@ -1419,10 +1422,32 @@ component ParamRow inherits VerticalLayout {
         HorizontalLayout {
             spacing: 4px;
             alignment: start;
+            // Inside an opened group: ◆ exposes the setting as a group
+            // parameter (filled) or hides it again.
+            if PipelinesPanelState.open-group-name != "" && p.param-type != ParamType.group: Rectangle {
+                width: 16px;
+                height: 16px;
+                border-radius: 3px;
+                background: expose-ta.has-hover ? Theme.raised : transparent;
+                Text {
+                    text: p.exposed ? "◆" : "◇";
+                    font-size: 10px;
+                    color: p.exposed ? Theme.cat-group : Theme.text-mute;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                expose-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.toggle-exposed();
+                    }
+                }
+            }
             Text {
                 text: p.display-name == "" ? p.name : p.display-name;
                 font-size: 11px;
-                color: Theme.text-dim;
+                color: p.exposed ? Theme.cat-group : Theme.text-dim;
                 vertical-alignment: center;
             }
 
@@ -1830,6 +1855,8 @@ component StepRow inherits Rectangle {
         callback remove;
         callback duplicate;
         callback group-steps;
+        callback open-group;
+        callback ungroup;
         callback param-changed(string, string);
         callback toggle-breakpoint;
 
@@ -1933,6 +1960,8 @@ component StepRow inherits Rectangle {
                             // Breakpoint dot: gray=off, red=Stop, orange=Snapshot
                         // Click cycles: off → stop → snapshot → off
                         bp-btn := Rectangle {
+                            // Inner steps of a group can't be breakpoint targets.
+                            visible: PipelinesPanelState.open-group-name == "";
                             // 0=off, 1=stop, 2=snapshot for this specific step
                             property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
                                 width: 22px;
@@ -2015,6 +2044,9 @@ component StepRow inherits Rectangle {
                         show-model-info => {
                             PipelinesPanelState.show-model-info(step.id);
                         }
+                        toggle-exposed => {
+                            PipelinesPanelState.toggle-exposed(step.id, p.name);
+                        }
                     }
 
                     if step.advanced-count > 0: AdvancedRow {
@@ -2046,6 +2078,9 @@ component StepRow inherits Rectangle {
                         }
                         show-model-info => {
                             PipelinesPanelState.show-model-info(step.id);
+                        }
+                        toggle-exposed => {
+                            PipelinesPanelState.toggle-exposed(step.id, p.name);
                         }
                     }
 
@@ -2091,7 +2126,59 @@ component StepRow inherits Rectangle {
                             }
                         }
 
-                        Rectangle {
+                        if root.step.category == StepCategory.group: Rectangle {
+                            height: 26px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: Theme.cat-group;
+                            background: open-ta.has-hover ? Theme.cat-group.with-alpha(0.15) : transparent;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                alignment: center;
+                                Text {
+                                    text: "Open";
+                                    font-size: 11px;
+                                    color: Theme.cat-group;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            open-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.open-group();
+                                }
+                            }
+                        }
+
+                        if root.step.category == StepCategory.group: Rectangle {
+                            height: 26px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            background: ungroup-ta.has-hover ? Theme.raised : transparent;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                alignment: center;
+                                Text {
+                                    text: "Ungroup";
+                                    font-size: 11px;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            ungroup-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.ungroup();
+                                }
+                            }
+                        }
+
+                        if root.step.category != StepCategory.group && PipelinesPanelState.open-group-name == "": Rectangle {
                             height: 26px;
                             border-radius: 4px;
                             border-width: 1px;
@@ -2344,6 +2431,15 @@ export global PipelinesPanelState {
         callback duplicate-step(int);
         /// Opens "Group steps" starting at this step (its index).
         callback group-steps(int);
+        /// The command group opened in the panel (its steps are shown), or
+        /// empty.
+        in property <string> open-group-name: "";
+        callback open-group(int);
+        callback close-group();
+        callback ungroup(int);
+        /// Exposes a setting of an opened group's step as a group parameter,
+        /// or hides it again: step index, setting name.
+        callback toggle-exposed(int, string);
         callback insert-step(int, int);          // pipeline-id, after-idx
     callback param-changed(int, string, string);
         callback add-group-item(int, string);    // step-id, param-name
@@ -2686,6 +2782,58 @@ export component PipelinesPanel inherits Rectangle {
                         padding-top: 8px;
                         spacing: 0px;
 
+                        // -- An opened command group --
+                    if PipelinesPanelState.open-group-name != "": Rectangle {
+                            height: 52px;
+                            border-radius: 6px;
+                            background: Theme.cat-group.with-alpha(0.10);
+                            border-width: 1px;
+                            border-color: Theme.cat-group.with-alpha(0.5);
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 10px;
+                                spacing: 10px;
+                                Rectangle {
+                                    width: 54px;
+                                    height: 24px;
+                                    y: (parent.height - 24px) / 2;
+                                    border-radius: 4px;
+                                    background: back-ta.has-hover ? Theme.raised : transparent;
+                                    Text {
+                                        text: "‹ Back";
+                                        font-size: 11px;
+                                        color: Theme.text;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    back-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            PipelinesPanelState.close-group();
+                                        }
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+                                    Text {
+                                        text: "\{PipelinesPanelState.active-pipeline-name} › ◆ \{PipelinesPanelState.open-group-name}";
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        color: Theme.text;
+                                    }
+
+                                    Text {
+                                        text: "Changes apply to every use of this group · ◇ exposes a setting";
+                                        font-size: 10px;
+                                        color: Theme.text-mute;
+                                    }
+                                }
+                            }
+                        }
+
                         // -- EMPTY STATE --
                     if PipelinesPanelState.active-commands.length == 0: Rectangle {
                             height: 180px;
@@ -2760,6 +2908,12 @@ export component PipelinesPanel inherits Rectangle {
                                 }
                                 group-steps => {
                                     PipelinesPanelState.group-steps(cmd.id);
+                                }
+                                open-group => {
+                                    PipelinesPanelState.open-group(cmd.id);
+                                }
+                                ungroup => {
+                                    PipelinesPanelState.ungroup(cmd.id);
                                 }
                                 param-changed(n, v) => {
                                     PipelinesPanelState.param-changed(cmd.id, n, v);

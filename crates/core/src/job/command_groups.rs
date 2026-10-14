@@ -213,6 +213,15 @@ fn steps_with_values(
     Ok(steps)
 }
 
+/// `instance`'s group's steps with the instance's values applied - what
+/// "Ungroup" puts into the pipeline in its place.
+pub fn group_steps_with_values(
+    instance: &GroupInstance,
+    definitions: &[GroupDefinition],
+) -> Result<Vec<PipelineStepSettings>, InternalErrors> {
+    steps_with_values(instance, definition_of(instance, definitions)?)
+}
+
 /// The parameters a group card shows for `instance`: each group parameter
 /// as the inner parameter it's bound to (its first binding) - same type,
 /// options and range, so the card gets the same control as the command -
@@ -350,7 +359,7 @@ fn missing_step(
 /// A parameter's text value (`ParameterDef::value`) as a typed group value -
 /// the reverse of [`value_text`]: `true`/`false`, whole and decimal numbers,
 /// comma-separated lists (e.g. classes "1,3"), else text.
-fn value_from_text(text: &str) -> ParamValue {
+pub fn value_from_text(text: &str) -> ParamValue {
     if text.contains(',') {
         return ParamValue::List(text.split(',').map(|t| value_from_text(t.trim())).collect());
     }

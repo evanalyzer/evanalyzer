@@ -8,9 +8,9 @@ use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     CommandDef, CommandParameter, CommandPickerState, DefaultParamPreview, GlobalAppState,
-    GroupClassRow, GroupItem, GroupStepsState, LeafParam, ParamType, Pipeline,
-    PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, RunAnalysisState,
-    StepCategory, UiState, WarningState,
+    GroupClassRow, GroupEditChoiceState, GroupItem, GroupStepsState, LeafParam, ParamType,
+    Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState,
+    RunAnalysisState, StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use crate::{ResultItemData, ResultsListState};
@@ -106,6 +106,11 @@ pub struct PipelinesController {
     /// Pipeline focus, told about every pipeline change (see
     /// `pipeline_settings_changed`).
     pub(crate) focus_controller: Arc<FocusController>,
+
+    /// The command group opened in the panel ("Open" on a group card):
+    /// (pipeline id, group key). The panel shows and edits its steps - its
+    /// definition, so every use of the group - instead of the pipeline's.
+    open_group: Mutex<Option<(u32, String)>>,
 }
 
 impl PipelinesController {
@@ -130,6 +135,7 @@ impl PipelinesController {
             auto_preview_enabled: Mutex::new(false),
             pipeline_templates: Mutex::new(Vec::new()),
             focus_controller,
+            open_group: Mutex::new(None),
         }
     }
 
@@ -263,6 +269,10 @@ impl PipelinesController {
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_select_pipeline(move |pipeline_id| {
+                    // Another pipeline: an opened group is closed.
+                    if manager.open_group_key(pipeline_id as u32).is_none() {
+                        *manager.open_group.lock().expect("Poisoned") = None;
+                    }
                     manager.sync_steps_of_selected_pipeline_to_slint(
                         PipelineId(pipeline_id as u32),
                         true,
@@ -611,17 +621,25 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
-                    let enabled = {
-                        let project = manager.app_state.get_project();
-                        project
-                            .pipelines
-                            .iter()
-                            .find(|p| p.id.0 == pipeline_id)
-                            .and_then(|p| p.steps.get(step_idx as usize))
-                            .map(|s| !s.enabled)
-                            .unwrap_or(false)
-                    };
-                    {
+                    if manager.open_group_key(pipeline_id).is_some() {
+                        let mut project = manager.app_state.get_project_write();
+                        if let Some(step) = manager
+                            .shown_steps_mut(&mut project, pipeline_id)
+                            .and_then(|steps| steps.get_mut(step_idx as usize))
+                        {
+                            step.enabled = !step.enabled;
+                        }
+                    } else {
+                        let enabled = {
+                            let project = manager.app_state.get_project();
+                            project
+                                .pipelines
+                                .iter()
+                                .find(|p| p.id.0 == pipeline_id)
+                                .and_then(|p| p.steps.get(step_idx as usize))
+                                .map(|s| !s.enabled)
+                                .unwrap_or(false)
+                        };
                         let mut project = manager.app_state.get_project_write();
                         project.enable_pipeline_step(
                             enabled,
@@ -648,7 +666,18 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
-                    {
+                    if let Some(key) = manager.open_group_key(pipeline_id) {
+                        // A step of the opened group: its bindings go with it.
+                        let mut project = manager.app_state.get_project_write();
+                        if let Some(definition) =
+                            project.command_groups.iter_mut().find(|d| d.key == key)
+                        {
+                            evanalyzer_app::groups::remove_group_step(
+                                definition,
+                                step_idx as usize,
+                            );
+                        }
+                    } else {
                         let mut project = manager.app_state.get_project_write();
                         if let Some(pipeline) =
                             project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
@@ -691,15 +720,13 @@ impl PipelinesController {
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
                     {
                         let mut project = manager.app_state.get_project_write();
-                        if let Some(pipeline) =
-                            project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
-                        {
+                        if let Some(steps) = manager.shown_steps_mut(&mut project, pipeline_id) {
                             let idx = step_idx as usize;
-                            if idx < pipeline.steps.len() {
-                                let mut cloned = pipeline.steps[idx].clone();
+                            if idx < steps.len() {
+                                let mut cloned = steps[idx].clone();
                                 cloned.id = evanalyzer_cfg::core_types::StepId::UNASSIGNED;
-                                pipeline.steps.insert(idx + 1, cloned);
-                                evanalyzer_app::utils::assign_step_ids(&mut pipeline.steps);
+                                steps.insert(idx + 1, cloned);
+                                evanalyzer_app::utils::assign_step_ids(steps);
                             }
                         }
                     }
@@ -887,22 +914,216 @@ impl PipelinesController {
                         }]
                     };
 
+                    // A group can't contain itself.
+                    let open_key = manager.open_group_key(pipeline_id);
+                    if new_steps.iter().any(|s| {
+                        matches!(&s.content, StepContent::Group(g) if Some(&g.key) == open_key.as_ref())
+                    }) {
+                        warn!("picker confirm: a group can't contain itself");
+                        return;
+                    }
                     {
                         let mut project = manager.app_state.get_project_write();
-                        if let Some(pipeline) =
-                            project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
-                        {
+                        if let Some(steps) = manager.shown_steps_mut(&mut project, pipeline_id) {
                             let insert_at = if after_idx < 0 {
                                 0
                             } else {
-                                ((after_idx as usize) + 1).min(pipeline.steps.len())
+                                ((after_idx as usize) + 1).min(steps.len())
                             };
-                            pipeline.steps.splice(insert_at..insert_at, new_steps);
-                            evanalyzer_app::utils::assign_step_ids(&mut pipeline.steps);
+                            steps.splice(insert_at..insert_at, new_steps);
+                            evanalyzer_app::utils::assign_step_ids(steps);
                         }
                     }
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::None);
+                    manager.pipeline_settings_changed();
+                    manager
+                        .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+                });
+
+            // "Open" on a group card: its steps in the panel - asking first
+            // if other steps use the group too.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_open_group(move |step_idx| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    let (name, uses) = {
+                        let project = manager.app_state.get_project();
+                        let Some(StepContent::Group(instance)) = project
+                            .pipelines
+                            .iter()
+                            .find(|p| p.id.0 == pipeline_id)
+                            .and_then(|p| p.steps.get(step_idx as usize))
+                            .map(|s| &s.content)
+                        else {
+                            return;
+                        };
+                        (
+                            step_label(
+                                &project,
+                                &project
+                                    .pipelines
+                                    .iter()
+                                    .find(|p| p.id.0 == pipeline_id)
+                                    .unwrap()
+                                    .steps[step_idx as usize],
+                            ),
+                            evanalyzer_app::groups::group_uses(&project, &instance.key),
+                        )
+                    };
+                    if uses > 1 {
+                        let choice = ui.global::<GroupEditChoiceState>();
+                        choice.set_pipeline_id(pipeline_id as i32);
+                        choice.set_step_idx(step_idx);
+                        choice.set_group_name(name.into());
+                        choice.set_uses(uses as i32);
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::GroupEditChoice);
+                    } else {
+                        manager.open_group_in_panel(pipeline_id, step_idx as usize);
+                    }
+                });
+
+            // "Edit for all": the group itself.
+            let manager = self.clone();
+            ui.global::<GroupEditChoiceState>().on_edit_all(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                let choice = ui.global::<GroupEditChoiceState>();
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::None);
+                manager.open_group_in_panel(
+                    choice.get_pipeline_id() as u32,
+                    choice.get_step_idx() as usize,
+                );
+            });
+
+            // "Only this step": a copy of the group for it.
+            let manager = self.clone();
+            ui.global::<GroupEditChoiceState>().on_only_this(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                let choice = ui.global::<GroupEditChoiceState>();
+                let pipeline_id = choice.get_pipeline_id() as u32;
+                let step_idx = choice.get_step_idx() as usize;
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::None);
+                let copied = {
+                    let mut project = manager.app_state.get_project_write();
+                    evanalyzer_app::groups::clone_group_for_step(
+                        &mut project,
+                        PipelineId(pipeline_id),
+                        step_idx,
+                    )
+                };
+                match copied {
+                    Ok(_) => {
+                        manager.pipeline_settings_changed();
+                        manager.open_group_in_panel(pipeline_id, step_idx);
+                    }
+                    Err(e) => warn!("Could not copy the group: {e}"),
+                }
+            });
+
+            let manager = self.clone();
+            ui.global::<GroupEditChoiceState>().on_cancel(move || {
+                if let Some(ui) = manager.ui.upgrade() {
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::None);
+                }
+            });
+
+            // "‹ Back" from an opened group: the pipeline's steps again.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>().on_close_group(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                *manager.open_group.lock().expect("Poisoned") = None;
+                let pipeline_id =
+                    ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), true);
+            });
+
+            // "Ungroup" on a group card: its steps in its place.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_ungroup(move |step_idx| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    let result = {
+                        let mut project = manager.app_state.get_project_write();
+                        evanalyzer_app::groups::ungroup(
+                            &mut project,
+                            PipelineId(pipeline_id),
+                            step_idx as usize,
+                        )
+                    };
+                    if let Err(e) = result {
+                        let warning = ui.global::<WarningState>();
+                        warning.set_info(false);
+                        warning.set_title("Cannot ungroup".into());
+                        warning.set_message(e.to_string().into());
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::Warning);
+                        return;
+                    }
+                    manager.pipeline_settings_changed();
+                    manager
+                        .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+                });
+
+            // ◆ on a setting inside an opened group: expose it as a group
+            // parameter, or hide it again.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_toggle_exposed(move |step_idx, param_name| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    let Some(key) = manager.open_group_key(pipeline_id) else {
+                        return;
+                    };
+                    {
+                        let mut project = manager.app_state.get_project_write();
+                        let Some(definition) =
+                            project.command_groups.iter_mut().find(|d| d.key == key)
+                        else {
+                            return;
+                        };
+                        let Some(step) = definition.steps.get(step_idx as usize) else {
+                            return;
+                        };
+                        let Some(command) = step.command() else {
+                            return;
+                        };
+                        let Some(setting) = command
+                            .to_parameters()
+                            .into_iter()
+                            .find(|p| p.name == param_name.as_str())
+                        else {
+                            return;
+                        };
+                        let step_id = step.id;
+                        evanalyzer_app::groups::toggle_exposed(
+                            definition,
+                            step_id,
+                            &setting.name,
+                            &setting.display_name,
+                            &setting.value,
+                        );
+                    }
                     manager.pipeline_settings_changed();
                     manager
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
@@ -917,6 +1138,10 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.open_group_key(pipeline_id).is_some() {
+                        // Groups inside groups: from the pipeline, for now.
+                        return;
+                    }
                     let names: Vec<slint::SharedString> = {
                         let project = manager.app_state.get_project();
                         let Some(pipeline) =
@@ -1157,12 +1382,10 @@ impl PipelinesController {
                     let (new_summary, params_now, needs_full_resync) = {
                         let mut project = manager.app_state.get_project_write();
                         let definitions = project.command_groups.clone();
-                        let Some(pipeline) =
-                            project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
+                        let Some(step) = manager
+                            .shown_steps_mut(&mut project, pipeline_id)
+                            .and_then(|steps| steps.get_mut(step_idx as usize))
                         else {
-                            return;
-                        };
-                        let Some(step) = pipeline.steps.get_mut(step_idx as usize) else {
                             return;
                         };
                         // A command group: its parameter is named by its id.
@@ -1980,6 +2203,76 @@ impl PipelinesController {
     /// step's `model_path` and shows its metadata via the shared warning/info
     /// dialog - see `pipelines_controller`'s module doc comment on why this
     /// reuses that dialog instead of a bespoke one.
+    /// The key of the group opened in pipeline `pipeline_id`'s panel, if any.
+    fn open_group_key(&self, pipeline_id: u32) -> Option<String> {
+        self.open_group
+            .lock()
+            .expect("Poisoned")
+            .as_ref()
+            .filter(|(pipeline, _)| *pipeline == pipeline_id)
+            .map(|(_, key)| key.clone())
+    }
+
+    /// The steps the panel shows for pipeline `pipeline_id`: an opened
+    /// group's, else the pipeline's.
+    fn shown_steps<'a>(
+        &self,
+        project: &'a ProjectSettings,
+        pipeline_id: u32,
+    ) -> Option<&'a Vec<PipelineStepSettings>> {
+        match self.open_group_key(pipeline_id) {
+            Some(key) => project
+                .command_groups
+                .iter()
+                .find(|d| d.key == key)
+                .map(|d| &d.steps),
+            None => project
+                .pipelines
+                .iter()
+                .find(|p| p.id.0 == pipeline_id)
+                .map(|p| &p.steps),
+        }
+    }
+
+    /// [`Self::shown_steps`], to edit.
+    fn shown_steps_mut<'a>(
+        &self,
+        project: &'a mut ProjectSettings,
+        pipeline_id: u32,
+    ) -> Option<&'a mut Vec<PipelineStepSettings>> {
+        match self.open_group_key(pipeline_id) {
+            Some(key) => project
+                .command_groups
+                .iter_mut()
+                .find(|d| d.key == key)
+                .map(|d| &mut d.steps),
+            None => project
+                .pipelines
+                .iter_mut()
+                .find(|p| p.id.0 == pipeline_id)
+                .map(|p| &mut p.steps),
+        }
+    }
+
+    /// Opens group step `step_idx` of pipeline `pipeline_id` in the panel.
+    fn open_group_in_panel(self: &Arc<Self>, pipeline_id: u32, step_idx: usize) {
+        let key = {
+            let project = self.app_state.get_project();
+            let Some(StepContent::Group(instance)) = project
+                .pipelines
+                .iter()
+                .find(|p| p.id.0 == pipeline_id)
+                .and_then(|p| p.steps.get(step_idx))
+                .map(|s| &s.content)
+            else {
+                return;
+            };
+            instance.key.clone()
+        };
+        *self.open_group.lock().expect("Poisoned") = Some((pipeline_id, key));
+        self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), true);
+    }
+
     fn show_classifier_model_info(self: &Arc<Self>, step_idx: usize) {
         let Some(ui) = self.ui.upgrade() else {
             return;
@@ -1988,10 +2281,10 @@ impl PipelinesController {
 
         let model_path = {
             let project = self.app_state.get_project();
-            let Some(pipeline) = project.pipelines.iter().find(|p| p.id.0 == pipeline_id) else {
-                return;
-            };
-            let Some(step) = pipeline.steps.get(step_idx) else {
+            let Some(step) = self
+                .shown_steps(&project, pipeline_id)
+                .and_then(|steps| steps.get(step_idx))
+            else {
                 return;
             };
             match step.command() {
@@ -2032,12 +2325,8 @@ impl PipelinesController {
         let param_name = param_name.to_owned();
         {
             let mut project = self.app_state.get_project_write();
-            if let Some(pipeline) = project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id) {
-                if let Some(command) = pipeline
-                    .steps
-                    .get_mut(step_idx)
-                    .and_then(|step| step.command_mut())
-                {
+            if let Some(steps) = self.shown_steps_mut(&mut project, pipeline_id) {
+                if let Some(command) = steps.get_mut(step_idx).and_then(|step| step.command_mut()) {
                     if add {
                         command.add_group_item(&param_name);
                     } else if let Some(idx) = remove_idx {
@@ -2465,7 +2754,34 @@ impl PipelinesController {
             category: StepCategory,
             enabled: bool,
             parameters: Vec<ParameterDef>,
+            /// Settings that are parameters of the opened group.
+            exposed: Vec<String>,
         }
+        // The opened group's name, or empty. A group that's gone (e.g. undone)
+        // is closed.
+        let mut open_group = self.open_group_key(pipeline_id.0);
+        if let Some(key) = &open_group
+            && !self
+                .app_state
+                .get_project()
+                .command_groups
+                .iter()
+                .any(|d| &d.key == key)
+        {
+            *self.open_group.lock().expect("Poisoned") = None;
+            open_group = None;
+        }
+        let open_group_name: String = open_group
+            .as_ref()
+            .map(|key| {
+                let project = self.app_state.get_project();
+                project
+                    .command_groups
+                    .iter()
+                    .find(|d| &d.key == key)
+                    .map_or_else(|| key.clone(), |d| d.meta.name.clone())
+            })
+            .unwrap_or_default();
 
         let (
             pipeline_name,
@@ -2493,8 +2809,13 @@ impl PipelinesController {
                     ImageAddress::None => "None".to_string(),
                     ImageAddress::Channel(c) => format!("Channel {c}"),
                 };
-                let steps: Vec<StepData> = pipeline
-                    .steps
+                let shown = self
+                    .shown_steps(&project, pipeline_id.0)
+                    .unwrap_or(&pipeline.steps);
+                let open_definition = open_group
+                    .as_ref()
+                    .and_then(|key| project.command_groups.iter().find(|d| &d.key == key));
+                let steps: Vec<StepData> = shown
                     .iter()
                     .enumerate()
                     .map(|(idx, step)| match &step.content {
@@ -2506,6 +2827,9 @@ impl PipelinesController {
                             category: step_category(*command.category()),
                             enabled: step.enabled,
                             parameters: command.to_parameters(),
+                            exposed: open_definition
+                                .map(|d| evanalyzer_app::groups::exposed_settings(d, step.id))
+                                .unwrap_or_default(),
                         },
                         // The group's name and parameters - each shown with the
                         // control of the inner setting it's bound to.
@@ -2530,6 +2854,7 @@ impl PipelinesController {
                                 category: StepCategory::Group,
                                 enabled: step.enabled,
                                 parameters,
+                                exposed: Vec::new(),
                             }
                         }
                     })
@@ -2656,6 +2981,7 @@ impl PipelinesController {
                             show_advanced_by_id.get(&step_id).copied().unwrap_or(false);
                         let show_advanced = always_show_advanced || step_show_advanced;
                         let (advanced_count, advanced_changed) = advanced_stats(&d.parameters);
+                        let exposed = d.exposed.clone();
                         let (advanced_defs, basic_defs): (Vec<ParameterDef>, Vec<ParameterDef>) =
                             filter_for_display(d.parameters, show_advanced)
                                 .into_iter()
@@ -2747,6 +3073,7 @@ impl PipelinesController {
                                 min: p.min,
                                 max: p.max,
                                 step: p.step,
+                                exposed: exposed.contains(&p_name),
                                 group_items: ModelRc::new(VecModel::from(group_items)),
                                 has_model_info,
                             }
@@ -2775,6 +3102,7 @@ impl PipelinesController {
                     })
                     .collect();
                 state.set_active_pipeline_name(pipeline_name.into());
+                state.set_open_group_name(open_group_name.into());
                 state.set_active_pipeline_image_source(pipeline_image_source.into());
                 state.set_active_commands(ModelRc::new(VecModel::from(commands)));
 
@@ -2910,19 +3238,6 @@ fn step_label(project: &ProjectSettings, step: &PipelineStepSettings) -> String 
 /// ids, pipeline templates negative ones.
 const GROUP_PICKER_ID_BASE: i32 = 1_000_000;
 
-/// How often the project uses group `key`: steps in its pipelines and in
-/// other groups.
-fn group_uses(project: &ProjectSettings, key: &str) -> usize {
-    let is_use = |step: &&PipelineStepSettings| matches!(&step.content, StepContent::Group(instance) if instance.key == key);
-    project
-        .pipelines
-        .iter()
-        .flat_map(|p| p.steps.iter())
-        .chain(project.command_groups.iter().flat_map(|d| d.steps.iter()))
-        .filter(is_use)
-        .count()
-}
-
 /// A group parameter's value as the picker's detail pane shows it.
 fn param_value_display(value: &ParamValue) -> String {
     match value {
@@ -2959,7 +3274,7 @@ fn group_to_command_def(
         (Some(only), _) => format!(" · {}", category_name(only)),
         _ => String::new(),
     };
-    let uses = group_uses(project, &definition.key);
+    let uses = evanalyzer_app::groups::group_uses(project, &definition.key);
     let summary = if definition.meta.short_description.is_empty() {
         format!("Command group · used {uses}×")
     } else {
@@ -4997,6 +5312,115 @@ mod tests {
             .row_data(1)
             .unwrap();
         assert_eq!(card.name, "Smooth twice");
+    }
+
+    /// A pipeline whose steps 2-3 (two blurs) are grouped as "Smooth".
+    fn with_a_group() -> (AppWindow, Arc<UiState>, Arc<PipelinesController>) {
+        let (ui, ui_state, controller) =
+            selected(vec![step("Threshold"), step("Blur"), step("Blur")]);
+        {
+            let mut project = ui_state.get_project_write();
+            evanalyzer_app::groups::group_steps(&mut project, PipelineId(1), 1..=2, "Smooth", &[])
+                .unwrap();
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        (ui, ui_state, controller)
+    }
+
+    fn card_names(ui: &AppWindow) -> Vec<String> {
+        let model = ui.global::<PipelinesPanelState>().get_active_commands();
+        (0..model.row_count())
+            .map(|i| model.row_data(i).unwrap().name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn an_opened_group_shows_its_steps_and_edits_its_definition() {
+        let (ui, ui_state, _controller) = with_a_group();
+        let panel = ui.global::<PipelinesPanelState>();
+        assert_eq!(card_names(&ui), ["Threshold", "Smooth"]);
+
+        panel.invoke_open_group(1);
+        drain_ui_queue();
+        assert_eq!(panel.get_open_group_name(), "Smooth");
+        assert_eq!(card_names(&ui), ["Blur", "Blur"]);
+
+        // A change edits the definition.
+        panel.invoke_param_changed(0, "kernel_size".into(), "7".into());
+        drain_ui_queue();
+        {
+            let project = ui_state.get_project();
+            let PipelineCommand::Blur(blur) = project.command_groups[0].steps[0].command().unwrap()
+            else {
+                panic!("blur")
+            };
+            assert_eq!(blur.kernel_size, 7);
+        }
+
+        // ◇ exposes the setting: a group parameter, shown filled.
+        panel.invoke_toggle_exposed(0, "kernel_size".into());
+        drain_ui_queue();
+        assert_eq!(ui_state.get_project().command_groups[0].parameters.len(), 1);
+        assert!(ui_param(&ui, 0, "kernel_size").exposed);
+
+        panel.invoke_close_group();
+        drain_ui_queue();
+        assert_eq!(panel.get_open_group_name(), "");
+        assert_eq!(card_names(&ui), ["Threshold", "Smooth"]);
+        let card = panel.get_active_commands().row_data(1).unwrap();
+        assert_eq!(
+            card.parameters.row_count(),
+            1,
+            "the exposed setting on the card"
+        );
+    }
+
+    #[test]
+    fn opening_a_group_used_twice_asks_and_can_copy_it_for_this_step() {
+        let (ui, ui_state, controller) = with_a_group();
+        {
+            let mut project = ui_state.get_project_write();
+            let mut second = project.pipelines[0].steps[1].clone();
+            second.id = evanalyzer_cfg::core_types::StepId(99);
+            project.pipelines[0].steps.push(second);
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+
+        ui.global::<PipelinesPanelState>().invoke_open_group(1);
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::GroupEditChoice);
+        let choice = ui.global::<GroupEditChoiceState>();
+        assert_eq!(choice.get_uses(), 2);
+
+        choice.invoke_only_this();
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::None);
+        assert_eq!(
+            ui.global::<PipelinesPanelState>().get_open_group_name(),
+            "Smooth (2)"
+        );
+        let project = ui_state.get_project();
+        assert_eq!(project.command_groups.len(), 2);
+        let keys: Vec<String> = project.pipelines[0]
+            .steps
+            .iter()
+            .filter_map(|s| match &s.content {
+                StepContent::Group(g) => Some(g.key.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(keys, ["SMOOTH_2", "SMOOTH"], "only this step uses the copy");
+    }
+
+    #[test]
+    fn ungroup_on_a_group_card_puts_the_steps_back() {
+        let (ui, ui_state, _controller) = with_a_group();
+        ui.global::<PipelinesPanelState>().invoke_ungroup(1);
+        drain_ui_queue();
+        assert_eq!(card_names(&ui), ["Threshold", "Blur", "Blur"]);
+        assert_eq!(ui_state.get_project().pipelines[0].steps.len(), 3);
     }
 
     #[test]
