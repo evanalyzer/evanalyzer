@@ -7,9 +7,9 @@ use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
-    CommandDef, CommandParameter, CommandPickerState, GlobalAppState, GroupItem, LeafParam,
-    ParamType, Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus,
-    PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
+    CommandDef, CommandParameter, CommandPickerState, DefaultParamPreview, GlobalAppState,
+    GroupItem, LeafParam, ParamType, Pipeline, PipelineCommand as SlintPipelineCommand,
+    PipelineStatus, PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use crate::{ResultItemData, ResultsListState};
@@ -28,6 +28,7 @@ use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningClassifierSettings, AiLearningSettings, ObjectClassLabel, PixelClassLabel,
     PixelInputColor,
 };
+use evanalyzer_cfg::settings::command_groups::{GroupDefinition, ParamValue};
 use evanalyzer_cfg::settings::images_settings::{
     ImageEntry, ImageSettings, TStackHandling, TStackSettings,
 };
@@ -760,6 +761,7 @@ impl PipelinesController {
                         picker.set_context_category(context_cat);
                         picker.set_query("".into());
                         picker.set_filter_favorites(false);
+                        picker.set_filter_groups(false);
                         // Pre-select the suggested next categories (all of them); an
                         // empty set leaves the "All" view.
                         picker.set_fcat_pre(suggested_filter[0]);
@@ -796,6 +798,17 @@ impl PipelinesController {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
+                    if command_id >= GROUP_PICKER_ID_BASE {
+                        let project = manager.app_state.get_project();
+                        let idx = (command_id - GROUP_PICKER_ID_BASE) as usize;
+                        if let Some(definition) = project.command_groups.get(idx) {
+                            let detail = group_to_command_def(idx, definition, &project);
+                            let picker = ui.global::<CommandPickerState>();
+                            picker.set_detail(detail);
+                            picker.set_has_detail(true);
+                        }
+                        return;
+                    }
                     if command_id < 0 {
                         // Pipeline template entry.
                         let templates = manager.pipeline_templates.lock().expect("Poisoned");
@@ -828,7 +841,26 @@ impl PipelinesController {
                     let pipeline_id = picker.get_pipeline_id() as u32;
                     let after_idx = picker.get_insert_after_idx();
 
-                    let new_steps: Vec<PipelineStepSettings> = if command_id < 0 {
+                    let new_steps: Vec<PipelineStepSettings> = if command_id >= GROUP_PICKER_ID_BASE
+                    {
+                        // A command group: one step using it, at its defaults.
+                        let project = manager.app_state.get_project();
+                        let idx = (command_id - GROUP_PICKER_ID_BASE) as usize;
+                        let Some(definition) = project.command_groups.get(idx) else {
+                            warn!("picker confirm: unknown group id {}", command_id);
+                            return;
+                        };
+                        vec![PipelineStepSettings {
+                            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                            enabled: true,
+                            content: StepContent::Group(
+                                evanalyzer_cfg::settings::command_groups::GroupInstance {
+                                    key: definition.key.clone(),
+                                    values: Default::default(),
+                                },
+                            ),
+                        }]
+                    } else if command_id < 0 {
                         // Pipeline template entry: insert all of its steps.
                         let templates = manager.pipeline_templates.lock().expect("Poisoned");
                         let idx = (-command_id - 1) as usize;
@@ -2080,10 +2112,38 @@ impl PipelinesController {
         drop(templates_lock);
         let cf = templates.len() as i32;
 
+        // Groups: all of the project's with the Groups chip, else only when
+        // searching (they don't crowd the category lists).
+        let filter_groups = picker_state.get_filter_groups();
+        let matching_groups: Vec<CommandDef> = {
+            let project = self.app_state.get_project();
+            project
+                .command_groups
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| {
+                    q.is_empty()
+                        || d.meta.name.to_ascii_lowercase().contains(&q)
+                        || d.meta.short_description.to_ascii_lowercase().contains(&q)
+                        || d.key.to_ascii_lowercase().contains(&q)
+                })
+                .map(|(idx, d)| group_to_command_def(idx, d, &project))
+                .collect()
+        };
+        let cg = matching_groups.len() as i32;
+        let groups = if filter_groups || !q.is_empty() {
+            matching_groups
+        } else {
+            Vec::new()
+        };
+
         let total = if filter_favorites {
             cf
+        } else if filter_groups {
+            cg
         } else {
-            (pre.len() + seg.len() + obj.len() + mea.len() + cls.len() + dat.len()) as i32
+            (pre.len() + seg.len() + obj.len() + mea.len() + cls.len() + dat.len() + groups.len())
+                as i32
         };
         let (cp, cs, co, cm, cc, cd) = (
             pre.len() as i32,
@@ -2101,6 +2161,8 @@ impl PipelinesController {
         picker.set_shown_classify(ModelRc::new(VecModel::from(cls)));
         picker.set_shown_dataset(ModelRc::new(VecModel::from(dat)));
         picker.set_shown_templates(ModelRc::new(VecModel::from(templates)));
+        picker.set_shown_groups(ModelRc::new(VecModel::from(groups)));
+        picker.set_cat_count_grp(cg);
         picker.set_total_shown(total);
         picker.set_cat_count_pre(cp);
         picker.set_cat_count_seg(cs);
@@ -2303,7 +2365,7 @@ impl PipelinesController {
                                     .find(|d| d.key == group.key)
                                     .map_or_else(|| group.key.clone(), |d| d.meta.name.clone()),
                                 summary,
-                                category: StepCategory::Preprocess,
+                                category: StepCategory::Group,
                                 enabled: step.enabled,
                                 parameters,
                             }
@@ -2625,6 +2687,7 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         recent: false,
         default_params: ModelRc::default(),
         is_template: true,
+        is_group: false,
         authors: ModelRc::new(VecModel::from(authors)),
         creation_time: template
             .meta
@@ -2662,10 +2725,114 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
         recent: false,
         default_params: ModelRc::default(),
         is_template: false,
+        is_group: false,
         authors: ModelRc::default(),
         creation_time: "".into(),
     };
     detail
+}
+
+/// Picker ids of command groups start here - commands have small positive
+/// ids, pipeline templates negative ones.
+const GROUP_PICKER_ID_BASE: i32 = 1_000_000;
+
+/// How often the project uses group `key`: steps in its pipelines and in
+/// other groups.
+fn group_uses(project: &ProjectSettings, key: &str) -> usize {
+    let is_use = |step: &&PipelineStepSettings| matches!(&step.content, StepContent::Group(instance) if instance.key == key);
+    project
+        .pipelines
+        .iter()
+        .flat_map(|p| p.steps.iter())
+        .chain(project.command_groups.iter().flat_map(|d| d.steps.iter()))
+        .filter(is_use)
+        .count()
+}
+
+/// A group parameter's value as the picker's detail pane shows it.
+fn param_value_display(value: &ParamValue) -> String {
+    match value {
+        ParamValue::Bool(b) => if *b { "on" } else { "off" }.to_string(),
+        ParamValue::Int(i) => i.to_string(),
+        ParamValue::Float(f) => f.to_string(),
+        ParamValue::Text(t) => t.clone(),
+        ParamValue::List(items) => items
+            .iter()
+            .map(param_value_display)
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+}
+
+/// The picker entry of the project's group number `idx`: shown with the
+/// group colour; its source line names where it lives and the categories of
+/// its first and last command (e.g. "this project · Segment → Object").
+fn group_to_command_def(
+    idx: usize,
+    definition: &GroupDefinition,
+    project: &ProjectSettings,
+) -> CommandDef {
+    let commands: Vec<&PipelineCommand> = definition
+        .steps
+        .iter()
+        .filter_map(|s| s.command())
+        .collect();
+    let category_name = |c: &&PipelineCommand| category_name(*c.category());
+    let flow = match (commands.first(), commands.last()) {
+        (Some(first), Some(last)) if commands.len() > 1 => {
+            format!(" · {} → {}", category_name(first), category_name(last))
+        }
+        (Some(only), _) => format!(" · {}", category_name(only)),
+        _ => String::new(),
+    };
+    let uses = group_uses(project, &definition.key);
+    let summary = if definition.meta.short_description.is_empty() {
+        format!("Command group · used {uses}×")
+    } else {
+        format!("{} · used {uses}×", definition.meta.short_description)
+    };
+    let defaults: Vec<DefaultParamPreview> = definition
+        .parameters
+        .iter()
+        .map(|p| DefaultParamPreview {
+            name: p.label.clone().into(),
+            value: param_value_display(&p.default).into(),
+        })
+        .collect();
+    CommandDef {
+        id: GROUP_PICKER_ID_BASE + idx as i32,
+        name: definition.meta.name.clone().into(),
+        summary: summary.into(),
+        description: definition.meta.description.clone().into(),
+        category: StepCategory::Group,
+        icon_glyph: "◆".into(),
+        keywords: format!(
+            "{} {}",
+            definition.meta.name.to_ascii_lowercase(),
+            definition.key.to_ascii_lowercase()
+        )
+        .into(),
+        source: format!("this project{flow}").into(),
+        favorite: false,
+        recent: false,
+        default_params: ModelRc::new(VecModel::from(defaults)),
+        is_template: false,
+        is_group: true,
+        authors: ModelRc::default(),
+        creation_time: "".into(),
+    }
+}
+
+/// A command category's name, as the picker's chips show it.
+fn category_name(category: CommandCategory) -> &'static str {
+    match category {
+        CommandCategory::Preprocess => "Preprocess",
+        CommandCategory::Segment => "Segment",
+        CommandCategory::InstanceSegmentation => "Instance Seg.",
+        CommandCategory::Measure => "Measure",
+        CommandCategory::Object => "Object",
+        CommandCategory::Dataset => "Dataset",
+    }
 }
 
 fn map_cfg_param_type(t: CfgParamType) -> ParamType {
@@ -3726,6 +3893,57 @@ mod tests {
         assert_eq!(picker.get_shown_templates().row_count(), 1);
     }
 
+    fn group_definition(key: &str, name: &str) -> GroupDefinition {
+        GroupDefinition {
+            key: key.into(),
+            meta: evanalyzer_cfg::settings::meta_data::MetaData {
+                name: name.into(),
+                ..Default::default()
+            },
+            classes: vec![],
+            steps: vec![],
+            parameters: vec![],
+            origin: None,
+        }
+    }
+
+    #[test]
+    fn the_projects_groups_show_with_their_chip_or_when_searching() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(ui.as_weak());
+        ui_state.get_project_write().command_groups = vec![
+            group_definition("CELLS", "Cell reconstruction"),
+            group_definition("SMOOTH", "Smoothing"),
+        ];
+        let picker = ui.global::<CommandPickerState>();
+
+        controller.apply_picker_filter(&ui, "", false);
+        assert_eq!(
+            picker.get_shown_groups().row_count(),
+            0,
+            "not among the categories"
+        );
+        assert_eq!(picker.get_cat_count_grp(), 2, "but counted on the chip");
+
+        picker.set_filter_groups(true);
+        controller.apply_picker_filter(&ui, "", false);
+        assert_eq!(picker.get_shown_groups().row_count(), 2);
+        assert_eq!(
+            picker.get_total_shown(),
+            2,
+            "only the groups while the chip is on"
+        );
+        let first = picker.get_shown_groups().row_data(0).unwrap();
+        assert!(first.is_group && first.category == StepCategory::Group);
+        assert_eq!(first.summary, "Command group · used 0×");
+
+        picker.set_filter_groups(false);
+        controller.apply_picker_filter(&ui, "cell", false);
+        let found = picker.get_shown_groups();
+        assert_eq!(found.row_count(), 1, "a search finds groups too");
+        assert_eq!(found.row_data(0).unwrap().name, "Cell reconstruction");
+    }
+
     // -- attach_callbacks (live AppWindow) -----------------------------------------
 
     use crate::editor::test_support::{test_ui_state, test_ui_windows};
@@ -4530,6 +4748,35 @@ mod tests {
         };
         assert_eq!(instance.values[&GroupParamId(1)], ParamValue::Int(5));
         assert_eq!(card(&ui).parameters.row_data(0).unwrap().value, "5");
+    }
+
+    #[test]
+    fn picking_a_group_inserts_a_step_using_it() {
+        let (ui, ui_state, _controller) = selected(vec![step("Threshold")]);
+        ui_state.get_project_write().command_groups =
+            vec![group_definition("CELLS", "Cell reconstruction")];
+        let picker = ui.global::<CommandPickerState>();
+        picker.set_pipeline_id(1);
+        picker.set_insert_after_idx(0);
+
+        picker.invoke_select(GROUP_PICKER_ID_BASE);
+        assert_eq!(picker.get_detail().name, "Cell reconstruction");
+        picker.invoke_confirm(GROUP_PICKER_ID_BASE);
+        drain_ui_queue();
+
+        let project = ui_state.get_project();
+        let StepContent::Group(instance) = &project.pipelines[0].steps[1].content else {
+            panic!("a group step");
+        };
+        assert_eq!(instance.key, "CELLS");
+        assert!(instance.values.is_empty(), "at the group's defaults");
+        drop(project);
+        let card = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(1)
+            .unwrap();
+        assert_eq!(card.category, StepCategory::Group, "the group colour");
     }
 
     #[test]

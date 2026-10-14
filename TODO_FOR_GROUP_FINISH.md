@@ -9,7 +9,7 @@ the job generator expands each group into its commands
 - [ ] **Scoping for classes, objects and memory slots** – decided, see
       "Scoping" below. Replaces the earlier plans "internal classes per
       instance" (created at insertion) and "renumber memory slots".
-- [ ] **Groups in the command picker** – see "Command picker" below.
+- [x] **Groups in the command picker** – step 12 (library part with step 16).
 - [ ] **Creating groups in the editor** – see "Creating groups" below.
 - [ ] **Focus classes for group steps** – `PipelineSettings::object_classes`
       ignores group steps (marked TODO); they should contribute the classes
@@ -180,8 +180,20 @@ before 14: most groups are made from existing steps).
         to a copy of the bound command and read back, so only values the
         command takes are stored. Works through nested groups. Icon/colour of
         the card: with step 12.
-12. [ ] Picker: groups in the category lists, "Groups" chip (in the project
-        / library), "Update available".
+12. [x] Picker: "Groups" chip (in the project / library), "Update
+        available" - see "Command picker".
+        Done (2026-10-14): `StepCategory::group` with `Theme.cat-group` - the
+        group colour and "Group" label on picker rows and group cards. Chip
+        "◆ Groups" lists the project's groups ("In this project"); without
+        it, a search lists matching groups in a "Groups" section. Row: "used
+        N×"; detail: the group's parameters with their defaults, source line
+        "this project · Segment → Object" (first/last command). Picker ids
+        from `GROUP_PICKER_ID_BASE` (1 000 000); confirming inserts a group
+        step at its defaults. Also fixed: the Templates section was in the
+        list twice (each template showed twice).
+        Still open: "Library" section and "Update available" (need step 16),
+        "Remove unused groups". Look not checked on screen (no headless
+        screenshot in the tests).
 13. [ ] "Group selected steps" with automatic detection of input, output
         and local classes.
 14. [ ] "Open group" with breadcrumb, "Expose as group parameter",
