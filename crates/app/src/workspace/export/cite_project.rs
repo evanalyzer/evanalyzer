@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
-use evanalyzer_core::{expand_step, into_pipeline_step};
+use evanalyzer_core::{ExpandedCommand, ScopeCounter, expand_step, into_pipeline_step};
 
 /// Renders every enabled pipeline as an ASCII/Unicode flow diagram followed
 /// by a consolidated reference list of every citation used, and writes the
@@ -53,7 +53,9 @@ pub fn cite_project(
                 }
                 evanalyzer_cfg::settings::pipeline_settings::StepContent::Group(group) => {
                     let mut cites: Vec<&'static CitationMetadata> = Vec::new();
-                    for (_, command) in expand_step(step, &config.command_groups)? {
+                    for ExpandedCommand { command, .. } in
+                        expand_step(step, &config.command_groups, &mut ScopeCounter::default())?
+                    {
                         for cite in into_pipeline_step(command)?.cite() {
                             if !cites.iter().any(|c| c.cite_key == cite.cite_key) {
                                 cites.push(cite);

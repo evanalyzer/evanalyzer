@@ -92,6 +92,7 @@ impl TileObjectStore {
 mod tests {
     use super::*;
     use crate::object::{Object, ObjectInit};
+    use crate::pipeline::scope::Scope;
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
 
@@ -115,7 +116,7 @@ mod tests {
             area: w * h,
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 
@@ -141,7 +142,7 @@ mod tests {
         assert_eq!(round_tripped.bbox, object.bbox);
         assert_eq!(round_tripped.area, object.area);
         assert_eq!(round_tripped.mask_data, object.mask_data);
-        assert_eq!(round_tripped.object_class, object.object_class);
+        assert_eq!(round_tripped.object_classes(), object.object_classes());
     }
 
     #[test]
@@ -161,9 +162,15 @@ mod tests {
         let (tile1, objects1) = store.read_tile(1).expect("read tile 1 must succeed");
 
         assert_eq!(tile0.offset_x, 0);
-        assert_eq!(objects0[0].object_class, [ObjectClass::Global(1)].into());
+        assert_eq!(
+            objects0[0].object_classes(),
+            &[ObjectClass::Global(1)].into()
+        );
         assert_eq!(tile1.offset_x, 5);
-        assert_eq!(objects1[0].object_class, [ObjectClass::Global(2)].into());
+        assert_eq!(
+            objects1[0].object_classes(),
+            &[ObjectClass::Global(2)].into()
+        );
     }
 
     #[test]

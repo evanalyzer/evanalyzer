@@ -57,7 +57,9 @@ impl Column {
                     .unwrap_or_else(|| class_id.to_string());
                 format!("n_colocalized_class_{name}")
             }
-            Column::ColocCount(ObjectClass::Unset | ObjectClass::Local(_)) => "n_colocalized_unset".to_string(),
+            Column::ColocCount(ObjectClass::Unset | ObjectClass::Local(_)) => {
+                "n_colocalized_unset".to_string()
+            }
             Column::IntensityAvg(channel) => format!("intensity_mean_gray_ch{channel}"),
             Column::IntensitySum(channel) => format!("intensity_sum_gray_ch{channel}"),
             Column::IntensityMin(channel) => format!("intensity_min_gray_ch{channel}"),

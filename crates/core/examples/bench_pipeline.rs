@@ -3,13 +3,17 @@
 // objects, run through the real job generator + JobExecutor.
 //
 // Usage: cargo run --release -p evanalyzer_core --features ai --example bench_pipeline -- \
-//     <workdir> [--images N] [--size PX] [--threads N] [--spots N]
+//     <workdir> [--images N] [--size PX] [--threads N] [--spots N] [--classify N]
+//
+// `--classify N` adds N Classify Objects steps (class filtering by size).
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
+use evanalyzer_cfg::core_types::{ObjectClass, SizeUnits};
 use evanalyzer_cfg::settings::images_settings::ImageEntry;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::{
-    ExtractObjectsSettings, GaussianBlurSettings, ThresholdEntrySettings, ThresholdSettings,
+    ClassifyObjectsSettings, ExtractObjectsSettings, GaussianBlurSettings,
+    ObjectClassifyObjectsClassifyMatchHandlingSettings, ThresholdEntrySettings, ThresholdSettings,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -62,6 +66,7 @@ fn main() {
     let threads = arg("--threads", 0);
     let spots = arg("--spots", 20000) as u32;
     let blurs = arg("--blurs", 1);
+    let classify = arg("--classify", 0);
     let images_dir = workdir.join(format!("images_{size}_{spots}"));
     std::fs::create_dir_all(&images_dir).unwrap();
 
@@ -118,8 +123,20 @@ fn main() {
                 step(PipelineCommand::ConnectedComponents(Default::default())),
                 step(PipelineCommand::ExtractObjects(ExtractObjectsSettings {
                     max_objects_before_fail: 100000,
+                    ..Default::default()
                 })),
             ])
+            .chain((0..classify).map(|i| {
+                step(PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                    input_classes: vec![ObjectClass::Global(1)],
+                    match_handling:
+                        ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch,
+                    output_class: ObjectClass::Global(2 + i as u32),
+                    size_unit: SizeUnits::Pixels,
+                    min_area: 100.0,
+                    ..Default::default()
+                }))
+            }))
             .collect(),
     });
 

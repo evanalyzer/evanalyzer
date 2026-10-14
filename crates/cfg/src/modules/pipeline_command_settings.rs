@@ -2056,6 +2056,9 @@ impl Default for WatershedSettings {
 fn _serde_default_extractobjects_max_objects_before_fail() -> i32 {
     100000i32
 }
+fn _serde_default_extractobjects_class_mapping() -> Vec<ExtractClassMappingSettings> {
+    vec![]
+}
 /// Represents a bounded object extracted from a labeled image.
 /// A command to extract spatial statistics and bounding boxes from labeled objects.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -2069,12 +2072,21 @@ pub struct ExtractObjectsSettings {
     #[schemars(range(min = 100000, max = 100000))]
     #[serde(default = "_serde_default_extractobjects_max_objects_before_fail")]
     pub max_objects_before_fail: i32,
+    /// Which object class the objects of a segmentation class get.
+    ///
+    /// Without an entry, a segmentation class's objects get the project class
+    /// with the same number - what the Threshold's class choice means. Inside
+    /// a command group, map to one of the group's own classes to keep the
+    /// objects internal to the group.
+    #[serde(default = "_serde_default_extractobjects_class_mapping")]
+    pub class_mapping: Vec<ExtractClassMappingSettings>,
 }
 
 impl Default for ExtractObjectsSettings {
     fn default() -> Self {
         Self {
             max_objects_before_fail: 100000i32,
+            class_mapping: vec![],
         }
     }
 }
@@ -2407,6 +2419,17 @@ impl Default for ColocalizationSettings {
             exclude_classes: vec![],
         }
     }
+}
+
+/// The object class the objects of one segmentation class get.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractClassMappingSettings {
+    /// The segmentation class, as set by Threshold, Pixel classifier, ...
+    pub segmentation_class: SegmentationClass,
+    /// The object class its objects get: a project class, or inside a
+    /// command group one of the group's own classes.
+    pub object_class: ObjectClass,
 }
 
 /// One intensity criterion of [`ClassifyObjects`], e.g. "average intensity

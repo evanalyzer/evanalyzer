@@ -8,6 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::image::Point2d;
+use crate::pipeline::scope::Scope;
 use crate::{
     ImagePlane,
     algos::{ExecutionScope, ImageAlgorithm},
@@ -24,6 +25,7 @@ use evanalyzer_cfg::core_types::{
 use indexmap::IndexMap;
 use kornia_image::ImageSize;
 use macros::CommandsMeta;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Represents a bounded object extracted from a labeled image.
@@ -45,6 +47,41 @@ pub struct ExtractObjects {
         visibility = Advanced
     )]
     pub max_objects_before_fail: i32,
+
+    /// Which object class the objects of a segmentation class get.
+    ///
+    /// Without an entry, a segmentation class's objects get the project class
+    /// with the same number - what the Threshold's class choice means. Inside
+    /// a command group, map to one of the group's own classes to keep the
+    /// objects internal to the group.
+    #[cmdsmeta(optional, display_name = "Class Mapping")]
+    pub class_mapping: Vec<ExtractClassMapping>,
+}
+
+/// The object class the objects of one segmentation class get.
+#[derive(CommandsMeta)]
+pub struct ExtractClassMapping {
+    /// The segmentation class, as set by Threshold, Pixel classifier, ...
+    #[cmdsmeta(summary = true)]
+    pub segmentation_class: SegmentationClass,
+
+    /// The object class its objects get: a project class, or inside a
+    /// command group one of the group's own classes.
+    pub object_class: ObjectClass,
+}
+
+impl ExtractObjects {
+    /// The object class the objects of `segmentation_class` get - see
+    /// [`Self::class_mapping`].
+    fn object_class_for(&self, segmentation_class: SegmentationClass) -> ObjectClass {
+        self.class_mapping
+            .iter()
+            .find(|m| m.segmentation_class == segmentation_class)
+            .map_or_else(
+                || ObjectClass::from_segmentation_class(segmentation_class),
+                |m| m.object_class,
+            )
+    }
 }
 
 impl ImageAlgorithm for ExtractObjects {
@@ -64,6 +101,7 @@ impl ImageAlgorithm for ExtractObjects {
         cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let tile = ctx.image_meta.image_tile_info.clone();
+        let scope = ctx.scope;
         let size = ctx.get_image_size();
         let (w, h) = (size.width as usize, size.height as usize);
 
@@ -241,10 +279,21 @@ impl ImageAlgorithm for ExtractObjects {
                     );
                 }
 
+                // The object class, so Classify Objects isn't mandatory - local
+                // ones put the object in the scope of the group running this.
+                let segmentation_class = SegmentationClass(seg_class[id]);
+                let object_class = self.object_class_for(segmentation_class);
+
                 // `Object::new` finalizes geometry (perimeter/ellipse) from the mask and moments.
-                let mut object = Object::new(ObjectInit {
+                let object = Object::new(ObjectInit {
                     id: ObjectId::next(),
-                    segmentation_class: SegmentationClass(seg_class[id]),
+                    segmentation_class,
+                    object_class: if object_class == ObjectClass::Unset {
+                        HashSet::new()
+                    } else {
+                        HashSet::from([object_class])
+                    },
+                    scope: scope.of_class(&object_class),
                     bbox: bb,
                     mask_data: mask,
                     area: area[id],
@@ -259,10 +308,6 @@ impl ImageAlgorithm for ExtractObjects {
                     source_tile: tile.clone(),
                     ..Default::default()
                 });
-                // Assign the segmentation class as default first object class so classify object is not mandatory.
-                object.add_object_class(ObjectClass::from_segmentation_class(
-                    object.segmentation_class,
-                ));
 
                 (object.id.clone(), object)
             }));
@@ -292,16 +337,20 @@ impl Object {
         images: &[(i32, Arc<crate::ImageContainer>)],
         object_class: ObjectClass,
     ) -> Self {
+        // A hand-drawn annotation: annotations only have project classes.
         let mut object = Object::new(ObjectInit {
             id: ObjectId::next(),
             segmentation_class: SegmentationClass::MANUAL_ANNOTATED,
+            object_class: if object_class == ObjectClass::Unset {
+                HashSet::new()
+            } else {
+                HashSet::from([object_class])
+            },
             intensities: IndexMap::new(),
             bbox: bbox,
             mask_data: mask,
             ..Default::default()
         });
-
-        object.add_object_class(object_class);
         object.plane = match origin_image.plane() {
             Some(plane) => plane,
             None => ImagePlane {
@@ -523,6 +572,7 @@ mod tests {
         // 2. Execute Algorithm
         let extractor = ExtractObjects {
             max_objects_before_fail: 100_000,
+            class_mapping: vec![],
         };
         extractor
             .execute(&mut ctx, &mut cache)
@@ -614,6 +664,7 @@ mod tests {
         // Execute
         let extractor = ExtractObjects {
             max_objects_before_fail: 100_000,
+            class_mapping: vec![],
         };
         extractor
             .execute(&mut ctx, &mut cache)
@@ -683,6 +734,7 @@ mod tests {
 
         let extractor = ExtractObjects {
             max_objects_before_fail: 100_000,
+            class_mapping: vec![],
         };
         extractor
             .execute(&mut ctx, &mut cache)
@@ -801,8 +853,95 @@ mod tests {
     fn test_name() {
         let extractor = ExtractObjects {
             max_objects_before_fail: 100_000,
+            class_mapping: vec![],
         };
         let name = extractor.name();
         assert_eq!(name, "Extract Objects");
+    }
+
+    // ---- Class mapping ----
+
+    /// A context with two objects: a 2×2 square of segmentation class 1 and
+    /// a single pixel of segmentation class 2.
+    fn two_segmentation_classes() -> PipelineContext {
+        let size = ImageSize {
+            width: 10,
+            height: 10,
+        };
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        let mut labels = vec![0u32; 100];
+        let mut instances = vec![0u32; 100];
+        for idx in [44, 45, 54, 55] {
+            labels[idx] = 1;
+            instances[idx] = 1;
+        }
+        labels[0] = 2;
+        instances[0] = 2;
+        ctx.segmentation_map = Some(Image::<u32, 1>::from_size_slice(size, &labels).unwrap());
+        ctx.instance_map = Some(Image::<u32, 1>::from_size_slice(size, &instances).unwrap());
+        ctx
+    }
+
+    /// The objects `extractor` extracts in `scope`, by segmentation class.
+    fn extract_in(extractor: &ExtractObjects, scope: Scope) -> Vec<Object> {
+        let mut ctx = two_segmentation_classes();
+        ctx.scope = scope;
+        let mut cache = GlobalPipelineCache::default();
+        cache.add_to_channel_cache(ctx.image.clone(), 0, ImageTile::default());
+        extractor.execute(&mut ctx, &mut cache).unwrap();
+        let mut objects: Vec<Object> = cache.object_cache.into_iter().map(|(_, o)| o).collect();
+        objects.sort_by_key(|o| o.segmentation_class);
+        objects
+    }
+
+    fn mapping(segmentation_class: u32, object_class: ObjectClass) -> ExtractClassMapping {
+        ExtractClassMapping {
+            segmentation_class: SegmentationClass(segmentation_class),
+            object_class,
+        }
+    }
+
+    #[test]
+    fn without_a_mapping_objects_get_the_project_class_of_their_segmentation_class() {
+        let extractor = ExtractObjects {
+            max_objects_before_fail: 100_000,
+            class_mapping: vec![],
+        };
+        let objects = extract_in(&extractor, Scope::Global);
+        assert!(objects[0].is_of(&ObjectClass::Global(1), Scope::Global));
+        assert!(objects[1].is_of(&ObjectClass::Global(2), Scope::Global));
+    }
+
+    #[test]
+    fn mapped_classes_are_used_and_local_ones_keep_the_objects_in_the_groups_scope() {
+        let group = Scope::Scoped(crate::pipeline::scope::ScopeId(3));
+        let extractor = ExtractObjects {
+            max_objects_before_fail: 100_000,
+            // Segmentation class 1 internal, 2 a result.
+            class_mapping: vec![
+                mapping(1, ObjectClass::Local(1)),
+                mapping(2, ObjectClass::Global(7)),
+            ],
+        };
+        let objects = extract_in(&extractor, group);
+
+        assert_eq!(objects[0].scope(), group);
+        assert!(objects[0].is_of(&ObjectClass::Local(1), group));
+        assert_eq!(objects[1].scope(), Scope::Global);
+        assert!(objects[1].is_of(&ObjectClass::Global(7), group));
+    }
+
+    #[test]
+    fn a_segmentation_class_mapped_to_no_class_gives_objects_without_class() {
+        let extractor = ExtractObjects {
+            max_objects_before_fail: 100_000,
+            class_mapping: vec![mapping(2, ObjectClass::Unset)],
+        };
+        let objects = extract_in(&extractor, Scope::Global);
+        assert!(
+            objects[0].is_of(&ObjectClass::Global(1), Scope::Global),
+            "unmapped"
+        );
+        assert!(objects[1].object_classes().is_empty());
     }
 }

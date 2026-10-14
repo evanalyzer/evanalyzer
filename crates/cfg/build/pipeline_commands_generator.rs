@@ -1922,9 +1922,7 @@ fn leaf_parts(
         }
         "ObjectClass" => (
             "ParamType::ObjClass",
-            format!(
-                "{access}.to_text()"
-            ),
+            format!("{access}.to_text()"),
             "vec![]".to_string(),
             0.0_f32,
             0.0_f32,
@@ -2748,9 +2746,9 @@ fn leaf_apply_change_branch(
         "bool" => format!("{assign} = value == \"true\";"),
         "String" => format!("{assign} = value.to_string();"),
         "PathBuf" => format!("{assign} = std::path::PathBuf::from(value);"),
-        "ObjectClass" => format!(
-            "if let Some(v) = ObjectClass::from_text(value) {{ {assign} = v; }}"
-        ),
+        "ObjectClass" => {
+            format!("if let Some(v) = ObjectClass::from_text(value) {{ {assign} = v; }}")
+        }
         "SegmentationClass" => {
             format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = SegmentationClass(v); }}")
         }

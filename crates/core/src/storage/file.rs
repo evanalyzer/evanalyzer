@@ -255,7 +255,7 @@ impl PipelineResultExporter for CsvExporter {
                 object.id.to_string(),
                 object.segmentation_class.to_string(),
                 object
-                    .object_class
+                    .object_classes()
                     .iter()
                     .map(|c| self.class_label(c))
                     .collect::<Vec<_>>()

@@ -32,6 +32,7 @@
 use crate::ImageTile;
 use crate::algos::{ExecutionScope, ImageAlgorithm};
 use crate::object::{Intensity, Object, ObjectInit};
+use crate::pipeline::scope::Scope;
 use crate::pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext};
 use crate::utils::spatial_grid::BboxGrid;
 use bitvec::prelude::*;
@@ -183,7 +184,7 @@ impl ImageAlgorithm for TileMerge {
 
                 let mut object_class = std::collections::HashSet::new();
                 for o in &object_refs {
-                    object_class.extend(o.object_class.iter().copied());
+                    object_class.extend(o.object_classes().iter().copied());
                 }
 
                 let first = object_refs[0];
@@ -191,6 +192,8 @@ impl ImageAlgorithm for TileMerge {
                     id: ObjectId::next(),
                     segmentation_class: first.segmentation_class,
                     object_class,
+                    // Fragments are grouped by scope, so they all share it.
+                    scope: first.scope(),
                     area: geometry.area,
                     bbox: geometry.bbox,
                     mask_data: geometry.mask_data,
@@ -253,32 +256,36 @@ pub(crate) fn touches_tile_edge(bbox: [u32; 4], tile: &ImageTile) -> bool {
 }
 
 /// Groups every object in `cache.object_cache` that touches its own
-/// `source_tile`'s edge (and isn't in `classes_to_not_merge`) by its full
-/// class set (sorted/deduped) plus plane - the merge-candidate pool.
+/// `source_tile`'s edge (and isn't in `classes_to_not_merge`) by its scope,
+/// full class set (sorted/deduped) and plane - the merge-candidate pool.
+/// The scope keeps two group instances' fragments of the same local class
+/// apart.
 /// Objects fully interior to their tile can never have a real cross-tile
 /// neighbor, so they're never even candidates.
 fn group_candidates(
     cache: &GlobalPipelineCache,
     classes_to_not_merge: &[ObjectClass],
-) -> IndexMap<(Vec<ObjectClass>, crate::ImagePlane), Vec<ObjectId>> {
-    let mut groups: IndexMap<(Vec<ObjectClass>, crate::ImagePlane), Vec<ObjectId>> =
+) -> IndexMap<(Scope, Vec<ObjectClass>, crate::ImagePlane), Vec<ObjectId>> {
+    let mut groups: IndexMap<(Scope, Vec<ObjectClass>, crate::ImagePlane), Vec<ObjectId>> =
         IndexMap::new();
     for (id, object) in cache.object_cache.iter() {
         if !touches_tile_edge(object.bbox, &object.source_tile) {
             continue;
         }
-        let denied = object
-            .object_class
-            .iter()
-            .any(|c| classes_to_not_merge.contains(c));
+        // `classes_to_not_merge` are project classes: only global objects.
+        let denied = object.scope() == Scope::Global
+            && object
+                .object_classes()
+                .iter()
+                .any(|c| classes_to_not_merge.contains(c));
         if denied {
             continue;
         }
-        let mut classes: Vec<_> = object.object_class.iter().copied().collect();
+        let mut classes: Vec<_> = object.object_classes().iter().copied().collect();
         classes.sort();
         classes.dedup();
         groups
-            .entry((classes, object.plane))
+            .entry((object.scope(), classes, object.plane))
             .or_default()
             .push(id.clone());
     }
@@ -523,7 +530,7 @@ mod tests {
             source_tile,
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 

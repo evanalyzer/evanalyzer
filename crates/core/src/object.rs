@@ -13,6 +13,8 @@ use crate::ImageTile;
 use crate::pipeline::pipeline_cache::{
     GlobalPipelineCache, channel_pixel_slice, sample_channel_pixel,
 };
+use crate::pipeline::scope::Scope;
+use evanalyzer_cfg::core_types::InternalErrors;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Intensity {
@@ -43,8 +45,11 @@ pub struct Object {
     // Semantic class after threshold
     pub segmentation_class: SegmentationClass,
 
-    // Dedicated class after classify object
-    pub object_class: HashSet<ObjectClass>,
+    // Dedicated class after classify object.
+    object_class: HashSet<ObjectClass>,
+
+    /// The scope the object lives in
+    scope: Scope,
 
     // Colocalization
     pub colocalized_with: IndexMap<ObjectClass, Vec<ObjectId>>,
@@ -116,6 +121,7 @@ pub struct ObjectInit {
     pub id: ObjectId,
     pub segmentation_class: SegmentationClass,
     pub object_class: HashSet<ObjectClass>,
+    pub scope: Scope,
     pub colocalized_with: IndexMap<ObjectClass, Vec<ObjectId>>,
     pub parent_id: Option<ObjectId>,
     pub children: Vec<ObjectId>,
@@ -204,6 +210,7 @@ impl Object {
             id: init.id,
             segmentation_class: init.segmentation_class,
             object_class: init.object_class,
+            scope: init.scope,
             colocalized_with: init.colocalized_with,
             parent_id: init.parent_id,
             children: init.children,
@@ -247,10 +254,31 @@ impl Object {
         self.mask_data.get(bit_index).map(|b| *b).unwrap_or(false)
     }
 
-    pub fn add_object_class(&mut self, object_class: ObjectClass) {
-        if object_class != ObjectClass::Unset {
-            self.object_class.insert(object_class);
+    /// Adds `object_class`, as named by a command running in `scope`. An
+    /// object without classes takes the class's scope (so reclassifying -
+    /// clear, then add - moves it); adding a class of another scope than the
+    /// object's is refused - an object never mixes local and global classes.
+    pub fn add_object_class(
+        &mut self,
+        object_class: ObjectClass,
+        scope: Scope,
+    ) -> Result<(), InternalErrors> {
+        if object_class == ObjectClass::Unset {
+            return Ok(());
         }
+        let class_scope = scope.of_class(&object_class);
+        if self.object_class.is_empty() {
+            self.scope = class_scope;
+        } else if self.scope != class_scope {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "object {} can't get class {} - an object can't have a command group's \
+                 local classes and project classes at the same time",
+                self.id,
+                object_class.to_text()
+            )));
+        }
+        self.object_class.insert(object_class);
+        Ok(())
     }
 
     /// Adds an object to the object which colocalzis with it
@@ -264,21 +292,49 @@ impl Object {
         coloc_per_class.dedup();
     }
 
-    pub fn has_object_class(&self, object_class: &ObjectClass) -> bool {
-        self.object_class.contains(object_class)
+    /// Whether the object is of `object_class`, as named by a command
+    /// running in `scope`: a local class matches only objects of that scope.
+    pub fn is_of(&self, object_class: &ObjectClass, scope: Scope) -> bool {
+        self.scope == scope.of_class(object_class) && self.object_class.contains(object_class)
     }
 
-    /// Whether the object carries at least one of `object_classes` - how
-    /// every "only objects of these classes" list of a pipeline command
-    /// selects its objects.
-    pub fn has_any_object_class(&self, object_classes: &[ObjectClass]) -> bool {
-        object_classes
-            .iter()
-            .any(|class| self.has_object_class(class))
+    /// Whether the object is of at least one of `object_classes` - how every
+    /// "only objects of these classes" list of a pipeline command selects
+    /// its objects. See [`Self::is_of`].
+    pub fn is_of_any(&self, object_classes: &[ObjectClass], scope: Scope) -> bool {
+        object_classes.iter().any(|class| self.is_of(class, scope))
     }
 
-    pub fn remove_object_class(&mut self, object_class: &ObjectClass) {
-        self.object_class.remove(object_class);
+    /// Removes `object_class`, as named by a command running in `scope` (a
+    /// local class of another scope isn't this object's).
+    pub fn remove_object_class(&mut self, object_class: &ObjectClass, scope: Scope) {
+        if self.is_of(object_class, scope) {
+            self.object_class.remove(object_class);
+        }
+    }
+
+    /// Removes every class. The object keeps its scope until it gets a
+    /// class again.
+    pub fn clear_object_classes(&mut self) {
+        self.object_class.clear();
+    }
+
+    /// Whether a command running in `scope` sees the object at all: the
+    /// project's objects, and those of its own scope - what "all objects"
+    /// means for a command (e.g. an empty class filter).
+    pub fn is_visible_in(&self, scope: Scope) -> bool {
+        self.scope == Scope::Global || self.scope == scope
+    }
+
+    /// The object's classes - local ones only mean something together with
+    /// [`Self::scope`].
+    pub fn object_classes(&self) -> &HashSet<ObjectClass> {
+        &self.object_class
+    }
+
+    /// The scope the object lives in.
+    pub fn scope(&self) -> Scope {
+        self.scope
     }
 
     /// Computes and stores the geometry metrics (`perimeter`, `ellipse`) from the
@@ -673,6 +729,8 @@ impl Object {
             id: s.id,
             segmentation_class: s.segmentation_class,
             object_class: s.object_class,
+            // Stored and annotated objects only have project classes.
+            scope: Scope::Global,
             colocalized_with: s.colocalized_with,
             parent_id: s.parent_id,
             children: s.children,
@@ -1708,5 +1766,71 @@ mod tests {
     fn solidity_one_for_single_pixel() {
         let object = object_from_pattern(&[&[true]]);
         assert_eq!(object.get_solidity(), 1.0);
+    }
+
+    // ---- Classes and scopes ----
+
+    fn scoped(n: u32) -> Scope {
+        Scope::Scoped(crate::pipeline::scope::ScopeId(n))
+    }
+
+    #[test]
+    fn an_object_takes_the_scope_of_its_first_class_and_never_mixes() {
+        let mut object = Object::new(ObjectInit::default());
+        object
+            .add_object_class(ObjectClass::Local(1), scoped(3))
+            .unwrap();
+        assert_eq!(object.scope(), scoped(3));
+        assert!(object.is_of(&ObjectClass::Local(1), scoped(3)));
+        assert!(
+            !object.is_of(&ObjectClass::Local(1), scoped(4)),
+            "another instance's"
+        );
+        assert!(
+            object
+                .add_object_class(ObjectClass::Global(1), scoped(3))
+                .is_err()
+        );
+        object
+            .add_object_class(ObjectClass::Local(2), scoped(3))
+            .unwrap();
+
+        // Removing every class keeps it internal; its next class decides again.
+        object.clear_object_classes();
+        assert_eq!(object.scope(), scoped(3));
+        object
+            .add_object_class(ObjectClass::Global(5), scoped(3))
+            .unwrap();
+        assert_eq!(object.scope(), Scope::Global);
+        assert!(object.is_of(&ObjectClass::Global(5), Scope::Global));
+        assert!(
+            object.is_of(&ObjectClass::Global(5), scoped(3)),
+            "seen from inside a group"
+        );
+    }
+
+    #[test]
+    fn a_local_class_of_another_scope_is_not_removed() {
+        let mut object = Object::new(ObjectInit::default());
+        object
+            .add_object_class(ObjectClass::Local(1), scoped(1))
+            .unwrap();
+        object.remove_object_class(&ObjectClass::Local(1), scoped(2));
+        assert!(object.is_of(&ObjectClass::Local(1), scoped(1)));
+        object.remove_object_class(&ObjectClass::Local(1), scoped(1));
+        assert!(object.object_classes().is_empty());
+    }
+
+    #[test]
+    fn a_command_sees_the_projects_objects_and_those_of_its_scope() {
+        let mut local = Object::new(ObjectInit::default());
+        local
+            .add_object_class(ObjectClass::Local(1), scoped(1))
+            .unwrap();
+        assert!(local.is_visible_in(scoped(1)));
+        assert!(!local.is_visible_in(scoped(2)));
+        assert!(!local.is_visible_in(Scope::Global));
+        let global = Object::new(ObjectInit::default());
+        assert!(global.is_visible_in(scoped(2)));
     }
 }

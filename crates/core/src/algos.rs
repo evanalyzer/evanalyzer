@@ -76,7 +76,7 @@ pub use self::object::classify_objects::IntensityFilter;
 pub use self::object::classify_objects::IntensityMetric;
 pub use self::object::coloc_objects::ColocMultiplicity;
 pub use self::object::coloc_objects::Colocalization;
-pub use self::object::extract_objects::ExtractObjects;
+pub use self::object::extract_objects::{ExtractClassMapping, ExtractObjects};
 pub use self::object::load_annotaed_objects::LoadAnnotatedObjects;
 pub use self::object::object_math::ObjectMath;
 pub use self::object::object_math::ObjectSetOperation;

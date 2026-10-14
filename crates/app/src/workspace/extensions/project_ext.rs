@@ -392,7 +392,10 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     fn get_class_from_id(&self, id: &ObjectClass) -> Option<&Class> {
-        self.classification.classes().iter().find(|c| c.global() == *id)
+        self.classification
+            .classes()
+            .iter()
+            .find(|c| c.global() == *id)
     }
 
     /// Internal helper to get the relative key of the currently active image.

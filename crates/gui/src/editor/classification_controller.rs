@@ -492,10 +492,7 @@ mod tests {
         let project = ui_state.get_project();
         // classes()[0] is the auto-prepended Background class.
         assert_eq!(project.classification.classes().len(), 2);
-        assert_eq!(
-            project.classification.classes()[1].id,
-            1
-        );
+        assert_eq!(project.classification.classes()[1].id, 1);
         assert_eq!(project.classification.classes()[1].name, "Nuclei");
     }
 

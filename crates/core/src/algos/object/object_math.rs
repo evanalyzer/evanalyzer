@@ -128,11 +128,11 @@ impl ImageAlgorithm for ObjectMath {
             .object_cache
             .values()
             .filter(|r| {
-                r.has_object_class(&self.other_class)
+                r.is_of(&self.other_class, ctx.scope)
                     && self
                         .other_filter_classes
                         .iter()
-                        .all(|f| r.has_object_class(f))
+                        .all(|f| r.is_of(f, ctx.scope))
             })
             .map(|r| r.id.clone())
             .collect();
@@ -140,7 +140,7 @@ impl ImageAlgorithm for ObjectMath {
         let input_ids: Vec<ObjectId> = cache
             .object_cache
             .values()
-            .filter(|r| r.has_object_class(&self.input_class))
+            .filter(|r| r.is_of(&self.input_class, ctx.scope))
             .map(|r| r.id.clone())
             .collect();
 
@@ -214,7 +214,7 @@ impl ImageAlgorithm for ObjectMath {
             } else {
                 let mut new_object = transformed;
                 new_object.intensities = intensities;
-                new_object.add_object_class(self.output_class);
+                new_object.add_object_class(self.output_class, ctx.scope)?;
                 new_objects.push(new_object);
             }
         }
@@ -246,6 +246,7 @@ impl ImageAlgorithm for ObjectMath {
 mod tests {
     use super::*;
     use crate::image::Point2d;
+    use crate::pipeline::scope::Scope;
     use crate::{
         ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::PixelSizes,
@@ -338,7 +339,7 @@ mod tests {
             plane: ImagePlane::default(),
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 
@@ -384,7 +385,7 @@ mod tests {
         let cytoplasm = cache
             .object_cache
             .values()
-            .find(|r| r.has_object_class(&OUT))
+            .find(|r| r.is_of(&OUT, Scope::Global))
             .expect("cytoplasm object not found");
         assert_eq!(cytoplasm.area, 100 - 16);
         assert!(
@@ -415,7 +416,7 @@ mod tests {
         let result = cache
             .object_cache
             .values()
-            .find(|r| r.has_object_class(&OUT))
+            .find(|r| r.is_of(&OUT, Scope::Global))
             .expect("AND result not found");
         assert_eq!(
             result.area, 16,
@@ -442,7 +443,7 @@ mod tests {
         let result = cache
             .object_cache
             .values()
-            .find(|r| r.has_object_class(&OUT))
+            .find(|r| r.is_of(&OUT, Scope::Global))
             .expect("OR result not found");
         assert_eq!(
             result.bbox,
@@ -470,7 +471,7 @@ mod tests {
         let result = cache
             .object_cache
             .values()
-            .find(|r| r.has_object_class(&OUT))
+            .find(|r| r.is_of(&OUT, Scope::Global))
             .expect("XOR result not found");
         assert_eq!(result.area, 100 + 100 - 2 * 25);
         assert!(
@@ -596,7 +597,7 @@ mod tests {
         let cytoplasm = cache
             .object_cache
             .values()
-            .find(|r| r.has_object_class(&OUT))
+            .find(|r| r.is_of(&OUT, Scope::Global))
             .expect("cytoplasm object not found");
         let intensity = cytoplasm
             .intensities

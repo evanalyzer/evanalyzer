@@ -1744,7 +1744,8 @@ impl ResultsStateController {
                 let mut default_object_classes = Vec::new();
                 match results.get_object_classes() {
                     Ok(classes) => {
-                        default_object_classes = classes.iter().map(|class| class.global()).collect();
+                        default_object_classes =
+                            classes.iter().map(|class| class.global()).collect();
                         *self.classes.lock().expect("Poisened") = classes.clone();
                         self.set_object_classes_in_slint(&classes);
                     }

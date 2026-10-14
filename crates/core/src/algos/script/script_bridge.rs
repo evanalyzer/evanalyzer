@@ -535,6 +535,7 @@ fn normalize_label(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::algos::{GaussianBlur, ImageAlgorithm};
+    use crate::pipeline::scope::Scope;
     use kornia_image::{Image, ImageSize};
 
     fn map(entries: &[(&str, Dynamic)]) -> Map {
@@ -912,7 +913,9 @@ mod tests {
             area: 9,
             ..Default::default()
         });
-        object.add_object_class(ObjectClass::Global(4));
+        object
+            .add_object_class(ObjectClass::Global(4), Scope::Global)
+            .unwrap();
         let mut declared = host();
         declared.ctx.output_path = Some(dir.path().to_path_buf());
         declared.classes = vec![ObjectClass::Global(4)];

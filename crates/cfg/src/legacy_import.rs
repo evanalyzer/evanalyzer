@@ -1163,7 +1163,10 @@ mod tests {
         // classes()[0] is always the auto-prepended Background class - see
         // `ClassificationSettings::new_from_existing`.
         assert_eq!(p.classification.classes().len(), 3);
-        assert_eq!(p.classification.classes()[0].global(), ObjectClass::BACKGROUND);
+        assert_eq!(
+            p.classification.classes()[0].global(),
+            ObjectClass::BACKGROUND
+        );
         assert_eq!(p.classification.classes()[1].id, 1);
         assert_eq!(p.classification.classes()[1].color, 0x3399FF);
         // "None" isn't a class id: the class gets the next free one.

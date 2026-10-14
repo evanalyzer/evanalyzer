@@ -1,3 +1,4 @@
+use crate::pipeline::scope::Scope;
 use crate::{
     ImageTile, ManagedImage,
     algos::ImageAlgorithm,
@@ -61,8 +62,9 @@ pub struct Pipeline {
     /// The commands, each paired with the id of the project step it came
     /// from (see `add_step`) - what a breakpoint targets, so it resolves
     /// correctly although `Tile` and `WholeImage` commands are split into
-    /// two separately-run lists.
-    pub commands: Vec<(StepId, Box<dyn ImageAlgorithm>)>,
+    /// two separately-run lists - and with the scope it runs in (a command
+    /// group instance's, or `Global`).
+    pub commands: Vec<(StepId, Scope, Box<dyn ImageAlgorithm>)>,
 }
 
 /// Pipeline execution pipeline implementation
@@ -88,15 +90,16 @@ impl Pipeline {
         }
     }
 
-    /// Adds the command of project step `id` to the end of the pipeline.
-    pub fn add_step(&mut self, id: StepId, command: Box<dyn ImageAlgorithm>) {
-        self.commands.push((id, command));
+    /// Adds the command of project step `id`, running in `scope`, to the
+    /// end of the pipeline.
+    pub fn add_step(&mut self, id: StepId, scope: Scope, command: Box<dyn ImageAlgorithm>) {
+        self.commands.push((id, scope, command));
     }
 
     /// Adds a command that isn't a project step (e.g. `TileMerge`), so no
-    /// breakpoint can target it.
+    /// breakpoint can target it. It runs in the global scope.
     pub fn add_command(&mut self, command: Box<dyn ImageAlgorithm>) {
-        self.add_step(StepId::UNASSIGNED, command);
+        self.add_step(StepId::UNASSIGNED, Scope::Global, command);
     }
 
     // Add dependency
@@ -185,8 +188,9 @@ impl Pipeline {
         let start = Instant::now();
         let mut breakpoint_capture: Option<BreakpointCapture> = None;
 
-        for (step_id, command) in &self.commands {
+        for (step_id, scope, command) in &self.commands {
             let step_id = *step_id;
+            ctx.scope = *scope;
             let step_start = Instant::now();
             command.run(&mut ctx, &mut cache)?;
             let duration = step_start.elapsed();
@@ -389,6 +393,7 @@ mod tests {
             stage1.add_command(Box::new(FakeSegmenter { rect: object_rect }));
             stage1.add_command(Box::new(ExtractObjects {
                 max_objects_before_fail: 100_000,
+                class_mapping: vec![],
             }));
             let result = stage1
                 .run_commands(
@@ -470,7 +475,7 @@ mod tests {
         let mut regions: Vec<&Object> = cache
             .object_cache
             .values()
-            .filter(|r| r.has_object_class(&ObjectClass::Global(99)))
+            .filter(|r| r.is_of(&ObjectClass::Global(99), Scope::Global))
             .collect();
         regions.sort_by_key(|r| r.bbox[0]);
         assert_eq!(

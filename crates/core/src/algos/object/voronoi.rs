@@ -277,11 +277,11 @@ impl ImageAlgorithm for Voronoi {
             .object_cache
             .values()
             .filter(|object| {
-                object.has_object_class(&self.centers)
+                object.is_of(&self.centers, ctx.scope)
                     && self
                         .center_filter_classes
                         .iter()
-                        .all(|f| object.has_object_class(f))
+                        .all(|f| object.is_of(f, ctx.scope))
             })
             .map(|object| {
                 let [x_min, y_min, x_max, y_max] = object.bbox;
@@ -302,11 +302,11 @@ impl ImageAlgorithm for Voronoi {
                 .object_cache
                 .values()
                 .filter(|r| {
-                    r.has_object_class(&self.mask)
+                    r.is_of(&self.mask, ctx.scope)
                         && self
                             .mask_filter_classes
                             .iter()
-                            .all(|f| r.has_object_class(f))
+                            .all(|f| r.is_of(f, ctx.scope))
                 })
                 .collect()
         } else {
@@ -485,7 +485,7 @@ impl ImageAlgorithm for Voronoi {
                 parent_id: Some(center_id.clone()),
                 ..Default::default()
             });
-            object.add_object_class(self.output_class);
+            object.add_object_class(self.output_class, ctx.scope)?;
             // `Object::new` only derives geometry from the mask; Voronoi regions never
             // pass through `ExtractObjects` (the step that normally samples pixel data),
             // so they need their own intensity measurement pass here.
@@ -525,6 +525,7 @@ impl ImageAlgorithm for Voronoi {
 
 #[cfg(test)]
 mod tests {
+    use crate::pipeline::scope::Scope;
     use std::path::PathBuf;
 
     use super::*;
@@ -640,7 +641,7 @@ mod tests {
             plane: ImagePlane::default(),
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 
@@ -662,7 +663,7 @@ mod tests {
         cache
             .object_cache
             .values()
-            .filter(|r| r.has_object_class(&OUTPUT_CLASS))
+            .filter(|r| r.is_of(&OUTPUT_CLASS, Scope::Global))
             .collect()
     }
 
@@ -1007,7 +1008,9 @@ mod tests {
 
         let object_a = make_filled_object(ID_A, center_bbox(2, 5), CENTER_CLASS);
         let mut object_b = make_filled_object(ID_B, center_bbox(7, 5), CENTER_CLASS);
-        object_b.add_object_class(FILTER_CLASS);
+        object_b
+            .add_object_class(FILTER_CLASS, Scope::Global)
+            .unwrap();
 
         cache.object_cache.insert(object_a.id.clone(), object_a);
         cache.object_cache.insert(object_b.id.clone(), object_b);
@@ -1168,7 +1171,7 @@ mod tests {
             source_tile,
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 

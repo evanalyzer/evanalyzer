@@ -10,6 +10,7 @@
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::{ImageContainer, Point2d};
 use crate::object::Object;
+use crate::pipeline::scope::Scope;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass};
 use image::{DynamicImage, ImageBuffer, Luma, Rgb, RgbImage};
 use kornia_image::Image;
@@ -142,7 +143,7 @@ impl ImageAlgorithm for SaveImage {
             image
         } else {
             let mut rgb = image.into_rgb8();
-            self.draw_classes(&mut rgb, tile_offset, cache);
+            self.draw_classes(&mut rgb, tile_offset, cache, ctx.scope);
             DynamicImage::ImageRgb8(rgb)
         };
 
@@ -176,6 +177,7 @@ impl SaveImage {
         image: &mut RgbImage,
         tile_offset: Point2d,
         cache: &GlobalPipelineCache,
+        scope: Scope,
     ) {
         let alpha = self.opacity.min(100) as f32 / 100.0;
         let objects: Vec<(&Object, [u8; 3])> = cache
@@ -185,7 +187,7 @@ impl SaveImage {
                 let class = self
                     .display_classes
                     .iter()
-                    .find(|class| object.has_object_class(class))?;
+                    .find(|class| object.is_of(class, scope))?;
                 Some((object, class_color(class, &cache.class_colors)))
             })
             .collect();
@@ -648,7 +650,7 @@ mod tests {
             area: (size * size) as usize,
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 
@@ -675,7 +677,12 @@ mod tests {
         let mut image = RgbImage::new(5, 5);
         let cache = cache_with(vec![square_object(1, 1, 3, RED_CLASS)]);
 
-        overlay_saver(vec![RED_CLASS], 50).draw_classes(&mut image, Point2d { x: 0, y: 0 }, &cache);
+        overlay_saver(vec![RED_CLASS], 50).draw_classes(
+            &mut image,
+            Point2d { x: 0, y: 0 },
+            &cache,
+            Scope::Global,
+        );
 
         // Inside: black blended 50% with the class color (127.5 rounds up).
         assert_eq!(image.get_pixel(2, 2).0, [128, 0, 0]);
@@ -697,7 +704,12 @@ mod tests {
         let cache = cache_with(vec![square_object(1, 1, 3, RED_CLASS)]);
 
         let mut image = RgbImage::from_pixel(5, 5, Rgb([10, 20, 30]));
-        overlay_saver(vec![RED_CLASS], 0).draw_classes(&mut image, Point2d { x: 0, y: 0 }, &cache);
+        overlay_saver(vec![RED_CLASS], 0).draw_classes(
+            &mut image,
+            Point2d { x: 0, y: 0 },
+            &cache,
+            Scope::Global,
+        );
         assert_eq!(
             image.get_pixel(2, 2).0,
             [10, 20, 30],
@@ -714,6 +726,7 @@ mod tests {
             &mut image,
             Point2d { x: 0, y: 0 },
             &cache,
+            Scope::Global,
         );
         assert_eq!(image.get_pixel(2, 2).0, [255, 0, 0], "opacity 100 is solid");
     }
@@ -723,7 +736,12 @@ mod tests {
         let mut image = RgbImage::new(5, 5);
         let cache = cache_with(vec![square_object(1, 1, 3, OTHER_CLASS)]);
 
-        overlay_saver(vec![RED_CLASS], 50).draw_classes(&mut image, Point2d { x: 0, y: 0 }, &cache);
+        overlay_saver(vec![RED_CLASS], 50).draw_classes(
+            &mut image,
+            Point2d { x: 0, y: 0 },
+            &cache,
+            Scope::Global,
+        );
 
         assert!(image.pixels().all(|p| p.0 == [0, 0, 0]));
     }
@@ -737,6 +755,7 @@ mod tests {
             &mut image,
             Point2d { x: 0, y: 0 },
             &cache,
+            Scope::Global,
         );
 
         assert_eq!(image.get_pixel(1, 1).0, get_color(2));
@@ -752,6 +771,7 @@ mod tests {
             &mut image,
             Point2d { x: 10, y: 10 },
             &cache,
+            Scope::Global,
         );
 
         assert_eq!(image.get_pixel(1, 1).0, [255, 0, 0]);
@@ -773,6 +793,7 @@ mod tests {
             &mut image,
             Point2d { x: 0, y: 0 },
             &cache,
+            Scope::Global,
         );
 
         // (2, 2) is a contour pixel of the red square and inside the blue one.

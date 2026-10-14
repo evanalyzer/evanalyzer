@@ -756,7 +756,7 @@ impl DuckDbExporter {
             };
 
             let object_class_names: Vec<String> = object
-                .object_class
+                .object_classes()
                 .iter()
                 .filter(|c| **c != ObjectClass::Unset)
                 .map(|c| self.class_label(c))
@@ -784,7 +784,7 @@ impl DuckDbExporter {
                 .append_value(object.segmentation_class.0 as i32);
             c.object_class_name
                 .append_value(json_string_array(&object_class_names));
-            for class in &object.object_class {
+            for class in object.object_classes() {
                 if let ObjectClass::Global(n) = class {
                     c.object_class_id.values().append_value(*n as i32);
                 }

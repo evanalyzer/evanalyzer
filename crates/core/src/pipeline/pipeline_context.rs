@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::image::Point2d;
+use crate::pipeline::scope::Scope;
 use crate::{
     ImagePlane,
     image::{ImageContainer, ImageTypeMarker, ManagedImage, PixelSizes},
@@ -26,6 +27,9 @@ pub struct PipelineContext {
     pub instance_map: Option<Image<u32, 1>>,
     // Segmentation map: Every pixel is assigned a category label (e.g., "Background", "Cell", "Nucleus").
     pub segmentation_map: Option<Image<u32, 1>>,
+    /// The scope the running command is in - set by the pipeline before
+    /// each command. A local class names objects of this scope only.
+    pub scope: Scope,
 }
 
 impl PipelineContext {
@@ -47,6 +51,7 @@ impl PipelineContext {
         let pixel_count: usize = size.width * size.height;
         Ok(Self {
             output_path: Some(output_path),
+            scope: Scope::Global,
             image_meta,
             image: Arc::new(T::create_container(size, tile_offset, plane)?),
             scratch_pad: Arc::new(T::create_container(size, tile_offset, plane)?),
@@ -76,6 +81,7 @@ impl PipelineContext {
         let pixel_count: usize = size.width * size.height;
         Ok(Self {
             output_path: Some(output_path),
+            scope: Scope::Global,
             image_meta,
             image,
             scratch_pad: Arc::new(empty_image),
@@ -112,6 +118,7 @@ impl PipelineContext {
         };
         let empty = PipelineContext {
             output_path: None,
+            scope: Scope::Global,
             image_meta: self.image_meta.clone(),
             image: placeholder(),
             scratch_pad: placeholder(),
@@ -609,6 +616,7 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: None,
+                scope: Scope::Global,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -653,6 +661,7 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: None,
+                scope: Scope::Global,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -697,6 +706,7 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: None,
+                scope: Scope::Global,
                 image: Arc::new(image),
                 scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
@@ -735,6 +745,7 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: Some(PathBuf::default()),
+                scope: Scope::Global,
                 image: Arc::new(T::create_container(
                     size,
                     Point2d { x: 0, y: 0 },
@@ -783,6 +794,7 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: Some(PathBuf::default()),
+                scope: Scope::Global,
                 image: Arc::new(T::create_container(
                     size,
                     offset,

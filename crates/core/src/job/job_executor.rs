@@ -1,3 +1,4 @@
+use crate::pipeline::scope::Scope;
 use crate::{
     ImageInfo, ZProjection,
     algos::Connectivity,
@@ -704,10 +705,11 @@ impl<'a> JobExecutor {
 
         // The user's hand-annotated objects of this image, for
         // `LoadAnnotatedObjects` - only gathered when a pipeline uses them.
-        let loads_annotations = self
-            .pipelines_post_process
-            .values()
-            .any(|p| p.commands.iter().any(|(_, c)| c.uses_annotated_objects()));
+        let loads_annotations = self.pipelines_post_process.values().any(|p| {
+            p.commands
+                .iter()
+                .any(|(_, _, c)| c.uses_annotated_objects())
+        });
         let series_annotations: &[ObjectMetricSettings] = match loads_annotations {
             true => image_entry
                 .series
@@ -879,6 +881,8 @@ impl<'a> JobExecutor {
                         cache
                             .object_cache
                             .values()
+                            // Command groups' internal objects aren't shown.
+                            .filter(|r| r.scope() == Scope::Global)
                             .map(|r| r.to_object_settings())
                             .collect()
                     } else {
@@ -996,6 +1000,12 @@ impl<'a> JobExecutor {
                         }
                     }
 
+                    // Command groups' internal objects never reach the results.
+                    // TODO(groups step 5): replaced by `EndScope` after each
+                    // instance's last step, which also drops references to them.
+                    merged_cache
+                        .object_cache
+                        .retain(|_, object| object.scope() == Scope::Global);
                     exporter.export(&merged_cache)?;
 
                     if let Some(sender) = &progress {
@@ -2443,6 +2453,7 @@ mod full_run_integration_tests {
         // A project step (id 1): what the breakpoint tests target.
         pipeline.add_step(
             evanalyzer_cfg::core_types::StepId(1),
+            Scope::Global,
             Box::new(Threshold {
                 thresholds: vec![ThresholdEntry {
                     method: ThresholdMethod::Manual,
@@ -2457,6 +2468,7 @@ mod full_run_integration_tests {
         pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
         pipeline.add_command(Box::new(ExtractObjects {
             max_objects_before_fail: 100_000,
+            class_mapping: vec![],
         }));
         pipeline
     }
@@ -2511,6 +2523,47 @@ mod full_run_integration_tests {
             message.contains("check the pipeline's image source"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_groups_internal_objects_never_reach_the_results() {
+        use crate::algos::{ClassifyMatchHandling, ClassifyObjects};
+        use crate::pipeline::scope::ScopeId;
+
+        // Every extracted object is reclassified into a local class by a
+        // command running in a group instance's scope.
+        let run_with_reclassify_in = |scope: Scope| {
+            let out_objects = Arc::new(Mutex::new(Vec::new()));
+            let mut job = make_single_image_job(out_objects.clone());
+            let mut post = Pipeline::new(
+                PipelineId(1),
+                CorePipelineSettings {
+                    start_image: ImageAddress::Scratchpad,
+                },
+            );
+            post.add_step(
+                evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                scope,
+                Box::new(ClassifyObjects {
+                    match_handling: ClassifyMatchHandling::ReclassifyIfMatch,
+                    output_class: ObjectClass::Local(1),
+                    ..Default::default()
+                }),
+            );
+            job.add_post_process_pipeline(post);
+            let (tx, _rx) = std::sync::mpsc::channel();
+            job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+            out_objects.lock().unwrap().len()
+        };
+
+        assert_eq!(
+            run_with_reclassify_in(Scope::Scoped(ScopeId(1))),
+            0,
+            "local objects are internal"
+        );
+        // Control: the same run without the group's scope exports them (a
+        // local class outside a group is otherwise refused at expansion).
+        assert!(run_with_reclassify_in(Scope::Global) > 0);
     }
 
     /// `make_single_image_job` plus a [`RecordingStep`] as dataset step.
@@ -2990,7 +3043,7 @@ mod full_run_integration_tests {
             area: 9,
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         let mut settings = object.to_object_settings();
         settings.z_stack = z;
         settings.t_stack = t;
@@ -3133,6 +3186,7 @@ mod tile_merge_end_to_end_tests {
         // A project step (id 1): what the breakpoint tests target.
         pipeline.add_step(
             evanalyzer_cfg::core_types::StepId(1),
+            Scope::Global,
             Box::new(Threshold {
                 thresholds: vec![ThresholdEntry {
                     method: ThresholdMethod::Manual,
@@ -3147,6 +3201,7 @@ mod tile_merge_end_to_end_tests {
         pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
         pipeline.add_command(Box::new(ExtractObjects {
             max_objects_before_fail: 100_000,
+            class_mapping: vec![],
         }));
         pipeline
     }
@@ -3241,7 +3296,7 @@ mod tile_merge_end_to_end_tests {
                 !object.touches_edge
                     && touches_tile_edge(object.bbox, tile)
                     && !object
-                        .object_class
+                        .object_classes()
                         .iter()
                         .any(|c| classes_to_not_merge.contains(c))
             })
@@ -3502,7 +3557,7 @@ mod tile_merge_end_to_end_tests {
         let mut reference_regions: Vec<_> = reference_cache
             .object_cache
             .values()
-            .filter(|o| o.has_object_class(&VORONOI_CLASS))
+            .filter(|o| o.is_of(&VORONOI_CLASS, Scope::Global))
             .map(|o| (o.bbox, o.area))
             .collect();
         reference_regions.sort();
@@ -3579,7 +3634,7 @@ mod tile_merge_end_to_end_tests {
         let mut tiled_regions: Vec<_> = tiled_cache
             .object_cache
             .values()
-            .filter(|o| o.has_object_class(&VORONOI_CLASS))
+            .filter(|o| o.is_of(&VORONOI_CLASS, Scope::Global))
             .map(|o| (o.bbox, o.area))
             .collect();
         tiled_regions.sort();

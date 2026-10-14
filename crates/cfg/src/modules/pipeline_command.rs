@@ -951,7 +951,7 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_s) => [vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "Size of the Gaussian smoothing kernel.\n\nMust be an odd number (e.g., 3, 5). Larger values reduce\nnoise but can blur fine edge details.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "threshold_min".to_string(), display_name: "Threshold Min".to_string(), description: "Lower bound for hysteresis thresholding [0.0, 1.0].\n\nEdges with a gradient intensity below this value are discarded.".to_string(), value: format!("{}", _s.threshold_min), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "threshold_max".to_string(), display_name: "Threshold Max".to_string(), description: "Upper bound for hysteresis thresholding [0.0, 1.0].\n\nEdges with a gradient intensity above this value are considered\n\"strong\" and are automatically preserved.".to_string(), value: format!("{}", _s.threshold_max), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![] }]].concat(),
             Self::EdgeDetectionSobel(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the Sobel operator window.\n\nTypically 3. Larger values (5, 7) provide a more smoothed\ngradient but result in \"thicker\" edges. Must be an odd number.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![] }],
             Self::EnhanceContrast(_s) => [vec![ParameterDef { name: "saturated_pixels".to_string(), display_name: "Saturated Pixels".to_string(), description: "Percentage of pixels to \"clip\" from the top and bottom of the histogram.\n\nIn percent (0 - 100), split evenly between the darkest and the\nbrightest pixels, like ImageJ: 0.35 clips 0.175 % at each end. A small\nvalue (ImageJ's default is 0.35) ignores hot/dead pixels that would\notherwise prevent effective contrast stretching.".to_string(), value: format!("{}", _s.saturated_pixels), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "normalize".to_string(), display_name: "Normalize".to_string(), description: "Whether to linearly stretch the remaining pixel intensities to fill\nthe full [0.0, 1.0] range.".to_string(), value: format!("{}", _s.normalize), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![] }], vec![ParameterDef { name: "equalize_histogram".to_string(), display_name: "Equalize Histogram".to_string(), description: "Whether to apply Histogram Equalization.\n\nThis redistributes pixel intensities to achieve a uniform distribution,\nwhich is highly effective for images with low contrast but high noise.".to_string(), value: format!("{}", _s.equalize_histogram), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![] }]].concat(),
-            Self::ExtractObjects(_s) => vec![ParameterDef { name: "max_objects_before_fail".to_string(), display_name: "Max Objects Before Fail".to_string(), description: "Maximum allowed ROIs to extract.\n\nIf this limit is exceeded the pipeline fails.\nThis is a protection against memory overload.".to_string(), value: format!("{}", _s.max_objects_before_fail), param_type: ParamType::Label, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (100000i32)), advanced: true, option_advanced: vec![] }],
+            Self::ExtractObjects(_s) => [vec![ParameterDef { name: "max_objects_before_fail".to_string(), display_name: "Max Objects Before Fail".to_string(), description: "Maximum allowed ROIs to extract.\n\nIf this limit is exceeded the pipeline fails.\nThis is a protection against memory overload.".to_string(), value: format!("{}", _s.max_objects_before_fail), param_type: ParamType::Label, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (100000i32)), advanced: true, option_advanced: vec![] }], vec![ParameterDef { name: "class_mapping".to_string(), display_name: "Class Mapping".to_string(), description: "Which object class the objects of a segmentation class get.\n\nWithout an entry, a segmentation class's objects get the project class\nwith the same number - what the Threshold's class choice means. Inside\na command group, map to one of the group's own classes to keep the\nobjects internal to the group.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.class_mapping.iter().map(|__item| [vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The segmentation class, as set by Threshold, Pixel classifier, ...".to_string(), value: format!("{}", __item.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass::default()).as_u32()), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "The object class its objects get: a project class, or inside a\ncommand group one of the group's own classes.".to_string(), value: __item.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![] }]].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![] }]].concat(),
             Self::FillHoles(_s) => vec![],
             Self::FillObjectHoles(_s) => vec![],
             Self::GaussianBlur(_s) => [vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the blur matrix.\n\nMust be an odd number (e.g., 3, 5, 7).".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Spinner, options: vec![], min: 3.0f32, max: 27.0f32, step: 2.0000f32, groups: vec![], default_value: format!("{}", (3usize)), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The standard deviation of the Gaussian kernel.\n\nHigher values create a more significant blur effect.\n$$N \\approx 6\\sigma + 1$$".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 5.0f32, step: 0.1000f32, groups: vec![], default_value: format!("{}", (0.34f32)), advanced: true, option_advanced: vec![] }]].concat(),
@@ -1137,7 +1137,14 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => {}
             Self::EdgeDetectionSobel(_) => {}
             Self::EnhanceContrast(_) => {}
-            Self::ExtractObjects(_) => {}
+            Self::ExtractObjects(s) => {
+                for item0 in s.class_mapping.iter() {
+                    classes.push(ObjectClass::from_segmentation_class(
+                        item0.segmentation_class,
+                    ));
+                    classes.push(item0.object_class);
+                }
+            }
             Self::FillHoles(_) => {}
             Self::FillObjectHoles(_) => {}
             Self::GaussianBlur(_) => {}
@@ -1677,6 +1684,26 @@ impl PipelineCommand {
                 if param_name == "max_objects_before_fail" {
                     if let Ok(v) = value.parse::<i32>() {
                         s.max_objects_before_fail = v;
+                    }
+                }
+                if param_name.starts_with("class_mapping.") {
+                    let rest = &param_name[14..];
+                    let mut _p = rest.splitn(2, '.');
+                    if let (Some(_i), Some(nested_name)) = (_p.next(), _p.next()) {
+                        if let Ok(_idx) = _i.parse::<usize>() {
+                            if let Some(item) = s.class_mapping.get_mut(_idx) {
+                                if nested_name == "segmentation_class" {
+                                    if let Ok(v) = value.parse::<u32>() {
+                                        item.segmentation_class = SegmentationClass(v);
+                                    }
+                                }
+                                if nested_name == "object_class" {
+                                    if let Some(v) = ObjectClass::from_text(value) {
+                                        item.object_class = v;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2597,7 +2624,15 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => {}
             Self::EdgeDetectionSobel(_) => {}
             Self::EnhanceContrast(_) => {}
-            Self::ExtractObjects(_) => {}
+            Self::ExtractObjects(s) => {
+                if param_name == "class_mapping" {
+                    if let Some(last) = s.class_mapping.last().cloned() {
+                        s.class_mapping.push(last);
+                    } else {
+                        s.class_mapping.push(ExtractClassMappingSettings::default());
+                    }
+                }
+            }
             Self::FillHoles(_) => {}
             Self::FillObjectHoles(_) => {}
             Self::GaussianBlur(_) => {}
@@ -2675,7 +2710,11 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => {}
             Self::EdgeDetectionSobel(_) => {}
             Self::EnhanceContrast(_) => {}
-            Self::ExtractObjects(_) => {}
+            Self::ExtractObjects(s) => {
+                if param_name == "class_mapping" && idx < s.class_mapping.len() {
+                    s.class_mapping.remove(idx);
+                }
+            }
             Self::FillHoles(_) => {}
             Self::FillObjectHoles(_) => {}
             Self::GaussianBlur(_) => {}

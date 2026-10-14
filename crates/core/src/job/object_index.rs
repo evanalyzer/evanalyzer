@@ -54,7 +54,7 @@ impl WholeImageIndex {
                     ObjectMetadata {
                         tile_index,
                         bbox: object.bbox,
-                        object_class: object.object_class.clone(),
+                        object_class: object.object_classes().clone(),
                         plane: object.plane,
                     },
                 );
@@ -94,6 +94,7 @@ mod tests {
     use super::*;
     use crate::ImageTile;
     use crate::object::{Object, ObjectInit};
+    use crate::pipeline::scope::Scope;
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::ObjectId;
 
@@ -117,7 +118,7 @@ mod tests {
             area: w * h,
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 

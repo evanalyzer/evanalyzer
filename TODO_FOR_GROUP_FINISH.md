@@ -54,12 +54,32 @@ before 14: most groups are made from existing steps).
 
 **Phase B – scopes at runtime (the core)**
 
-4. [ ] **`Scope` / `ScopeId` and `Object.scope`** – expansion assigns a
+4. [x] **`Scope` / `ScopeId` and `Object.scope`** – expansion assigns a
        `ScopeId` per instance, commands carry their scope; new objects get
        their class's scope; reading by class filters by scope through a
        central cache API (not direct `object_cache` access). The biggest
        step: every object algorithm has to be checked. *Done when:* two
        instances with `Local(1)` don't see each other's objects.
+       Done (2026-10-14): `pipeline::scope`; `expand_step` returns
+       `ExpandedCommand { step_id, scope, command }` (a `ScopeCounter` per
+       job), the pipeline sets `ctx.scope` per command. `Object`'s classes
+       and scope are private: `is_of` / `is_of_any` / `is_visible_in`
+       (empty filter = the project's objects plus the own scope's),
+       `add_object_class(class, scope)` refuses mixing, removing classes
+       keeps the scope (an internal object stays internal). Passing a
+       `Local` value into a nested group is refused; a dataset step in a
+       group with a local class too. Until step 5: scoped objects are
+       dropped right before the export (`job_executor`, TODO there).
+       Benchmark (8 × 4096², 90k objects, 4 classify steps): 1.04–1.08 s vs
+       1.06–1.11 s before, peak RSS 2.15–2.24 GB vs 2.20–2.22 GB - no
+       measurable change.
+       **ExtractObjects class mapping** (optional `class_mapping`:
+       segmentation class → object class, local or global; without an entry
+       the project class with the same number, as before). Lets a group
+       extract objects for internal use. Benchmark unchanged (1.02–1.11 s,
+       2.20–2.23 GB). For step 10: a mapping to `Global(n)` needs class n in
+       the project; `object_classes()` still also lists the mapped
+       segmentation class as `Global(n)`.
 5. [ ] **`EndScope`** after an instance's last step across both phases:
        removes the scope's objects and the references to them. **Benchmark
        speed and RAM before/after.** *Done when:* no local object reaches the
@@ -67,7 +87,9 @@ before 14: most groups are made from existing steps).
 6. [ ] **The mixing rule** – `ReclassifyIfMatch` moves an object to
        `Global`; `AddOutputClassIfMatch` local → global is an error (checked
        at expansion, plus a runtime guard).
-7. [ ] **Tile merge by (scope, class, plane)** – test with two instances'
+7. [ ] **Tile merge by (scope, class, plane)** – key done with step 4
+       (merged object keeps the scope; `classes_to_not_merge` only for
+       global objects); the seam test is still open – test with two instances'
        seed fragments on one seam.
 8. [ ] **`MemoryId::Group(slot)`** – scoped like classes, freed at
        `EndScope`.

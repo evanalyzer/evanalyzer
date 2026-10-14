@@ -32,7 +32,12 @@ pub fn migrate_from_v3_to_v4(raw: &mut Value) {
         .iter()
         .map(|class| class.get("id").and_then(class_number))
         .collect();
-    let mut next_free = numbers.iter().flatten().max().map_or(1, |max| max + 1).max(1);
+    let mut next_free = numbers
+        .iter()
+        .flatten()
+        .max()
+        .map_or(1, |max| max + 1)
+        .max(1);
     for (class, number) in classes.iter_mut().zip(numbers) {
         let number = number.unwrap_or_else(|| {
             next_free += 1;

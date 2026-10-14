@@ -5,7 +5,7 @@ use crate::{
     image::PixelSizes,
     job::{
         algos_from_config::into_pipeline_step,
-        command_groups::expand_step,
+        command_groups::{ExpandedCommand, ScopeCounter, expand_step},
         job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
         pipeline_step::PipelineStep,
     },
@@ -15,14 +15,11 @@ use crate::{
 use chrono::Utc;
 use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types::ImageAddress};
 use evanalyzer_cfg::{
-    core_types::{InternalErrors, StepId},
+    core_types::InternalErrors,
     settings::{
-        command_groups::GroupDefinition,
-        images_settings::ImageEntry,
-        object_settings::ObjectMetricSettings,
-        pipeline_command::{CommandCategory, PipelineCommand},
-        pipeline_settings::PipelineStepSettings,
-        project_settings::ProjectSettings,
+        command_groups::GroupDefinition, images_settings::ImageEntry,
+        object_settings::ObjectMetricSettings, pipeline_command::CommandCategory,
+        pipeline_settings::PipelineStepSettings, project_settings::ProjectSettings,
     },
 };
 use log::{error, info, warn};
@@ -471,6 +468,7 @@ fn generate_job_from_project_settings_intenal(
     }
 
     // Now generate the pipelines from the user settings
+    let mut scopes = ScopeCounter::default();
     for pipeline_setting in &config.pipelines {
         if !pipeline_setting.enabled {
             continue;
@@ -492,14 +490,23 @@ fn generate_job_from_project_settings_intenal(
 
         for step in pipeline_setting.steps.iter().filter(|s| s.enabled) {
             // A group runs as its commands.
-            for (id, command) in
-                step_commands(&pipeline_setting.name, step, &config.command_groups)?
-            {
+            for ExpandedCommand {
+                step_id,
+                scope,
+                command,
+            } in step_commands(
+                &pipeline_setting.name,
+                step,
+                &config.command_groups,
+                &mut scopes,
+            )? {
                 match into_pipeline_step(command)? {
                     // Kept with its id: what a breakpoint targets.
                     PipelineStep::Image(algo) => match algo.execution_scope() {
-                        ExecutionScope::Tile => pipeline_pre_process.add_step(id, algo),
-                        ExecutionScope::WholeImage => pipeline_post_process.add_step(id, algo),
+                        ExecutionScope::Tile => pipeline_pre_process.add_step(step_id, scope, algo),
+                        ExecutionScope::WholeImage => {
+                            pipeline_post_process.add_step(step_id, scope, algo)
+                        }
                     },
                     // Runs once after every image, whatever its place in the pipeline.
                     PipelineStep::Dataset(step) => job.add_dataset_step(step),
@@ -514,14 +521,15 @@ fn generate_job_from_project_settings_intenal(
     Ok(job)
 }
 
-/// The commands `step` runs, with their breakpoint ids (see
+/// The commands `step` runs, with their breakpoint ids and scopes (see
 /// [`expand_step`]) - a group's error says which pipeline and step it is.
 fn step_commands(
     pipeline_name: &str,
     step: &PipelineStepSettings,
     definitions: &[GroupDefinition],
-) -> Result<Vec<(StepId, PipelineCommand)>, InternalErrors> {
-    expand_step(step, definitions).map_err(|e| {
+    scopes: &mut ScopeCounter,
+) -> Result<Vec<ExpandedCommand>, InternalErrors> {
+    expand_step(step, definitions, scopes).map_err(|e| {
         InternalErrors::InvalidArgument(format!(
             "Pipeline \"{pipeline_name}\", step {}: {e}",
             step.id
@@ -536,9 +544,13 @@ pub(crate) fn dataset_steps_from_project_settings(
     config: &ProjectSettings,
 ) -> Result<Vec<Box<dyn DatasetAlgorithm>>, InternalErrors> {
     let mut steps = Vec::new();
+    // Dataset steps have no scope: they only use project classes.
+    let mut scopes = ScopeCounter::default();
     for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
         for step in pipeline.steps.iter().filter(|s| s.enabled) {
-            for (_, command) in step_commands(&pipeline.name, step, &config.command_groups)? {
+            for ExpandedCommand { command, .. } in
+                step_commands(&pipeline.name, step, &config.command_groups, &mut scopes)?
+            {
                 if !matches!(command.category(), CommandCategory::Dataset) {
                     continue;
                 }
@@ -1204,7 +1216,7 @@ mod tests {
         let built: Vec<_> = job.pipelines_pre_process[&PipelineId(1)]
             .commands
             .iter()
-            .map(|(id, _)| *id)
+            .map(|(id, _, _)| *id)
             .collect();
         assert_eq!(
             built, ids,

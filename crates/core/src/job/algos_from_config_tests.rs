@@ -616,6 +616,7 @@ fn enhance_contrast_settings_convert_fields() {
 fn extract_objects_settings_convert_max_objects_before_fail() {
     let settings = ExtractObjectsSettings {
         max_objects_before_fail: 500,
+        class_mapping: vec![],
     };
     let result = ExtractObjects::from(settings);
     assert_eq!(result.max_objects_before_fail, 500);

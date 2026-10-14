@@ -149,7 +149,12 @@ mod tests {
             .push(serde_json::json!({ "id": { "VALID": 2 }, "color": "#FF0000", "name": "Cell", "notes": "" }));
 
         let settings = load_project_settings(raw).expect("a v3 project must load");
-        let ids: Vec<u32> = settings.classification.classes().iter().map(|c| c.id).collect();
+        let ids: Vec<u32> = settings
+            .classification
+            .classes()
+            .iter()
+            .map(|c| c.id)
+            .collect();
         assert_eq!(ids, [0, 2]);
     }
 

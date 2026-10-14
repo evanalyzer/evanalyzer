@@ -394,7 +394,7 @@ impl ImageAlgorithm for ClassifyObjects {
             cache
                 .object_cache
                 .values()
-                .filter(|object| object.has_object_class(&self.overlapping_with))
+                .filter(|object| object.is_of(&self.overlapping_with, ctx.scope))
                 .map(|object| object.id.clone())
                 .collect()
         };
@@ -427,8 +427,11 @@ impl ImageAlgorithm for ClassifyObjects {
                     || self
                         .origin_segmentation
                         .contains(&object.segmentation_class))
-                    && (self.input_classes.is_empty()
-                        || object.has_any_object_class(&self.input_classes))
+                    && if self.input_classes.is_empty() {
+                        object.is_visible_in(ctx.scope)
+                    } else {
+                        object.is_of_any(&self.input_classes, ctx.scope)
+                    }
             })
             .map(|object| {
                 let matches = self.matches_criteria(object, px_size)
@@ -441,6 +444,7 @@ impl ImageAlgorithm for ClassifyObjects {
             })
             .collect();
 
+        let scope = ctx.scope;
         for (id, matches) in evaluations {
             let Some(object) = cache.object_cache.get_mut(&id) else {
                 continue;
@@ -448,58 +452,58 @@ impl ImageAlgorithm for ClassifyObjects {
             match self.match_handling {
                 ClassifyMatchHandling::AddOutputClassIfMatch => {
                     if matches {
-                        object.add_object_class(self.output_class.clone());
+                        object.add_object_class(self.output_class, scope)?;
                     }
                 }
                 ClassifyMatchHandling::AddOutputClassIfNotMatch => {
                     if !matches {
-                        object.add_object_class(self.output_class.clone());
+                        object.add_object_class(self.output_class, scope)?;
                     }
                 }
                 ClassifyMatchHandling::RemoveInputClassIfMatch => {
                     if matches {
                         for class in &self.input_classes {
-                            object.remove_object_class(class);
+                            object.remove_object_class(class, scope);
                         }
                     }
                 }
                 ClassifyMatchHandling::RemoveInputClassIfNotMatch => {
                     if !matches {
                         for class in &self.input_classes {
-                            object.remove_object_class(class);
+                            object.remove_object_class(class, scope);
                         }
                     }
                 }
                 ClassifyMatchHandling::RemoveOutputClassIfMatch => {
                     if matches {
-                        object.remove_object_class(&self.output_class);
+                        object.remove_object_class(&self.output_class, scope);
                     }
                 }
                 ClassifyMatchHandling::RemoveOutputClassIfNotMatch => {
                     if !matches {
-                        object.remove_object_class(&self.output_class);
+                        object.remove_object_class(&self.output_class, scope);
                     }
                 }
                 ClassifyMatchHandling::RemoveAllClassesIfMatch => {
                     if matches {
-                        object.object_class.clear();
+                        object.clear_object_classes();
                     }
                 }
                 ClassifyMatchHandling::RemoveAllClassesIfNotMatch => {
                     if !matches {
-                        object.object_class.clear();
+                        object.clear_object_classes();
                     }
                 }
                 ClassifyMatchHandling::ReclassifyIfMatch => {
                     if matches {
-                        object.object_class.clear();
-                        object.add_object_class(self.output_class.clone());
+                        object.clear_object_classes();
+                        object.add_object_class(self.output_class, scope)?;
                     }
                 }
                 ClassifyMatchHandling::ReclassifyIfNotMatch => {
                     if !matches {
-                        object.object_class.clear();
-                        object.add_object_class(self.output_class.clone());
+                        object.clear_object_classes();
+                        object.add_object_class(self.output_class, scope)?;
                     }
                 }
             }
@@ -616,6 +620,7 @@ impl ClassifyObjects {
 
 #[cfg(test)]
 mod tests {
+    use crate::pipeline::scope::Scope;
     use bitvec::vec;
 
     use super::*;
@@ -692,7 +697,7 @@ mod tests {
             plane: ImagePlane::default(),
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 
@@ -726,14 +731,14 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(ID_A))
                 .unwrap()
-                .has_object_class(&CLASS_A)
+                .is_of(&CLASS_A, Scope::Global)
         );
         assert!(
             cache
                 .object_cache
                 .get(&ObjectId(ID_B))
                 .unwrap()
-                .has_object_class(&CLASS_B)
+                .is_of(&CLASS_B, Scope::Global)
         );
     }
 
@@ -759,7 +764,7 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(ID_A))
                 .unwrap()
-                .has_object_class(&CLASS_A),
+                .is_of(&CLASS_A, Scope::Global),
             "A doesn't intersect any CLASS_B object, so it should fail the criteria"
         );
     }
@@ -787,7 +792,7 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(ID_A))
                 .unwrap()
-                .has_object_class(&CLASS_A),
+                .is_of(&CLASS_A, Scope::Global),
             "A intersects a CLASS_B object, so it should pass the criteria"
         );
     }
@@ -817,7 +822,7 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(ID_A))
                 .unwrap()
-                .has_object_class(&CLASS_A),
+                .is_of(&CLASS_A, Scope::Global),
             "overlap area (1px) is below min_intersection_area (4px), so A should fail"
         );
     }
@@ -845,10 +850,10 @@ mod tests {
 
         let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(
-            object.has_object_class(&CLASS_A),
+            object.is_of(&CLASS_A, Scope::Global),
             "original class must be kept, not replaced"
         );
-        assert!(object.has_object_class(&CLASS_B));
+        assert!(object.is_of(&CLASS_B, Scope::Global));
     }
 
     #[test]
@@ -871,7 +876,7 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(ID_A))
                 .unwrap()
-                .has_object_class(&CLASS_B)
+                .is_of(&CLASS_B, Scope::Global)
         );
     }
 
@@ -900,7 +905,7 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(id))
                 .unwrap()
-                .has_object_class(&CLASS_OUT)
+                .is_of(&CLASS_OUT, Scope::Global)
         };
         assert!(classified(ID_A), "carries one listed class (A)");
         assert!(classified(ID_B), "carries the other listed class (B)");
@@ -931,7 +936,7 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(id))
                 .unwrap()
-                .has_object_class(&CLASS_OUT)
+                .is_of(&CLASS_OUT, Scope::Global)
         };
         assert!(!classified(ID_A), "segmentation class 1 is not selected");
         assert!(classified(ID_B), "segmentation class 2 is");
@@ -946,17 +951,17 @@ mod tests {
         };
         let mut cache = GlobalPipelineCache::default();
         let mut object = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
-        object.add_object_class(CLASS_B);
+        object.add_object_class(CLASS_B, Scope::Global).unwrap();
         cache.object_cache.insert(ObjectId(ID_A), object);
         run(&cmd, &mut cache);
 
         let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(
-            !object.has_object_class(&CLASS_A),
+            !object.is_of(&CLASS_A, Scope::Global),
             "listed input class must be removed"
         );
         assert!(
-            object.has_object_class(&CLASS_B),
+            object.is_of(&CLASS_B, Scope::Global),
             "class not in input_classes must survive"
         );
     }
@@ -981,7 +986,7 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(ID_A))
                 .unwrap()
-                .has_object_class(&CLASS_A)
+                .is_of(&CLASS_A, Scope::Global)
         );
     }
 
@@ -994,14 +999,14 @@ mod tests {
         };
         let mut cache = GlobalPipelineCache::default();
         let mut object = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
-        object.add_object_class(CLASS_B);
+        object.add_object_class(CLASS_B, Scope::Global).unwrap();
         cache.object_cache.insert(ObjectId(ID_A), object);
         run(&cmd, &mut cache);
 
         let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
-        assert!(!object.has_object_class(&CLASS_A));
+        assert!(!object.is_of(&CLASS_A, Scope::Global));
         assert!(
-            object.has_object_class(&CLASS_B),
+            object.is_of(&CLASS_B, Scope::Global),
             "only the output class should be touched"
         );
     }
@@ -1026,7 +1031,7 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(ID_A))
                 .unwrap()
-                .has_object_class(&CLASS_A)
+                .is_of(&CLASS_A, Scope::Global)
         );
     }
 
@@ -1038,7 +1043,7 @@ mod tests {
         };
         let mut cache = GlobalPipelineCache::default();
         let mut object = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
-        object.add_object_class(CLASS_B);
+        object.add_object_class(CLASS_B, Scope::Global).unwrap();
         cache.object_cache.insert(ObjectId(ID_A), object);
         run(&cmd, &mut cache);
 
@@ -1047,7 +1052,7 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(ID_A))
                 .unwrap()
-                .object_class
+                .object_classes()
                 .is_empty()
         );
     }
@@ -1067,10 +1072,10 @@ mod tests {
         run(&cmd, &mut cache);
 
         let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
-        assert!(!object.has_object_class(&CLASS_A));
-        assert!(object.has_object_class(&CLASS_B));
+        assert!(!object.is_of(&CLASS_A, Scope::Global));
+        assert!(object.is_of(&CLASS_B, Scope::Global));
         assert_eq!(
-            object.object_class.len(),
+            object.object_classes().len(),
             1,
             "reclassify should leave exactly the output class"
         );
@@ -1092,8 +1097,8 @@ mod tests {
         run(&cmd, &mut cache);
 
         let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
-        assert!(!object.has_object_class(&CLASS_A));
-        assert!(object.has_object_class(&CLASS_B));
+        assert!(!object.is_of(&CLASS_A, Scope::Global));
+        assert!(object.is_of(&CLASS_B, Scope::Global));
     }
 
     // -- intensity_filters. `make_ctx` is an 8-bit image, so a `Bit`
@@ -1143,7 +1148,7 @@ mod tests {
             .object_cache
             .get(&ObjectId(ID_A))
             .unwrap()
-            .has_object_class(&CLASS_A)
+            .is_of(&CLASS_A, Scope::Global)
     }
 
     #[test]
@@ -1260,7 +1265,7 @@ mod tests {
                 .object_cache
                 .get(&ObjectId(ID_A))
                 .unwrap()
-                .has_object_class(&CLASS_A),
+                .is_of(&CLASS_A, Scope::Global),
             "a lone object must not be considered as intersecting itself"
         );
     }
@@ -1347,7 +1352,7 @@ mod tests {
                     .object_cache
                     .get(subject_id)
                     .unwrap()
-                    .has_object_class(&CLASS_A);
+                    .is_of(&CLASS_A, Scope::Global);
                 assert_eq!(
                     still_has_class, expected[subject_id],
                     "seed {seed}: subject {subject_id:?} - grid-pruned overlap result \
@@ -1355,5 +1360,102 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- Scopes: two instances of one command group ----
+
+    const LOCAL_SEED: ObjectClass = ObjectClass::Local(1);
+
+    fn scope(n: u32) -> Scope {
+        Scope::Scoped(crate::pipeline::scope::ScopeId(n))
+    }
+
+    /// A filled object with the local class `LOCAL_SEED` of `scope`.
+    fn local_object(id: u128, x: u32, scope: Scope) -> Object {
+        let mut object = make_filled_object(id, [x, 0, x + 4, 4], CLASS_A);
+        object.clear_object_classes();
+        object.add_object_class(LOCAL_SEED, scope).unwrap();
+        object
+    }
+
+    fn run_in(cmd: &ClassifyObjects, cache: &mut GlobalPipelineCache, scope: Scope) {
+        let mut ctx = make_ctx();
+        ctx.scope = scope;
+        cmd.execute(&mut ctx, cache).unwrap();
+    }
+
+    fn object(cache: &GlobalPipelineCache, id: u128) -> &Object {
+        cache.object_cache.get(&ObjectId(id)).unwrap()
+    }
+
+    #[test]
+    fn two_instances_with_the_same_local_class_dont_see_each_others_objects() {
+        let mut cache = GlobalPipelineCache::default();
+        for object in [
+            local_object(ID_A, 0, scope(1)),
+            local_object(ID_B, 10, scope(2)),
+        ] {
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        // Instance 1 turns its seeds into project objects.
+        let reclassify = ClassifyObjects {
+            input_classes: vec![LOCAL_SEED],
+            match_handling: ClassifyMatchHandling::ReclassifyIfMatch,
+            output_class: CLASS_B,
+            ..Default::default()
+        };
+        run_in(&reclassify, &mut cache, scope(1));
+
+        let a = object(&cache, ID_A);
+        assert_eq!(a.scope(), Scope::Global, "reclassified: now the project's");
+        assert!(a.is_of(&CLASS_B, Scope::Global));
+        let b = object(&cache, ID_B);
+        assert_eq!(b.scope(), scope(2), "instance 2's seed is untouched");
+        assert!(b.is_of(&LOCAL_SEED, scope(2)));
+        assert!(!b.is_of(&LOCAL_SEED, scope(1)));
+    }
+
+    #[test]
+    fn all_objects_means_the_projects_and_the_own_scopes() {
+        let mut cache = GlobalPipelineCache::default();
+        let global = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
+        for object in [global, local_object(ID_B, 10, scope(1))] {
+            cache.object_cache.insert(object.id.clone(), object);
+        }
+        // No input classes: every object the command sees loses its classes.
+        let clear_all = ClassifyObjects {
+            match_handling: ClassifyMatchHandling::RemoveAllClassesIfMatch,
+            ..Default::default()
+        };
+        run_in(&clear_all, &mut cache, scope(2));
+
+        assert!(
+            object(&cache, ID_A).object_classes().is_empty(),
+            "global: seen"
+        );
+        assert!(
+            object(&cache, ID_B).is_of(&LOCAL_SEED, scope(1)),
+            "another instance's object: not seen"
+        );
+    }
+
+    #[test]
+    fn adding_a_project_class_to_a_local_object_is_refused() {
+        let mut cache = GlobalPipelineCache::default();
+        let seed = local_object(ID_A, 0, scope(1));
+        cache.object_cache.insert(seed.id.clone(), seed);
+        let add = ClassifyObjects {
+            input_classes: vec![LOCAL_SEED],
+            match_handling: ClassifyMatchHandling::AddOutputClassIfMatch,
+            output_class: CLASS_B,
+            ..Default::default()
+        };
+        let mut ctx = make_ctx();
+        ctx.scope = scope(1);
+        let error = add.execute(&mut ctx, &mut cache).unwrap_err().to_string();
+        assert!(
+            error.contains("local classes and project classes"),
+            "{error}"
+        );
     }
 }

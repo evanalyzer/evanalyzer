@@ -238,6 +238,7 @@ mod tests {
     use super::*;
     use crate::image::PixelSizes;
     use crate::pipeline::pipeline::PipelineImageMeta;
+    use crate::pipeline::scope::Scope;
     use kornia_image::Image;
     use kornia_image::ImageSize;
 
@@ -416,6 +417,7 @@ mod tests {
 
         PipelineContext {
             output_path: None,
+            scope: crate::pipeline::scope::Scope::Global,
             image: ImageContainer::new_f32_gray_from_image_test(gray_img).into(),
             scratch_pad: ImageContainer::new_f32_rgb_from_image_test(rgb_img).into(),
             instance_map: None,
@@ -565,6 +567,7 @@ mod tests {
         // image size.
         let mut ctx = PipelineContext {
             output_path: None,
+            scope: crate::pipeline::scope::Scope::Global,
             image: ImageContainer::new_f32_gray_from_image_test(img).into(),
             scratch_pad: ImageContainer::new_f32_gray_from_image_test(wrong_scratch).into(), // Mismatched size!
             instance_map: None,

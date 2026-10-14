@@ -575,10 +575,20 @@ impl From<EnhanceContrastSettings> for EnhanceContrast {
     }
 }
 
+impl From<ExtractClassMappingSettings> for ExtractClassMapping {
+    fn from(_s: ExtractClassMappingSettings) -> Self {
+        ExtractClassMapping {
+            segmentation_class: _s.segmentation_class,
+            object_class: _s.object_class,
+        }
+    }
+}
+
 impl From<ExtractObjectsSettings> for ExtractObjects {
     fn from(_s: ExtractObjectsSettings) -> Self {
         ExtractObjects {
             max_objects_before_fail: _s.max_objects_before_fail,
+            class_mapping: _s.class_mapping.into_iter().map(|v| v.into()).collect(),
         }
     }
 }

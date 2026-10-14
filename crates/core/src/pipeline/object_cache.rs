@@ -60,6 +60,10 @@ impl ObjectCache {
     pub fn is_empty(&self) -> bool {
         self.objects.is_empty()
     }
+
+    pub fn retain(&mut self, keep: impl FnMut(&ObjectId, &mut Object) -> bool) {
+        self.objects.retain(keep);
+    }
 }
 
 impl Extend<(ObjectId, Object)> for ObjectCache {

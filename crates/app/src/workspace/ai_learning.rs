@@ -63,7 +63,9 @@ pub fn pixel_class_labels_from_project(
         .classification
         .classes()
         .iter()
-        .filter(|class| class.global() == ObjectClass::BACKGROUND || selected.contains(&class.global()))
+        .filter(|class| {
+            class.global() == ObjectClass::BACKGROUND || selected.contains(&class.global())
+        })
         .map(|class| PixelClassLabel {
             class: SegmentationClass(class.id),
             name: class.name.clone(),
@@ -89,7 +91,9 @@ pub fn object_class_labels_from_project(
         .classification
         .classes()
         .iter()
-        .filter(|class| class.global() == ObjectClass::BACKGROUND || selected.contains(&class.global()))
+        .filter(|class| {
+            class.global() == ObjectClass::BACKGROUND || selected.contains(&class.global())
+        })
         .map(|class| ObjectClassLabel {
             class: class.global(),
             name: class.name.clone(),

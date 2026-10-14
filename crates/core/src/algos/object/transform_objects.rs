@@ -147,7 +147,7 @@ impl ImageAlgorithm for TransformObjects {
         let target_ids: Vec<ObjectId> = cache
             .object_cache
             .iter()
-            .filter(|(_, object)| object.has_object_class(&self.input_class))
+            .filter(|(_, object)| object.is_of(&self.input_class, ctx.scope))
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -195,7 +195,7 @@ impl ImageAlgorithm for TransformObjects {
             } else {
                 let mut new_object = transformed;
                 new_object.intensities = intensities;
-                new_object.add_object_class(self.output_class);
+                new_object.add_object_class(self.output_class, ctx.scope)?;
                 new_objects.push(new_object);
             }
         }
@@ -294,6 +294,7 @@ fn bbox_max_dimension(object: &Object) -> f32 {
 mod tests {
     use super::*;
     use crate::image::Point2d;
+    use crate::pipeline::scope::Scope;
     use crate::{
         ImageContainer, ImagePlane, ImageTile, ManagedImage,
         pipeline::{
@@ -351,7 +352,7 @@ mod tests {
             plane: ImagePlane::default(),
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 
@@ -458,7 +459,7 @@ mod tests {
             "expected ~8px tall, got {height}"
         );
         assert!(
-            scaled.has_object_class(&CLASS_IN),
+            scaled.is_of(&CLASS_IN, Scope::Global),
             "class is unchanged by a geometric transform"
         );
     }
@@ -494,7 +495,7 @@ mod tests {
         let transformed = cache
             .object_cache
             .values()
-            .find(|r| r.has_object_class(&CLASS_OUT))
+            .find(|r| r.is_of(&CLASS_OUT, Scope::Global))
             .expect("transformed object tagged with CLASS_OUT not found");
         assert_ne!(transformed.bbox, original_bbox);
     }
@@ -778,7 +779,7 @@ mod tests {
         let transformed = cache
             .object_cache
             .values()
-            .find(|r| r.has_object_class(&CLASS_OUT))
+            .find(|r| r.is_of(&CLASS_OUT, Scope::Global))
             .expect("transformed object not found");
         let intensity = transformed
             .intensities

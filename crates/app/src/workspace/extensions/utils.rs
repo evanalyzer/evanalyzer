@@ -2,9 +2,7 @@ use evanalyzer_cfg::core_types::{InternalErrors, StepId};
 use evanalyzer_cfg::settings::command_groups::GroupDefinition;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
-use evanalyzer_cfg::settings::pipeline_settings::{
-    PipelineSettings, PipelineStepSettings,
-};
+use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use pathdiff::diff_paths;
 use std::{
     fs,

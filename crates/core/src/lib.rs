@@ -49,7 +49,7 @@ pub use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 
 // Job execution
 pub use crate::job::algos_from_config::{into_algorithm, into_pipeline_step};
-pub use crate::job::command_groups::expand_step;
+pub use crate::job::command_groups::{ExpandedCommand, ScopeCounter, expand_step};
 pub use crate::job::job_executor::JobExecutor;
 pub use crate::job::job_executor::PreviewTileSettings;
 pub use crate::job::job_executor::ProgressEvent;
