@@ -1230,6 +1230,18 @@ pub struct LaplacianSettings {
     pub kernel_size: usize,
 }
 
+/// Loads an image channel as the image the following steps work on.
+///
+/// Replaces the current image. Use it as the first step of a pipeline
+/// without an image source, or to switch channels within a pipeline - e.g.
+/// a command group that detects nuclei in one channel and cells in another.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadChannelSettings {
+    /// The image channel to load.
+    pub channel: ImageChannelIdx,
+}
+
 /// A background subtraction filter that uses a median rank operator.
 ///
 /// This algorithm is highly effective for removing large-scale background

@@ -123,7 +123,7 @@ impl Pipeline {
                  stored - add an Image Cache step that stores it to a pipeline running before",
                 self.id
             ),
-            ImageAddress::Scratchpad => {
+            ImageAddress::Scratchpad | ImageAddress::None => {
                 format!("pipeline {}: its start image is not available", self.id)
             }
         }
@@ -162,29 +162,32 @@ impl Pipeline {
             },
         };
 
+        let image_meta = PipelineImageMeta {
+            image_tile_info: tile,
+            full_image_width: cache.image_meta.full_image_width,
+            is_rgb: cache.image_meta.is_rgb,
+            nr_of_bits: cache.image_meta.nr_of_bits,
+            pixel_sizes: cache.image_meta.pixel_sizes.clone(),
+        };
         let cache_idx: CacheAddress = match self.settings.start_image {
             ImageAddress::Scratchpad => CacheAddress::Scratchpad,
-            ImageAddress::Memory(memory_id) => CacheAddress::Memory(memory_id),
+            // A pipeline's start isn't inside a group.
+            ImageAddress::Memory(memory_id) => CacheAddress::memory(memory_id, Scope::Global)?,
             ImageAddress::Channel(channel_idx) => CacheAddress::Channel((channel_idx, tile)),
+            // No start image: the first step loads one (checked when the
+            // job is built).
+            ImageAddress::None => CacheAddress::Scratchpad,
         };
-
-        let Some(initial_image) = cache.get_image_from_cache(&cache_idx, tile) else {
-            return Err(InternalErrors::CacheMiss(
-                self.missing_start_image_message(),
-            ));
+        let mut ctx = if self.settings.start_image == ImageAddress::None {
+            PipelineContext::without_image(output_path, image_meta)?
+        } else {
+            let Some(initial_image) = cache.get_image_from_cache(&cache_idx, tile) else {
+                return Err(InternalErrors::CacheMiss(
+                    self.missing_start_image_message(),
+                ));
+            };
+            PipelineContext::new_from_image(output_path, image_meta, initial_image)?
         };
-
-        let mut ctx = PipelineContext::new_from_image(
-            output_path,
-            PipelineImageMeta {
-                image_tile_info: tile,
-                full_image_width: cache.image_meta.full_image_width,
-                is_rgb: cache.image_meta.is_rgb,
-                nr_of_bits: cache.image_meta.nr_of_bits,
-                pixel_sizes: cache.image_meta.pixel_sizes.clone(),
-            },
-            initial_image,
-        )?;
         let start = Instant::now();
         let mut breakpoint_capture: Option<BreakpointCapture> = None;
 

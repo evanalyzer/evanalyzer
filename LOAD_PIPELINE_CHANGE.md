@@ -1,6 +1,9 @@
 # Pipelines without an initial load
 
-Status 2026-10-13: concept, not implemented. Background: command groups
+Status 2026-10-14: implemented (TODO_FOR_GROUP_FINISH.md, step 9) - the
+source "None", the command Load Image Channel, the focus and the pre-start
+check from load steps (also inside groups), clear error messages.
+Before: concept (2026-10-13). Background: command groups
 (VISION_GROUP.md) need to load several image channels, e.g. "Cell
 reconstruction" detects cells in channel 0 and the cell area in channel 1.
 

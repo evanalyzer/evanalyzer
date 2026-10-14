@@ -1,18 +1,40 @@
 use crate::image::Point2d;
+use crate::pipeline::scope::{Scope, ScopeId};
 use crate::{
     ImageTile,
     image::{ImageContainer, PixelSizes},
     pipeline::{image_cache::ImageCache, object_cache::ObjectCache, pipeline::PipelineImageMeta},
 };
-use evanalyzer_cfg::core_types::{MemoryId, ObjectClass};
+use evanalyzer_cfg::core_types::{InternalErrors, MemoryId, MemorySlot, ObjectClass};
 use kornia_image::{Image, ImageSize};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheAddress {
     Scratchpad,
+    /// A pipeline or project memory slot - never `MemoryId::GroupContext`, see
+    /// [`CacheAddress::memory`].
     Memory(MemoryId),
     Channel((i32, ImageTile)),
+    /// A command group instance's memory slot (`MemoryId::GroupContext`).
+    GroupMemory(ScopeId, MemorySlot),
+}
+
+impl CacheAddress {
+    /// Where memory slot `id` lives for a command running in `scope`: a
+    /// group slot belongs to the group instance (each has its own), the
+    /// others to the pipeline or project.
+    pub fn memory(id: MemoryId, scope: Scope) -> Result<CacheAddress, InternalErrors> {
+        match (id, scope) {
+            (MemoryId::GroupContext(slot), Scope::Scoped(scope_id)) => {
+                Ok(CacheAddress::GroupMemory(scope_id, slot))
+            }
+            (MemoryId::GroupContext(slot), Scope::Global) => Err(InternalErrors::InvalidArgument(
+                format!("group memory slot {slot} is only available inside a command group"),
+            )),
+            (id, _) => Ok(CacheAddress::Memory(id)),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -161,6 +183,7 @@ impl GlobalPipelineCache {
                 }))),
             },
             CacheAddress::Memory(memory_id) => self.get_image_from_memory_cache(memory_id.clone()),
+            CacheAddress::GroupMemory(..) => self.image_cache.get(cache_slot),
             CacheAddress::Channel(channel_idx) => {
                 self.get_image_from_channel_cache_for_tile(channel_idx.clone())
             }

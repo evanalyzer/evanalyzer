@@ -2567,6 +2567,41 @@ mod full_run_integration_tests {
         assert!(run_with_reclassify_in(Scope::Global) > 0);
     }
 
+    #[test]
+    fn a_pipeline_without_an_image_source_loads_its_channel_like_a_channel_source() {
+        use crate::algos::LoadChannel;
+        use evanalyzer_cfg::core_types::ImageChannelIdx;
+        let run = |source_none: bool| {
+            let out_objects = Arc::new(Mutex::new(Vec::new()));
+            let mut job = make_single_image_job(out_objects.clone());
+            let mut pipeline = threshold_connected_components_extract_pipeline();
+            if source_none {
+                pipeline.settings.start_image = ImageAddress::None;
+                pipeline.commands.insert(
+                    0,
+                    (
+                        evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                        Scope::Global,
+                        Box::new(LoadChannel {
+                            channel: ImageChannelIdx(0),
+                        }),
+                    ),
+                );
+            }
+            job.pipelines_pre_process.clear();
+            job.add_pre_process_pipeline(pipeline);
+            let (tx, _rx) = std::sync::mpsc::channel();
+            job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+            let mut areas: Vec<usize> =
+                out_objects.lock().unwrap().iter().map(|o| o.area).collect();
+            areas.sort_unstable();
+            areas
+        };
+        let from_channel = run(false);
+        assert!(!from_channel.is_empty(), "the fixture image has objects");
+        assert_eq!(run(true), from_channel, "the same objects");
+    }
+
     /// `make_single_image_job` plus a [`RecordingStep`] as dataset step.
     fn single_image_job_with_dataset_step(
         fail: bool,

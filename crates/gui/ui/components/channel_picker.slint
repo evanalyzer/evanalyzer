@@ -154,10 +154,11 @@ export component ChannelPicker inherits Rectangle {
 
 // Editor for an `ImageAddress` command parameter. `kind`/`number` are the
 // current value pre-split by Rust (`ImageAddress::param_parts`: "channel",
-// "memory", "cache" or "scratchpad"); `changed` reports the new value in
-// `ImageAddress::to_param_value`'s format ("channel:2", "memory:1",
+// "memory", "cache", "group" or "scratchpad"); `changed` reports the new value
+// in `ImageAddress::to_param_value`'s format ("channel:2", "memory:1",
 // "scratchpad"). A project-cache address shows as "Memory"; editing it
-// turns it into a pipeline memory slot.
+// turns it into a pipeline memory slot. A command group's slot ("group")
+// shows as "Memory" too and stays a group slot when its number changes.
 export component ImageAddressPicker inherits HorizontalLayout {
     in property <string> kind;
     in property <int> number;
@@ -190,12 +191,12 @@ export component ImageAddressPicker inherits HorizontalLayout {
         }
     }
 
-    if root.kind == "memory" || root.kind == "cache": ComboBox {
+    if root.kind == "memory" || root.kind == "cache" || root.kind == "group": ComboBox {
         horizontal-stretch: 2;
         model: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
         current-value: root.number;
         selected(v) => {
-            root.changed("memory:" + v);
+            root.changed((root.kind == "group" ? "group:" : "memory:") + v);
         }
     }
 }

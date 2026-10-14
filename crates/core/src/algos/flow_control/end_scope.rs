@@ -3,16 +3,19 @@
 use crate::algos::{ExecutionScope, ImageAlgorithm};
 use crate::object::Object;
 use crate::pipeline::{
-    object_cache::ObjectCache, pipeline_cache::GlobalPipelineCache,
-    pipeline_context::PipelineContext, scope::Scope,
+    object_cache::ObjectCache,
+    pipeline_cache::{CacheAddress, GlobalPipelineCache},
+    pipeline_context::PipelineContext,
+    scope::Scope,
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectId};
 
 /// Ends a command group instance's scope - added by the job generator right
 /// after the instance's last command, in the phase that command runs in (its
 /// tile commands run before every whole-image command). Frees the scope's
-/// objects and the references to them, so nothing internal reaches the
-/// results and the memory is free for the rest of the run.
+/// objects and the references to them, and its memory slots
+/// (`MemoryId::GroupContext`), so nothing internal reaches the results and the
+/// memory is free for the rest of the run.
 ///
 /// `pub(crate)` - internal for now: a fully `pub` command here would become a
 /// pipeline command the user can add.
@@ -29,6 +32,11 @@ impl ImageAlgorithm for EndScope {
         cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let removed = remove_scope(&mut cache.object_cache, self.scope);
+        if let Scope::Scoped(scope_id) = self.scope {
+            cache.image_cache.retain(
+                |address| !matches!(address, CacheAddress::GroupMemory(id, _) if *id == scope_id),
+            );
+        }
         log::debug!("End of {:?}: {removed} objects removed", self.scope);
         Ok(())
     }
@@ -288,5 +296,52 @@ mod tests {
             );
             drop(cache);
         }
+    }
+
+    #[test]
+    fn ending_a_scope_frees_its_memory_slots_only() {
+        use crate::image::ImageContainer;
+        use evanalyzer_cfg::core_types::MemoryId;
+        let image = || {
+            std::sync::Arc::new(ImageContainer::new_f32_gray_from_image_test(
+                kornia_image::Image::new(
+                    kornia_image::ImageSize {
+                        width: 1,
+                        height: 1,
+                    },
+                    vec![0.0],
+                )
+                .unwrap(),
+            ))
+        };
+        let mut cache = GlobalPipelineCache::default();
+        let own = CacheAddress::GroupMemory(ScopeId(1), 1);
+        let other = CacheAddress::GroupMemory(ScopeId(2), 1);
+        let pipeline_slot = CacheAddress::Memory(MemoryId::PipelineContext(1));
+        for address in [own, other, pipeline_slot] {
+            cache.image_cache.insert(address, image());
+        }
+        let mut ctx = crate::pipeline::pipeline_context::PipelineContext::new_from_image_test(
+            kornia_image::Image::new(
+                kornia_image::ImageSize {
+                    width: 1,
+                    height: 1,
+                },
+                vec![0.0],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        EndScope {
+            scope: GROUP,
+            phase: ExecutionScope::Tile,
+        }
+        .execute(&mut ctx, &mut cache)
+        .unwrap();
+
+        assert!(!cache.image_cache.contains_key(&own));
+        assert!(cache.image_cache.contains_key(&other), "another instance's");
+        assert!(cache.image_cache.contains_key(&pipeline_slot));
     }
 }

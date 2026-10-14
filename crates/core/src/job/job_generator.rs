@@ -18,13 +18,18 @@ use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types
 use evanalyzer_cfg::{
     core_types::{InternalErrors, StepId},
     settings::{
-        command_groups::GroupDefinition, images_settings::ImageEntry,
-        object_settings::ObjectMetricSettings, pipeline_command::CommandCategory,
-        pipeline_settings::PipelineStepSettings, project_settings::ProjectSettings,
+        command_groups::GroupDefinition,
+        images_settings::ImageEntry,
+        object_settings::ObjectMetricSettings,
+        pipeline_command::{CommandCategory, PipelineCommand},
+        pipeline_command_settings::MathImageCacheImageCacheModeSettings,
+        pipeline_settings::{PipelineSettings, PipelineStepSettings},
+        project_settings::ProjectSettings,
     },
 };
 use log::{error, info, warn};
 use std::{
+    collections::BTreeSet,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -257,55 +262,108 @@ pub fn check_pipeline_channels(config: &ProjectSettings) -> Result<(), InternalE
     const LISTED: usize = 5;
     let mut problems = Vec::new();
     for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
-        let ImageAddress::Channel(channel) = pipeline.image_source else {
-            continue;
-        };
-        let missing: Vec<String> = config
-            .images
-            .list
-            .values()
-            .filter_map(|image| {
-                let active = active_series(image, config.images.settings.selected_series);
-                let series = image.series.get(&active)?;
-                if series.channels.is_empty() || series.channels.contains_key(&channel) {
-                    return None;
-                }
-                let available: Vec<String> =
-                    series.channels.keys().map(|c| c.to_string()).collect();
-                Some(format!(
-                    "{} (channels {})",
-                    image.rel_path.display(),
-                    available.join(", ")
-                ))
-            })
-            .collect();
-        if missing.is_empty() {
-            continue;
+        for channel in pipeline_channels(pipeline, &config.command_groups) {
+            let missing: Vec<String> = config
+                .images
+                .list
+                .values()
+                .filter_map(|image| {
+                    let active = active_series(image, config.images.settings.selected_series);
+                    let series = image.series.get(&active)?;
+                    if series.channels.is_empty() || series.channels.contains_key(&channel) {
+                        return None;
+                    }
+                    let available: Vec<String> =
+                        series.channels.keys().map(|c| c.to_string()).collect();
+                    Some(format!(
+                        "{} (channels {})",
+                        image.rel_path.display(),
+                        available.join(", ")
+                    ))
+                })
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            let mut listed = missing
+                .iter()
+                .take(LISTED)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            if missing.len() > LISTED {
+                listed.push_str(&format!(" and {} more", missing.len() - LISTED));
+            }
+            let message = format!(
+                "pipeline '{}' reads channel {channel}, which {} image(s) don't have: {listed}",
+                pipeline.name,
+                missing.len()
+            );
+            warn!("{message}");
+            problems.push(message);
         }
-        let mut listed = missing
-            .iter()
-            .take(LISTED)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
-        if missing.len() > LISTED {
-            listed.push_str(&format!(" and {} more", missing.len() - LISTED));
-        }
-        let message = format!(
-            "pipeline '{}' reads channel {channel}, which {} image(s) don't have: {listed}",
-            pipeline.name,
-            missing.len()
-        );
-        warn!("{message}");
-        problems.push(message);
     }
     if problems.is_empty() {
         return Ok(());
     }
     Err(InternalErrors::InvalidArgument(format!(
-        "Cannot start: {}. Change the pipeline's image source, or remove those images.",
+        "Cannot start: {}. Change the pipeline's image source or load steps, or remove those \
+         images.",
         problems.join("; ")
     )))
+}
+
+/// The image channels `pipeline` reads: its image source's and those its
+/// steps load (Load Image Channel, Image Cache Load, Image Math's second
+/// image) - also inside command groups, with the instances' values. A group
+/// that can't be expanded is skipped here; building the job reports it.
+pub fn pipeline_channels(pipeline: &PipelineSettings, groups: &[GroupDefinition]) -> BTreeSet<i32> {
+    let mut channels = BTreeSet::new();
+    if let ImageAddress::Channel(channel) = pipeline.image_source {
+        channels.insert(channel);
+    }
+    for step in pipeline.steps.iter().filter(|s| s.enabled) {
+        let Ok(commands) = expand_step(step, groups, &mut ScopeCounter::default()) else {
+            continue;
+        };
+        for ExpandedCommand { command, .. } in commands {
+            channels.extend(loaded_channel(&command));
+        }
+    }
+    channels
+}
+
+/// The image channel `command` reads, if it reads one.
+fn loaded_channel(command: &PipelineCommand) -> Option<i32> {
+    match command {
+        PipelineCommand::LoadChannel(s) => Some(s.channel.0 as i32),
+        PipelineCommand::ImageCache(s)
+            if matches!(s.mode, MathImageCacheImageCacheModeSettings::Load) =>
+        {
+            match s.address {
+                ImageAddress::Channel(channel) => Some(channel),
+                _ => None,
+            }
+        }
+        PipelineCommand::ImageMath(s) => match s.second_image_address {
+            ImageAddress::Channel(channel) => Some(channel),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `command` replaces the current image with a loaded one - what a
+/// pipeline without an image source must start with.
+fn loads_image(command: &PipelineCommand) -> bool {
+    match command {
+        PipelineCommand::LoadChannel(_) => true,
+        PipelineCommand::ImageCache(s) => {
+            matches!(s.mode, MathImageCacheImageCacheModeSettings::Load)
+                && s.address != ImageAddress::None
+        }
+        _ => false,
+    }
 }
 
 /// The series that counts for `image`: the project-wide choice
@@ -489,6 +547,8 @@ fn generate_job_from_project_settings_intenal(
             },
         );
 
+        // A pipeline without an image source must load one first.
+        let mut needs_image = pipeline_setting.image_source == ImageAddress::None;
         for step in pipeline_setting.steps.iter().filter(|s| s.enabled) {
             // A group runs as its commands.
             for ExpandedCommand {
@@ -501,10 +561,22 @@ fn generate_job_from_project_settings_intenal(
                 &config.command_groups,
                 &mut scopes,
             )? {
+                let loads = loads_image(&command);
                 match into_pipeline_step(command)? {
                     // Kept with its id: what a breakpoint targets.
                     PipelineStep::Image(algo) => match algo.execution_scope() {
-                        ExecutionScope::Tile => pipeline_pre_process.add_step(step_id, scope, algo),
+                        ExecutionScope::Tile => {
+                            if needs_image && !loads {
+                                return Err(InternalErrors::InvalidArgument(format!(
+                                    "Pipeline \"{}\" has no image source, so its first step \
+                                     must load one (Load Image Channel) - \"{}\" needs an image",
+                                    pipeline_setting.name,
+                                    algo.name()
+                                )));
+                            }
+                            needs_image = false;
+                            pipeline_pre_process.add_step(step_id, scope, algo)
+                        }
                         ExecutionScope::WholeImage => {
                             pipeline_post_process.add_step(step_id, scope, algo)
                         }
@@ -802,6 +874,75 @@ mod tests {
             vec![image("a.tif", &[0]), image("unknown.tif", &[])],
         );
         assert!(check_pipeline_channels(&project).is_ok());
+    }
+
+    fn load_channel_step(channel: u32) -> PipelineStepSettings {
+        PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::LoadChannel(
+                    evanalyzer_cfg::settings::pipeline_command_settings::LoadChannelSettings {
+                        channel: evanalyzer_cfg::core_types::ImageChannelIdx(channel),
+                    },
+                ),
+            ),
+        }
+    }
+
+    #[test]
+    fn the_channels_a_pipeline_reads_include_its_load_steps_also_in_groups() {
+        let mut pipeline = named(1, "Cells", ImageAddress::Channel(0), true);
+        pipeline.steps = vec![load_channel_step(3), group_step("LOADS")];
+        let groups = [group("LOADS", vec![load_channel_step(5)])];
+        assert_eq!(
+            pipeline_channels(&pipeline, &groups),
+            BTreeSet::from([0, 3, 5])
+        );
+    }
+
+    #[test]
+    fn a_load_step_in_a_group_reading_a_missing_channel_is_refused() {
+        let mut pipeline = named(1, "Cells", ImageAddress::None, true);
+        pipeline.steps = vec![group_step("LOADS")];
+        let mut project = project_with_images(
+            vec![pipeline],
+            vec![image("a.tif", &[0, 1]), image("b.tif", &[0, 1, 2])],
+        );
+        project
+            .command_groups
+            .push(group("LOADS", vec![load_channel_step(2)]));
+        let message = check_pipeline_channels(&project).unwrap_err().to_string();
+        assert!(
+            message.contains("pipeline 'Cells' reads channel 2"),
+            "{message}"
+        );
+        assert!(message.contains("a.tif (channels 0, 1)"), "{message}");
+    }
+
+    #[test]
+    fn a_pipeline_without_an_image_source_must_load_one_first() {
+        let image_root = tempfile::tempdir().unwrap();
+        let project_dir = tempfile::tempdir().unwrap();
+        let mut pipeline = named(1, "Cells", ImageAddress::None, true);
+        pipeline.steps = vec![blur_step(true), load_channel_step(0)];
+        let project = project_with(Some(image_root.path().to_path_buf()), vec![pipeline]);
+        let Err(error) =
+            generate_preview_job_from_project_settings(project.clone(), project_dir.path().into())
+        else {
+            panic!("a blur without an image must be refused");
+        };
+        let error = error.to_string();
+        assert!(
+            error.contains("has no image source") && error.contains("\"Blur\" needs an image"),
+            "{error}"
+        );
+
+        let mut fine = project;
+        fine.pipelines[0].steps = vec![load_channel_step(0), blur_step(true)];
+        assert!(
+            generate_preview_job_from_project_settings(fine, project_dir.path().into()).is_ok()
+        );
     }
 
     #[test]

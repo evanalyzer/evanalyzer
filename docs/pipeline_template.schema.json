@@ -967,6 +967,11 @@
           "required": [
             "channel"
           ]
+        },
+        {
+          "description": "No image - only as a pipeline's start: its first step loads one\n(Load Image Channel, Image Cache Load).",
+          "type": "string",
+          "const": "NONE"
         }
       ]
     },
@@ -1115,6 +1120,19 @@
         }
       }
     },
+    "LoadChannelSettings": {
+      "description": "Loads an image channel as the image the following steps work on.\n\nReplaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na command group that detects nuclei in one channel and cells in another.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The image channel to load.",
+          "$ref": "#/$defs/ImageChannelIdx"
+        }
+      },
+      "required": [
+        "channel"
+      ]
+    },
     "MathImageCacheImageCacheModeSettings": {
       "description": "Defines the interaction type with the persistent image storage.",
       "oneOf": [
@@ -1250,6 +1268,20 @@
           "additionalProperties": false,
           "required": [
             "projectCache"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "groupContext": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "groupContext"
           ]
         }
       ]
@@ -2088,6 +2120,19 @@
             }
           },
           "$ref": "#/$defs/LoadAnnotatedObjectsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "LOAD_CHANNEL"
+            }
+          },
+          "$ref": "#/$defs/LoadChannelSettings",
           "required": [
             "type"
           ]

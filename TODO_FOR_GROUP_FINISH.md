@@ -113,14 +113,39 @@ before 14: most groups are made from existing steps).
        the same spot of one seam merge per instance (the test fails without
        the scope in the key).
 
-8. [ ] **`MemoryId::Group(slot)`** – scoped like classes, freed at
+8. [x] **`MemoryId::GroupContext(slot)`** – scoped like classes, freed at
        `EndScope`.
+       Done (2026-10-14): `MemoryId::GroupContext` - `{"groupContext": n}` in
+       the file, `"group:n"` as text.
+       Resolved in one place, `CacheAddress::memory(id, scope)` →
+       `CacheAddress::GroupMemory(scope_id, slot)` (Image Cache, Image Math,
+       Threshold's value source, a pipeline's start image - there an error).
+       `EndScope` frees the instance's slots (also spilled ones). Expansion
+       refuses a group slot outside a group and passing `"group:n"` into a
+       nested group. GUI: the slot picker keeps a group slot a group slot;
+       choosing one belongs to phase E.
 
 **Phase C – loading channels inside groups**
 
-9. [ ] **The four fixes from LOAD_PIPELINE_CHANGE.md** (source "None",
+9. [x] **The four fixes from LOAD_PIPELINE_CHANGE.md** (source "None",
        viewer focus from Load steps, pre-start check incl. groups, error
        message), then **"Load image channel" as a visible command**.
+       Done (2026-10-14): `ImageAddress::None` (pipeline dialog: "None");
+       such a pipeline starts with a 1×1 placeholder
+       (`PipelineContext::without_image`) and its first tile step must load
+       an image (checked when the job is built). New command **Load Image
+       Channel** (`LoadChannel`, Preprocessing). `pipeline_channels` (core):
+       the source's channel plus the load steps' (Load Image Channel, Image
+       Cache Load, Image Math's second image), also inside groups - used by
+       the pre-start check and the viewer focus. Missing channel: "reads
+       image channel 9, which this image doesn't have (it has channels 0,
+       2)"; an empty memory slot names the slot. Found on the way: the
+       scratch pad was only re-made on a type change, not a size change -
+       a loaded image of another size broke the next step; fixed in
+       `prepare_*_scratch`. Benchmark (4 × 8192², 182k objects): channel
+       source / Scratchpad + Load / None + Load all 2.25–2.41 s, peak RSS
+       3.96–4.17 GB - the scratch pad was only allocated briefly, so the peak
+       doesn't change.
 
 **Phase D – validation**
 

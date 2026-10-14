@@ -96,6 +96,55 @@ impl PipelineContext {
         })
     }
 
+    /// A context without an image yet, for a pipeline whose image source is
+    /// `ImageAddress::None`: its first step loads one. The image is a 1x1
+    /// placeholder instead of a zeroed tile-sized buffer; the segmentation
+    /// and instance maps get the tile's size, the size of the image loaded
+    /// next.
+    pub fn without_image(
+        output_path: PathBuf,
+        image_meta: PipelineImageMeta,
+    ) -> Result<Self, InternalErrors> {
+        let tile = &image_meta.image_tile_info;
+        let size = ImageSize {
+            width: tile.width,
+            height: tile.height,
+        };
+        let pixel_count = size.width * size.height;
+        let placeholder = || {
+            Ok::<_, InternalErrors>(Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: Image::new(
+                    ImageSize {
+                        width: 1,
+                        height: 1,
+                    },
+                    vec![0.0],
+                )
+                .map_err(InternalErrors::from_kornia)?,
+                tile_offset: Point2d {
+                    x: tile.offset_x,
+                    y: tile.offset_y,
+                },
+                plane: None,
+            })))
+        };
+        Ok(Self {
+            output_path: Some(output_path),
+            scope: Scope::Global,
+            image: placeholder()?,
+            scratch_pad: placeholder()?,
+            segmentation_map: Some(
+                Image::<u32, 1>::new(size, vec![0u32; pixel_count])
+                    .map_err(InternalErrors::from_kornia)?,
+            ),
+            instance_map: Some(
+                Image::<u32, 1>::new(size, vec![0u32; pixel_count])
+                    .map_err(InternalErrors::from_kornia)?,
+            ),
+            image_meta,
+        })
+    }
+
     /// Moves the whole context out, leaving a 1x1 placeholder behind - for
     /// code that must own the context for a while (the script step lends it
     /// to the script engine) and puts it back afterwards. The placeholder has
@@ -235,7 +284,9 @@ impl PipelineContext {
     }
 
     pub fn get_scratch_as_f32_gray(&mut self) -> &mut Image<f32, 1> {
-        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Gray(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Gray(_))
+            || self.scratch_pad.size() != self.image.size()
+        {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: Image::new(size, vec![0.0; size.width * size.height]).unwrap(),
@@ -251,7 +302,9 @@ impl PipelineContext {
     }
 
     pub fn get_scratch_as_f32_rgb(&mut self) -> &mut Image<f32, 3> {
-        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Rgb(_))
+            || self.scratch_pad.size() != self.image.size()
+        {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::F32Rgb(ManagedImage {
                 data: Image::new(size, vec![0.0; size.width * size.height * 3]).unwrap(),
@@ -267,7 +320,9 @@ impl PipelineContext {
     }
 
     pub fn get_scratch_as_u32(&mut self) -> &mut Image<u32, 1> {
-        if !matches!(self.scratch_pad.as_ref(), ImageContainer::U32(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::U32(_))
+            || self.scratch_pad.size() != self.image.size()
+        {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::U32(ManagedImage {
                 data: Image::new(size, vec![0u32; size.width * size.height]).unwrap(),
@@ -283,7 +338,9 @@ impl PipelineContext {
     }
 
     fn prepare_u32_scratch(&mut self) -> Result<(), InternalErrors> {
-        if !matches!(self.scratch_pad.as_ref(), ImageContainer::U32(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::U32(_))
+            || self.scratch_pad.size() != self.image.size()
+        {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::U32(ManagedImage {
                 data: Image::new(size, vec![0u32; size.width * size.height])
@@ -295,6 +352,9 @@ impl PipelineContext {
         Ok(())
     }
 
+    /// Makes the scratch pad the image's type and size - also a size: a
+    /// loaded image (Load Image Channel, Image Cache Load) may differ from
+    /// the one the scratch pad was made for.
     pub fn prepare_scratch_matching_image(&mut self) -> Result<(), InternalErrors> {
         match self.image.as_ref() {
             ImageContainer::F32Gray(_) => self.prepare_f32_gray_scratch(),
@@ -304,7 +364,9 @@ impl PipelineContext {
     }
 
     pub fn prepare_f32_gray_scratch(&mut self) -> Result<(), InternalErrors> {
-        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Gray(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Gray(_))
+            || self.scratch_pad.size() != self.image.size()
+        {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: Image::new(size, vec![0f32; size.width * size.height])
@@ -317,7 +379,9 @@ impl PipelineContext {
     }
 
     fn prepare_f32_rgb_scratch(&mut self) -> Result<(), InternalErrors> {
-        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Rgb(_))
+            || self.scratch_pad.size() != self.image.size()
+        {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::F32Rgb(ManagedImage {
                 // Three values (R, G, B) per pixel.
@@ -1281,5 +1345,46 @@ mod tests {
 
         ctx.segmentation_map = None;
         assert!(!ctx.does_segmentation_map_exist());
+    }
+
+    #[test]
+    fn the_scratch_pad_follows_a_loaded_image_of_another_size() {
+        let tile = crate::ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 4,
+            height: 3,
+        };
+        let mut ctx = PipelineContext::without_image(
+            PathBuf::default(),
+            PipelineImageMeta {
+                image_tile_info: tile,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            ctx.segmentation_map.as_ref().unwrap().size(),
+            ImageSize {
+                width: 4,
+                height: 3
+            },
+            "the maps have the tile's size already"
+        );
+        // What a Load step does: a tile-sized image replaces the placeholder.
+        ctx.image = Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::new(
+                ImageSize {
+                    width: 4,
+                    height: 3,
+                },
+                vec![1.0; 12],
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }));
+        ctx.prepare_scratch_matching_image().unwrap();
+        assert_eq!(ctx.scratch_pad.size(), ctx.image.size());
     }
 }

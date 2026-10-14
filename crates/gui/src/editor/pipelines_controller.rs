@@ -364,10 +364,12 @@ impl PipelinesController {
                                     ImageAddress::Memory(MemoryId::PipelineContext(s)) => {
                                         (1, s as i32, 0)
                                     }
-                                    ImageAddress::Memory(MemoryId::ProjectCache(s)) => {
+                                    ImageAddress::Memory(MemoryId::ProjectCache(s))
+                                    | ImageAddress::Memory(MemoryId::GroupContext(s)) => {
                                         (1, s as i32, 0)
                                     }
                                     ImageAddress::Channel(c) => (2, 1, c),
+                                    ImageAddress::None => (3, 1, 0),
                                 };
                                 (p.name.clone(), stype, slot, ch)
                             })
@@ -531,6 +533,7 @@ impl PipelinesController {
                     0 => ImageAddress::Scratchpad,
                     1 => ImageAddress::Memory(MemoryId::PipelineContext(slot.max(1))),
                     2 => ImageAddress::Channel(ch),
+                    3 => ImageAddress::None,
                     _ => ImageAddress::default(),
                 };
                 {
@@ -554,6 +557,10 @@ impl PipelinesController {
                         ImageAddress::Memory(MemoryId::ProjectCache(s)) => {
                             format!("Cache[{s}]").into()
                         }
+                        ImageAddress::Memory(MemoryId::GroupContext(s)) => {
+                            format!("Group[{s}]").into()
+                        }
+                        ImageAddress::None => "None".into(),
                         ImageAddress::Channel(c) => format!("Channel {c}").into(),
                     };
                     ps.set_active_pipeline_image_source(image_source_str);
@@ -1915,6 +1922,10 @@ impl PipelinesController {
                             ImageAddress::Memory(MemoryId::ProjectCache(s)) => {
                                 format!("Cache[{s}]").into()
                             }
+                            ImageAddress::Memory(MemoryId::GroupContext(s)) => {
+                                format!("Group[{s}]").into()
+                            }
+                            ImageAddress::None => "None".into(),
                             ImageAddress::Channel(c) => format!("Channel {c}").into(),
                         },
                         enabled: p.enabled,
@@ -2231,6 +2242,8 @@ impl PipelinesController {
                     ImageAddress::Scratchpad => "Scratchpad".to_string(),
                     ImageAddress::Memory(MemoryId::PipelineContext(s)) => format!("Memory[{s}]"),
                     ImageAddress::Memory(MemoryId::ProjectCache(s)) => format!("Cache[{s}]"),
+                    ImageAddress::Memory(MemoryId::GroupContext(s)) => format!("Group[{s}]"),
+                    ImageAddress::None => "None".to_string(),
                     ImageAddress::Channel(c) => format!("Channel {c}"),
                 };
                 let steps: Vec<StepData> = pipeline
@@ -4275,6 +4288,7 @@ mod tests {
                 "Memory[1]",
             ),
             (2, 1, 3, ImageAddress::Channel(3), "Channel 3"),
+            (3, 1, 0, ImageAddress::None, "None"),
         ] {
             ui.global::<GlobalAppState>()
                 .set_active_dialog(DialogType::PipelineEdit);

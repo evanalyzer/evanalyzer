@@ -6,6 +6,8 @@
 //     <workdir> [--images N] [--size PX] [--threads N] [--spots N] [--classify N]
 //
 // `--classify N` adds N Classify Objects steps (class filtering by size).
+// `--source 1` starts from the scratchpad, `--source 2` from no image, both
+// with a Load Image Channel step first (0: the channel itself, the default).
 // `--group 1` adds a command group instance that turns the larger objects
 // into local (internal) objects - they don't reach the results.
 
@@ -70,6 +72,7 @@ fn main() {
     let blurs = arg("--blurs", 1);
     let classify = arg("--classify", 0);
     let group = arg("--group", 0);
+    let source = arg("--source", 0);
     let images_dir = workdir.join(format!("images_{size}_{spots}"));
     std::fs::create_dir_all(&images_dir).unwrap();
 
@@ -106,15 +109,27 @@ fn main() {
         id: evanalyzer_cfg::core_types::PipelineId(1),
         name: "bench".into(),
         description: None,
-        image_source: ImageAddress::Channel(0),
+        image_source: match source {
+            1 => ImageAddress::Scratchpad,
+            2 => ImageAddress::None,
+            _ => ImageAddress::Channel(0),
+        },
         enabled: true,
-        steps: (0..blurs)
-            .map(|_| {
+        steps: (source > 0)
+            .then(|| {
+                step(PipelineCommand::LoadChannel(
+                    evanalyzer_cfg::settings::pipeline_command_settings::LoadChannelSettings {
+                        channel: evanalyzer_cfg::core_types::ImageChannelIdx(0),
+                    },
+                ))
+            })
+            .into_iter()
+            .chain((0..blurs).map(|_| {
                 step(PipelineCommand::GaussianBlur(GaussianBlurSettings {
                     kernel_size: 5,
                     sigma: 1.0,
                 }))
-            })
+            }))
             .chain([
                 step(PipelineCommand::Threshold(ThresholdSettings {
                     thresholds: vec![ThresholdEntrySettings {

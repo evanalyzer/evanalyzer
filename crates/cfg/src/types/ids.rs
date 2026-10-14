@@ -15,6 +15,8 @@ pub enum MemoryId {
     PipelineContext(MemorySlot),
     #[serde(alias = "PROJECT_CACHE", alias = "project_cache")]
     ProjectCache(MemorySlot),
+    #[serde(alias = "GROUP_CONTEXT", alias = "group_context")]
+    GroupContext(MemorySlot),
 }
 
 impl Default for MemoryId {
@@ -32,6 +34,10 @@ pub enum ImageAddress {
     Memory(MemoryId), // Memory slot
     #[serde(alias = "CHANNEL", alias = "channel")]
     Channel(i32), // Initial based on image channel
+    /// No image - only as a pipeline's start: its first step loads one
+    /// (Load Image Channel, Image Cache Load).
+    #[serde(rename = "NONE", alias = "none")]
+    None,
 }
 
 impl Default for ImageAddress {
@@ -44,13 +50,16 @@ impl Default for ImageAddress {
 #[allow(dead_code)]
 impl ImageAddress {
     /// Kind and number as the pipeline UI edits them: ("scratchpad", 0),
-    /// ("memory", slot), ("cache", slot) or ("channel", channel).
+    /// ("memory", slot), ("cache", slot), ("group", slot) or ("channel",
+    /// channel).
     pub fn param_parts(&self) -> (&'static str, i64) {
         match *self {
             ImageAddress::Scratchpad => ("scratchpad", 0),
             ImageAddress::Memory(MemoryId::PipelineContext(slot)) => ("memory", slot as i64),
             ImageAddress::Memory(MemoryId::ProjectCache(slot)) => ("cache", slot as i64),
+            ImageAddress::Memory(MemoryId::GroupContext(slot)) => ("group", slot as i64),
             ImageAddress::Channel(channel) => ("channel", channel as i64),
+            ImageAddress::None => ("none", 0),
         }
     }
 
@@ -59,6 +68,7 @@ impl ImageAddress {
     pub fn to_param_value(&self) -> String {
         match self.param_parts() {
             ("scratchpad", _) => "scratchpad".to_string(),
+            ("none", _) => "none".to_string(),
             (kind, nr) => format!("{kind}:{nr}"),
         }
     }
@@ -69,12 +79,18 @@ impl ImageAddress {
         if value == "scratchpad" {
             return Some(ImageAddress::Scratchpad);
         }
+        if value == "none" {
+            return Some(ImageAddress::None);
+        }
         let (kind, nr) = value.split_once(':')?;
         match kind {
             "memory" => Some(ImageAddress::Memory(MemoryId::PipelineContext(
                 nr.parse().ok()?,
             ))),
             "cache" => Some(ImageAddress::Memory(MemoryId::ProjectCache(
+                nr.parse().ok()?,
+            ))),
+            "group" => Some(ImageAddress::Memory(MemoryId::GroupContext(
                 nr.parse().ok()?,
             ))),
             "channel" => Some(ImageAddress::Channel(nr.parse().ok()?)),
@@ -339,6 +355,8 @@ mod tests {
             ImageAddress::Scratchpad,
             ImageAddress::Memory(MemoryId::PipelineContext(3)),
             ImageAddress::Memory(MemoryId::ProjectCache(7)),
+            ImageAddress::Memory(MemoryId::GroupContext(2)),
+            ImageAddress::None,
             ImageAddress::Channel(0),
             ImageAddress::Channel(15),
         ] {
@@ -351,6 +369,14 @@ mod tests {
         }
         assert_eq!(ImageAddress::Channel(2).to_param_value(), "channel:2");
         assert_eq!(ImageAddress::Scratchpad.to_param_value(), "scratchpad");
+        assert_eq!(
+            ImageAddress::Memory(MemoryId::GroupContext(2)).to_param_value(),
+            "group:2"
+        );
+        assert_eq!(
+            serde_json::to_string(&MemoryId::GroupContext(2)).unwrap(),
+            r#"{"groupContext":2}"#
+        );
     }
 
     #[test]

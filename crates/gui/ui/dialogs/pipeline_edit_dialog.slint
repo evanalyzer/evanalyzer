@@ -10,7 +10,7 @@ import { ChannelPicker } from "../components/channel_picker.slint";
 export global PipelineEditState {
     in property <int> pipeline-id: 0;
     in-out property <string> pipeline-name: "";
-    // 0 = Scratchpad · 1 = Memory (PipelineContext slot) · 2 = Channel
+    // 0 = Scratchpad · 1 = Memory (PipelineContext slot) · 2 = Channel · 3 = None
     in-out property <int> source-type: 0;
     in-out property <int> source-slot: 1;
     in-out property <int> source-channel: 0;
@@ -234,6 +234,15 @@ export component PipelineEditDialog inherits Rectangle {
                             changed(v) => {
                                 PipelineEditState.source-channel = v;
                             }
+                        }
+                    }
+
+                    SourceOption {
+                        label: "None";
+                        description: "No image - the first step loads one (Load Image Channel)";
+                        selected: PipelineEditState.source-type == 3;
+                        clicked => {
+                            PipelineEditState.source-type = 3;
                         }
                     }
 

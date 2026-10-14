@@ -77,9 +77,15 @@ impl ImageAlgorithm for ImageCache {
     ) -> Result<(), InternalErrors> {
         let address = match self.address {
             ImageAddress::Scratchpad => CacheAddress::Scratchpad,
-            ImageAddress::Memory(memory_id) => CacheAddress::Memory(memory_id),
+            ImageAddress::Memory(memory_id) => CacheAddress::memory(memory_id, ctx.scope)?,
             ImageAddress::Channel(channel_idx) => {
                 CacheAddress::Channel((channel_idx, ctx.image_meta.image_tile_info.clone()))
+            }
+            ImageAddress::None => {
+                return Err(InternalErrors::InvalidArgument(
+                    "Image Cache: \"none\" isn't an image to read - pick a channel or memory slot"
+                        .into(),
+                ));
             }
         };
 
@@ -90,8 +96,16 @@ impl ImageAlgorithm for ImageCache {
                 ctx.image = cache
                     .image_cache
                     .get(&address)
-                    .ok_or(InternalErrors::CacheMiss("".to_string()))?
-                    .clone();
+                    .ok_or_else(|| match address {
+                        CacheAddress::Channel((channel, tile)) => {
+                            super::load_channel::missing_channel(cache, channel, tile)
+                        }
+                        _ => InternalErrors::CacheMiss(format!(
+                            "Image Cache: nothing stored at {} yet - store an image there \
+                         with an Image Cache step before this one",
+                            self.address.to_param_value()
+                        )),
+                    })?;
                 Ok(())
             }
             ImageCacheMode::Store => {
@@ -327,5 +341,73 @@ mod tests {
         assert_eq!(algo.name(), "Image Cache");
         assert_eq!(algo.cite()[0].cite_key, "danmayr2026");
         assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
+    }
+
+    // ---- Group memory slots ----
+
+    fn gray(value: f32) -> Arc<ImageContainer> {
+        let size = ImageSize {
+            width: 1,
+            height: 1,
+        };
+        Arc::new(ImageContainer::new_f32_gray_from_image_test(
+            Image::new(size, vec![value]).unwrap(),
+        ))
+    }
+
+    fn value_of(image: &ImageContainer) -> f32 {
+        let ImageContainer::F32Gray(image) = image else {
+            panic!("expected a gray image");
+        };
+        image.as_slice()[0]
+    }
+
+    fn group_slot(mode: ImageCacheMode) -> ImageCache {
+        ImageCache {
+            mode,
+            address: ImageAddress::Memory(MemoryId::GroupContext(1)),
+        }
+    }
+
+    #[test]
+    fn two_group_instances_have_separate_memory_slots() {
+        use crate::pipeline::scope::{Scope, ScopeId};
+        let mut cache = GlobalPipelineCache::default();
+        let mut ctx = PipelineContext::new_from_image_test(
+            Image::new(
+                ImageSize {
+                    width: 1,
+                    height: 1,
+                },
+                vec![0.0],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // Each instance stores its own image in its group slot 1.
+        for (scope, value) in [(1, 10.0), (2, 20.0)] {
+            ctx.scope = Scope::Scoped(ScopeId(scope));
+            ctx.image = gray(value);
+            group_slot(ImageCacheMode::Store)
+                .execute(&mut ctx, &mut cache)
+                .unwrap();
+        }
+        for (scope, value) in [(1, 10.0), (2, 20.0)] {
+            ctx.scope = Scope::Scoped(ScopeId(scope));
+            group_slot(ImageCacheMode::Load)
+                .execute(&mut ctx, &mut cache)
+                .unwrap();
+            assert_eq!(value_of(&ctx.image), value, "instance {scope}");
+        }
+
+        ctx.scope = Scope::Global;
+        let error = group_slot(ImageCacheMode::Load)
+            .execute(&mut ctx, &mut cache)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("only available inside a command group"),
+            "{error}"
+        );
     }
 }

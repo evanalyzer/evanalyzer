@@ -706,6 +706,14 @@ impl From<LoadAnnotatedObjectsSettings> for LoadAnnotatedObjects {
     }
 }
 
+impl From<LoadChannelSettings> for LoadChannel {
+    fn from(_s: LoadChannelSettings) -> Self {
+        LoadChannel {
+            channel: _s.channel,
+        }
+    }
+}
+
 impl From<MedianSubtractSettings> for MedianSubtract {
     fn from(_s: MedianSubtractSettings) -> Self {
         MedianSubtract { radius: _s.radius }
@@ -1038,6 +1046,9 @@ pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, Internal
         ))),
         PipelineCommand::LoadAnnotatedObjects(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::LoadAnnotatedObjects::from(settings),
+        ))),
+        PipelineCommand::LoadChannel(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::LoadChannel::from(settings),
         ))),
         PipelineCommand::MedianSubtract(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::MedianSubtract::from(settings),

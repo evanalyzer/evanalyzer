@@ -66,6 +66,11 @@ pub fn expand_step(
                     class.to_text()
                 )));
             }
+            if let Some(slot) = group_memory_slots(command).first() {
+                return Err(InternalErrors::InvalidArgument(format!(
+                    "uses the group memory slot {slot}, which only exists inside a command group"
+                )));
+            }
             Ok(vec![ExpandedCommand {
                 step_id: step.id,
                 scope: Scope::Global,
@@ -297,9 +302,52 @@ fn set_bound_value(
                     local.to_text()
                 ));
             }
+            if group_memory_in(value) {
+                return Err(
+                    "a group memory slot can't be passed into a nested group - it has its own"
+                        .into(),
+                );
+            }
             inner.values.insert(id, value.clone());
             Ok(())
         }
+    }
+}
+
+/// The group memory slots (`MemoryId::GroupContext`) `command` reads or writes.
+/// Found in its file form, where such a slot is always `{"memory":
+/// {"groupContext": n}}` - whichever setting holds it (an image address, a
+/// threshold's value source, ...).
+fn group_memory_slots(command: &PipelineCommand) -> Vec<u64> {
+    fn collect(value: &serde_json::Value, slots: &mut Vec<u64>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(slot) = map
+                    .get("memory")
+                    .and_then(|memory| memory.get("groupContext"))
+                    .and_then(serde_json::Value::as_u64)
+                {
+                    slots.push(slot);
+                }
+                map.values().for_each(|v| collect(v, slots));
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|v| collect(v, slots)),
+            _ => {}
+        }
+    }
+    let mut slots = Vec::new();
+    if let Ok(value) = serde_json::to_value(command) {
+        collect(&value, &mut slots);
+    }
+    slots
+}
+
+/// Whether `value` holds a group memory slot in its text form (`"group:2"`).
+fn group_memory_in(value: &ParamValue) -> bool {
+    match value {
+        ParamValue::Text(text) => text.starts_with("group:"),
+        ParamValue::List(items) => items.iter().any(group_memory_in),
+        _ => false,
     }
 }
 
@@ -358,12 +406,14 @@ mod tests {
     use super::*;
     use evanalyzer_cfg::core_types::ObjectClass;
     use evanalyzer_cfg::core_types::SegmentationClass;
+    use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
     use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::command_groups::{GroupParameterDef, ParamBinding};
     use evanalyzer_cfg::settings::pipeline_command_settings::{
         AiObjectClassifierSettings, BlurSettings, ClassificationMappingSettings,
         ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
-        SimpleTrackerSettings, VoronoiSettings,
+        ImageCacheSettings, MathImageCacheImageCacheModeSettings, SimpleTrackerSettings,
+        VoronoiSettings,
     };
     use std::collections::BTreeMap;
 
@@ -824,6 +874,59 @@ mod tests {
                 ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch
             ))
             .is_ok()
+        );
+    }
+
+    // ---- Group memory slots ----
+
+    fn store_in(address: ImageAddress) -> PipelineCommand {
+        PipelineCommand::ImageCache(ImageCacheSettings {
+            mode: MathImageCacheImageCacheModeSettings::Store,
+            address,
+        })
+    }
+
+    #[test]
+    fn a_group_memory_slot_outside_a_group_is_refused() {
+        let group_slot = ImageAddress::Memory(MemoryId::GroupContext(2));
+        let error = expand(&command_step(1, store_in(group_slot)), &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("group memory slot 2"), "{error}");
+
+        let group = definition("SLOTS", vec![command_step(1, store_in(group_slot))], vec![]);
+        assert!(expand(&group_step(1, "SLOTS", &[]), &[group]).is_ok());
+    }
+
+    #[test]
+    fn a_group_memory_slot_cant_be_passed_into_a_nested_group() {
+        let inner = definition(
+            "INNER",
+            vec![command_step(
+                1,
+                store_in(ImageAddress::Memory(MemoryId::PipelineContext(1))),
+            )],
+            vec![parameter(
+                1,
+                ParamValue::Text("memory:1".into()),
+                &[(1, "address")],
+            )],
+        );
+        let outer = definition(
+            "OUTER",
+            vec![group_step(1, "INNER", &[])],
+            vec![parameter(
+                1,
+                ParamValue::Text("group:1".into()),
+                &[(1, "1")],
+            )],
+        );
+        let error = expand(&group_step(4, "OUTER", &[]), &[inner, outer])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("memory slot can't be passed into a nested group"),
+            "{error}"
         );
     }
 }

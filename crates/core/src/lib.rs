@@ -57,6 +57,7 @@ pub use crate::job::job_generator::active_series;
 pub use crate::job::job_generator::generate_analyze_job_from_project_settings;
 pub use crate::job::job_generator::generate_dataset_job_from_project_settings;
 pub use crate::job::job_generator::generate_preview_job_from_project_settings;
+pub use crate::job::job_generator::pipeline_channels;
 pub use crate::job::pipeline_step::PipelineStep;
 pub use crate::storage::PipelineResultExporter;
 pub use crate::storage::duckdb::DuckDbExporter;

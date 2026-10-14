@@ -1,3 +1,5 @@
+use crate::pipeline::pipeline_cache::CacheAddress;
+use crate::pipeline::scope::Scope;
 use evanalyzer_cfg::core_types::{
     CitationMetadata, InternalErrors, MemoryId, PixelUnits, SegmentationClass,
 };
@@ -188,6 +190,7 @@ impl ImageAlgorithm for Threshold {
         // know which channel the pipeline's current image belongs to.
         let channel = ctx.get_image_plane().map(|p| p.c);
         let tile = ctx.image_meta.image_tile_info.clone();
+        let scope = ctx.scope;
         let (input_data, segmentation_map) = ctx.get_f32_gray_and_segmentation_mask_mut()?;
         let actual_slice = input_data.as_slice();
 
@@ -238,6 +241,7 @@ impl ImageAlgorithm for Threshold {
                     s.value_source,
                     channel,
                     tile.clone(),
+                    scope,
                     cache,
                     actual_slice,
                     |data| {
@@ -257,6 +261,7 @@ impl ImageAlgorithm for Threshold {
                             s.value_source,
                             channel,
                             tile.clone(),
+                            scope,
                             cache,
                             actual_slice,
                         )?;
@@ -352,6 +357,7 @@ fn build_source_histogram(
     source: ThresholdValueSource,
     channel: Option<i32>,
     tile: ImageTile,
+    scope: Scope,
     cache: &GlobalPipelineCache,
     actual_data: &[f32],
 ) -> Result<([f32; 256], f32, f32), InternalErrors> {
@@ -359,6 +365,7 @@ fn build_source_histogram(
         source,
         channel,
         tile,
+        scope,
         cache,
         actual_data,
         histogram_from_slice,
@@ -376,6 +383,8 @@ fn with_source_slice<R>(
     source: ThresholdValueSource,
     channel: Option<i32>,
     tile: ImageTile,
+    // The scope the command runs in - where a group memory slot lives.
+    scope: Scope,
     cache: &GlobalPipelineCache,
     actual_data: &[f32],
     f: impl FnOnce(&[f32]) -> R,
@@ -400,11 +409,14 @@ fn with_source_slice<R>(
             gray_slice(&raw).map(f)
         }
         ThresholdValueSource::Memory(id) => {
-            let snapshot = cache.get_image_from_memory_cache(id).ok_or_else(|| {
-                InternalErrors::CacheMiss(format!(
-                    "Threshold: no image found in memory cache at {id:?}"
-                ))
-            })?;
+            let snapshot = cache
+                .image_cache
+                .get(&CacheAddress::memory(id, scope)?)
+                .ok_or_else(|| {
+                    InternalErrors::CacheMiss(format!(
+                        "Threshold: no image found in memory cache at {id:?}"
+                    ))
+                })?;
             gray_slice(&snapshot).map(f)
         }
     }

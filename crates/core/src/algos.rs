@@ -57,6 +57,7 @@ pub use self::math::image_cache::ImageCache;
 pub use self::math::image_cache::ImageCacheMode;
 pub use self::math::image_math::ImageMath;
 pub use self::math::image_math::Operand;
+pub use self::math::load_channel::LoadChannel;
 pub use self::math::median_subtract::MedianSubtract;
 pub use self::math::save_image::ImageSource;
 pub use self::math::save_image::SaveImage;

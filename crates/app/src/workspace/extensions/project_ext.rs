@@ -14,6 +14,7 @@ use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::ImageAddress;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId};
 use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
+use evanalyzer_cfg::settings::command_groups::GroupDefinition;
 use evanalyzer_cfg::settings::images_settings::{
     ChannelSettings, HistogramSettings, PixelSizeSettings, TStackSettings, ZStackSettings,
 };
@@ -39,7 +40,7 @@ use evanalyzer_cfg::{
 use human_sort::compare;
 use log::{info, trace, warn};
 use rayon::prelude::*;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -1601,18 +1602,16 @@ impl ProjectExt for ProjectWithRuntime {
         }
     }
 
-    /// Focuses the given pipeline: only its image channel (all channels for
-    /// a scratchpad or memory source) and its object classes are shown.
+    /// Focuses the given pipeline: only the image channels it reads (its
+    /// source's and its load steps', also inside groups - all channels if it
+    /// reads none) and its object classes are shown.
     /// Returns `false` (and clears any focus) if there is no such pipeline.
     fn focus_pipeline(&mut self, pipeline_id: PipelineId) -> bool {
         let Some(pipeline) = self.pipelines.iter().find(|p| p.id == pipeline_id) else {
             self.tmp_settings.pipeline_focus = None;
             return false;
         };
-        let channels = match pipeline.image_source {
-            ImageAddress::Channel(channel) => FocusChannels::Only(BTreeSet::from([channel])),
-            ImageAddress::Scratchpad | ImageAddress::Memory(_) => FocusChannels::All,
-        };
+        let channels = focus_channels(pipeline, &self.command_groups);
         let pipeline_classes = pipeline.object_classes();
         self.tmp_settings.pipeline_focus = Some(PipelineFocus {
             pipeline_id,
@@ -1635,10 +1634,7 @@ impl ProjectExt for ProjectWithRuntime {
             self.tmp_settings.pipeline_focus = None;
             return;
         };
-        let source_channels = match pipeline.image_source {
-            ImageAddress::Channel(channel) => FocusChannels::Only(BTreeSet::from([channel])),
-            ImageAddress::Scratchpad | ImageAddress::Memory(_) => FocusChannels::All,
-        };
+        let source_channels = focus_channels(pipeline, &self.command_groups);
         let source_changed = match (&source_channels, &focus.channels) {
             (FocusChannels::Only(new), FocusChannels::Only(old)) => !new.is_subset(old),
             (a, b) => a != b,
@@ -1682,6 +1678,17 @@ impl ProjectExt for ProjectWithRuntime {
             .filter(|r| r.object_class.contains(class_id))
             .count();
         manual + preview
+    }
+}
+
+/// The channels a focus on `pipeline` shows - see
+/// [`ProjectExt::focus_pipeline`].
+fn focus_channels(pipeline: &PipelineSettings, groups: &[GroupDefinition]) -> FocusChannels {
+    let channels = evanalyzer_core::pipeline_channels(pipeline, groups);
+    if channels.is_empty() {
+        FocusChannels::All
+    } else {
+        FocusChannels::Only(channels)
     }
 }
 
@@ -3102,6 +3109,32 @@ mod tests {
         assert!(project.is_class_visible(&ObjectClass::Global(3)));
         assert!(project.is_class_visible(&ObjectClass::Global(4)));
         assert!(!project.is_class_visible(&ObjectClass::Global(5)));
+    }
+
+    #[test]
+    fn focus_on_a_pipeline_without_an_image_source_shows_the_channels_it_loads() {
+        let mut project = project_with_focus_pipelines();
+        let mut pipeline = focus_test_pipeline(3, ImageAddress::None, 7, 8);
+        pipeline.steps.insert(
+            0,
+            PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                enabled: true,
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                    PipelineCommand::LoadChannel(
+                        evanalyzer_cfg::settings::pipeline_command_settings::LoadChannelSettings {
+                            channel: evanalyzer_cfg::core_types::ImageChannelIdx(1),
+                        },
+                    ),
+                ),
+            },
+        );
+        project.pipelines.push(pipeline);
+
+        project.focus_pipeline(PipelineId(3));
+        let channels = project.get_image_channel_visibilities();
+        assert_eq!(channels.get(&0), Some(&false));
+        assert_eq!(channels.get(&1), Some(&true), "the loaded channel");
     }
 
     #[test]
