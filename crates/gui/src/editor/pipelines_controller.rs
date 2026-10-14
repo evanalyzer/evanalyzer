@@ -7,10 +7,10 @@ use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
-    CommandDef, CommandParameter, CommandPickerState, DefaultParamPreview, GlobalAppState,
-    GroupClassRow, GroupEditChoiceState, GroupItem, GroupStepsState, LeafParam, ParamType,
-    Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState,
-    RunAnalysisState, StepCategory, UiState, WarningState,
+    CommandDef, CommandParameter, CommandPickerState, DefaultParamPreview, ExposeChoiceState,
+    GlobalAppState, GroupClassRow, GroupEditChoiceState, GroupItem, GroupStepsState, LeafParam,
+    ParamType, Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus,
+    PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use crate::{ResultItemData, ResultsListState};
@@ -111,6 +111,10 @@ pub struct PipelinesController {
     /// (pipeline id, group key). The panel shows and edits its steps - its
     /// definition, so every use of the group - instead of the pipeline's.
     open_group: Mutex<Option<(u32, String)>>,
+
+    /// A setting waiting for "Expose setting": (pipeline id, step index,
+    /// setting path, the parameters it could be added to).
+    pending_expose: Mutex<Option<(u32, usize, String, Vec<GroupParamId>)>>,
 }
 
 impl PipelinesController {
@@ -136,6 +140,7 @@ impl PipelinesController {
             pipeline_templates: Mutex::new(Vec::new()),
             focus_controller,
             open_group: Mutex::new(None),
+            pending_expose: Mutex::new(None),
         }
     }
 
@@ -1082,11 +1087,11 @@ impl PipelinesController {
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
 
-            // ◆ on a setting inside an opened group: expose it as a group
-            // parameter, or hide it again.
+            // ◇/◆ on a setting inside an opened group: hide it if exposed; else
+            // expose it - asking first if existing parameters could set it.
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
-                .on_toggle_exposed(move |step_idx, param_name| {
+                .on_toggle_exposed(move |step_idx, path| {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
@@ -1095,39 +1100,138 @@ impl PipelinesController {
                     let Some(key) = manager.open_group_key(pipeline_id) else {
                         return;
                     };
-                    {
+                    let step_idx = step_idx as usize;
+                    let path = path.to_string();
+                    let ask = {
                         let mut project = manager.app_state.get_project_write();
+                        let definitions = project.command_groups.clone();
                         let Some(definition) =
                             project.command_groups.iter_mut().find(|d| d.key == key)
                         else {
                             return;
                         };
-                        let Some(step) = definition.steps.get(step_idx as usize) else {
-                            return;
-                        };
-                        let Some(command) = step.command() else {
-                            return;
-                        };
-                        let Some(setting) = command
-                            .to_parameters()
-                            .into_iter()
-                            .find(|p| p.name == param_name.as_str())
+                        let Some((step_id, (setting, label))) =
+                            definition.steps.get(step_idx).and_then(|step| {
+                                let command = step.command()?;
+                                Some((step.id, evanalyzer_app::groups::setting_at(command, &path)?))
+                            })
                         else {
                             return;
                         };
-                        let step_id = step.id;
-                        evanalyzer_app::groups::toggle_exposed(
-                            definition,
-                            step_id,
-                            &setting.name,
-                            &setting.display_name,
-                            &setting.value,
-                        );
+                        let exposed = evanalyzer_app::groups::exposed_settings(definition, step_id)
+                            .contains(&path);
+                        let candidates = if exposed {
+                            Vec::new()
+                        } else {
+                            evanalyzer_app::groups::compatible_parameters(
+                                &definitions,
+                                &key,
+                                &setting,
+                            )
+                        };
+                        if candidates.is_empty() {
+                            evanalyzer_app::groups::toggle_exposed(
+                                definition,
+                                step_id,
+                                &path,
+                                &label,
+                                &setting.value,
+                            );
+                            None
+                        } else {
+                            Some((label, candidates))
+                        }
+                    };
+                    match ask {
+                        None => {
+                            manager.pipeline_settings_changed();
+                            manager.sync_steps_of_selected_pipeline_to_slint(
+                                PipelineId(pipeline_id),
+                                false,
+                            );
+                        }
+                        Some((label, candidates)) => {
+                            let choices: Vec<slint::SharedString> =
+                                std::iter::once("New parameter".to_string())
+                                    .chain(candidates.iter().map(|(_, l)| format!("Add to “{l}”")))
+                                    .map(Into::into)
+                                    .collect();
+                            *manager.pending_expose.lock().expect("Poisoned") = Some((
+                                pipeline_id,
+                                step_idx,
+                                path,
+                                candidates.into_iter().map(|(id, _)| id).collect(),
+                            ));
+                            let choice = ui.global::<ExposeChoiceState>();
+                            choice.set_setting_name(label.into());
+                            choice.set_choices(ModelRc::new(VecModel::from(choices)));
+                            ui.global::<GlobalAppState>()
+                                .set_active_dialog(DialogType::ExposeChoice);
+                        }
                     }
-                    manager.pipeline_settings_changed();
-                    manager
-                        .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
+
+            // "Expose setting": 0 = a new parameter, else the n-th candidate.
+            let manager = self.clone();
+            ui.global::<ExposeChoiceState>().on_chosen(move |choice| {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::None);
+                let Some((pipeline_id, step_idx, path, candidates)) =
+                    manager.pending_expose.lock().expect("Poisoned").take()
+                else {
+                    return;
+                };
+                let Some(key) = manager.open_group_key(pipeline_id) else {
+                    return;
+                };
+                {
+                    let mut project = manager.app_state.get_project_write();
+                    let Some(definition) = project.command_groups.iter_mut().find(|d| d.key == key)
+                    else {
+                        return;
+                    };
+                    let Some((step_id, (setting, label))) =
+                        definition.steps.get(step_idx).and_then(|step| {
+                            let command = step.command()?;
+                            Some((step.id, evanalyzer_app::groups::setting_at(command, &path)?))
+                        })
+                    else {
+                        return;
+                    };
+                    match candidates.get((choice as usize).wrapping_sub(1)) {
+                        Some(&id) if choice > 0 => {
+                            if let Err(e) =
+                                evanalyzer_app::groups::add_binding(definition, id, step_id, &path)
+                            {
+                                warn!("Could not add the setting to the parameter: {e}");
+                            }
+                        }
+                        _ => {
+                            evanalyzer_app::groups::toggle_exposed(
+                                definition,
+                                step_id,
+                                &path,
+                                &label,
+                                &setting.value,
+                            );
+                        }
+                    }
+                }
+                manager.pipeline_settings_changed();
+                manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+            });
+
+            let manager = self.clone();
+            ui.global::<ExposeChoiceState>().on_cancel(move || {
+                if let Some(ui) = manager.ui.upgrade() {
+                    *manager.pending_expose.lock().expect("Poisoned") = None;
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::None);
+                }
+            });
 
             // "Group…" on a step card: the dialog, starting with that step.
             let manager = self.clone();
@@ -2325,14 +2429,26 @@ impl PipelinesController {
         let param_name = param_name.to_owned();
         {
             let mut project = self.app_state.get_project_write();
+            let mut removed_from: Option<evanalyzer_cfg::core_types::StepId> = None;
             if let Some(steps) = self.shown_steps_mut(&mut project, pipeline_id) {
-                if let Some(command) = steps.get_mut(step_idx).and_then(|step| step.command_mut()) {
-                    if add {
-                        command.add_group_item(&param_name);
-                    } else if let Some(idx) = remove_idx {
-                        command.remove_group_item(&param_name, idx);
+                if let Some(step) = steps.get_mut(step_idx) {
+                    let step_id = step.id;
+                    if let Some(command) = step.command_mut() {
+                        if add {
+                            command.add_group_item(&param_name);
+                        } else if let Some(idx) = remove_idx {
+                            command.remove_group_item(&param_name, idx);
+                            removed_from = Some(step_id);
+                        }
                     }
                 }
+            }
+            // Inside an opened group: bindings to later entries move up.
+            if let (Some(step_id), Some(idx), Some(key)) =
+                (removed_from, remove_idx, self.open_group_key(pipeline_id))
+                && let Some(definition) = project.command_groups.iter_mut().find(|d| d.key == key)
+            {
+                evanalyzer_app::groups::list_entry_removed(definition, step_id, &param_name, idx);
             }
         }
         self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
@@ -2992,11 +3108,16 @@ impl PipelinesController {
                             let group_items: Vec<GroupItem> = p
                                 .groups
                                 .into_iter()
-                                .map(|group| GroupItem {
+                                .enumerate()
+                                .map(|(entry, group)| GroupItem {
                                     fields: ModelRc::new(VecModel::from(
                                         group
                                             .into_iter()
                                             .map(|lp| {
+                                                let leaf_exposed = exposed.contains(&format!(
+                                                    "{p_name}.{entry}.{}",
+                                                    lp.name
+                                                ));
                                                 let relabeled = p_name == "segmentation_mapping"
                                                     && ((is_pixel_classifier
                                                         && lp.name == "segmentation_class")
@@ -3035,6 +3156,7 @@ impl PipelinesController {
                                                     ),
                                                 };
                                                 LeafParam {
+                                                    exposed: leaf_exposed,
                                                     name: lp.name.into(),
                                                     display_name: lp.display_name.into(),
                                                     description: lp.description.into(),
@@ -5373,6 +5495,104 @@ mod tests {
             card.parameters.row_count(),
             1,
             "the exposed setting on the card"
+        );
+    }
+
+    #[test]
+    fn a_second_blur_can_join_the_first_ones_parameter() {
+        let (ui, ui_state, _controller) = with_a_group();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_group(1);
+        drain_ui_queue();
+
+        panel.invoke_toggle_exposed(0, "kernel_size".into());
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::None, "nothing to join yet");
+
+        panel.invoke_toggle_exposed(1, "kernel_size".into());
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::ExposeChoice);
+        let choice = ui.global::<ExposeChoiceState>();
+        let choices: Vec<String> = choice.get_choices().iter().map(|c| c.to_string()).collect();
+        assert_eq!(choices.len(), 2);
+        assert_eq!(choices[0], "New parameter");
+        assert!(choices[1].starts_with("Add to “"), "{}", choices[1]);
+
+        choice.invoke_chosen(1);
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::None);
+        let project = ui_state.get_project();
+        let parameters = &project.command_groups[0].parameters;
+        assert_eq!(parameters.len(), 1, "one parameter ...");
+        assert_eq!(parameters[0].bindings.len(), 2, "... setting both blurs");
+        drop(project);
+        assert!(ui_param(&ui, 1, "kernel_size").exposed);
+    }
+
+    #[test]
+    fn a_setting_of_a_list_entry_is_exposed_from_the_card() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold")]);
+        {
+            let mut project = ui_state.get_project_write();
+            evanalyzer_app::groups::group_steps(&mut project, PipelineId(1), 0..=0, "Detect", &[])
+                .unwrap();
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_group(0);
+        drain_ui_queue();
+        // A threshold entry, added inside the opened group.
+        panel.invoke_add_group_item(0, "thresholds".into());
+        drain_ui_queue();
+
+        panel.invoke_toggle_exposed(0, "thresholds.0.min_threshold".into());
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        let parameter = &project.command_groups[0].parameters[0];
+        assert_eq!(parameter.bindings[0].param, "thresholds.0.min_threshold");
+        assert!(
+            parameter.label.starts_with("Thresholds 1 · "),
+            "{}",
+            parameter.label
+        );
+        drop(project);
+        let list = ui_param(&ui, 0, "thresholds");
+        let entry = list.group_items.row_data(0).unwrap();
+        let min = entry
+            .fields
+            .iter()
+            .find(|f| f.name == "min_threshold")
+            .unwrap();
+        assert!(min.exposed, "shown filled");
+    }
+
+    #[test]
+    fn removing_a_list_entry_in_a_group_moves_the_bindings_along() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold")]);
+        {
+            let mut project = ui_state.get_project_write();
+            evanalyzer_app::groups::group_steps(&mut project, PipelineId(1), 0..=0, "Detect", &[])
+                .unwrap();
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_group(0);
+        drain_ui_queue();
+        for _ in 0..3 {
+            panel.invoke_add_group_item(0, "thresholds".into());
+        }
+        drain_ui_queue();
+        panel.invoke_toggle_exposed(0, "thresholds.2.min_threshold".into());
+        drain_ui_queue();
+
+        panel.invoke_remove_group_item(0, "thresholds".into(), 0);
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        assert_eq!(
+            project.command_groups[0].parameters[0].bindings[0].param, "thresholds.1.min_threshold",
+            "still the same entry, now the second"
         );
     }
 

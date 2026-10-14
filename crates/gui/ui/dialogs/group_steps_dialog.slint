@@ -338,3 +338,80 @@ export component GroupEditChoiceDialog inherits Rectangle {
         height: layout.preferred-height;
     }
 }
+
+// -- Expose a setting: a new parameter, or one that exists -------
+
+/// Asked when exposing a setting that existing group parameters could set
+/// too (same kind of setting).
+export global ExposeChoiceState {
+    in property <string> setting-name: "";
+    /// "New parameter", then "Add to “Cell class”", ...
+    in property <[string]> choices: [];
+    callback chosen(int);
+    callback cancel();
+}
+
+export component ExposeChoiceDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    TouchArea {
+        clicked => {
+            ExposeChoiceState.cancel();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 380px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 10px;
+
+            Text {
+                text: "Expose \{ExposeChoiceState.setting-name}";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text;
+            }
+
+            Text {
+                text: "As a parameter of its own, or set by a parameter the group has already:";
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            for choice[i] in ExposeChoiceState.choices: AppButton {
+                text: choice;
+                primary: i == 0;
+                clicked => {
+                    ExposeChoiceState.chosen(i);
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        ExposeChoiceState.cancel();
+                    }
+                }
+            }
+        }
+
+        height: layout.preferred-height;
+    }
+}

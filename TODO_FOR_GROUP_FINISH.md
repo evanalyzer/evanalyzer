@@ -233,9 +233,14 @@ before 14: most groups are made from existing steps).
         the steps' file form); the definition stays. Inside an opened group:
         no breakpoints, no "Group…" (groups in groups only from the
         pipeline, for now), a group can't be inserted into itself. A group
-        that's gone (undo) closes. Not done: list-entry settings
-        ("thresholds.0.min") can't be exposed from the card yet; adding a
-        binding to an existing parameter of the same type.
+        that's gone (undo) closes.
+        Also done: settings of list entries ("thresholds.1.min_threshold",
+        label "Thresholds 2 · Min Threshold") get ◇ too; exposing a setting
+        that existing parameters with the same control (type, a dropdown's
+        options) could set asks "New parameter" / "Add to “Cell class”"
+        (`compatible_parameters`, `add_binding`). Removing a list entry inside a
+        group: bindings to it go, bindings to later entries move up
+        (`list_entry_removed`, called from `modify_group_item`).
 15. [ ] Focus classes for group steps.
 16. [ ] Group library (`.evagroup`): save, insert, update while keeping the
         user's values.

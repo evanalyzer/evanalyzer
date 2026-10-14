@@ -480,6 +480,87 @@ pub fn toggle_exposed(
     true
 }
 
+/// The setting at `path` of `command` - a top-level one ("min_area") or one
+/// of a list entry ("thresholds.1.min_threshold") - and a label for it as a
+/// group parameter ("Thresholds 2 · Min Threshold").
+pub fn setting_at(command: &PipelineCommand, path: &str) -> Option<(ParameterDef, String)> {
+    fn find(params: &[ParameterDef], path: &str) -> Option<(ParameterDef, String)> {
+        if let Some(p) = params.iter().find(|p| p.name == path) {
+            return Some((p.clone(), label_of(p)));
+        }
+        let mut parts = path.splitn(3, '.');
+        let (list, index, field) = (parts.next()?, parts.next()?, parts.next()?);
+        let index: usize = index.parse().ok()?;
+        let list = params.iter().find(|p| p.name == list)?;
+        let (setting, inner) = find(list.groups.get(index)?, field)?;
+        Some((
+            setting,
+            format!("{} {} · {inner}", label_of(list), index + 1),
+        ))
+    }
+    fn label_of(p: &ParameterDef) -> String {
+        if p.display_name.is_empty() {
+            p.name.clone()
+        } else {
+            p.display_name.clone()
+        }
+    }
+    find(&command.to_parameters(), path)
+}
+
+/// The parameters of group `key` a setting like `setting` could be added
+/// to: those with the same control - type, and a dropdown's options.
+pub fn compatible_parameters(
+    definitions: &[GroupDefinition],
+    key: &str,
+    setting: &ParameterDef,
+) -> Vec<(GroupParamId, String)> {
+    let Some(definition) = definitions.iter().find(|d| d.key == key) else {
+        return Vec::new();
+    };
+    let instance = GroupInstance {
+        key: key.to_string(),
+        values: Default::default(),
+    };
+    let Ok(shown) = evanalyzer_core::group_parameters(&instance, definitions) else {
+        return Vec::new();
+    };
+    definition
+        .parameters
+        .iter()
+        .zip(shown)
+        .filter(|(_, shown)| {
+            shown.param_type == setting.param_type && shown.options == setting.options
+        })
+        .map(|(parameter, _)| (parameter.id, parameter.label.clone()))
+        .collect()
+}
+
+/// Adds setting `path` of step `step_id` to parameter `id` of `definition`:
+/// the parameter sets it too from now on.
+pub fn add_binding(
+    definition: &mut GroupDefinition,
+    id: GroupParamId,
+    step_id: StepId,
+    path: &str,
+) -> Result<(), InternalErrors> {
+    let parameter = definition
+        .parameters
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or_else(|| {
+            InternalErrors::InvalidArgument(format!("the group has no parameter {}", id.0))
+        })?;
+    let binding = ParamBinding {
+        step: step_id,
+        param: path.to_string(),
+    };
+    if !parameter.bindings.contains(&binding) {
+        parameter.bindings.push(binding);
+    }
+    Ok(())
+}
+
 /// The settings of step `step_id` that are group parameters.
 pub fn exposed_settings(definition: &GroupDefinition, step_id: StepId) -> Vec<String> {
     definition
@@ -489,6 +570,41 @@ pub fn exposed_settings(definition: &GroupDefinition, step_id: StepId) -> Vec<St
         .filter(|b| b.step == step_id)
         .map(|b| b.param.clone())
         .collect()
+}
+
+/// After entry `index` of list setting `list` of step `step_id` was
+/// removed: bindings to that entry go (and a parameter left without
+/// bindings), bindings to the entries after it move up one
+/// ("thresholds.3.min" → "thresholds.2.min") - so they keep setting the
+/// same entry.
+pub fn list_entry_removed(
+    definition: &mut GroupDefinition,
+    step_id: StepId,
+    list: &str,
+    index: usize,
+) {
+    let prefix = format!("{list}.");
+    // The entry number of a binding into `list`, and the rest of its path.
+    let entry_of = |param: &str| -> Option<(usize, String)> {
+        let (number, rest) = param.strip_prefix(&prefix)?.split_once('.')?;
+        Some((number.parse().ok()?, rest.to_string()))
+    };
+    for parameter in &mut definition.parameters {
+        parameter
+            .bindings
+            .retain(|b| b.step != step_id || entry_of(&b.param).is_none_or(|(n, _)| n != index));
+        for binding in &mut parameter.bindings {
+            if binding.step != step_id {
+                continue;
+            }
+            if let Some((n, rest)) = entry_of(&binding.param)
+                && n > index
+            {
+                binding.param = format!("{list}.{}.{rest}", n - 1);
+            }
+        }
+    }
+    definition.parameters.retain(|p| !p.bindings.is_empty());
 }
 
 /// Removes step `index` of `definition` and every binding to it (and a
@@ -1209,5 +1325,123 @@ mod tests {
             .map(|p| p.label.as_str())
             .collect();
         assert_eq!(labels, ["Nuclei"]);
+    }
+
+    // ---- List-entry settings, more settings for one parameter ----
+
+    #[test]
+    fn a_setting_of_a_list_entry_is_found_with_a_readable_label() {
+        let (setting, label) = setting_at(&threshold(1), "thresholds.0.min_threshold").unwrap();
+        assert_eq!(setting.name, "min_threshold");
+        assert!(label.starts_with("Thresholds 1 · "), "{label}");
+        assert!(setting_at(&threshold(1), "thresholds.5.min_threshold").is_none());
+    }
+
+    #[test]
+    fn a_list_entry_setting_exposed_is_set_by_the_groups_parameter() {
+        let mut project = project();
+        group_steps(&mut project, PipelineId(1), 0..=0, "Detect", &[]).unwrap();
+        let definition = &mut project.command_groups[0];
+        assert!(toggle_exposed(
+            definition,
+            StepId(1),
+            "thresholds.0.min_threshold",
+            "Minimum",
+            "0"
+        ));
+        let id = definition.parameters[0].id;
+        let StepContent::Group(instance) = &mut project.pipelines[0].steps[0].content else {
+            panic!("group step")
+        };
+        instance.values.insert(id, ParamValue::Int(1200));
+
+        let commands = commands_of_step(&project, 0, 0);
+        let PipelineCommand::Threshold(threshold) = &commands[0] else {
+            panic!("threshold")
+        };
+        assert_eq!(threshold.thresholds[0].min_threshold, 1200.0);
+    }
+
+    #[test]
+    fn a_second_setting_can_join_a_parameter_with_the_same_control() {
+        let mut project = grouped();
+        let key = project.command_groups[0].key.clone();
+        let voronoi = project.command_groups[0]
+            .steps
+            .iter()
+            .find(|s| s.id == StepId(5))
+            .and_then(|s| s.command().cloned())
+            .unwrap();
+        let (mask, _) = setting_at(&voronoi, "mask").unwrap();
+
+        // "Cells" (a class) fits, "Nuclei" (a class list) doesn't.
+        let candidates = compatible_parameters(&project.command_groups, &key, &mask);
+        let labels: Vec<&str> = candidates.iter().map(|(_, l)| l.as_str()).collect();
+        assert_eq!(labels, ["Cells"]);
+
+        add_binding(
+            &mut project.command_groups[0],
+            candidates[0].0,
+            StepId(5),
+            "mask",
+        )
+        .unwrap();
+        let commands = commands_of_step(&project, 0, 2);
+        let PipelineCommand::Voronoi(voronoi) = &commands[2] else {
+            panic!("voronoi")
+        };
+        assert_eq!(voronoi.mask, CELLS, "set by the parameter too");
+        assert!(
+            add_binding(
+                &mut project.command_groups[0],
+                GroupParamId(99),
+                StepId(5),
+                "mask"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn removing_a_list_entry_keeps_the_bindings_on_their_entries() {
+        let mut definition = GroupDefinition {
+            key: "T".into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: vec![],
+            parameters: vec![],
+            origin: None,
+        };
+        let bind = |definition: &mut GroupDefinition, step: u32, path: &str| {
+            toggle_exposed(definition, StepId(step), path, path, "1");
+        };
+        bind(&mut definition, 1, "thresholds.0.min_threshold");
+        bind(&mut definition, 1, "thresholds.1.min_threshold");
+        bind(&mut definition, 1, "thresholds.2.method.classes");
+        bind(&mut definition, 1, "thresholds_other.1.x"); // another list
+        bind(&mut definition, 2, "thresholds.2.min_threshold"); // another step
+
+        list_entry_removed(&mut definition, StepId(1), "thresholds", 1);
+
+        let bound: Vec<(u32, String)> = definition
+            .parameters
+            .iter()
+            .flat_map(|p| p.bindings.iter())
+            .map(|b| (b.step.0, b.param.clone()))
+            .collect();
+        assert_eq!(
+            bound,
+            [
+                (1, "thresholds.0.min_threshold".to_string()),
+                (1, "thresholds.1.method.classes".to_string()),
+                (1, "thresholds_other.1.x".to_string()),
+                (2, "thresholds.2.min_threshold".to_string()),
+            ]
+        );
+        assert_eq!(
+            definition.parameters.len(),
+            4,
+            "the removed entry's parameter went"
+        );
     }
 }

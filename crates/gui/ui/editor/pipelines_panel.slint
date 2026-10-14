@@ -52,6 +52,8 @@ export struct LeafParam {
         min: float,
         max: float,
         step: float,
+        // Inside an opened command group: this setting is a group parameter.
+        exposed: bool,
     }
 
 export struct GroupItem {
@@ -1152,6 +1154,7 @@ component SpinnerInput inherits HorizontalLayout {
 component LeafParamRow inherits VerticalLayout {
         in property <LeafParam> p;
         callback changed(string);
+        callback toggle-exposed();
         // This row's pending file-browser request (see `browse-file`).
         property <int> browse-token: -1;
 
@@ -1160,10 +1163,32 @@ component LeafParamRow inherits VerticalLayout {
         HorizontalLayout {
             spacing: 4px;
             alignment: start;
+            // Inside an opened group: ◆ exposes the setting as a group
+            // parameter (filled) or hides it again.
+            if PipelinesPanelState.open-group-name != "": Rectangle {
+                width: 14px;
+                height: 14px;
+                border-radius: 3px;
+                background: leaf-expose-ta.has-hover ? Theme.raised : transparent;
+                Text {
+                    text: p.exposed ? "◆" : "◇";
+                    font-size: 9px;
+                    color: p.exposed ? Theme.cat-group : Theme.text-mute;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                leaf-expose-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.toggle-exposed();
+                    }
+                }
+            }
             Text {
                 text: p.display-name == "" ? p.name : p.display-name;
                 font-size: 10px;
-                color: Theme.text-dim;
+                color: p.exposed ? Theme.cat-group : Theme.text-dim;
                 vertical-alignment: center;
             }
 
@@ -1412,6 +1437,8 @@ component ParamRow inherits VerticalLayout {
         callback remove-item(int);
         callback show-model-info();
         callback toggle-exposed();
+        // A list entry's setting: entry index, setting name.
+        callback toggle-item-exposed(int, string);
         // This row's pending file-browser request (see `browse-file`).
         property <int> browse-token: -1;
         // This row's pending script-editor request (see `ScriptEditorState`).
@@ -1804,6 +1831,9 @@ component ParamRow inherits VerticalLayout {
                         changed(v) => {
                             root.item-field-changed(i, field.name, v);
                         }
+                        toggle-exposed => {
+                            root.toggle-item-exposed(i, field.name);
+                        }
                     }
                 }
             }
@@ -2047,6 +2077,9 @@ component StepRow inherits Rectangle {
                         toggle-exposed => {
                             PipelinesPanelState.toggle-exposed(step.id, p.name);
                         }
+                        toggle-item-exposed(item_idx, field_name) => {
+                            PipelinesPanelState.toggle-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
+                        }
                     }
 
                     if step.advanced-count > 0: AdvancedRow {
@@ -2081,6 +2114,9 @@ component StepRow inherits Rectangle {
                         }
                         toggle-exposed => {
                             PipelinesPanelState.toggle-exposed(step.id, p.name);
+                        }
+                        toggle-item-exposed(item_idx, field_name) => {
+                            PipelinesPanelState.toggle-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
                         }
                     }
 
@@ -2438,7 +2474,8 @@ export global PipelinesPanelState {
         callback close-group();
         callback ungroup(int);
         /// Exposes a setting of an opened group's step as a group parameter,
-        /// or hides it again: step index, setting name.
+        /// or hides it again: step index, setting path ("min_area",
+        /// "thresholds.1.min_threshold").
         callback toggle-exposed(int, string);
         callback insert-step(int, int);          // pipeline-id, after-idx
     callback param-changed(int, string, string);
