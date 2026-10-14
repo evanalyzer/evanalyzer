@@ -14,4 +14,3 @@
 pub mod migration_v1_to_v2;
 pub mod migration_v2_to_v3;
 pub mod migration_v3_to_v4;
-pub mod migration_v4_to_v5;
