@@ -90,6 +90,7 @@ impl TemplateController {
             author_organization: "".into(),
             category: "".into(),
             tags: "".into(),
+            version: "".into(),
         });
         state.set_known_categories(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
         ui.global::<GlobalAppState>()
@@ -157,8 +158,7 @@ impl TemplateController {
             description: meta_slint.description.to_string(),
             authors,
             creation_time: chrono::Utc::now(),
-            // The save dialog doesn't ask for a version (yet).
-            version: None,
+            version: parse_version(&meta_slint.version),
             category: meta_slint.category.to_string(),
             tags,
             // Stamped for real by `save_project_as_template`/
@@ -229,6 +229,12 @@ impl TemplateController {
 }
 
 /// Parses a comma-separated tag string into a trimmed, non-empty tag list.
+/// The template version the user typed - `None` for none (the field is
+/// optional; the dialog only accepts whole numbers from 1).
+fn parse_version(raw: &str) -> Option<u32> {
+    raw.trim().parse().ok().filter(|v| *v >= 1)
+}
+
 fn parse_tags(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(|s| s.trim().to_string())
@@ -260,6 +266,15 @@ mod tests {
             parse_tags("cells,,uptake,"),
             vec!["cells".to_string(), "uptake".to_string()]
         );
+    }
+
+    #[test]
+    fn the_version_is_optional_and_a_whole_number_from_one() {
+        assert_eq!(parse_version(""), None);
+        assert_eq!(parse_version(" 3 "), Some(3));
+        assert_eq!(parse_version("0"), None);
+        assert_eq!(parse_version("1.5"), None);
+        assert_eq!(parse_version("abc"), None);
     }
 
     #[test]
@@ -303,6 +318,7 @@ mod tests {
         meta.author_name = "  Ada  ".into();
         meta.category = "Segmentation".into();
         meta.tags = "nuclei, dapi,".into();
+        meta.version = "2".into();
         state.set_meta(meta);
     }
 
@@ -334,6 +350,8 @@ mod tests {
         assert!(written.contains("Finds nuclei"));
         assert!(written.contains("Ada"));
         assert!(written.contains("dapi"));
+        let json: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(json["meta"]["version"], 2);
     }
 
     #[test]
@@ -350,7 +368,12 @@ mod tests {
             .path()
             .join(format!("project.{PROJECT_FILE_TEMPLATE_EXTENSIONS}"));
         choose_file(&ui, &target);
-        assert!(target.exists());
+        let written = std::fs::read_to_string(&target).expect("template written");
+        let json: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert!(
+            json["meta"].get("version").is_none(),
+            "no version entered: none written"
+        );
     }
 
     #[test]
