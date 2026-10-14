@@ -7,13 +7,14 @@ use crate::{
 };
 use evanalyzer_app::prelude::classification_ext::ClassificationExt;
 use evanalyzer_app::project::ProjectExt;
+use evanalyzer_app::project::{free_class_ids, next_class_id};
 use evanalyzer_cfg::AssignObjectClass;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
-use log::warn;
-use slint::ModelRc;
+use log::{info, warn};
 use slint::{Color, Model};
 use slint::{ComponentHandle, ModelNotify};
+use slint::{ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -288,7 +289,19 @@ impl ClassificationController {
                     .map(|c| project.count_objects_for_class(&c.global()) as i32)
                     .sum();
                 let hide_unclassified = project.hide_unclassified_objects();
+                // A new class's id: automatic, or one of the free ones.
+                let new_id_options: Vec<SharedString> =
+                    std::iter::once(format!("Auto ({})", next_class_id(&project.classification)))
+                        .chain(
+                            free_class_ids(&project.classification)
+                                .into_iter()
+                                .map(|id| id.to_string()),
+                        )
+                        .map(Into::into)
+                        .collect();
                 drop(project);
+                ui.global::<ClassificationSettingsState>()
+                    .set_new_id_options(ModelRc::new(VecModel::from(new_id_options)));
 
                 let bridge = Rc::new(ClassificationModelBridge {
                     app_state: bridge_ptr.app_state.clone(),
@@ -326,7 +339,8 @@ impl ClassificationController {
         let mut project = self.app_state.get_project_write();
 
         let new_class = Class {
-            // Negative for a new class - `add_class` gives it its id.
+            // Negative for a new class - it gets `new_id`, or (negative too)
+            // the next one from `add_class`.
             id: class_settings.class_id.max(0) as u32,
             color: class_settings.color.as_argb_encoded(),
             name: class_settings.name.into(),
@@ -334,12 +348,33 @@ impl ClassificationController {
         };
 
         if class_settings.class_id < 0 {
-            // This is a new class, we have to enter a new class
-            project.classification.add_class(new_class);
+            if class_settings.new_id < 0 {
+                project.classification.add_class(new_class);
+            } else if let Err(e) = project.classification.add_class_with_id(Class {
+                id: class_settings.new_id as u32,
+                ..new_class
+            }) {
+                warn!("Could not add the class: {e}");
+            }
         } else {
-            let ret = project.classification.update_class(new_class);
-            if ret.is_err() {
+            if project.classification.update_class(new_class).is_err() {
                 warn!("Could not update class!");
+                return;
+            }
+            // A new id: the class and everything referring to it.
+            if class_settings.new_id >= 0 && class_settings.new_id != class_settings.class_id {
+                match project
+                    .change_class_id(class_settings.class_id as u32, class_settings.new_id as u32)
+                {
+                    Ok(change) => info!(
+                        "Class {} is now {}: {} references and {} Extract Objects mappings changed",
+                        class_settings.class_id,
+                        class_settings.new_id,
+                        change.references,
+                        change.mappings_added
+                    ),
+                    Err(e) => warn!("Could not change the class id: {e}"),
+                }
             }
         }
     }
@@ -353,6 +388,7 @@ impl ClassificationController {
         let ui_weak = self.ui.clone();
         let project = self.app_state.get_project();
         let class_cloned = project.classification.get_class(class_id).cloned();
+        let free_ids = free_class_ids(&project.classification);
         drop(project);
 
         let Some(class) = class_cloned else {
@@ -367,6 +403,14 @@ impl ClassificationController {
                 let class_settings_state = ui.global::<ClassificationSettingsState>();
                 let mut class_settings_slint: ClassSettingsSlint = ClassSettingsSlint::default();
                 class_settings_slint.class_id = class.id as i32;
+                class_settings_slint.new_id = class.id as i32;
+                // Its own id first, then the free ones.
+                let id_options: Vec<SharedString> = std::iter::once(class.id)
+                    .chain(free_ids)
+                    .map(|id| id.to_string().into())
+                    .collect();
+                class_settings_state.set_id_options(ModelRc::new(VecModel::from(id_options)));
+                class_settings_state.set_id_index(0);
                 class_settings_slint.color = Color::from_rgb_u8(r, g, b);
                 class_settings_slint.name = class.name.clone().into();
                 class_settings_slint.notes = class.notes.clone().into();
@@ -477,6 +521,7 @@ mod tests {
     fn settings(class_id: i32, name: &str) -> ClassSettingsSlint {
         ClassSettingsSlint {
             class_id,
+            new_id: class_id,
             name: name.into(),
             notes: "".into(),
             color: Color::from_rgb_u8(10, 20, 30),
@@ -494,6 +539,117 @@ mod tests {
         assert_eq!(project.classification.classes().len(), 2);
         assert_eq!(project.classification.classes()[1].id, 1);
         assert_eq!(project.classification.classes()[1].name, "Nuclei");
+    }
+
+    #[test]
+    fn a_new_class_gets_the_chosen_free_id() {
+        let (ui_state, controller) = make_controller();
+        controller.update_class_settings_in_project(ClassSettingsSlint {
+            new_id: 4,
+            ..settings(-1, "Nuclei")
+        });
+        let project = ui_state.get_project();
+        assert_eq!(project.classification.classes()[1].id, 4);
+        assert_eq!(project.classification.classes()[1].name, "Nuclei");
+    }
+
+    #[test]
+    fn a_new_id_moves_the_references_selection_and_hidden_state_along() {
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::ClassifyObjectsSettings;
+        use evanalyzer_cfg::settings::pipeline_settings::{
+            PipelineSettings, PipelineStepSettings, StepContent,
+        };
+        let (ui_state, controller) = make_controller();
+        controller.update_class_settings_in_project(settings(-1, "Nuclei"));
+        {
+            let mut project = ui_state.get_project_write();
+            project.pipelines.push(PipelineSettings {
+                id: evanalyzer_cfg::core_types::PipelineId(1),
+                name: "P".into(),
+                description: None,
+                image_source: evanalyzer_cfg::core_types::ImageAddress::Channel(0),
+                enabled: true,
+                steps: vec![PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId(1),
+                    enabled: true,
+                    content: StepContent::Command(PipelineCommand::ClassifyObjects(
+                        ClassifyObjectsSettings {
+                            input_classes: vec![ObjectClass::Global(1)],
+                            ..Default::default()
+                        },
+                    )),
+                }],
+            });
+            project.set_selected_object_class(ObjectClass::Global(1));
+            project.toggle_class_visibility(ObjectClass::Global(1));
+        }
+
+        controller.update_class_settings_in_project(ClassSettingsSlint {
+            new_id: 7,
+            ..settings(1, "Renamed")
+        });
+
+        let project = ui_state.get_project();
+        let class = &project.classification.classes()[1];
+        assert_eq!((class.id, class.name.as_str()), (7, "Renamed"));
+        let Some(PipelineCommand::ClassifyObjects(classify)) =
+            project.pipelines[0].steps[0].command()
+        else {
+            panic!("classify")
+        };
+        assert_eq!(classify.input_classes, [ObjectClass::Global(7)]);
+        assert_eq!(project.get_selected_object_class(), ObjectClass::Global(7));
+        assert!(
+            !project.is_class_visible(&ObjectClass::Global(7)),
+            "still hidden"
+        );
+    }
+
+    #[test]
+    fn the_dialog_offers_auto_or_free_ids_and_the_own_id_when_editing() {
+        use crate::helper::ui_thread::drain_ui_queue;
+        let mut project = crate::editor::test_support::project_with_one_image();
+        project.classification.add_class(Class {
+            id: 0,
+            color: 0,
+            name: "Nuclei".into(),
+            notes: String::new(),
+        });
+        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
+        let (ui_state, controller) = classification_on_windows(&ui, &results_ui, project);
+        controller.attach_callbacks();
+        controller.sync_classification_to_slint();
+        drain_ui_queue();
+        let dialog = ui.global::<ClassificationSettingsState>();
+        let options =
+            |m: ModelRc<SharedString>| m.iter().map(|o| o.to_string()).collect::<Vec<_>>();
+
+        // A new class: "Auto" first, then the free ids (0 and 1 are taken).
+        let new_options = options(dialog.get_new_id_options());
+        assert_eq!(new_options[0], "Auto (2)");
+        assert_eq!(new_options[1], "2");
+        dialog.invoke_reset_to_zero();
+        assert_eq!(options(dialog.get_id_options()), new_options);
+
+        // Editing class 1: its own id first.
+        ui.global::<ClassificationState>().invoke_class_edit(1);
+        drain_ui_queue();
+        let edit_options = options(dialog.get_id_options());
+        assert_eq!(&edit_options[..2], ["1", "2"]);
+        assert_eq!(dialog.get_id_index(), 0);
+
+        // Choosing 5 and pressing "Apply Settings".
+        let index = edit_options.iter().position(|o| o == "5").unwrap();
+        dialog.set_id_index(index as i32);
+        ui.global::<crate::GlobalAppState>()
+            .set_active_dialog(crate::DialogType::ClassificationEditClassDialog);
+        i_slint_backend_testing::ElementHandle::find_by_accessible_label(&ui, "Apply Settings")
+            .next()
+            .expect("the dialog's apply button")
+            .invoke_accessible_default_action();
+        drain_ui_queue();
+        assert_eq!(ui_state.get_project().classification.classes()[1].id, 5);
     }
 
     #[test]
@@ -568,6 +724,7 @@ mod tests {
         let (ui_state, controller) = make_controller();
         controller.update_class_settings_in_project(ClassSettingsSlint {
             class_id: -1,
+            new_id: -1,
             name: "Nuclei".into(),
             notes: "".into(),
             color: Color::from_rgb_u8(0x11, 0x22, 0x33),

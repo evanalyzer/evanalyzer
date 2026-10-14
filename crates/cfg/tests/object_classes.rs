@@ -12,11 +12,11 @@ fn segmentation_classes_count_as_the_object_class_they_become() {
     let threshold = PipelineCommand::Threshold(ThresholdSettings {
         thresholds: vec![
             ThresholdEntrySettings {
-                object_class_id: SegmentationClass(2),
+                segmentation_class: SegmentationClass(2),
                 ..Default::default()
             },
             ThresholdEntrySettings {
-                object_class_id: SegmentationClass(5),
+                segmentation_class: SegmentationClass(5),
                 ..Default::default()
             },
         ],
@@ -82,15 +82,15 @@ fn sorted(command: PipelineCommand) -> Vec<ObjectClass> {
 #[test]
 fn ai_segmentation_reports_the_class_it_writes() {
     let cellpose = PipelineCommand::Cellpose(CellposeSettings {
-        object_class_id: SegmentationClass(3),
+        segmentation_class: SegmentationClass(3),
         ..Default::default()
     });
     let stardist = PipelineCommand::Stardist(StardistSettings {
-        object_class_id: SegmentationClass(4),
+        segmentation_class: SegmentationClass(4),
         ..Default::default()
     });
     let unet = PipelineCommand::UNet(UNetSettings {
-        object_class_id: SegmentationClass(5),
+        segmentation_class: SegmentationClass(5),
         ..Default::default()
     });
     assert_eq!(sorted(cellpose), [ObjectClass::Global(3)]);
@@ -104,12 +104,12 @@ fn classifier_and_yolo_mappings_report_their_target_classes() {
         segmentation_mapping: vec![
             // The model's own classes (1, 2) are `ModelSegmentationClass`.
             SegmentationMappingSettings {
-                segmentation_class: SegmentationClass(1),
-                object_class_id: SegmentationClass(6),
+                model_class: SegmentationClass(1),
+                segmentation_class: SegmentationClass(6),
             },
             SegmentationMappingSettings {
-                segmentation_class: SegmentationClass(2),
-                object_class_id: SegmentationClass(7),
+                model_class: SegmentationClass(2),
+                segmentation_class: SegmentationClass(7),
             },
         ],
         ..Default::default()

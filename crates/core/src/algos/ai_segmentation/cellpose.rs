@@ -46,7 +46,7 @@ pub struct Cellpose {
     /// The class assigned to pixels of every detected object. All other
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
     #[cmdsmeta(default = SegmentationClass(1))]
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
 
     /// Number of input channels the model expects. The grayscale image goes in
     /// channel 0; any further channels are zero-filled. Cellpose-SAM's
@@ -994,7 +994,7 @@ impl Cellpose {
             }
         }
 
-        let foreground_class = self.object_class_id.as_u32();
+        let foreground_class = self.segmentation_class.as_u32();
         for (i, &label) in labels.iter().enumerate() {
             let instance_id = remap[label as usize];
             inst_slice[i] = instance_id;
@@ -1016,7 +1016,7 @@ mod tests {
     fn cellpose(min_object_size: i32) -> Cellpose {
         Cellpose {
             model_path: PathBuf::new(),
-            object_class_id: SegmentationClass(7),
+            segmentation_class: SegmentationClass(7),
             input_channels: 2,
             probability_threshold: 0.5,
             flow_iterations: 10,

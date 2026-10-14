@@ -428,7 +428,7 @@ fn blur_settings_convert_kernel_size() {
 fn cellpose_settings_convert_fields_and_clamp_probability_threshold() {
     let settings = CellposeSettings {
         model_path: PathBuf::from("model.pt"),
-        object_class_id: SegmentationClass(7),
+        segmentation_class: SegmentationClass(7),
         input_channels: 3,
         probability_threshold: 1.5,
         flow_iterations: 100,
@@ -437,7 +437,7 @@ fn cellpose_settings_convert_fields_and_clamp_probability_threshold() {
     };
     let result = Cellpose::from(settings);
     assert_eq!(result.model_path, PathBuf::from("model.pt"));
-    assert_eq!(result.object_class_id, SegmentationClass(7));
+    assert_eq!(result.segmentation_class, SegmentationClass(7));
     assert_eq!(result.input_channels, 3);
     assert_eq!(result.probability_threshold, 1.0);
     assert_eq!(result.flow_iterations, 100);
@@ -814,13 +814,13 @@ fn save_image_settings_convert_all_fields() {
 fn stardist_settings_convert_and_clamp_thresholds() {
     let settings = StardistSettings {
         model_path: PathBuf::from("stardist.pt"),
-        object_class_id: SegmentationClass(3),
+        segmentation_class: SegmentationClass(3),
         probability_threshold: -0.5,
         nms_threshold: 2.0,
     };
     let result = Stardist::from(settings);
     assert_eq!(result.model_path, PathBuf::from("stardist.pt"));
-    assert_eq!(result.object_class_id, SegmentationClass(3));
+    assert_eq!(result.segmentation_class, SegmentationClass(3));
     assert_eq!(result.probability_threshold, 0.0);
     assert_eq!(result.nms_threshold, 1.0);
 }
@@ -875,7 +875,7 @@ fn threshold_entry_settings_convert_and_clamp_thresholds() {
         min_threshold: -10.0,
         max_threshold: 999999.0,
         unit: PixelUnits::Percent,
-        object_class_id: SegmentationClass(6),
+        segmentation_class: SegmentationClass(6),
         value_source: SegmentationThresholdThresholdValueSourceSettings::ActualImage,
     };
     let result = ThresholdEntry::from(settings);
@@ -883,7 +883,7 @@ fn threshold_entry_settings_convert_and_clamp_thresholds() {
     assert_eq!(result.min_threshold, 0.0);
     assert_eq!(result.max_threshold, 65535.0);
     assert_eq!(result.unit, PixelUnits::Percent);
-    assert_eq!(result.object_class_id, SegmentationClass(6));
+    assert_eq!(result.segmentation_class, SegmentationClass(6));
 }
 
 #[test]
@@ -907,7 +907,7 @@ fn transform_objects_settings_convert_all_fields() {
 fn unet_settings_convert_and_clamp_probability_threshold() {
     let settings = UNetSettings {
         model_path: PathBuf::from("unet.pt"),
-        object_class_id: SegmentationClass(2),
+        segmentation_class: SegmentationClass(2),
         probability_threshold: 3.0,
         output_mode: AiSegmentationUnetUNetOutputModeSettings::IndependentChannels,
         foreground_channel: 1,
@@ -916,7 +916,7 @@ fn unet_settings_convert_and_clamp_probability_threshold() {
     };
     let result = UNet::from(settings);
     assert_eq!(result.model_path, PathBuf::from("unet.pt"));
-    assert_eq!(result.object_class_id, SegmentationClass(2));
+    assert_eq!(result.segmentation_class, SegmentationClass(2));
     assert_eq!(result.probability_threshold, 1.0);
     assert!(matches!(
         result.output_mode,

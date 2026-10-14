@@ -3806,7 +3806,7 @@ impl PipelinesController {
                             d.name.as_str() == AI_OBJECT_CLASSIFIER_COMMAND_NAME;
                         // Model class id -> the model's own display name (in the
                         // model's declared order), for relabeling
-                        // `segmentation_mapping`'s `segmentation_class`/`object_class`
+                        // `segmentation_mapping`'s `model_class`/`object_class`
                         // leaves below (best-effort: empty if the model hasn't been
                         // set or fails to load - those rows just keep their raw
                         // numeric label in that case). Order matters here: it's what
@@ -3884,7 +3884,7 @@ impl PipelinesController {
                                                 ));
                                                 let relabeled = p_name == "segmentation_mapping"
                                                     && ((is_pixel_classifier
-                                                        && lp.name == "segmentation_class")
+                                                        && lp.name == "model_class")
                                                         || (is_ai_object_classifier
                                                             && lp.name == "object_class"));
                                                 let model_name = relabeled
@@ -4393,7 +4393,7 @@ fn load_pixel_classifier_class_labels(
 /// `segmentation_mapping` to exactly one entry per class the newly loaded
 /// model declares - the model's classes are a closed set fixed by the file,
 /// not something to freely add/remove rows for by hand. Existing
-/// `object_class_id` choices are preserved wherever the same model class is
+/// `segmentation_class` choices are preserved wherever the same model class is
 /// still present; new entries (or a load failure, which clears the list -
 /// there's nothing to map without a readable model) default to
 /// `SegmentationClass::BACKGROUND`.
@@ -4409,14 +4409,14 @@ fn reconcile_pixel_classifier_mapping(
     settings.segmentation_mapping = class_labels
         .iter()
         .map(|label| {
-            let object_class_id = old
+            let segmentation_class = old
                 .iter()
-                .find(|m| m.segmentation_class == label.class)
-                .map(|m| m.object_class_id)
+                .find(|m| m.model_class == label.class)
+                .map(|m| m.segmentation_class)
                 .unwrap_or(SegmentationClass::BACKGROUND);
             SegmentationMappingSettings {
-                segmentation_class: label.class,
-                object_class_id,
+                model_class: label.class,
+                segmentation_class,
             }
         })
         .collect();
@@ -5016,8 +5016,8 @@ mod tests {
         let mut settings = PixelClassifierSettings {
             model_path: PathBuf::new(),
             segmentation_mapping: vec![SegmentationMappingSettings {
-                segmentation_class: SegmentationClass(1),
-                object_class_id: SegmentationClass(2),
+                model_class: SegmentationClass(1),
+                segmentation_class: SegmentationClass(2),
             }],
         };
 
@@ -5034,8 +5034,8 @@ mod tests {
         let mut settings = PixelClassifierSettings {
             model_path: PathBuf::from("/nonexistent/model.evamodel"),
             segmentation_mapping: vec![SegmentationMappingSettings {
-                segmentation_class: SegmentationClass(1),
-                object_class_id: SegmentationClass(2),
+                model_class: SegmentationClass(1),
+                segmentation_class: SegmentationClass(2),
             }],
         };
 

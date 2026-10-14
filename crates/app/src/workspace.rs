@@ -4,6 +4,7 @@
 
 pub mod ai_learning;
 pub mod bioimageio;
+pub mod class_ids;
 pub mod crash_log;
 pub mod export;
 pub mod extensions;

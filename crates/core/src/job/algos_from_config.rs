@@ -453,7 +453,7 @@ impl From<CellposeSettings> for Cellpose {
     fn from(_s: CellposeSettings) -> Self {
         Cellpose {
             model_path: _s.model_path,
-            object_class_id: _s.object_class_id,
+            segmentation_class: _s.segmentation_class,
             input_channels: _s.input_channels,
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             flow_iterations: _s.flow_iterations,
@@ -807,8 +807,8 @@ impl From<ScriptSettings> for Script {
 impl From<SegmentationMappingSettings> for SegmentationMapping {
     fn from(_s: SegmentationMappingSettings) -> Self {
         SegmentationMapping {
+            model_class: _s.model_class,
             segmentation_class: _s.segmentation_class,
-            object_class_id: _s.object_class_id,
         }
     }
 }
@@ -828,7 +828,7 @@ impl From<StardistSettings> for Stardist {
     fn from(_s: StardistSettings) -> Self {
         Stardist {
             model_path: _s.model_path,
-            object_class_id: _s.object_class_id,
+            segmentation_class: _s.segmentation_class,
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             nms_threshold: _s.nms_threshold.clamp(0.0, 1.0),
         }
@@ -860,7 +860,7 @@ impl From<ThresholdEntrySettings> for ThresholdEntry {
             min_threshold: _s.min_threshold.clamp(0.0, 65535.0),
             max_threshold: _s.max_threshold.clamp(0.0, 65535.0),
             unit: _s.unit,
-            object_class_id: _s.object_class_id,
+            segmentation_class: _s.segmentation_class,
             value_source: ThresholdValueSource::from(_s.value_source),
         }
     }
@@ -881,7 +881,7 @@ impl From<UNetSettings> for UNet {
     fn from(_s: UNetSettings) -> Self {
         UNet {
             model_path: _s.model_path,
-            object_class_id: _s.object_class_id,
+            segmentation_class: _s.segmentation_class,
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             output_mode: UNetOutputMode::from(_s.output_mode),
             foreground_channel: _s.foreground_channel,

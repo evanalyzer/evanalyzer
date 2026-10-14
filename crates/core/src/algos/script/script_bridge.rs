@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn commands_may_only_use_the_declared_classes() {
-        let params = map(&[("thresholds.0.object_class_id", Dynamic::from(4_i64))]);
+        let params = map(&[("thresholds.0.segmentation_class", Dynamic::from(4_i64))]);
         let mut undeclared = host();
         let err = undeclared.run_command("threshold", &params).unwrap_err();
         assert!(err.contains("class 4"), "{err}");

@@ -175,6 +175,14 @@ pub trait ProjectExt {
     fn auto_add_classes_based_on_image_meta(&mut self);
     fn set_selected_object_class(&mut self, object_class: ObjectClass);
     fn get_selected_object_class(&self) -> ObjectClass;
+    /// Gives class `from` the id `to` with every reference to it (see
+    /// [`change_class_id`](crate::workspace::class_ids::change_class_id)),
+    /// and the editor's state too: the selected class, hidden classes.
+    fn change_class_id(
+        &mut self,
+        from: u32,
+        to: u32,
+    ) -> Result<crate::workspace::class_ids::ClassIdChange, InternalErrors>;
     fn delete_all_classes(&mut self);
     fn get_object_classes(&self) -> &Vec<Class>;
     fn get_image_absolute_path_from_relative(&self, path: &Path) -> Option<PathBuf>;
@@ -998,6 +1006,28 @@ impl ProjectExt for ProjectWithRuntime {
 
     fn get_selected_object_class(&self) -> ObjectClass {
         self.tmp_settings.selected_object_class.clone()
+    }
+
+    fn change_class_id(
+        &mut self,
+        from: u32,
+        to: u32,
+    ) -> Result<crate::workspace::class_ids::ClassIdChange, InternalErrors> {
+        let change = crate::workspace::class_ids::change_class_id(&mut self.settings, from, to)?;
+        let (old, new) = (ObjectClass::Global(from), ObjectClass::Global(to));
+        let tmp = &mut self.tmp_settings;
+        if tmp.selected_object_class == old {
+            tmp.selected_object_class = new;
+        }
+        if tmp.hidden_classes.remove(&old) {
+            tmp.hidden_classes.insert(new);
+        }
+        if let Some(focus) = &mut tmp.pipeline_focus
+            && focus.visible_classes.remove(&old)
+        {
+            focus.visible_classes.insert(new);
+        }
+        Ok(change)
     }
 
     fn get_object_classes(&self) -> &Vec<Class> {

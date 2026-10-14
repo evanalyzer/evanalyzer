@@ -1535,7 +1535,7 @@ pub struct CellposeSettings {
     pub model_path: PathBuf,
     /// The class assigned to pixels of every detected object. All other
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
     /// Number of input channels the model expects. The grayscale image goes in
     /// channel 0; any further channels are zero-filled. Cellpose-SAM's
     /// patch-embedding convolution only has weights for up to 3 input
@@ -1593,7 +1593,7 @@ impl Default for CellposeSettings {
     fn default() -> Self {
         Self {
             model_path: PathBuf::default(),
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             input_channels: 2i32,
             probability_threshold: 0.5f32,
             flow_iterations: 200i32,
@@ -1637,11 +1637,11 @@ pub struct PixelClassifierSettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SegmentationMappingSettings {
-    /// Segmentation class predicted by the classifier model.
-    pub segmentation_class: ModelSegmentationClass,
+    /// The class the classifier model predicts.
+    pub model_class: ModelSegmentationClass,
     /// The project's own segmentation class pixels predicted as
-    /// `segmentation_class` are written as.
-    pub object_class_id: SegmentationClass,
+    /// `model_class` are written as.
+    pub segmentation_class: SegmentationClass,
 }
 
 /// Instance segmentation using a pretrained StarDist model exported as TorchScript.
@@ -1673,7 +1673,7 @@ pub struct StardistSettings {
     pub model_path: PathBuf,
     /// The class assigned to pixels of every detected object. All other
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
     /// Probability above which a grid cell is considered a candidate object center.
     #[schemars(range(min = 0, max = 1))]
     pub probability_threshold: f32,
@@ -1687,7 +1687,7 @@ impl Default for StardistSettings {
     fn default() -> Self {
         Self {
             model_path: PathBuf::default(),
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             probability_threshold: 0.5f32,
             nms_threshold: 0.3f32,
         }
@@ -1698,7 +1698,7 @@ impl Default for StardistSettings {
 ///
 /// This supports "Multi-Otsu" style behavior by allowing a vector of
 /// [`ThresholdSettings`]. Each pixel is evaluated against the settings to
-/// determine which `object_class_id` it belongs to.
+/// determine which `segmentation_class` it belongs to.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThresholdSettings {
@@ -1733,7 +1733,7 @@ pub struct ThresholdEntrySettings {
     /// rel: 0 - 1.0
     pub unit: PixelUnits,
     /// The classification ID assigned to pixels falling within this threshold range.
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
     /// Defines which image should be taken for calculating the threhold value.
     ///
     /// This is the source which is used to calculate the threshold value.
@@ -1749,7 +1749,7 @@ impl Default for ThresholdEntrySettings {
             min_threshold: 0.0f32,
             max_threshold: 65535.0f32,
             unit: PixelUnits::Bit,
-            object_class_id: SegmentationClass::default(),
+            segmentation_class: SegmentationClass::default(),
             value_source: SegmentationThresholdThresholdValueSourceSettings::ActualImage,
         }
     }
@@ -1778,7 +1778,7 @@ pub struct UNetSettings {
     pub model_path: PathBuf,
     /// The class assigned to pixels whose predicted probability reaches
     /// `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
     /// Probability above which a pixel is classified as foreground.
     #[schemars(range(min = 0, max = 1))]
     pub probability_threshold: f32,
@@ -1821,7 +1821,7 @@ impl Default for UNetSettings {
     fn default() -> Self {
         Self {
             model_path: PathBuf::default(),
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             probability_threshold: 0.5f32,
             output_mode: AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses,
             foreground_channel: 1i32,

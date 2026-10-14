@@ -52,7 +52,7 @@ pub struct Stardist {
     /// The class assigned to pixels of every detected object. All other
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
     #[cmdsmeta(default = SegmentationClass(1))]
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
 
     /// Probability above which a grid cell is considered a candidate object center.
     #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.01)]
@@ -145,7 +145,7 @@ impl ImageAlgorithm for Stardist {
         );
         let kept = Self::non_max_suppress(candidates, self.nms_threshold);
 
-        let foreground_class = self.object_class_id.as_u32();
+        let foreground_class = self.segmentation_class.as_u32();
         Self::write_instances(
             &kept,
             width,
@@ -527,7 +527,7 @@ mod tests {
     fn stardist(probability_threshold: f32, nms_threshold: f32) -> Stardist {
         Stardist {
             model_path: PathBuf::new(),
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             probability_threshold,
             nms_threshold,
         }

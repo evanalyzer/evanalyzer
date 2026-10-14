@@ -110,6 +110,9 @@ pub mod utils {
 pub mod project {
     pub use crate::workspace::ProjectOwner;
     pub use crate::workspace::ProjectWithRuntime;
+    pub use crate::workspace::class_ids::{
+        ClassIdChange, change_class_id, free_class_ids, next_class_id,
+    };
     pub use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
     pub use crate::workspace::extensions::object_ext::ObjectExt;
     pub use crate::workspace::extensions::project_ext::ConfigValueSource;

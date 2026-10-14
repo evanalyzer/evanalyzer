@@ -800,6 +800,14 @@ enum PathKind {
     Segmentation,
 }
 
+/// Whether a setting of `command` writes or reads segmentation class
+/// `number`.
+pub(crate) fn uses_segmentation_class(command: &PipelineCommand, number: u32) -> bool {
+    class_paths(command, ObjectClass::Global(number))
+        .iter()
+        .any(|(_, kind)| *kind == PathKind::Segmentation)
+}
+
 /// Where `command`'s settings refer to `class`: the setting's path (as
 /// `apply_param_change` takes it, "list.2.field" inside list entries) and how.
 fn class_paths(command: &PipelineCommand, class: ObjectClass) -> Vec<(String, PathKind)> {
@@ -1057,7 +1065,7 @@ mod tests {
     fn threshold(class: u32) -> PipelineCommand {
         PipelineCommand::Threshold(ThresholdSettings {
             thresholds: vec![ThresholdEntrySettings {
-                object_class_id: SegmentationClass(class),
+                segmentation_class: SegmentationClass(class),
                 ..Default::default()
             }],
         })

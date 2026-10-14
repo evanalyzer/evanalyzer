@@ -168,11 +168,6 @@
           "type": "string",
           "default": ""
         },
-        "objectClassId": {
-          "description": "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.",
-          "$ref": "#/$defs/SegmentationClass",
-          "default": 1
-        },
         "probabilityThreshold": {
           "description": "Cell probability above which a pixel takes part in the flow dynamics and\ncan be assigned to an object. The raw cell-probability logits are passed\nthrough a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's\ndefault logit threshold of `0` corresponds to `0.5`).",
           "type": "number",
@@ -185,6 +180,11 @@
           "description": "Copy the gray image into every input channel instead of filling the\nextra channels with zeros. With `input_channels = 3` this matches\nCellpose run on an RGB image whose channels are (nearly) equal.",
           "type": "boolean",
           "default": true
+        },
+        "segmentationClass": {
+          "description": "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
         }
       }
     },
@@ -2715,18 +2715,18 @@
       "description": "Maps one class the model was trained to predict to a class ID meaningful\nin this project. Model class IDs are a snapshot taken at training time\n(see `evanalyzer_cfg::PixelClassLabel`'s doc comment) and aren't\nguaranteed to line up with this project's own `SegmentationClass` IDs -\nthis is the bridge between the two.",
       "type": "object",
       "properties": {
-        "objectClassId": {
-          "description": "The project's own segmentation class pixels predicted as\n`segmentation_class` are written as.",
+        "modelClass": {
+          "description": "The class the classifier model predicts.",
           "$ref": "#/$defs/SegmentationClass"
         },
         "segmentationClass": {
-          "description": "Segmentation class predicted by the classifier model.",
+          "description": "The project's own segmentation class pixels predicted as\n`model_class` are written as.",
           "$ref": "#/$defs/SegmentationClass"
         }
       },
       "required": [
-        "segmentationClass",
-        "objectClassId"
+        "modelClass",
+        "segmentationClass"
       ]
     },
     "SegmentationThresholdAveragingSettings": {
@@ -3129,11 +3129,6 @@
           "maximum": 1,
           "minimum": 0
         },
-        "objectClassId": {
-          "description": "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.",
-          "$ref": "#/$defs/SegmentationClass",
-          "default": 1
-        },
         "probabilityThreshold": {
           "description": "Probability above which a grid cell is considered a candidate object center.",
           "type": "number",
@@ -3141,6 +3136,11 @@
           "default": 0.5,
           "maximum": 1,
           "minimum": 0
+        },
+        "segmentationClass": {
+          "description": "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
         }
       }
     },
@@ -3203,7 +3203,7 @@
           "maximum": 65535,
           "minimum": 0
         },
-        "objectClassId": {
+        "segmentationClass": {
           "description": "The classification ID assigned to pixels falling within this threshold range.",
           "$ref": "#/$defs/SegmentationClass",
           "default": 0
@@ -3221,7 +3221,7 @@
       }
     },
     "ThresholdSettings": {
-      "description": "A filter that segments an image into discrete classes based on intensity.\n\nThis supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.",
+      "description": "A filter that segments an image into discrete classes based on intensity.\n\nThis supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `segmentation_class` it belongs to.",
       "type": "object",
       "properties": {
         "thresholds": {
@@ -3293,11 +3293,6 @@
           "type": "string",
           "default": ""
         },
-        "objectClassId": {
-          "description": "The class assigned to pixels whose predicted probability reaches\n`probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.",
-          "$ref": "#/$defs/SegmentationClass",
-          "default": 1
-        },
         "outputMode": {
           "description": "How to interpret the model output when it has more than one channel.\nIgnored for single-channel outputs.",
           "$ref": "#/$defs/AiSegmentationUnetUNetOutputModeSettings",
@@ -3310,6 +3305,11 @@
           "default": 0.5,
           "maximum": 1,
           "minimum": 0
+        },
+        "segmentationClass": {
+          "description": "The class assigned to pixels whose predicted probability reaches\n`probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
         }
       }
     },

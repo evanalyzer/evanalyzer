@@ -1740,7 +1740,7 @@ mod tests {
         let command = |command: PipelineCommand| serde_json::to_value(command).unwrap();
         let threshold = command(PipelineCommand::Threshold(ThresholdSettings {
             thresholds: vec![ThresholdEntrySettings {
-                object_class_id: SegmentationClass(1),
+                segmentation_class: SegmentationClass(1),
                 ..Default::default()
             }],
         }));

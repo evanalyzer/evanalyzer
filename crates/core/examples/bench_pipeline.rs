@@ -140,7 +140,7 @@ fn main() {
                 step(PipelineCommand::Threshold(ThresholdSettings {
                     thresholds: vec![ThresholdEntrySettings {
                         min_threshold: 1500.0,
-                        object_class_id: SegmentationClass(1),
+                        segmentation_class: SegmentationClass(1),
                         ..Default::default()
                     }],
                 })),

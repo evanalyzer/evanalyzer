@@ -13,6 +13,15 @@ export component AppButton inherits Rectangle {
     in property <bool> enabled: true;
     callback clicked;
 
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
     height: 36px;
     min-width: 90px;
     border-radius: 8px;
@@ -27,6 +36,8 @@ export component AppButton inherits Rectangle {
         padding-right: 16px;
         alignment: center;
         Text {
+            // The button itself carries the label.
+            accessible-role: none;
             text: root.text;
             font-size: 13px;
             font-weight: 600;

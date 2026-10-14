@@ -15,6 +15,13 @@ pub trait ClassificationExt {
     /// The [`ObjectClass`] ID assigned to the new class.
     fn add_class(&mut self, new_class: Class) -> ObjectClass;
 
+    /// Adds `new_class` with its own id - one of
+    /// [`free_class_ids`](crate::workspace::class_ids::free_class_ids).
+    ///
+    /// # Errors
+    /// If the id is 0 (the background's) or taken.
+    fn add_class_with_id(&mut self, new_class: Class) -> Result<ObjectClass, InternalErrors>;
+
     /// Replaces an existing class identified by its ID.
     ///
     /// # Errors
@@ -44,10 +51,22 @@ pub trait ClassificationExt {
 
 impl ClassificationExt for ClassificationSettings {
     fn add_class(&mut self, mut new_class: Class) -> ObjectClass {
-        new_class.id = next_id(&self.classes());
+        new_class.id = crate::workspace::class_ids::next_class_id(self);
         let id = new_class.global();
         self.classes_mut().push(new_class);
         id
+    }
+
+    fn add_class_with_id(&mut self, new_class: Class) -> Result<ObjectClass, InternalErrors> {
+        if new_class.id == 0 || self.classes().iter().any(|c| c.id == new_class.id) {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "class id {} is taken",
+                new_class.id
+            )));
+        }
+        let id = new_class.global();
+        self.classes_mut().push(new_class);
+        Ok(id)
     }
 
     fn update_class(&mut self, new_class: Class) -> Result<(), InternalErrors> {
@@ -90,14 +109,6 @@ impl ClassificationExt for ClassificationSettings {
     }
 }
 
-/// Returns the next available unique ID for a new class.
-///
-/// Calculates `max(existing_ids) + 1`, or `1` if the list is empty.
-/// This ensures IDs are never reused after deletions.
-fn next_id(classes: &[Class]) -> u32 {
-    classes.iter().map(|c| c.id).max().map_or(1, |max| max + 1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,7 +125,7 @@ mod tests {
         ClassificationSettings::new_from_existing(classes)
     }
 
-    // ---- add_class / next_id ----
+    // ---- add_class / next_class_id ----
 
     #[test]
     fn add_class_assigns_id_one_to_the_first_class() {
@@ -128,7 +139,7 @@ mod tests {
 
     #[test]
     fn add_class_assigns_max_plus_one_regardless_of_the_classs_own_id() {
-        // The caller's `new_class.id` is always overwritten by `next_id`.
+        // The caller's `new_class.id` is always overwritten by `next_class_id`.
         let mut s = settings(vec![class(1, "A"), class(5, "B")]);
         let id = s.add_class(class(999, "C"));
         assert_eq!(id, ObjectClass::Global(6));
@@ -149,13 +160,23 @@ mod tests {
     }
 
     #[test]
+    fn add_class_with_id_keeps_a_free_id_and_refuses_a_taken_one_or_zero() {
+        let mut s = settings(vec![class(1, "A"), class(5, "B")]);
+        assert_eq!(
+            s.add_class_with_id(class(3, "C")).unwrap(),
+            ObjectClass::Global(3)
+        );
+        assert!(s.add_class_with_id(class(5, "D")).is_err());
+        assert!(s.add_class_with_id(class(0, "E")).is_err());
+        let ids: Vec<u32> = s.classes().iter().map(|c| c.id).collect();
+        assert_eq!(ids, [0, 1, 5, 3]);
+    }
+
+    #[test]
     fn add_class_can_reuse_an_id_after_the_highest_numbered_class_is_deleted() {
-        // `next_id` is `max(ids currently present) + 1`, not "highest id ever
-        // assigned" - deleting whichever class currently holds the highest id
-        // immediately frees that id for reuse. This contradicts a literal
-        // reading of `next_id`'s doc comment ("IDs are never reused after
-        // deletions"), which only holds as long as the *maximum* id is still
-        // present; pinning the actual behaviour here since it's surprising.
+        // `next_class_id` is `max(ids currently present) + 1`, not "highest id
+        // ever assigned" - deleting the class with the highest id frees that
+        // id again (the exception its doc comment names).
         let mut s = settings(vec![]);
         s.add_class(class(0, "A")); // -> id 1
         let b_id = s.add_class(class(0, "B")); // -> id 2 (currently the max)

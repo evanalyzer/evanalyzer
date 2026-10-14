@@ -156,7 +156,7 @@ pub struct ThresholdEntry {
     pub unit: PixelUnits,
 
     /// The classification ID assigned to pixels falling within this threshold range.
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
 
     /// Defines which image should be taken for calculating the threhold value.
     ///
@@ -170,7 +170,7 @@ pub struct ThresholdEntry {
 ///
 /// This supports "Multi-Otsu" style behavior by allowing a vector of
 /// [`ThresholdSettings`]. Each pixel is evaluated against the settings to
-/// determine which `object_class_id` it belongs to.
+/// determine which `segmentation_class` it belongs to.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "segment", next = "instance_segmentation")]
 pub struct Threshold {
@@ -303,7 +303,7 @@ impl ImageAlgorithm for Threshold {
                     relative.clamp(floor, ceiling)
                 }
             };
-            normalized.push((min, ceiling, s.object_class_id.as_u32()));
+            normalized.push((min, ceiling, s.segmentation_class.as_u32()));
         }
 
         let output_slice = segmentation_map.as_slice_mut();
@@ -1657,7 +1657,7 @@ mod tests {
                     min_threshold: 0.0,
                     max_threshold: 255.0,
                     unit: PixelUnits::Bit,
-                    object_class_id: SegmentationClass(1),
+                    segmentation_class: SegmentationClass(1),
                     value_source: ThresholdValueSource::ActualImage,
                 })
                 .collect(),
@@ -1722,7 +1722,7 @@ mod tests {
                 method: ThresholdMethod::Manual,
                 min_threshold: 0.0,
                 max_threshold: 0.2,
-                object_class_id: SegmentationClass(10),
+                segmentation_class: SegmentationClass(10),
                 unit: PixelUnits::Relative,
                 value_source: ThresholdValueSource::ActualImage,
             },
@@ -1730,7 +1730,7 @@ mod tests {
                 method: ThresholdMethod::Manual,
                 min_threshold: 0.3,
                 max_threshold: 0.6,
-                object_class_id: SegmentationClass(20),
+                segmentation_class: SegmentationClass(20),
                 unit: PixelUnits::Relative,
                 value_source: ThresholdValueSource::ActualImage,
             },
@@ -1738,7 +1738,7 @@ mod tests {
                 method: ThresholdMethod::Manual,
                 min_threshold: 0.8,
                 max_threshold: 1.0,
-                object_class_id: SegmentationClass(30),
+                segmentation_class: SegmentationClass(30),
                 unit: PixelUnits::Relative,
                 value_source: ThresholdValueSource::ActualImage,
             },
@@ -1882,7 +1882,7 @@ mod tests {
             method: ThresholdMethod::Li,
             min_threshold: 0.0,
             max_threshold: 1.0,
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             unit: PixelUnits::Relative,
             value_source: ThresholdValueSource::ActualImage,
         }];
@@ -1993,7 +1993,7 @@ mod tests {
                 method,
                 min_threshold: 0.0,
                 max_threshold: 1.0,
-                object_class_id: SegmentationClass(1),
+                segmentation_class: SegmentationClass(1),
                 unit: PixelUnits::Relative,
                 value_source: ThresholdValueSource::ActualImage,
             }];
@@ -2148,7 +2148,7 @@ mod tests {
                 },
                 min_threshold: 0.0,
                 max_threshold: 1.0,
-                object_class_id: SegmentationClass(1),
+                segmentation_class: SegmentationClass(1),
                 unit: PixelUnits::Relative,
                 value_source: ThresholdValueSource::ActualImage,
             }];
@@ -2373,7 +2373,7 @@ mod tests {
             },
             min_threshold: 0.0,
             max_threshold: 255.0,
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             unit: PixelUnits::Relative,
             value_source: ThresholdValueSource::ActualImage,
         }];
@@ -2433,7 +2433,7 @@ mod tests {
             },
             min_threshold: 0.0,
             max_threshold: 1000.0,
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             unit: PixelUnits::Relative,
             value_source: ThresholdValueSource::ActualImage,
         }];
@@ -2604,7 +2604,7 @@ mod tests {
                 min_threshold: 0.0,
                 max_threshold: 65535.0,
                 unit: PixelUnits::Bit,
-                object_class_id: SegmentationClass(1),
+                segmentation_class: SegmentationClass(1),
                 value_source: ThresholdValueSource::ActualImage,
             }],
         };
@@ -2649,7 +2649,7 @@ mod tests {
             min_threshold: 0.0,
             max_threshold: 1.0,
             unit: PixelUnits::Relative,
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             value_source,
         }
     }
@@ -2848,7 +2848,7 @@ mod tests {
                     min_threshold: 0.0,
                     max_threshold: 1.0,
                     unit: PixelUnits::Relative,
-                    object_class_id: SegmentationClass(2),
+                    segmentation_class: SegmentationClass(2),
                     value_source: ThresholdValueSource::RawImage,
                 },
             ],
