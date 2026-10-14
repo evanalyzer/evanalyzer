@@ -560,7 +560,8 @@ impl PipelinesController {
                 };
                 let image_source = match stype {
                     0 => ImageAddress::Scratchpad,
-                    1 => ImageAddress::Memory(MemoryId::PipelineContext(slot.max(1))),
+                    // A start from a memory slot reads the shared one.
+                    1 => ImageAddress::Memory(MemoryId::ProjectCache(slot.max(1))),
                     2 => ImageAddress::Channel(ch),
                     3 => ImageAddress::None,
                     _ => ImageAddress::default(),
@@ -580,12 +581,9 @@ impl PipelinesController {
                     ps.set_active_pipeline_name(display_name.into());
                     let image_source_str: slint::SharedString = match image_source {
                         ImageAddress::Scratchpad => "Scratchpad".into(),
-                        ImageAddress::Memory(MemoryId::PipelineContext(s)) => {
-                            format!("Memory[{s}]").into()
-                        }
-                        ImageAddress::Memory(MemoryId::ProjectCache(s)) => {
-                            format!("Cache[{s}]").into()
-                        }
+                        ImageAddress::Memory(
+                            MemoryId::PipelineContext(s) | MemoryId::ProjectCache(s),
+                        ) => format!("Shared[{s}]").into(),
                         ImageAddress::Memory(MemoryId::GroupContext(s)) => {
                             format!("Group[{s}]").into()
                         }
@@ -2721,12 +2719,9 @@ impl PipelinesController {
                         name: p.name.clone().into(),
                         image_source: match p.image_source {
                             ImageAddress::Scratchpad => "Scratchpad".into(),
-                            ImageAddress::Memory(MemoryId::PipelineContext(s)) => {
-                                format!("Memory[{s}]").into()
-                            }
-                            ImageAddress::Memory(MemoryId::ProjectCache(s)) => {
-                                format!("Cache[{s}]").into()
-                            }
+                            ImageAddress::Memory(
+                                MemoryId::PipelineContext(s) | MemoryId::ProjectCache(s),
+                            ) => format!("Shared[{s}]").into(),
                             ImageAddress::Memory(MemoryId::GroupContext(s)) => {
                                 format!("Group[{s}]").into()
                             }
@@ -3219,8 +3214,11 @@ impl PipelinesController {
                 let name = pipeline.name.clone();
                 let image_src = match pipeline.image_source {
                     ImageAddress::Scratchpad => "Scratchpad".to_string(),
-                    ImageAddress::Memory(MemoryId::PipelineContext(s)) => format!("Memory[{s}]"),
-                    ImageAddress::Memory(MemoryId::ProjectCache(s)) => format!("Cache[{s}]"),
+                    ImageAddress::Memory(
+                        MemoryId::PipelineContext(s) | MemoryId::ProjectCache(s),
+                    ) => {
+                        format!("Shared[{s}]")
+                    }
                     ImageAddress::Memory(MemoryId::GroupContext(s)) => format!("Group[{s}]"),
                     ImageAddress::None => "None".to_string(),
                     ImageAddress::Channel(c) => format!("Channel {c}"),
@@ -5456,7 +5454,8 @@ mod tests {
             .collect();
         assert_eq!(
             sources,
-            ["Scratchpad", "Memory[3]", "Cache[4]", "Channel 2"]
+            // A start from a memory slot reads the shared one, either kind.
+            ["Scratchpad", "Shared[3]", "Shared[4]", "Channel 2"]
         );
     }
 
@@ -5533,8 +5532,8 @@ mod tests {
                 1,
                 0,
                 0,
-                ImageAddress::Memory(MemoryId::PipelineContext(1)),
-                "Memory[1]",
+                ImageAddress::Memory(MemoryId::ProjectCache(1)),
+                "Shared[1]",
             ),
             (2, 1, 3, ImageAddress::Channel(3), "Channel 3"),
             (3, 1, 0, ImageAddress::None, "None"),
@@ -6152,6 +6151,45 @@ mod tests {
             .unwrap();
         assert!(card.summary.starts_with("⚠ "), "{}", card.summary);
         assert!(card.summary.contains("big"), "{}", card.summary);
+    }
+
+    /// The group card's buttons and the opened group's bar fit the panel -
+    /// they used to run past its right edge and get cut off.
+    #[test]
+    fn group_buttons_and_the_opened_groups_bar_fit_the_panel() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _ui_state, _controller) = with_a_group();
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 800.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        let model = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = model.row_data(1).unwrap();
+        card.expanded = true;
+        model.set_row_data(1, card);
+
+        let right_edge_of_steps = || {
+            ElementHandle::find_by_element_type_name(&ui, "ScrollView")
+                .filter(|e| e.absolute_position().x < 400.0)
+                .map(|e| e.absolute_position().x + e.size().width)
+                .fold(f32::MAX, f32::min)
+        };
+        let fits = |label: &str| {
+            let element = ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label:?} not found"));
+            let right = element.absolute_position().x + element.size().width;
+            let edge = right_edge_of_steps();
+            assert!(
+                right <= edge,
+                "{label:?} ends at {right}, the step list at {edge}"
+            );
+        };
+        for label in ["Open", "Ungroup", "Save to library…", "Duplicate"] {
+            fits(label);
+        }
+
+        ui.global::<PipelinesPanelState>().invoke_open_group(1);
+        drain_ui_queue();
+        fits("Changes apply to every use of this group · ◇ exposes a setting");
     }
 
     #[test]

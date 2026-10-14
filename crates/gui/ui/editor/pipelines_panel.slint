@@ -2124,47 +2124,12 @@ component StepRow inherits Rectangle {
                         }
                     }
 
-                    HorizontalLayout {
+                    // A group's own actions, in a row of their own - with
+                    // the step actions they'd be wider than the card.
+                    if root.step.category == StepCategory.group: HorizontalLayout {
                         spacing: 6px;
                         padding-top: 2px;
-
-                        Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            background: dup-ta.has-hover ? Theme.raised : transparent;
-                            animate background { duration: 100ms; }
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 5px;
-                                alignment: center;
-                                VerticalLayout {
-                                    alignment: center;
-                                    Image {
-                                        source: @image-url("../icons/regular-white/copy.svg");
-                                        width: 11px;
-                                        height: 11px;
-                                        colorize: Theme.text-dim;
-                                    }
-                                }
-
-                                Text {
-                                    text: "Duplicate";
-                                    font-size: 11px;
-                                    color: Theme.text-dim;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            dup-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.duplicate();
-                                }
-                            }
-                        }
+                        alignment: start;
 
                         if root.step.category == StepCategory.group: Rectangle {
                             height: 26px;
@@ -2218,6 +2183,75 @@ component StepRow inherits Rectangle {
                             }
                         }
 
+                        if root.step.update-version != "": Rectangle {
+                            height: 26px;
+                            border-radius: 4px;
+                            background: update-ta.has-hover ? Theme.cat-group : Theme.cat-group.with-alpha(0.8);
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                alignment: center;
+                                Text {
+                                    text: "Update to v\{root.step.update-version}";
+                                    font-size: 11px;
+                                    color: Theme.panel;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            update-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.update-group();
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        padding-top: 2px;
+
+                        Rectangle {
+                            height: 26px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            background: dup-ta.has-hover ? Theme.raised : transparent;
+                            animate background { duration: 100ms; }
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 5px;
+                                alignment: center;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Image {
+                                        source: @image-url("../icons/regular-white/copy.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: Theme.text-dim;
+                                    }
+                                }
+
+                                Text {
+                                    text: "Duplicate";
+                                    font-size: 11px;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            dup-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.duplicate();
+                                }
+                            }
+                        }
+
+
+
                         if root.step.category == StepCategory.group && PipelinesPanelState.open-group-name == "": Rectangle {
                             height: 26px;
                             border-radius: 4px;
@@ -2244,29 +2278,6 @@ component StepRow inherits Rectangle {
                             }
                         }
 
-                        if root.step.update-version != "": Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            background: update-ta.has-hover ? Theme.cat-group : Theme.cat-group.with-alpha(0.8);
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                alignment: center;
-                                Text {
-                                    text: "Update to v\{root.step.update-version}";
-                                    font-size: 11px;
-                                    color: Theme.panel;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            update-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.update-group();
-                                }
-                            }
-                        }
 
                         if root.step.category != StepCategory.group && PipelinesPanelState.open-group-name == "": Rectangle {
                             height: 26px;
@@ -2881,38 +2892,44 @@ export component PipelinesPanel inherits Rectangle {
 
                         // -- An opened command group --
                     if PipelinesPanelState.open-group-name != "": Rectangle {
-                            height: PipelinesPanelState.open-group-problem == "" ? 52px : 72px;
+                            // As high as its (wrapping) text needs.
+                            height: bar.preferred-height;
                             border-radius: 6px;
                             background: Theme.cat-group.with-alpha(0.10);
                             border-width: 1px;
                             border-color: Theme.cat-group.with-alpha(0.5);
-                            HorizontalLayout {
+                            bar := HorizontalLayout {
                                 padding-left: 8px;
                                 padding-right: 10px;
+                                padding-top: 8px;
+                                padding-bottom: 8px;
                                 spacing: 10px;
-                                Rectangle {
-                                    width: 54px;
-                                    height: 24px;
-                                    y: (parent.height - 24px) / 2;
-                                    border-radius: 4px;
-                                    background: back-ta.has-hover ? Theme.raised : transparent;
-                                    Text {
-                                        text: "‹ Back";
-                                        font-size: 11px;
-                                        color: Theme.text;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 54px;
+                                        height: 24px;
+                                        border-radius: 4px;
+                                        background: back-ta.has-hover ? Theme.raised : transparent;
+                                        Text {
+                                            text: "‹ Back";
+                                            font-size: 11px;
+                                            color: Theme.text;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
 
-                                    back-ta := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            PipelinesPanelState.close-group();
+                                        back-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                PipelinesPanelState.close-group();
+                                            }
                                         }
                                     }
                                 }
 
                                 VerticalLayout {
+                                    horizontal-stretch: 1;
                                     alignment: center;
                                     spacing: 2px;
                                     Text {
@@ -2920,12 +2937,16 @@ export component PipelinesPanel inherits Rectangle {
                                         font-size: 12px;
                                         font-weight: 600;
                                         color: Theme.text;
+                                        wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
 
                                     Text {
                                         text: "Changes apply to every use of this group · ◇ exposes a setting";
                                         font-size: 10px;
                                         color: Theme.text-mute;
+                                        wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
 
                                     if PipelinesPanelState.open-group-problem != "": Text {
@@ -2933,6 +2954,7 @@ export component PipelinesPanel inherits Rectangle {
                                         font-size: 10px;
                                         color: Theme.warn;
                                         wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
                                 }
                             }

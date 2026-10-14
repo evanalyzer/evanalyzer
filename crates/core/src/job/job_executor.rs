@@ -832,6 +832,8 @@ impl<'a> JobExecutor {
                             cache = result.cache;
                         }
                     }
+                    // Every pipeline ran on this tile: its shared slots are done.
+                    cache.clear_shared_slots();
 
                     // Snapshot: send the captured buffers but continue merging normally.
                     if let Some(capture) = snapshot_capture {
@@ -2600,6 +2602,41 @@ mod full_run_integration_tests {
         let from_channel = run(false);
         assert!(!from_channel.is_empty(), "the fixture image has objects");
         assert_eq!(run(true), from_channel, "the same objects");
+    }
+
+    /// Pipeline 1 stores its image in a shared slot, pipeline 2 starts from
+    /// it - also when pipeline 2's source is a pipeline slot, as projects saved
+    /// before chose. (Every slot used to be dropped after each pipeline, so no
+    /// image could get from one pipeline to the next.)
+    #[test]
+    fn a_pipeline_starts_from_the_image_an_earlier_pipeline_stored() {
+        use crate::algos::{ImageCache, ImageCacheMode};
+        use evanalyzer_cfg::core_types::MemoryId;
+        for source in [MemoryId::ProjectCache(1), MemoryId::PipelineContext(1)] {
+            let out_objects = Arc::new(Mutex::new(Vec::new()));
+            let mut job = make_single_image_job(out_objects.clone());
+            job.pipelines_pre_process.clear();
+            let mut store = Pipeline::new(
+                PipelineId(1),
+                CorePipelineSettings {
+                    start_image: ImageAddress::Channel(0),
+                },
+            );
+            store.add_command(Box::new(ImageCache {
+                mode: ImageCacheMode::Store,
+                address: ImageAddress::Memory(MemoryId::ProjectCache(1)),
+            }));
+            job.add_pre_process_pipeline(store);
+            let mut detect = threshold_connected_components_extract_pipeline();
+            detect.id = PipelineId(2);
+            detect.settings.start_image = ImageAddress::Memory(source);
+            job.add_pre_process_pipeline(detect);
+
+            let (tx, _rx) = std::sync::mpsc::channel();
+            job.run(1, tx, Arc::new(AtomicBool::new(false)))
+                .unwrap_or_else(|e| panic!("{source:?}: {e}"));
+            assert!(!out_objects.lock().unwrap().is_empty(), "{source:?}");
+        }
     }
 
     /// `make_single_image_job` plus a [`RecordingStep`] as dataset step.

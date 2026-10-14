@@ -10,7 +10,7 @@ import { ChannelPicker } from "../components/channel_picker.slint";
 export global PipelineEditState {
     in property <int> pipeline-id: 0;
     in-out property <string> pipeline-name: "";
-    // 0 = Scratchpad · 1 = Memory (PipelineContext slot) · 2 = Channel · 3 = None
+    // 0 = Scratchpad · 1 = Shared memory slot (ProjectCache) · 2 = Channel · 3 = None
     in-out property <int> source-type: 0;
     in-out property <int> source-slot: 1;
     in-out property <int> source-channel: 0;
@@ -256,8 +256,8 @@ export component PipelineEditDialog inherits Rectangle {
                     }
 
                     SourceOption {
-                        label: "Memory slot";
-                        description: "Read from a pipeline context memory slot";
+                        label: "Shared memory slot";
+                        description: "The image an earlier pipeline stored (Image Cache → Shared)";
                         selected: PipelineEditState.source-type == 1;
                         clicked => {
                             PipelineEditState.source-type = 1;

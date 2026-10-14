@@ -8,7 +8,7 @@ use crate::{
         pipeline_context::PipelineContext,
     },
 };
-use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, PipelineId, StepId};
+use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, MemoryId, PipelineId, StepId};
 use kornia_image::ImageSize;
 use log::info;
 use std::sync::Arc;
@@ -119,9 +119,15 @@ impl Pipeline {
                 self.id
             ),
             ImageAddress::Memory(slot) => format!(
-                "pipeline {} starts from memory slot {slot:?}, which no earlier pipeline \
-                 stored - add an Image Cache step that stores it to a pipeline running before",
-                self.id
+                "pipeline {} starts from shared memory slot {}, which no earlier pipeline \
+                 stored - add an Image Cache step storing to that shared slot to a pipeline \
+                 above it",
+                self.id,
+                match slot {
+                    MemoryId::PipelineContext(n)
+                    | MemoryId::ProjectCache(n)
+                    | MemoryId::GroupContext(n) => n,
+                }
             ),
             ImageAddress::Scratchpad | ImageAddress::None => {
                 format!("pipeline {}: its start image is not available", self.id)
@@ -171,6 +177,12 @@ impl Pipeline {
         };
         let cache_idx: CacheAddress = match self.settings.start_image {
             ImageAddress::Scratchpad => CacheAddress::Scratchpad,
+            // A pipeline's own slots are empty when it starts: a start from a
+            // memory slot reads the shared one an earlier pipeline stored.
+            // (Projects saved before chose `PipelineContext` here.)
+            ImageAddress::Memory(
+                MemoryId::PipelineContext(slot) | MemoryId::ProjectCache(slot),
+            ) => CacheAddress::Memory(MemoryId::ProjectCache(slot)),
             // A pipeline's start isn't inside a group.
             ImageAddress::Memory(memory_id) => CacheAddress::memory(memory_id, Scope::Global)?,
             ImageAddress::Channel(channel_idx) => CacheAddress::Channel((channel_idx, tile)),

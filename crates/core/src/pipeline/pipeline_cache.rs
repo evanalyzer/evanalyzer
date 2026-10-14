@@ -101,16 +101,25 @@ mod tests {
 }
 
 impl GlobalPipelineCache {
+    /// After a pipeline: what only it could use goes - its memory slots
+    /// (`PipelineContext`), its groups' slots, the scratchpad. The image
+    /// channels and the shared slots (`ProjectCache`) stay for the pipelines
+    /// after it; [`Self::clear_shared_slots`] frees those.
     pub fn clear_pipeline_context(&mut self) {
-        self.image_cache.retain(|key| {
-            match key {
-                // Always keep Channel types
-                CacheAddress::Channel(_) => true,
-                // If it is a Memory(PipelineContext), return false to remove it
-                CacheAddress::Memory(MemoryId::PipelineContext(_)) => false,
-                _ => false,
-            }
+        self.image_cache.retain(|key| match key {
+            CacheAddress::Channel(_) | CacheAddress::Memory(MemoryId::ProjectCache(_)) => true,
+            CacheAddress::Memory(MemoryId::PipelineContext(_) | MemoryId::GroupContext(_))
+            | CacheAddress::GroupMemory(..)
+            | CacheAddress::Scratchpad => false,
         });
+    }
+
+    /// After every pipeline ran (on a tile): the shared slots
+    /// (`ProjectCache`) go too - nothing reads them any more, and the tiles'
+    /// slots would only pile up when the tiles are merged.
+    pub fn clear_shared_slots(&mut self) {
+        self.image_cache
+            .retain(|key| !matches!(key, CacheAddress::Memory(MemoryId::ProjectCache(_))));
     }
 
     pub fn add_to_channel_cache(
@@ -378,14 +387,12 @@ mod cache_tests {
         );
     }
 
-    /// Pins down the current (possibly surprising) behavior of the catch-all `_ => false`
-    /// arm: the doc comment on `clear_pipeline_context` only mentions dropping
-    /// `Memory(PipelineContext(_))`, but the match's fallback arm actually also drops
-    /// every other non-Channel `ImageAddress` variant -- including `Scratchpad` and
-    /// `Memory(ProjectCache(_))`. This test documents that reality; it is not asserting
-    /// that this is the *intended* behavior.
+    /// A pipeline's own leftovers go, the shared slots stay for the next
+    /// pipelines - until `clear_shared_slots`. (This test used to pin the
+    /// shared slots being dropped too, which made passing an image from one
+    /// pipeline to the next impossible.)
     #[test]
-    fn clear_pipeline_context_also_drops_scratchpad_and_project_cache_via_catch_all() {
+    fn clear_pipeline_context_keeps_the_shared_slots_for_the_next_pipelines() {
         let mut cache = GlobalPipelineCache::default();
         cache
             .image_cache
@@ -404,15 +411,17 @@ mod cache_tests {
                 .get_image_from_channel_cache(5, ImageTile::default())
                 .is_some()
         );
-        // Scratchpad and ProjectCache entries are both gone too, via the `_ => false` arm,
-        // even though the doc comment only calls out PipelineContext memory slots.
         assert!(!cache.image_cache.contains_key(&CacheAddress::Scratchpad));
+        let shared = CacheAddress::Memory(MemoryId::ProjectCache(7));
         assert!(
-            !cache
-                .image_cache
-                .contains_key(&CacheAddress::Memory(MemoryId::ProjectCache(7)))
+            cache.image_cache.contains_key(&shared),
+            "for the next pipelines"
         );
-        assert_eq!(cache.image_cache.len(), 1);
+        assert_eq!(cache.image_cache.len(), 2);
+
+        cache.clear_shared_slots();
+        assert!(!cache.image_cache.contains_key(&shared));
+        assert_eq!(cache.image_cache.len(), 1, "the channel stays");
     }
 
     // ---- add_to_channel_cache / get_image_from_channel_cache ----

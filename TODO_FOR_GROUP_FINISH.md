@@ -176,6 +176,17 @@ before 14: most groups are made from existing steps).
         comment only mentions `PipelineContext` slots. Suggestion: clear only
         `PipelineContext` (and group) slots per pipeline, keep `ProjectCache`
         slots until the image (plane) is done. Not decided - ask first.
+        **Fixed (2026-10-14):** `clear_pipeline_context` keeps the shared
+        slots (`ProjectCache`); `clear_shared_slots` frees them once every
+        pipeline ran on a tile (before the merge). A pipeline starting from a
+        memory slot reads the shared one (also `PipelineContext` in projects
+        saved before - a pipeline's own slots are always empty at its start).
+        UI: the pipeline dialog's "Shared memory slot", the step slot picker
+        "Memory" (this pipeline) / "Shared" (pipelines after it). Why no test
+        caught it: the one test pinned the dropping as "possibly surprising"
+        instead of failing on it, no test passed an image between two
+        pipelines, and the UI couldn't create the case. Now: a run where
+        pipeline 2 starts from pipeline 1's image (fails with the old code).
 
 **Phase E – editor and picker** (started 2026-10-14; decisions under
 "Command picker" and "Creating groups")
