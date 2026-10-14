@@ -9,17 +9,21 @@ use evanalyzer_app::templates::load_project_templates;
 use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::settings::meta_data::AuthorInformation;
 use evanalyzer_cfg::settings::meta_data::MetaData;
-use evanalyzer_cfg::{PIPELINE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS};
+use evanalyzer_cfg::{
+    GROUP_TEMPLATE_EXTENSION, PIPELINE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS,
+};
 use log::warn;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 /// What the in-progress "save as template" flow is currently saving.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum TemplateTarget {
     Pipeline(PipelineId),
     Project,
+    /// A command group, by key - saved to the group library (`.evagroup`).
+    Group(String),
 }
 
 /// Drives the "Save as Template" flow shared by pipelines and projects.
@@ -76,21 +80,60 @@ impl TemplateController {
         self.open_dialog("Save Project as Template", name);
     }
 
+    /// Opens the metadata dialog to save command group `key` to the group
+    /// library, filled in from the group (`meta`) - its version one up, if
+    /// it has one.
+    pub fn start_group_template_save(self: &Arc<Self>, key: String, meta: MetaData) {
+        *self.target.lock().expect("Poisoned") = Some(TemplateTarget::Group(key));
+        self.open_dialog_with("Save Command Group to Library", &meta);
+        if let Some(ui) = self.ui.upgrade() {
+            let state = ui.global::<TemplateMetaState>();
+            let mut shown = state.get_meta();
+            shown.version = meta
+                .version
+                .map(|v| (v + 1).to_string())
+                .unwrap_or_else(|| "1".into())
+                .into();
+            state.set_meta(shown);
+        }
+    }
+
     fn open_dialog(self: &Arc<Self>, title: &str, name: String) {
+        self.open_dialog_with(
+            title,
+            &MetaData {
+                name,
+                ..Default::default()
+            },
+        );
+    }
+
+    fn open_dialog_with(self: &Arc<Self>, title: &str, meta: &MetaData) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
         let state = ui.global::<TemplateMetaState>();
         state.set_dialog_title(title.into());
+        let author = meta.authors.first();
         state.set_meta(TemplateMetaSlint {
-            name: name.into(),
-            short_description: "".into(),
-            description: "".into(),
-            author_name: "".into(),
-            author_organization: "".into(),
-            category: "".into(),
-            tags: "".into(),
-            version: "".into(),
+            name: meta.name.clone().into(),
+            short_description: meta.short_description.clone().into(),
+            description: meta.description.clone().into(),
+            author_name: author
+                .map(|a| a.full_name.clone())
+                .unwrap_or_default()
+                .into(),
+            author_organization: author
+                .map(|a| a.organization.clone())
+                .unwrap_or_default()
+                .into(),
+            category: meta.category.clone().into(),
+            tags: meta.tags.join(", ").into(),
+            version: meta
+                .version
+                .map(|v| v.to_string())
+                .unwrap_or_default()
+                .into(),
         });
         state.set_known_categories(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
         ui.global::<GlobalAppState>()
@@ -180,11 +223,13 @@ impl TemplateController {
             meta.name.clone()
         };
 
-        let request = match target {
+        let request = match &target {
             TemplateTarget::Pipeline(_) => FileRequest::save_file("Save pipeline template")
                 .filter("Pipeline template", &[PIPELINE_EXTENSIONS]),
             TemplateTarget::Project => FileRequest::save_file("Save project template")
                 .filter("Project template", &[PROJECT_FILE_TEMPLATE_EXTENSIONS]),
+            TemplateTarget::Group(_) => FileRequest::save_file("Save command group")
+                .filter("Command group", &[GROUP_TEMPLATE_EXTENSION]),
         }
         .start_in(&templates_folder)
         .file_name(&default_file_name);
@@ -218,6 +263,13 @@ impl TemplateController {
                     TemplateTarget::Project => app_state
                         .get_project_write()
                         .save_project_as_template(app_state.backend().files(), meta, &path),
+                    TemplateTarget::Group(key) => evanalyzer_app::groups::save_group_template(
+                        &mut app_state.get_project_write(),
+                        app_state.backend().files(),
+                        meta,
+                        &key,
+                        &path,
+                    ),
                 };
 
             match result {
@@ -320,6 +372,55 @@ mod tests {
         meta.tags = "nuclei, dapi,".into();
         meta.version = "2".into();
         state.set_meta(meta);
+    }
+
+    #[test]
+    fn saving_a_command_group_to_the_library_writes_an_evagroup_file() {
+        use evanalyzer_cfg::settings::command_groups::GroupDefinition;
+        let (ui, ui_state, controller) = controller();
+        ui_state
+            .get_project_write()
+            .command_groups
+            .push(GroupDefinition {
+                key: "SMOOTH".into(),
+                meta: MetaData {
+                    name: "Smooth".into(),
+                    short_description: "Blurs twice".into(),
+                    version: Some(2),
+                    ..Default::default()
+                },
+                classes: vec![],
+                steps: vec![],
+                parameters: vec![],
+                origin: None,
+            });
+        let meta = ui_state.get_project().command_groups[0].meta.clone();
+        let dir = tempfile::tempdir().unwrap();
+
+        controller.start_group_template_save("SMOOTH".into(), meta);
+        drain_ui_queue();
+        let state = ui.global::<TemplateMetaState>();
+        assert_eq!(state.get_meta().name, "Smooth");
+        assert_eq!(state.get_meta().short_description, "Blurs twice");
+        assert_eq!(state.get_meta().version, "3", "one up");
+
+        state.invoke_confirm();
+        let target = dir.path().join("smooth.evagroup");
+        choose_file(&ui, &target);
+
+        let written = std::fs::read_to_string(&target).expect("group written");
+        let json: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(json["group"]["key"], "SMOOTH");
+        assert_eq!(json["group"]["meta"]["version"], 3);
+        let project = ui_state.get_project();
+        let origin = project.command_groups[0]
+            .origin
+            .as_ref()
+            .expect("linked to the file");
+        assert_eq!(
+            (origin.library.as_str(), origin.version),
+            ("smooth.evagroup", 3)
+        );
     }
 
     #[test]

@@ -18,7 +18,8 @@ pub fn generate_project_struct_schema() -> Result<(), Box<dyn std::error::Error>
 
 /// Generates `docs/project_template.schema.json` for `ProjectTemplate`
 /// (`.evapt` files) and `docs/pipeline_template.schema.json` for
-/// `PipelineTemplate` (`.evapipe` files). These are deliberately separate from
+/// `PipelineTemplate` (`.evapipe` files), `docs/group_template.schema.json` for
+/// `GroupTemplate` (`.evagroup` files). These are deliberately separate from
 /// `ProjectSettings` - templates only carry a subset of a full project (no
 /// `images`, and `meta` instead of `metadata`) - so validating a template
 /// against `project.schema.json` will always fail even when the template
@@ -26,6 +27,7 @@ pub fn generate_project_struct_schema() -> Result<(), Box<dyn std::error::Error>
 pub fn generate_template_schemas() -> Result<(), Box<dyn std::error::Error>> {
     write_schema::<crate::modules::templates::ProjectTemplate>("project_template.schema.json")?;
     write_schema::<crate::modules::templates::PipelineTemplate>("pipeline_template.schema.json")?;
+    write_schema::<crate::modules::templates::GroupTemplate>("group_template.schema.json")?;
     Ok(())
 }
 

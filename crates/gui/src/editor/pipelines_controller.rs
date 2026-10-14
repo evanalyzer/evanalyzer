@@ -8,9 +8,9 @@ use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     CommandDef, CommandParameter, CommandPickerState, DefaultParamPreview, ExposeChoiceState,
-    GlobalAppState, GroupClassRow, GroupEditChoiceState, GroupItem, GroupStepsState, LeafParam,
-    ParamType, Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus,
-    PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
+    GlobalAppState, GroupClassRow, GroupEditChoiceState, GroupItem, GroupStepsState,
+    GroupUpdateState, LeafParam, ParamType, Pipeline, PipelineCommand as SlintPipelineCommand,
+    PipelineStatus, PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use crate::{ResultItemData, ResultsListState};
@@ -19,7 +19,7 @@ use evanalyzer_app::fs::FileSystem;
 use evanalyzer_app::groups::ClassRole;
 use evanalyzer_app::project::ImageEntryExt;
 use evanalyzer_app::project::ProjectExt;
-use evanalyzer_app::templates::load_pipeline_templates;
+use evanalyzer_app::templates::{load_group_templates, load_pipeline_templates};
 use evanalyzer_cfg::core_types::GroupParamId;
 use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::ObjectClass;
@@ -49,6 +49,7 @@ use evanalyzer_cfg::settings::pipeline_settings::{
     PipelineSettings, PipelineStepSettings, StepContent,
 };
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
+use evanalyzer_cfg::settings::templates::GroupTemplate;
 use evanalyzer_cfg::settings::templates::PipelineTemplate;
 use evanalyzer_gui_slint::CommandAuthor;
 use log::debug;
@@ -115,6 +116,13 @@ pub struct PipelinesController {
     /// A setting waiting for "Expose setting": (pipeline id, step index,
     /// setting path, the parameters it could be added to).
     pending_expose: Mutex<Option<(u32, usize, String, Vec<GroupParamId>)>>,
+
+    /// The group library: `.evagroup` files of the templates folders,
+    /// reloaded with the pipeline templates.
+    group_library: Mutex<Vec<(PathBuf, GroupTemplate)>>,
+
+    /// A group waiting for "Update": (its key, index into `group_library`).
+    pending_update: Mutex<Option<(String, usize)>>,
 }
 
 impl PipelinesController {
@@ -141,6 +149,8 @@ impl PipelinesController {
             focus_controller,
             open_group: Mutex::new(None),
             pending_expose: Mutex::new(None),
+            group_library: Mutex::new(Vec::new()),
+            pending_update: Mutex::new(None),
         }
     }
 
@@ -832,6 +842,16 @@ impl PipelinesController {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
+                    if command_id >= LIBRARY_GROUP_PICKER_ID_BASE {
+                        let idx = (command_id - LIBRARY_GROUP_PICKER_ID_BASE) as usize;
+                        let library = manager.group_library.lock().expect("Poisoned");
+                        if let Some((path, template)) = library.get(idx) {
+                            let picker = ui.global::<CommandPickerState>();
+                            picker.set_detail(library_group_to_command_def(idx, path, template));
+                            picker.set_has_detail(true);
+                        }
+                        return;
+                    }
                     if command_id >= GROUP_PICKER_ID_BASE {
                         let project = manager.app_state.get_project();
                         let idx = (command_id - GROUP_PICKER_ID_BASE) as usize;
@@ -875,8 +895,43 @@ impl PipelinesController {
                     let pipeline_id = picker.get_pipeline_id() as u32;
                     let after_idx = picker.get_insert_after_idx();
 
-                    let new_steps: Vec<PipelineStepSettings> = if command_id >= GROUP_PICKER_ID_BASE
+                    let new_steps: Vec<PipelineStepSettings> = if command_id
+                        >= LIBRARY_GROUP_PICKER_ID_BASE
                     {
+                        // A library group: copied into the project, then used.
+                        let idx = (command_id - LIBRARY_GROUP_PICKER_ID_BASE) as usize;
+                        let Some((path, template)) =
+                            manager.group_library.lock().expect("Poisoned").get(idx).cloned()
+                        else {
+                            warn!("picker confirm: unknown library group id {}", command_id);
+                            return;
+                        };
+                        let inserted = {
+                            let mut project = manager.app_state.get_project_write();
+                            evanalyzer_app::groups::insert_group_template(
+                                &mut project,
+                                &template,
+                                &evanalyzer_app::groups::library_name(&path),
+                            )
+                        };
+                        let key = match inserted {
+                            Ok(key) => key,
+                            Err(e) => {
+                                warn!("Could not insert the library group: {e}");
+                                return;
+                            }
+                        };
+                        vec![PipelineStepSettings {
+                            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                            enabled: true,
+                            content: StepContent::Group(
+                                evanalyzer_cfg::settings::command_groups::GroupInstance {
+                                    key,
+                                    values: Default::default(),
+                                },
+                            ),
+                        }]
+                    } else if command_id >= GROUP_PICKER_ID_BASE {
                         // A command group: one step using it, at its defaults.
                         let project = manager.app_state.get_project();
                         let idx = (command_id - GROUP_PICKER_ID_BASE) as usize;
@@ -902,6 +957,11 @@ impl PipelinesController {
                             warn!("picker confirm: unknown template id {}", command_id);
                             return;
                         };
+                        // The groups its steps use, unless the project has them.
+                        evanalyzer_app::groups::merge_group_definitions(
+                            &mut manager.app_state.get_project_write(),
+                            &template.command_groups,
+                        );
                         // Numbered in this pipeline once inserted.
                         evanalyzer_app::utils::unassigned(template.steps.clone())
                     } else {
@@ -1228,6 +1288,136 @@ impl PipelinesController {
             ui.global::<ExposeChoiceState>().on_cancel(move || {
                 if let Some(ui) = manager.ui.upgrade() {
                     *manager.pending_expose.lock().expect("Poisoned") = None;
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::None);
+                }
+            });
+
+            // "Save to library…" on a group card: the template dialog.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_save_group_to_library(move |step_idx| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    let found = {
+                        let project = manager.app_state.get_project();
+                        project
+                            .pipelines
+                            .iter()
+                            .find(|p| p.id.0 == pipeline_id)
+                            .and_then(|p| p.steps.get(step_idx as usize))
+                            .and_then(|step| match &step.content {
+                                StepContent::Group(instance) => project
+                                    .command_groups
+                                    .iter()
+                                    .find(|d| d.key == instance.key)
+                                    .map(|d| (d.key.clone(), d.meta.clone())),
+                                StepContent::Command(_) => None,
+                            })
+                    };
+                    if let Some((key, meta)) = found {
+                        manager
+                            .template_controller
+                            .start_group_template_save(key, meta);
+                    }
+                });
+
+            // "Update to vN" on a group card: asks, then takes the library's
+            // version.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_update_group(move |step_idx| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    let found = {
+                        let project = manager.app_state.get_project();
+                        let library = manager.group_library.lock().expect("Poisoned");
+                        project
+                            .pipelines
+                            .iter()
+                            .find(|p| p.id.0 == pipeline_id)
+                            .and_then(|p| p.steps.get(step_idx as usize))
+                            .and_then(|step| match &step.content {
+                                StepContent::Group(instance) => project
+                                    .command_groups
+                                    .iter()
+                                    .find(|d| d.key == instance.key),
+                                StepContent::Command(_) => None,
+                            })
+                            .and_then(|definition| {
+                                let (index, version) =
+                                    evanalyzer_app::groups::update_available(definition, &library)?;
+                                Some((
+                                    definition.key.clone(),
+                                    definition.meta.name.clone(),
+                                    definition.origin.as_ref().map_or(0, |o| o.version),
+                                    version,
+                                    evanalyzer_app::groups::modified_since_inserted(definition),
+                                    index,
+                                ))
+                            })
+                    };
+                    let Some((key, name, from, to, changed_here, index)) = found else {
+                        return;
+                    };
+                    *manager.pending_update.lock().expect("Poisoned") = Some((key, index));
+                    let state = ui.global::<GroupUpdateState>();
+                    state.set_group_name(name.into());
+                    state.set_versions(format!("v{from} → v{to}").into());
+                    state.set_changed_here(changed_here);
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::GroupUpdate);
+                });
+
+            let manager = self.clone();
+            ui.global::<GroupUpdateState>().on_confirm(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::None);
+                let Some((key, index)) = manager.pending_update.lock().expect("Poisoned").take()
+                else {
+                    return;
+                };
+                let Some((path, template)) = manager
+                    .group_library
+                    .lock()
+                    .expect("Poisoned")
+                    .get(index)
+                    .cloned()
+                else {
+                    return;
+                };
+                let result = {
+                    let mut project = manager.app_state.get_project_write();
+                    evanalyzer_app::groups::update_from_library(
+                        &mut project,
+                        &key,
+                        &template,
+                        &evanalyzer_app::groups::library_name(&path),
+                    )
+                };
+                if let Err(e) = result {
+                    warn!("Could not update the group: {e}");
+                    return;
+                }
+                manager.pipeline_settings_changed();
+                let pipeline_id =
+                    ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+            });
+
+            let manager = self.clone();
+            ui.global::<GroupUpdateState>().on_cancel(move || {
+                if let Some(ui) = manager.ui.upgrade() {
+                    *manager.pending_update.lock().expect("Poisoned") = None;
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::None);
                 }
@@ -1792,6 +1982,8 @@ impl PipelinesController {
 
         // Must be called onece at startup
         self.sync_commands_to_selection_dialog_slint();
+        // The group library, for "Update" on group cards.
+        self.reload_pipeline_templates_async();
     }
 
     /// Builds the `ProjectSettings` for a single-image preview run.
@@ -2697,11 +2889,37 @@ impl PipelinesController {
                 .map(|(idx, d)| group_to_command_def(idx, d, &project))
                 .collect()
         };
-        let cg = matching_groups.len() as i32;
-        let groups = if filter_groups || !q.is_empty() {
-            matching_groups
+        let library_groups: Vec<CommandDef> = {
+            let project = self.app_state.get_project();
+            let library = self.group_library.lock().expect("Poisoned");
+            library
+                .iter()
+                .enumerate()
+                .filter(|(_, (path, template))| {
+                    evanalyzer_app::groups::project_copy(
+                        &project,
+                        template,
+                        &evanalyzer_app::groups::library_name(path),
+                    )
+                    .is_none()
+                })
+                .filter(|(_, (_, t))| {
+                    q.is_empty()
+                        || t.group.meta.name.to_ascii_lowercase().contains(&q)
+                        || t.group
+                            .meta
+                            .short_description
+                            .to_ascii_lowercase()
+                            .contains(&q)
+                })
+                .map(|(idx, (path, template))| library_group_to_command_def(idx, path, template))
+                .collect()
+        };
+        let cg = (matching_groups.len() + library_groups.len()) as i32;
+        let (groups, library_groups) = if filter_groups || !q.is_empty() {
+            (matching_groups, library_groups)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
 
         let total = if filter_favorites {
@@ -2709,8 +2927,14 @@ impl PipelinesController {
         } else if filter_groups {
             cg
         } else {
-            (pre.len() + seg.len() + obj.len() + mea.len() + cls.len() + dat.len() + groups.len())
-                as i32
+            (pre.len()
+                + seg.len()
+                + obj.len()
+                + mea.len()
+                + cls.len()
+                + dat.len()
+                + groups.len()
+                + library_groups.len()) as i32
         };
         let (cp, cs, co, cm, cc, cd) = (
             pre.len() as i32,
@@ -2729,6 +2953,7 @@ impl PipelinesController {
         picker.set_shown_dataset(ModelRc::new(VecModel::from(dat)));
         picker.set_shown_templates(ModelRc::new(VecModel::from(templates)));
         picker.set_shown_groups(ModelRc::new(VecModel::from(groups)));
+        picker.set_shown_library_groups(ModelRc::new(VecModel::from(library_groups)));
         picker.set_cat_count_grp(cg);
         picker.set_total_shown(total);
         picker.set_cat_count_pre(cp);
@@ -2758,6 +2983,8 @@ impl PipelinesController {
                     .map(|(_path, template)| template)
                     .collect();
             *manager.pipeline_templates.lock().expect("Poisoned") = templates;
+            *manager.group_library.lock().expect("Poisoned") =
+                load_group_templates(manager.app_state.backend().as_ref());
 
             let manager = manager.clone();
             if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -2872,6 +3099,8 @@ impl PipelinesController {
             parameters: Vec<ParameterDef>,
             /// Settings that are parameters of the opened group.
             exposed: Vec<String>,
+            /// A group step: the library's newer version, or empty.
+            update_version: String,
         }
         // The opened group's name, or empty. A group that's gone (e.g. undone)
         // is closed.
@@ -2946,6 +3175,7 @@ impl PipelinesController {
                             exposed: open_definition
                                 .map(|d| evanalyzer_app::groups::exposed_settings(d, step.id))
                                 .unwrap_or_default(),
+                            update_version: String::new(),
                         },
                         // The group's name and parameters - each shown with the
                         // control of the inner setting it's bound to.
@@ -2971,6 +3201,18 @@ impl PipelinesController {
                                 enabled: step.enabled,
                                 parameters,
                                 exposed: Vec::new(),
+                                update_version: project
+                                    .command_groups
+                                    .iter()
+                                    .find(|d| d.key == group.key)
+                                    .and_then(|d| {
+                                        evanalyzer_app::groups::update_available(
+                                            d,
+                                            &self.group_library.lock().expect("Poisoned"),
+                                        )
+                                    })
+                                    .map(|(_, version)| version.to_string())
+                                    .unwrap_or_default(),
                             }
                         }
                     })
@@ -3220,6 +3462,7 @@ impl PipelinesController {
                             show_advanced: step_show_advanced,
                             advanced_count: advanced_count as i32,
                             advanced_changed: advanced_changed as i32,
+                            update_version: d.update_version.into(),
                         }
                     })
                     .collect();
@@ -3359,6 +3602,66 @@ fn step_label(project: &ProjectSettings, step: &PipelineStepSettings) -> String 
 /// Picker ids of command groups start here - commands have small positive
 /// ids, pipeline templates negative ones.
 const GROUP_PICKER_ID_BASE: i32 = 1_000_000;
+
+/// Picker ids of the group library's groups (not yet in the project).
+const LIBRARY_GROUP_PICKER_ID_BASE: i32 = 2_000_000;
+
+/// The picker entry of library group number `idx` (file `path`).
+fn library_group_to_command_def(idx: usize, path: &Path, template: &GroupTemplate) -> CommandDef {
+    let definition = &template.group;
+    let version = definition
+        .meta
+        .version
+        .map(|v| format!(" · v{v}"))
+        .unwrap_or_default();
+    let defaults: Vec<DefaultParamPreview> = definition
+        .parameters
+        .iter()
+        .map(|p| DefaultParamPreview {
+            name: p.label.clone().into(),
+            value: param_value_display(&p.default).into(),
+        })
+        .collect();
+    let authors: Vec<CommandAuthor> = definition
+        .meta
+        .authors
+        .iter()
+        .map(|a| CommandAuthor {
+            full_name: a.full_name.clone().into(),
+            organization: a.organization.clone().into(),
+        })
+        .collect();
+    CommandDef {
+        id: LIBRARY_GROUP_PICKER_ID_BASE + idx as i32,
+        name: definition.meta.name.clone().into(),
+        summary: if definition.meta.short_description.is_empty() {
+            "Command group from the library".into()
+        } else {
+            definition.meta.short_description.clone().into()
+        },
+        description: definition.meta.description.clone().into(),
+        category: StepCategory::Group,
+        icon_glyph: "◆".into(),
+        keywords: definition.meta.name.to_ascii_lowercase().into(),
+        source: format!(
+            "library · {}{version}",
+            evanalyzer_app::groups::library_name(path)
+        )
+        .into(),
+        favorite: false,
+        recent: false,
+        default_params: ModelRc::new(VecModel::from(defaults)),
+        is_template: false,
+        is_group: true,
+        authors: ModelRc::new(VecModel::from(authors)),
+        creation_time: definition
+            .meta
+            .creation_time
+            .format("%Y-%m-%d")
+            .to_string()
+            .into(),
+    }
+}
 
 /// A group parameter's value as the picker's detail pane shows it.
 fn param_value_display(value: &ParamValue) -> String {
@@ -5594,6 +5897,113 @@ mod tests {
             project.command_groups[0].parameters[0].bindings[0].param, "thresholds.1.min_threshold",
             "still the same entry, now the second"
         );
+    }
+
+    /// A library file with group SMOOTH (one blur), version `version`.
+    fn library_file(version: u32) -> (PathBuf, GroupTemplate) {
+        let mut definition = group_definition("SMOOTH", "Smooth");
+        definition.meta.version = Some(version);
+        definition.steps = vec![step("Blur")];
+        definition.steps[0].id = evanalyzer_cfg::core_types::StepId(1);
+        (
+            PathBuf::from("/templates/smooth.evagroup"),
+            GroupTemplate {
+                schema_version: 1,
+                group: definition,
+                uses: vec![],
+            },
+        )
+    }
+
+    #[test]
+    fn a_library_group_is_listed_until_the_project_has_its_copy() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold")]);
+        *controller.group_library.lock().unwrap() = vec![library_file(1)];
+        let picker = ui.global::<CommandPickerState>();
+        picker.set_filter_groups(true);
+        controller.apply_picker_filter(&ui, "", false);
+        assert_eq!(picker.get_shown_library_groups().row_count(), 1);
+        assert!(
+            picker
+                .get_shown_library_groups()
+                .row_data(0)
+                .unwrap()
+                .source
+                .contains("smooth.evagroup")
+        );
+
+        picker.set_pipeline_id(1);
+        picker.set_insert_after_idx(0);
+        picker.invoke_confirm(LIBRARY_GROUP_PICKER_ID_BASE);
+        drain_ui_queue();
+        {
+            let project = ui_state.get_project();
+            assert_eq!(project.command_groups.len(), 1, "a copy in the project");
+            assert!(matches!(
+                &project.pipelines[0].steps[1].content,
+                StepContent::Group(g) if g.key == "SMOOTH"
+            ));
+        }
+        controller.apply_picker_filter(&ui, "", false);
+        assert_eq!(
+            picker.get_shown_library_groups().row_count(),
+            0,
+            "now it's the project's"
+        );
+        assert_eq!(picker.get_shown_groups().row_count(), 1);
+    }
+
+    #[test]
+    fn a_newer_library_version_is_offered_on_the_group_card() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold")]);
+        let (path, v1) = library_file(1);
+        {
+            let mut project = ui_state.get_project_write();
+            let key =
+                evanalyzer_app::groups::insert_group_template(&mut project, &v1, "smooth.evagroup")
+                    .unwrap();
+            project.pipelines[0].steps.push(PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId(9),
+                enabled: true,
+                content: StepContent::Group(
+                    evanalyzer_cfg::settings::command_groups::GroupInstance {
+                        key,
+                        values: Default::default(),
+                    },
+                ),
+            });
+        }
+        let (_, mut v2) = library_file(2);
+        v2.group.steps.push(step("Blur"));
+        v2.group.steps[1].id = evanalyzer_cfg::core_types::StepId(2);
+        *controller.group_library.lock().unwrap() = vec![(path, v2)];
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let card = |ui: &AppWindow| {
+            ui.global::<PipelinesPanelState>()
+                .get_active_commands()
+                .row_data(1)
+                .unwrap()
+        };
+        assert_eq!(card(&ui).update_version, "2");
+
+        ui.global::<PipelinesPanelState>().invoke_update_group(1);
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::GroupUpdate);
+        let state = ui.global::<GroupUpdateState>();
+        assert_eq!(state.get_versions(), "v1 → v2");
+        assert!(!state.get_changed_here());
+
+        state.invoke_confirm();
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        assert_eq!(project.command_groups[0].steps.len(), 2, "the new version");
+        assert_eq!(
+            project.command_groups[0].origin.as_ref().unwrap().version,
+            2
+        );
+        drop(project);
+        assert_eq!(card(&ui).update_version, "", "up to date");
     }
 
     #[test]

@@ -1,7 +1,9 @@
 use crate::api::{Backend, FileSystem};
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
-use evanalyzer_cfg::{PIPELINE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS};
+use evanalyzer_cfg::settings::templates::{GroupTemplate, PipelineTemplate, ProjectTemplate};
+use evanalyzer_cfg::{
+    GROUP_TEMPLATE_EXTENSION, PIPELINE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS,
+};
 use std::path::{Path, PathBuf};
 
 /// Loads a single `ProjectTemplate` from an arbitrary path (e.g. one picked
@@ -26,6 +28,12 @@ pub fn load_project_template_from_file(
 /// templates are paired with the path they were loaded from.
 pub fn load_pipeline_templates(backend: &dyn Backend) -> Vec<(PathBuf, PipelineTemplate)> {
     load_templates(backend, PIPELINE_EXTENSIONS)
+}
+
+/// Loads all command group library files (`.evagroup`, see `GroupTemplate`)
+/// found in the backend's user and app templates folders.
+pub fn load_group_templates(backend: &dyn Backend) -> Vec<(PathBuf, GroupTemplate)> {
+    load_templates(backend, GROUP_TEMPLATE_EXTENSION)
 }
 
 /// Loads all `ProjectTemplate`s found in the backend's user and app

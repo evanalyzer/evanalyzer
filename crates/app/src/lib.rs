@@ -23,6 +23,11 @@ pub mod ai {
 
 /// Command groups as the editor shows them: a group card's parameters.
 pub mod groups {
+    pub use crate::workspace::group_library::{
+        content_hash, groups_used_by, insert_group_template, library_name, merge_group_definitions,
+        modified_since_inserted, project_copy, save_group_template, update_available,
+        update_from_library,
+    };
     pub use crate::workspace::grouping::{
         ClassRole, GroupingClass, GroupingPlan, add_binding, clone_group_for_step,
         compatible_parameters, exposed_settings, group_steps, group_uses, list_entry_removed,
@@ -120,6 +125,7 @@ pub mod bioimageio {
 
 pub mod templates {
     pub use crate::api::TemplateFolders;
+    pub use crate::workspace::templates::load_group_templates;
     pub use crate::workspace::templates::load_pipeline_templates;
     pub use crate::workspace::templates::load_project_template_from_file;
     pub use crate::workspace::templates::load_project_templates;

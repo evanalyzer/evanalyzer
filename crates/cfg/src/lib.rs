@@ -13,6 +13,7 @@ pub use load_config::{load_ai_learning_settings, load_project_settings};
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
 pub const PROJECT_FILE_TEMPLATE_EXTENSIONS: &str = &"evapt";
 pub const PIPELINE_EXTENSIONS: &str = &"evapipe";
+pub const GROUP_TEMPLATE_EXTENSION: &str = &"evagroup";
 pub const RESULTS_FILE_EXTENSION: &str = &"evadb";
 pub const EVANALYZER_TRAINED_AI_MODELS: &str = &"evamodel";
 /// Project file extension used by the old (pre-rewrite) application.
@@ -48,6 +49,11 @@ pub const CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION: u32 = 3;
 /// entry of a `ProjectTemplate`'s `pipelines`). See
 /// `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`.
 pub const CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION: u32 = 2;
+
+/// Current on-disk format version for
+/// [`settings::templates::GroupTemplate`] (`.evagroup` files). See
+/// `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`.
+pub const CURRENT_GROUP_TEMPLATE_SCHEMA_VERSION: u32 = 1;
 
 // Project Settings structs
 pub mod settings {

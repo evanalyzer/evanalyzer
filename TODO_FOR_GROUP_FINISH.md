@@ -6,14 +6,10 @@ the job generator expands each group into its commands
 (`core/src/job/command_groups.rs`, `expand_step`). Concept: VISION_GROUP.md.
 
 - [x] **Group card with parameters** – done (step 11).
-- [ ] **Scoping for classes, objects and memory slots** – decided, see
-      "Scoping" below. Replaces the earlier plans "internal classes per
-      instance" (created at insertion) and "renumber memory slots".
+- [x] **Scoping for classes, objects and memory slots** – steps 4–8.
 - [x] **Groups in the command picker** – step 12 (library part with step 16).
 - [x] **Creating groups in the editor** – steps 13 and 14.
-- [ ] **Focus classes for group steps** – `PipelineSettings::object_classes`
-      ignores group steps (marked TODO); they should contribute the classes
-      their commands use.
+- [x] **Focus classes for group steps** – step 15.
 - [ ] **Validation in the editor** – today mistakes surface when a run starts.
       Check earlier, when loading/editing: unique group keys, every instance's
       key is defined, bindings point to existing steps/parameters, all
@@ -241,9 +237,31 @@ before 14: most groups are made from existing steps).
         (`compatible_parameters`, `add_binding`). Removing a list entry inside a
         group: bindings to it go, bindings to later entries move up
         (`list_entry_removed`, called from `modify_group_item`).
-15. [ ] Focus classes for group steps.
-16. [ ] Group library (`.evagroup`): save, insert, update while keeping the
+15. [x] Focus classes for group steps.
+        Done (2026-10-14): `evanalyzer_core::pipeline_classes` (next to
+        `pipeline_channels`) - the project classes of the enabled steps, also
+        inside groups with the instances' values (a group's own classes left
+        out). Used by the viewer focus; the incomplete
+        `PipelineSettings::object_classes` in cfg is gone.
+16. [x] Group library (`.evagroup`): save, insert, update while keeping the
         user's values.
+        Done (2026-10-14), reusing the template machinery: `GroupTemplate`
+        (cfg, next to the other templates: `schemaVersion`, `group` with its
+        `meta` as the template's, `uses` = nested groups; schema
+        `docs/group_template.schema.json`; `check_templates` checks
+        `.evagroup` too), loaded from the template folders like pipeline
+        templates (`load_group_templates`), saved through the template
+        dialog (`TemplateController`, target `Group`, filled from the group,
+        version one up). `workspace/group_library.rs`: saving links the
+        project's group to the file (`origin`); inserting copies it with the
+        groups it uses (once; an unrelated group with the same key → `_2`);
+        `origin.content_hash` (FNV-1a of steps/parameters/classes) tells
+        whether the project changed it; a higher file version → "Update to
+        vN" on the group card, asking (and warning about local changes);
+        the key stays, so the steps keep their values. Picker: "Library"
+        section under the project's groups (files not in the project yet).
+        Pipeline templates now carry the groups their steps use
+        (`command_groups`), merged into the project on insert.
 17. [ ] Allow to remove (unused) groups from project
 
 ## Scoping

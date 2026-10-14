@@ -1059,6 +1059,11 @@
       "description": "Where a definition came from: a group library file.",
       "type": "object",
       "properties": {
+        "contentHash": {
+          "description": "A fingerprint of the definition as inserted - if it differs now, the\nproject changed the group, and an update from the library would\nreplace those changes. Empty in files written before.",
+          "type": "string",
+          "default": ""
+        },
         "library": {
           "description": "The library file's name (`.evagroup`).",
           "type": "string"

@@ -17,7 +17,7 @@
 //!
 //! Usage: `cargo run -p evanalyzer_cfg --example check_templates -- <dir>`
 
-use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
+use evanalyzer_cfg::settings::templates::{GroupTemplate, PipelineTemplate, ProjectTemplate};
 use std::path::Path;
 
 fn main() {
@@ -30,12 +30,14 @@ fn main() {
 
     let mut checked_evapipe = 0;
     let mut checked_evapt = 0;
+    let mut checked_evagroup = 0;
     let mut failures = Vec::new();
 
     walk(root, &mut |path| {
         let is_evapipe = path.extension().and_then(|e| e.to_str()) == Some("evapipe");
         let is_evapt = path.extension().and_then(|e| e.to_str()) == Some("evapt");
-        if !is_evapipe && !is_evapt {
+        let is_evagroup = path.extension().and_then(|e| e.to_str()) == Some("evagroup");
+        if !is_evapipe && !is_evapt && !is_evagroup {
             return;
         }
 
@@ -44,7 +46,15 @@ fn main() {
             return;
         };
 
-        if is_evapipe {
+        if is_evagroup {
+            checked_evagroup += 1;
+            if let Err(e) = serde_json::from_str::<GroupTemplate>(&json) {
+                failures.push(format!(
+                    "{}: failed to deserialize as GroupTemplate: {e}",
+                    path.display()
+                ));
+            }
+        } else if is_evapipe {
             checked_evapipe += 1;
             if let Err(e) = serde_json::from_str::<PipelineTemplate>(&json) {
                 failures.push(format!(
@@ -63,9 +73,12 @@ fn main() {
         }
     });
 
-    println!("checked {checked_evapipe} .evapipe file(s), {checked_evapt} .evapt file(s)");
+    println!(
+        "checked {checked_evapipe} .evapipe file(s), {checked_evapt} .evapt file(s), \
+         {checked_evagroup} .evagroup file(s)"
+    );
 
-    if checked_evapipe == 0 && checked_evapt == 0 {
+    if checked_evapipe == 0 && checked_evapt == 0 && checked_evagroup == 0 {
         eprintln!(
             "no .evapipe/.evapt files found under {} - check the path/checkout is correct",
             root.display()

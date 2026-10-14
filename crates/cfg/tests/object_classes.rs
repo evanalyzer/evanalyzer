@@ -1,30 +1,11 @@
 //! Tests for the generated `PipelineCommand::object_classes()` (see
-//! `build/pipeline_commands_generator.rs`) and `PipelineSettings::object_classes()`.
+//! `build/pipeline_commands_generator.rs`). A pipeline's classes (also
+//! inside groups) are `evanalyzer_core::pipeline_classes`.
 //! The generated file can't carry inline tests, so they live here.
 
-use evanalyzer_cfg::core_types::{ImageAddress, ObjectClass, PipelineId, SegmentationClass};
+use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::*;
-use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
-
-fn step(enabled: bool, command: PipelineCommand) -> PipelineStepSettings {
-    PipelineStepSettings {
-        id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-        enabled,
-        content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command),
-    }
-}
-
-fn pipeline(steps: Vec<PipelineStepSettings>) -> PipelineSettings {
-    PipelineSettings {
-        id: PipelineId(1),
-        name: "p".into(),
-        description: None,
-        image_source: ImageAddress::Channel(0),
-        enabled: true,
-        steps,
-    }
-}
 
 #[test]
 fn segmentation_classes_count_as_the_object_class_they_become() {
@@ -190,24 +171,4 @@ fn object_commands_report_all_their_classes() {
 fn image_filters_have_no_classes() {
     let blur = PipelineCommand::GaussianBlur(GaussianBlurSettings::default());
     assert!(blur.object_classes().is_empty());
-}
-
-#[test]
-fn a_pipeline_collects_the_classes_of_its_enabled_steps_once() {
-    let make = |id| {
-        PipelineCommand::TransformObjects(TransformObjectsSettings {
-            input_class: ObjectClass::Global(id),
-            output_class: ObjectClass::Global(10),
-            ..Default::default()
-        })
-    };
-    let p = pipeline(vec![
-        step(true, make(1)),
-        step(true, make(2)),
-        step(false, make(3)),
-    ]);
-    assert_eq!(
-        p.object_classes().into_iter().collect::<Vec<_>>(),
-        [1, 2, 10].map(ObjectClass::Global)
-    );
 }

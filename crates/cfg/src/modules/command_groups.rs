@@ -108,6 +108,12 @@ pub struct GroupOrigin {
 
     /// The definition's version in that file when it was inserted.
     pub version: u32,
+
+    /// A fingerprint of the definition as inserted - if it differs now, the
+    /// project changed the group, and an update from the library would
+    /// replace those changes. Empty in files written before.
+    #[serde(default)]
+    pub content_hash: String,
 }
 
 /// A use of a group in a pipeline: which definition, with which values.

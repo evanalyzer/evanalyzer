@@ -3,6 +3,14 @@
   "title": "PipelineTemplate",
   "type": "object",
   "properties": {
+    "commandGroups": {
+      "description": "The command group definitions the steps use, so the template works in\nother projects. Absent in templates saved before groups existed.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/GroupDefinition"
+      }
+    },
     "meta": {
       "description": "Metadata of this pipeline template",
       "$ref": "#/$defs/MetaData"
@@ -186,6 +194,31 @@
           "default": true
         }
       }
+    },
+    "Class": {
+      "type": "object",
+      "properties": {
+        "color": {
+          "type": "string"
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "color",
+        "name",
+        "notes"
+      ]
     },
     "ClassificationMappingSettings": {
       "description": "Maps one class the model was trained to predict to a class ID meaningful\nin this project. Model class IDs are a snapshot taken at training time\n(see `evanalyzer_cfg::ObjectClassLabel`'s doc comment) and aren't\nguaranteed to line up with this project's own `ObjectClass` IDs - this is\nthe bridge between the two.",
@@ -808,6 +841,60 @@
         }
       }
     },
+    "GroupDefinition": {
+      "description": "A group as defined in the project: its steps and the parameters it shows.",
+      "type": "object",
+      "properties": {
+        "classes": {
+          "description": "Local classes used by the group. These classes are scoped to the group only",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Class"
+          }
+        },
+        "key": {
+          "description": "Unique group key, prefere SCREAMING_SNAKE_CASE",
+          "type": "string"
+        },
+        "meta": {
+          "description": "Metadata of this group",
+          "$ref": "#/$defs/MetaData"
+        },
+        "origin": {
+          "description": "The library file this definition was inserted from, if any.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GroupOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameters": {
+          "description": "The group's parameters, shown on the group card.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GroupParameterDef"
+          }
+        },
+        "steps": {
+          "description": "The steps which are executed in the given order",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PipelineStepSettings"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "meta",
+        "steps",
+        "parameters"
+      ]
+    },
     "GroupInstance": {
       "description": "A use of a group in a pipeline: which definition, with which values.",
       "type": "object",
@@ -830,6 +917,78 @@
       },
       "required": [
         "key"
+      ]
+    },
+    "GroupOrigin": {
+      "description": "Where a definition came from: a group library file.",
+      "type": "object",
+      "properties": {
+        "contentHash": {
+          "description": "A fingerprint of the definition as inserted - if it differs now, the\nproject changed the group, and an update from the library would\nreplace those changes. Empty in files written before.",
+          "type": "string",
+          "default": ""
+        },
+        "library": {
+          "description": "The library file's name (`.evagroup`).",
+          "type": "string"
+        },
+        "originGroupKey": {
+          "description": "If this is a copy form an existing group, this is the origin group key.\nThis allows to reset the group default settings.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The definition's version in that file when it was inserted.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "originGroupKey",
+        "library",
+        "version"
+      ]
+    },
+    "GroupParamId": {
+      "description": "A group parameter's id, unique within its group definition. The values a\ngroup instance holds are keyed by it, so they survive reordering and\nrelabelling the definition's parameters.\n\nAlso read from text (`\"1\"`): as a map key inside a pipeline step, serde\nhands it over as a string (the step's content is `#[serde(flatten)]`ed),\nwhich the derived number-only `Deserialize` would refuse.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "GroupParameterDef": {
+      "description": "One parameter of a group: what it sets inside the group, and its default.",
+      "type": "object",
+      "properties": {
+        "bindings": {
+          "description": "The inner parameters this one sets - all of the same type. Type,\noptions and range are those of the bound parameters (not stored here,\nso they can't go stale when a command changes).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParamBinding"
+          }
+        },
+        "default": {
+          "description": "The value an instance starts with.",
+          "$ref": "#/$defs/ParamValue"
+        },
+        "description": {
+          "description": "Explanation shown to the user.",
+          "type": "string",
+          "default": ""
+        },
+        "id": {
+          "description": "Unique within the group definition.",
+          "$ref": "#/$defs/GroupParamId"
+        },
+        "label": {
+          "description": "Name shown to the user, e.g. \"Cell class\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "default",
+        "bindings"
       ]
     },
     "HessianSettings": {
@@ -1807,6 +1966,24 @@
             "unit"
           ]
         }
+      ]
+    },
+    "ParamBinding": {
+      "description": "An inner parameter a group parameter sets.",
+      "type": "object",
+      "properties": {
+        "param": {
+          "description": "The parameter's path in that step's command, as `ParameterDef::name`\ngives it (e.g. \"class_out\", \"method.classes\"). A path into a list\nentry (\"thresholds.2.min\") breaks when entries are added or removed.",
+          "type": "string"
+        },
+        "step": {
+          "description": "The step of the group that owns the parameter.",
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "step",
+        "param"
       ]
     },
     "ParamValue": {

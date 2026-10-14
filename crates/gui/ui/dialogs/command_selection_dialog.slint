@@ -90,6 +90,7 @@ export global CommandPickerState {
     in property <[CommandDef]> shown-measure;
     in property <[CommandDef]> shown-templates;
     in property <[CommandDef]> shown-groups;
+    in property <[CommandDef]> shown-library-groups;
     in property <CommandDef> detail;
     in property <bool> has-detail;
     in property <int> total-shown;
@@ -677,6 +678,7 @@ export component CommandSelectionDialog inherits Rectangle {
     in property <[CommandDef]> shown-measure;
     in property <[CommandDef]> shown-templates;
     in property <[CommandDef]> shown-groups;
+    in property <[CommandDef]> shown-library-groups;
     in property <CommandDef> detail;            // command for selected-id (or default)
     in property <bool> has-detail;
     in property <int> total-shown;       // sum across the five categories
@@ -1322,7 +1324,7 @@ export component CommandSelectionDialog inherits Rectangle {
                             if (filter-groups || query != "") && !filter-favorites: VerticalLayout {
                                     spacing: 0;
 
-                                    if filter-groups && shown-groups.length == 0: VerticalLayout {
+                                    if filter-groups && shown-groups.length == 0 && shown-library-groups.length == 0: VerticalLayout {
                                         padding-top: 60px;
                                         spacing: 10px;
                                         Text {
@@ -1380,6 +1382,59 @@ export component CommandSelectionDialog inherits Rectangle {
                                     }
 
                                     for c in shown-groups: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+
+                                    if shown-library-groups.length > 0: Rectangle {
+                                        height: 28px;
+                                        HorizontalLayout {
+                                            padding-left: 14px;
+                                            padding-right: 14px;
+                                            spacing: 8px;
+                                            alignment: start;
+                                            Rectangle {
+                                                width: 3px;
+                                                height: 10px;
+                                                background: Theme.cat-group.with-alpha(0.6);
+                                                border-radius: 1.5px;
+                                                y: (parent.height - 10px) / 2;
+                                            }
+
+                                            Text {
+                                                text: "LIBRARY";
+                                                color: Theme.cat-group;
+                                                font-size: 10px;
+                                                font-weight: 600;
+                                                letter-spacing: 0.6px;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Rectangle {
+                                                horizontal-stretch: 1;
+                                            }
+
+                                            Text {
+                                                text: "\{shown-library-groups.length}";
+                                                color: Theme.text-mute;
+                                                font-size: 10px;
+                                                font-family: Theme.font-mono;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    for c in shown-library-groups: CommandRow {
                                         cmd: c;
                                         selected: c.id == selected-id;
                                         clicked => {
@@ -1558,6 +1613,7 @@ export component CommandPickerModal inherits Rectangle {
     in property <[CommandDef]> shown-measure;
     in property <[CommandDef]> shown-templates;
     in property <[CommandDef]> shown-groups;
+    in property <[CommandDef]> shown-library-groups;
     in property <CommandDef> detail;
     in property <bool> has-detail;
     in property <int> total-shown;
@@ -1614,6 +1670,7 @@ export component CommandPickerModal inherits Rectangle {
         shown-measure: root.shown-measure;
         shown-templates: root.shown-templates;
         shown-groups: root.shown-groups;
+        shown-library-groups: root.shown-library-groups;
         detail: root.detail;
         has-detail: root.has-detail;
         total-shown: root.total-shown;

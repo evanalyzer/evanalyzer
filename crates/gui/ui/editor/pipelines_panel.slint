@@ -104,6 +104,8 @@ export struct PipelineCommand {
         // values never go unnoticed).
         advanced-count: int,
         advanced-changed: int,
+        // A group card: the group library has a newer version ("3"), or empty.
+        update-version: string,
     }
 
 export struct Pipeline {
@@ -1887,6 +1889,8 @@ component StepRow inherits Rectangle {
         callback group-steps;
         callback open-group;
         callback ungroup;
+        callback save-to-library;
+        callback update-group;
         callback param-changed(string, string);
         callback toggle-breakpoint;
 
@@ -2214,6 +2218,56 @@ component StepRow inherits Rectangle {
                             }
                         }
 
+                        if root.step.category == StepCategory.group && PipelinesPanelState.open-group-name == "": Rectangle {
+                            height: 26px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            background: library-ta.has-hover ? Theme.raised : transparent;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                alignment: center;
+                                Text {
+                                    text: "Save to library…";
+                                    font-size: 11px;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            library-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.save-to-library();
+                                }
+                            }
+                        }
+
+                        if root.step.update-version != "": Rectangle {
+                            height: 26px;
+                            border-radius: 4px;
+                            background: update-ta.has-hover ? Theme.cat-group : Theme.cat-group.with-alpha(0.8);
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                alignment: center;
+                                Text {
+                                    text: "Update to v\{root.step.update-version}";
+                                    font-size: 11px;
+                                    color: Theme.panel;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            update-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.update-group();
+                                }
+                            }
+                        }
+
                         if root.step.category != StepCategory.group && PipelinesPanelState.open-group-name == "": Rectangle {
                             height: 26px;
                             border-radius: 4px;
@@ -2473,6 +2527,10 @@ export global PipelinesPanelState {
         callback open-group(int);
         callback close-group();
         callback ungroup(int);
+        /// "Save to library…" on a group card (step index).
+        callback save-group-to-library(int);
+        /// "Update to vN" on a group card (step index).
+        callback update-group(int);
         /// Exposes a setting of an opened group's step as a group parameter,
         /// or hides it again: step index, setting path ("min_area",
         /// "thresholds.1.min_threshold").
@@ -2951,6 +3009,12 @@ export component PipelinesPanel inherits Rectangle {
                                 }
                                 ungroup => {
                                     PipelinesPanelState.ungroup(cmd.id);
+                                }
+                                save-to-library => {
+                                    PipelinesPanelState.save-group-to-library(cmd.id);
+                                }
+                                update-group => {
+                                    PipelinesPanelState.update-group(cmd.id);
                                 }
                                 param-changed(n, v) => {
                                     PipelinesPanelState.param-changed(cmd.id, n, v);

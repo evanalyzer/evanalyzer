@@ -415,3 +415,89 @@ export component ExposeChoiceDialog inherits Rectangle {
         height: layout.preferred-height;
     }
 }
+
+// -- Update a group from the library -------------------------------
+
+export global GroupUpdateState {
+    in property <string> group-name: "";
+    /// "v1 → v3"
+    in property <string> versions: "";
+    /// The project changed the group since it was inserted - the update
+    /// replaces those changes.
+    in property <bool> changed-here: false;
+    callback confirm();
+    callback cancel();
+}
+
+export component GroupUpdateDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    TouchArea {
+        clicked => {
+            GroupUpdateState.cancel();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+
+            Text {
+                text: "Update \{GroupUpdateState.group-name}";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text;
+            }
+
+            Text {
+                text: "The group library has a newer version (\{GroupUpdateState.versions}). Every step using the group gets it; their values stay.";
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            if GroupUpdateState.changed-here: Text {
+                text: "This project changed the group since it was inserted - updating replaces those changes.";
+                font-size: 11px;
+                color: Theme.warn;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        GroupUpdateState.cancel();
+                    }
+                }
+
+                AppButton {
+                    text: "Update";
+                    primary: true;
+                    clicked => {
+                        GroupUpdateState.confirm();
+                    }
+                }
+            }
+        }
+
+        height: layout.preferred-height;
+    }
+}

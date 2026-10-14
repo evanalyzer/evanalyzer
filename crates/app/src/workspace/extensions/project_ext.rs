@@ -1460,6 +1460,7 @@ impl ProjectExt for ProjectWithRuntime {
             schema_version: CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION,
             meta,
             steps: pipeline.steps.clone(),
+            command_groups: crate::workspace::group_library::groups_used_by(self, &pipeline.steps),
         };
 
         let mut final_path = path.clone();
@@ -1550,6 +1551,8 @@ impl ProjectExt for ProjectWithRuntime {
         };
 
         let next_id = self.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
+        // The groups its steps use, unless the project has them already.
+        crate::workspace::group_library::merge_group_definitions(self, &template.command_groups);
 
         self.add_pipeline(PipelineSettings {
             id: PipelineId(next_id),
@@ -1612,7 +1615,7 @@ impl ProjectExt for ProjectWithRuntime {
             return false;
         };
         let channels = focus_channels(pipeline, &self.command_groups);
-        let pipeline_classes = pipeline.object_classes();
+        let pipeline_classes = evanalyzer_core::pipeline_classes(pipeline, &self.command_groups);
         self.tmp_settings.pipeline_focus = Some(PipelineFocus {
             pipeline_id,
             channels,
@@ -1639,7 +1642,10 @@ impl ProjectExt for ProjectWithRuntime {
             (FocusChannels::Only(new), FocusChannels::Only(old)) => !new.is_subset(old),
             (a, b) => a != b,
         };
-        if source_changed || pipeline.object_classes() != focus.pipeline_classes {
+        if source_changed
+            || evanalyzer_core::pipeline_classes(pipeline, &self.command_groups)
+                != focus.pipeline_classes
+        {
             self.focus_pipeline(focus.pipeline_id);
         }
     }
@@ -3109,6 +3115,44 @@ mod tests {
         assert!(project.is_class_visible(&ObjectClass::Global(3)));
         assert!(project.is_class_visible(&ObjectClass::Global(4)));
         assert!(!project.is_class_visible(&ObjectClass::Global(5)));
+    }
+
+    #[test]
+    fn focus_shows_the_classes_used_inside_a_pipelines_groups() {
+        let mut project = project_with_focus_pipelines();
+        // Pipeline 3: only a group step, whose transform uses classes 7 → 8.
+        let mut inner = focus_test_pipeline(9, ImageAddress::Channel(0), 7, 8).steps;
+        inner[0].id = evanalyzer_cfg::core_types::StepId(1);
+        project
+            .command_groups
+            .push(evanalyzer_cfg::settings::command_groups::GroupDefinition {
+                key: "INNER".into(),
+                meta: Default::default(),
+                classes: vec![],
+                steps: inner,
+                parameters: vec![],
+                origin: None,
+            });
+        let mut pipeline = focus_test_pipeline(3, ImageAddress::Channel(0), 1, 1);
+        pipeline.steps = vec![PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(1),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Group(
+                evanalyzer_cfg::settings::command_groups::GroupInstance {
+                    key: "INNER".into(),
+                    values: Default::default(),
+                },
+            ),
+        }];
+        project.pipelines.push(pipeline);
+
+        project.focus_pipeline(PipelineId(3));
+        assert!(project.is_class_visible(&ObjectClass::Global(7)));
+        assert!(project.is_class_visible(&ObjectClass::Global(8)));
+        assert!(
+            !project.is_class_visible(&ObjectClass::Global(3)),
+            "pipeline 1's"
+        );
     }
 
     #[test]

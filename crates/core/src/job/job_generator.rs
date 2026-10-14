@@ -16,7 +16,7 @@ use crate::{
 use chrono::Utc;
 use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types::ImageAddress};
 use evanalyzer_cfg::{
-    core_types::{InternalErrors, StepId},
+    core_types::{InternalErrors, ObjectClass, StepId},
     settings::{
         command_groups::GroupDefinition,
         images_settings::ImageEntry,
@@ -331,6 +331,23 @@ pub fn pipeline_channels(pipeline: &PipelineSettings, groups: &[GroupDefinition]
         }
     }
     channels
+}
+
+/// The project classes `pipeline`'s enabled steps use - also inside command
+/// groups, with the instances' values (a group's own classes aren't project
+/// classes and are left out). A group that can't be expanded is skipped.
+pub fn pipeline_classes(
+    pipeline: &PipelineSettings,
+    groups: &[GroupDefinition],
+) -> BTreeSet<ObjectClass> {
+    pipeline
+        .steps
+        .iter()
+        .filter(|s| s.enabled)
+        .filter_map(|step| expand_step(step, groups, &mut ScopeCounter::default()).ok())
+        .flatten()
+        .flat_map(|ExpandedCommand { command, .. }| command.object_classes())
+        .collect()
 }
 
 /// The image channel `command` reads, if it reads one.
@@ -888,6 +905,40 @@ mod tests {
                 ),
             ),
         }
+    }
+
+    #[test]
+    fn a_pipelines_classes_are_its_enabled_steps_and_its_groups_project_classes() {
+        use evanalyzer_cfg::core_types::ObjectClass;
+        use evanalyzer_cfg::settings::pipeline_command_settings::TransformObjectsSettings;
+        let transform = |input: ObjectClass, output: u32, enabled: bool| PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+            enabled,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::TransformObjects(TransformObjectsSettings {
+                    input_class: input,
+                    output_class: ObjectClass::Global(output),
+                    ..Default::default()
+                }),
+            ),
+        };
+        let mut pipeline = named(1, "Cells", ImageAddress::Channel(0), true);
+        pipeline.steps = vec![
+            transform(ObjectClass::Global(1), 10, true),
+            transform(ObjectClass::Global(3), 11, false),
+            group_step("INNER"),
+        ];
+        let mut inner = group("INNER", vec![transform(ObjectClass::Local(1), 12, true)]);
+        inner.steps[0].id = evanalyzer_cfg::core_types::StepId(1);
+        inner.classes = vec![evanalyzer_cfg::settings::classification_settings::Class {
+            id: 1,
+            ..Default::default()
+        }];
+        assert_eq!(
+            pipeline_classes(&pipeline, &[inner]),
+            BTreeSet::from([1, 10, 12].map(ObjectClass::Global)),
+            "disabled steps and the group's own class left out"
+        );
     }
 
     #[test]

@@ -25,6 +25,32 @@ pub struct PipelineTemplate {
 
     /// The pipeline settings
     pub steps: Vec<PipelineStepSettings>,
+
+    /// The command group definitions the steps use, so the template works in
+    /// other projects. Absent in templates saved before groups existed.
+    #[serde(default)]
+    pub command_groups: Vec<GroupDefinition>,
+}
+
+/// A command group saved to a library file (`.evagroup`). Inserting it copies
+/// the group into a project, where it lives on its own from then on.
+#[allow(unused)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupTemplate {
+    /// On-disk format version (`.evagroup`), see
+    /// `CURRENT_GROUP_TEMPLATE_SCHEMA_VERSION`. Like the other templates, not
+    /// migrated.
+    #[serde(default)]
+    pub schema_version: u32,
+
+    /// The group. Its `meta` is the template's: name, description, authors,
+    /// version ("Update available" compares it).
+    pub group: GroupDefinition,
+
+    /// The groups it uses inside, so the file is complete on its own.
+    #[serde(default)]
+    pub uses: Vec<GroupDefinition>,
 }
 
 #[allow(unused)]
