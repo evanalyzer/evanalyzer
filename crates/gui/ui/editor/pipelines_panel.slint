@@ -1829,6 +1829,7 @@ component StepRow inherits Rectangle {
         callback toggle-expanded;
         callback remove;
         callback duplicate;
+        callback group-steps;
         callback param-changed(string, string);
         callback toggle-breakpoint;
 
@@ -2091,6 +2092,44 @@ component StepRow inherits Rectangle {
                         }
 
                         Rectangle {
+                            height: 26px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            background: group-ta.has-hover ? Theme.raised : transparent;
+                            animate background { duration: 100ms; }
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 5px;
+                                alignment: center;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Image {
+                                        source: @image-url("../icons/regular-white/brackets-square.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: Theme.text-dim;
+                                    }
+                                }
+
+                                Text {
+                                    text: "Group…";
+                                    font-size: 11px;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            group-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.group-steps();
+                                }
+                            }
+                        }
+
+                        Rectangle {
                             horizontal-stretch: 1;
                         }
 
@@ -2303,6 +2342,8 @@ export global PipelinesPanelState {
         callback expand-step(int);
         callback remove-step(int);
         callback duplicate-step(int);
+        /// Opens "Group steps" starting at this step (its index).
+        callback group-steps(int);
         callback insert-step(int, int);          // pipeline-id, after-idx
     callback param-changed(int, string, string);
         callback add-group-item(int, string);    // step-id, param-name
@@ -2716,6 +2757,9 @@ export component PipelinesPanel inherits Rectangle {
                                 }
                                 duplicate => {
                                     PipelinesPanelState.duplicate-step(cmd.id);
+                                }
+                                group-steps => {
+                                    PipelinesPanelState.group-steps(cmd.id);
                                 }
                                 param-changed(n, v) => {
                                     PipelinesPanelState.param-changed(cmd.id, n, v);

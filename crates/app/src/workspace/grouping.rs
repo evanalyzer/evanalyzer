@@ -1,0 +1,804 @@
+//! "Group steps": turns consecutive steps of a pipeline into a command group
+//! - a new definition in the project, and a step using it in their place.
+//!
+//! [`plan_grouping`] looks at the project classes the steps use and suggests
+//! a role for each ([`ClassRole`]); [`group_steps`] builds the group with the
+//! roles the user confirmed. With every class a parameter or fixed, the group
+//! runs exactly the commands the steps ran before.
+
+use chrono::Utc;
+use evanalyzer_cfg::{
+    core_types::{
+        GroupParamId, InternalErrors, ObjectClass, PipelineId, SegmentationClass, StepId,
+    },
+    settings::{
+        classification_settings::Class,
+        command_groups::{
+            GroupDefinition, GroupInstance, GroupParameterDef, ParamBinding, ParamValue,
+        },
+        meta_data::MetaData,
+        parameter_def::{ParamType, ParameterDef},
+        pipeline_command::PipelineCommand,
+        pipeline_command_settings::ExtractClassMappingSettings,
+        pipeline_settings::{PipelineStepSettings, StepContent},
+        project_settings::ProjectSettings,
+    },
+};
+use evanalyzer_core::{ExpandedCommand, ScopeCounter, expand_step};
+use std::collections::BTreeSet;
+use std::ops::RangeInclusive;
+
+use crate::workspace::extensions::utils::assign_step_ids;
+
+/// What a project class becomes in the new group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassRole {
+    /// A class of the group's own (`L1`, `L2`, ...): internal, each use of
+    /// the group has its own, and its objects don't reach the results.
+    Local,
+    /// A group parameter: each use of the group picks the class (starting
+    /// with this one).
+    Parameter,
+    /// Stays written into the group's steps as it is.
+    Fixed,
+}
+
+/// A project class the steps to group use.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupingClass {
+    pub class: ObjectClass,
+    /// The class's name in the project ("Class 5" if it has none).
+    pub name: String,
+    /// Used by other steps, pipelines or hand annotations too.
+    pub used_elsewhere: bool,
+    pub suggested: ClassRole,
+}
+
+/// What grouping some steps would involve - see [`plan_grouping`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupingPlan {
+    pub classes: Vec<GroupingClass>,
+    /// Image channels the steps load (Load Image Channel): exposed as group
+    /// parameters.
+    pub channels: BTreeSet<u32>,
+}
+
+/// The project classes steps `range` of pipeline `pipeline_id` use, each with
+/// a suggested role: used elsewhere too → [`ClassRole::Parameter`]; only
+/// here → [`ClassRole::Local`] - except a class the steps only know as a
+/// segmentation class with no Extract Objects among them to turn it into
+/// objects ([`ClassRole::Fixed`]: making it local would change nothing).
+pub fn plan_grouping(
+    project: &ProjectSettings,
+    pipeline_id: PipelineId,
+    range: RangeInclusive<usize>,
+) -> Result<GroupingPlan, InternalErrors> {
+    let steps = selected_steps(project, pipeline_id, &range)?;
+    let elsewhere = classes_used_elsewhere(project, pipeline_id, &range);
+    let extracts = steps
+        .iter()
+        .filter_map(|s| s.command())
+        .any(|c| matches!(c, PipelineCommand::ExtractObjects(_)));
+
+    let mut used: BTreeSet<ObjectClass> = BTreeSet::new();
+    for step in steps {
+        match &step.content {
+            StepContent::Command(command) => used.extend(command.object_classes()),
+            // A nested group's classes are written inside its own
+            // definition - they can't be rewritten here.
+            StepContent::Group(_) => {}
+        }
+    }
+    let nested: BTreeSet<ObjectClass> = steps
+        .iter()
+        .filter(|s| matches!(s.content, StepContent::Group(_)))
+        .flat_map(|s| commands_of(project, s))
+        .flat_map(|c| c.object_classes())
+        .collect();
+
+    let classes = used
+        .into_iter()
+        .map(|class| {
+            let used_elsewhere = elsewhere.contains(&class) || nested.contains(&class);
+            let only_segmentation = steps.iter().filter_map(|s| s.command()).all(|c| {
+                class_paths(c, class)
+                    .iter()
+                    .all(|(_, k)| *k == PathKind::Segmentation)
+            });
+            let suggested = if used_elsewhere {
+                ClassRole::Parameter
+            } else if only_segmentation && !extracts {
+                ClassRole::Fixed
+            } else {
+                ClassRole::Local
+            };
+            GroupingClass {
+                class,
+                name: class_name(project, class),
+                used_elsewhere,
+                suggested,
+            }
+        })
+        .collect();
+
+    let channels = steps
+        .iter()
+        .filter_map(|s| s.command())
+        .filter_map(|c| match c {
+            PipelineCommand::LoadChannel(s) => Some(s.channel.0),
+            _ => None,
+        })
+        .collect();
+    Ok(GroupingPlan { classes, channels })
+}
+
+/// Turns steps `range` of pipeline `pipeline_id` into a command group named
+/// `name`: a new definition in the project and one step using it in their
+/// place. `roles` says what each class of [`plan_grouping`] becomes (a class
+/// left out stays [`ClassRole::Fixed`]); loaded channels become parameters.
+/// Returns the new definition's key.
+pub fn group_steps(
+    project: &mut ProjectSettings,
+    pipeline_id: PipelineId,
+    range: RangeInclusive<usize>,
+    name: &str,
+    roles: &[(ObjectClass, ClassRole)],
+) -> Result<String, InternalErrors> {
+    selected_steps(project, pipeline_id, &range)?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(InternalErrors::InvalidArgument(
+            "a command group needs a name".into(),
+        ));
+    }
+    let key = unique_key(project, name);
+    let names: Vec<(ObjectClass, String, u32)> = roles
+        .iter()
+        .map(|(class, _)| {
+            let color = match class {
+                ObjectClass::Global(n) => project
+                    .classification
+                    .classes()
+                    .iter()
+                    .find(|c| c.id == *n)
+                    .map_or(0x808080, |c| c.color),
+                _ => 0x808080,
+            };
+            (*class, class_name(project, *class), color)
+        })
+        .collect();
+
+    let pipeline = project
+        .pipelines
+        .iter_mut()
+        .find(|p| p.id == pipeline_id)
+        .expect("checked by selected_steps");
+    let mut steps: Vec<PipelineStepSettings> = pipeline.steps.drain(range.clone()).collect();
+
+    let mut definition = GroupDefinition {
+        key: key.clone(),
+        meta: MetaData {
+            name: name.to_string(),
+            creation_time: Utc::now(),
+            ..Default::default()
+        },
+        classes: Vec::new(),
+        steps: Vec::new(),
+        parameters: Vec::new(),
+        origin: None,
+    };
+
+    let mut next_local = 1;
+    let mut next_parameter = 1;
+    for ((class, role), (_, class_name, color)) in roles.iter().zip(&names) {
+        match role {
+            ClassRole::Fixed => {}
+            ClassRole::Local => {
+                let local = ObjectClass::Local(next_local);
+                next_local += 1;
+                // Made by a segmentation step of these: Extract Objects maps it.
+                let segmented_here = steps.iter().filter_map(|s| s.command()).any(|c| {
+                    class_paths(c, *class)
+                        .iter()
+                        .any(|(_, kind)| *kind == PathKind::Segmentation)
+                });
+                for step in &mut steps {
+                    if let StepContent::Command(command) = &mut step.content {
+                        make_local(command, *class, local, segmented_here)?;
+                    }
+                }
+                definition.classes.push(Class {
+                    id: local_number(local),
+                    color: *color,
+                    name: class_name.clone(),
+                    notes: String::new(),
+                });
+            }
+            ClassRole::Parameter => {
+                let bindings: Vec<ParamBinding> = steps
+                    .iter()
+                    .filter_map(|s| s.command().map(|c| (s.id, c)))
+                    .flat_map(|(id, command)| {
+                        class_paths(command, *class)
+                            .into_iter()
+                            .filter(|(_, kind)| *kind != PathKind::Multi)
+                            .map(move |(param, _)| ParamBinding { step: id, param })
+                    })
+                    .collect();
+                if bindings.is_empty() {
+                    continue;
+                }
+                definition.parameters.push(GroupParameterDef {
+                    id: GroupParamId(next_parameter),
+                    label: class_name.clone(),
+                    description: String::new(),
+                    default: ParamValue::Text(class.to_text()),
+                    bindings,
+                });
+                next_parameter += 1;
+            }
+        }
+    }
+
+    // Each channel loaded becomes a parameter, bound to every step loading it.
+    let mut channels: Vec<(u32, Vec<StepId>)> = Vec::new();
+    for step in &steps {
+        if let Some(PipelineCommand::LoadChannel(s)) = step.command() {
+            match channels.iter_mut().find(|(c, _)| *c == s.channel.0) {
+                Some((_, ids)) => ids.push(step.id),
+                None => channels.push((s.channel.0, vec![step.id])),
+            }
+        }
+    }
+    let several = channels.len() > 1;
+    for (channel, ids) in channels {
+        definition.parameters.push(GroupParameterDef {
+            id: GroupParamId(next_parameter),
+            label: if several {
+                format!("Channel {channel}")
+            } else {
+                "Channel".into()
+            },
+            description: String::new(),
+            default: ParamValue::Int(channel as i64),
+            bindings: ids
+                .into_iter()
+                .map(|step| ParamBinding {
+                    step,
+                    param: "channel".into(),
+                })
+                .collect(),
+        });
+        next_parameter += 1;
+    }
+
+    definition.steps = steps;
+    let start = *range.start();
+    pipeline.steps.insert(
+        start,
+        PipelineStepSettings {
+            id: StepId::UNASSIGNED,
+            enabled: true,
+            content: StepContent::Group(GroupInstance {
+                key: key.clone(),
+                values: Default::default(),
+            }),
+        },
+    );
+    assign_step_ids(&mut pipeline.steps);
+    project.command_groups.push(definition);
+    Ok(key)
+}
+
+/// How a setting refers to a class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathKind {
+    /// A single class setting (e.g. "output_class"), or a class list with
+    /// only this class.
+    Single,
+    /// One entry of a class list with other classes too (e.g.
+    /// "input_classes" = 1, 3) - a group parameter can't set one entry.
+    Multi,
+    /// A segmentation class with the class's number (a Threshold's class -
+    /// the same number by convention).
+    Segmentation,
+}
+
+/// Where `command`'s settings refer to `class`: the setting's path (as
+/// `apply_param_change` takes it, "list.2.field" inside list entries) and how.
+fn class_paths(command: &PipelineCommand, class: ObjectClass) -> Vec<(String, PathKind)> {
+    fn walk(
+        params: &[ParameterDef],
+        prefix: &str,
+        class: ObjectClass,
+        out: &mut Vec<(String, PathKind)>,
+    ) {
+        let text = class.to_text();
+        for param in params {
+            let path = format!("{prefix}{}", param.name);
+            match param.param_type {
+                ParamType::ObjClass if param.value.trim() == text => {
+                    out.push((path, PathKind::Single))
+                }
+                ParamType::MultiObjClass => {
+                    let items: Vec<&str> = param.value.split(',').map(str::trim).collect();
+                    if items == [text.as_str()] {
+                        // Only this class: set like a single class.
+                        out.push((path, PathKind::Single));
+                    } else if items.contains(&text.as_str()) {
+                        out.push((path, PathKind::Multi));
+                    }
+                }
+                ParamType::SegClass => {
+                    if let ObjectClass::Global(n) = class
+                        && param.value.trim() == n.to_string()
+                    {
+                        out.push((path, PathKind::Segmentation));
+                    }
+                }
+                ParamType::Group => {
+                    for (index, entry) in param.groups.iter().enumerate() {
+                        walk(entry, &format!("{path}.{index}."), class, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&command.to_parameters(), "", class, &mut out);
+    out
+}
+
+/// Rewrites every reference of `command` to project class `class` to the
+/// group's class `local`. If `segmented_here` (a step being grouped makes the
+/// segmentation class with the class's number), an Extract Objects maps that
+/// segmentation class to `local`, so its objects get the group's class.
+fn make_local(
+    command: &mut PipelineCommand,
+    class: ObjectClass,
+    local: ObjectClass,
+    segmented_here: bool,
+) -> Result<(), InternalErrors> {
+    for (path, kind) in class_paths(command, class) {
+        let value = match kind {
+            PathKind::Segmentation => continue,
+            PathKind::Single => local.to_text(),
+            PathKind::Multi => {
+                let current = find_value(&command.to_parameters(), &path).unwrap_or_default();
+                current
+                    .split(',')
+                    .map(|item| {
+                        if item.trim() == class.to_text() {
+                            local.to_text()
+                        } else {
+                            item.trim().to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }
+        };
+        command.apply_param_change(&path, &value);
+        if find_value(&command.to_parameters(), &path).as_deref() != Some(value.as_str()) {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "{} doesn't take the group class {} for {path}",
+                command.name(),
+                local.to_text()
+            )));
+        }
+    }
+    if let (true, PipelineCommand::ExtractObjects(extract), ObjectClass::Global(n)) =
+        (segmented_here, command, class)
+    {
+        let segmentation_class = SegmentationClass(n);
+        match extract
+            .class_mapping
+            .iter_mut()
+            .find(|m| m.segmentation_class == segmentation_class)
+        {
+            // Already mapped elsewhere - that class decides.
+            Some(_) => {}
+            None => extract.class_mapping.push(ExtractClassMappingSettings {
+                segmentation_class,
+                object_class: local,
+            }),
+        }
+    }
+    Ok(())
+}
+
+fn find_value(params: &[ParameterDef], path: &str) -> Option<String> {
+    if let Some(p) = params.iter().find(|p| p.name == path) {
+        return Some(p.value.clone());
+    }
+    let mut parts = path.splitn(3, '.');
+    let (list, index, field) = (parts.next()?, parts.next()?, parts.next()?);
+    let index: usize = index.parse().ok()?;
+    let entry = params.iter().find(|p| p.name == list)?.groups.get(index)?;
+    find_value(entry, field)
+}
+
+fn local_number(class: ObjectClass) -> u32 {
+    match class {
+        ObjectClass::Local(n) => n,
+        _ => unreachable!("only local classes are numbered here"),
+    }
+}
+
+/// Steps `range` of the pipeline - an error if the pipeline or the steps
+/// don't exist.
+fn selected_steps<'a>(
+    project: &'a ProjectSettings,
+    pipeline_id: PipelineId,
+    range: &RangeInclusive<usize>,
+) -> Result<&'a [PipelineStepSettings], InternalErrors> {
+    let pipeline = project
+        .pipelines
+        .iter()
+        .find(|p| p.id == pipeline_id)
+        .ok_or_else(|| InternalErrors::InvalidArgument(format!("no pipeline {pipeline_id}")))?;
+    pipeline.steps.get(range.clone()).ok_or_else(|| {
+        InternalErrors::InvalidArgument(format!(
+            "pipeline \"{}\" has no steps {} to {}",
+            pipeline.name,
+            range.start() + 1,
+            range.end() + 1
+        ))
+    })
+}
+
+/// The commands `step` runs (a group's with its values) - none if it can't
+/// be expanded.
+fn commands_of(project: &ProjectSettings, step: &PipelineStepSettings) -> Vec<PipelineCommand> {
+    expand_step(step, &project.command_groups, &mut ScopeCounter::default())
+        .map(|commands| {
+            commands
+                .into_iter()
+                .map(|ExpandedCommand { command, .. }| command)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The classes the project uses outside steps `range` of pipeline
+/// `pipeline_id`: in other steps and pipelines (inside groups too), in hand
+/// annotations, in the tile merge settings.
+fn classes_used_elsewhere(
+    project: &ProjectSettings,
+    pipeline_id: PipelineId,
+    range: &RangeInclusive<usize>,
+) -> BTreeSet<ObjectClass> {
+    let mut classes = BTreeSet::new();
+    for pipeline in &project.pipelines {
+        for (index, step) in pipeline.steps.iter().enumerate() {
+            if pipeline.id == pipeline_id && range.contains(&index) {
+                continue;
+            }
+            for command in commands_of(project, step) {
+                classes.extend(command.object_classes());
+            }
+        }
+    }
+    for image in project.images.list.values() {
+        for series in image.series.values() {
+            for object in &series.objects {
+                classes.extend(object.object_class.iter().copied());
+            }
+        }
+    }
+    classes.extend(project.tile_merge.classes_to_not_merge.iter().copied());
+    classes
+}
+
+fn class_name(project: &ProjectSettings, class: ObjectClass) -> String {
+    match class {
+        ObjectClass::Global(n) => project
+            .classification
+            .classes()
+            .iter()
+            .find(|c| c.id == n)
+            .map(|c| c.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| format!("Class {n}")),
+        other => other.to_text(),
+    }
+}
+
+/// A key for a group named `name` that no group of the project has:
+/// SCREAMING_SNAKE_CASE of the name, numbered if taken ("CELLS_2").
+fn unique_key(project: &ProjectSettings, name: &str) -> String {
+    let mut base: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    base = base.trim_matches('_').to_string();
+    while base.contains("__") {
+        base = base.replace("__", "_");
+    }
+    if base.is_empty() {
+        base = "GROUP".into();
+    }
+    let taken = |key: &str| project.command_groups.iter().any(|d| d.key == key);
+    if !taken(&base) {
+        return base;
+    }
+    (2..)
+        .map(|n| format!("{base}_{n}"))
+        .find(|key| !taken(key))
+        .expect("some number is free")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::core_types::{ImageAddress, ImageChannelIdx, SizeUnits};
+    use evanalyzer_cfg::settings::pipeline_command_settings::{
+        ClassifyObjectsSettings, ExtractObjectsSettings, LoadChannelSettings,
+        ObjectClassifyObjectsClassifyMatchHandlingSettings, ThresholdEntrySettings,
+        ThresholdSettings, VoronoiSettings,
+    };
+    use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
+
+    const NUCLEI: ObjectClass = ObjectClass::Global(1);
+    const SEEDS: ObjectClass = ObjectClass::Global(2);
+    const CELLS: ObjectClass = ObjectClass::Global(3);
+
+    fn step(id: u32, command: PipelineCommand) -> PipelineStepSettings {
+        PipelineStepSettings {
+            id: StepId(id),
+            enabled: true,
+            content: StepContent::Command(command),
+        }
+    }
+
+    fn threshold(class: u32) -> PipelineCommand {
+        PipelineCommand::Threshold(ThresholdSettings {
+            thresholds: vec![ThresholdEntrySettings {
+                object_class_id: SegmentationClass(class),
+                ..Default::default()
+            }],
+        })
+    }
+
+    fn classify(input: ObjectClass, output: ObjectClass) -> PipelineCommand {
+        PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+            input_classes: vec![input],
+            match_handling: ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch,
+            output_class: output,
+            size_unit: SizeUnits::Pixels,
+            min_area: 50.0,
+            ..Default::default()
+        })
+    }
+
+    fn pipeline(id: u32, steps: Vec<PipelineStepSettings>) -> PipelineSettings {
+        PipelineSettings {
+            id: PipelineId(id),
+            name: format!("Pipeline {id}"),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps,
+        }
+    }
+
+    /// Pipeline 1: nuclei → seeds (only used here) → Voronoi cells; pipeline
+    /// 2 reads the cells.
+    fn project() -> ProjectSettings {
+        let mut project = ProjectSettings::default();
+        for (id, name) in [(1, "Nuclei"), (2, "Seeds"), (3, "Cells")] {
+            project.classification.classes_mut().push(Class {
+                id,
+                color: 0xFF0000,
+                name: name.into(),
+                notes: String::new(),
+            });
+        }
+        project.pipelines = vec![
+            pipeline(
+                1,
+                vec![
+                    step(1, threshold(1)),
+                    step(2, PipelineCommand::ConnectedComponents(Default::default())),
+                    step(3, PipelineCommand::ExtractObjects(Default::default())),
+                    step(4, classify(NUCLEI, SEEDS)),
+                    step(
+                        5,
+                        PipelineCommand::Voronoi(VoronoiSettings {
+                            centers: SEEDS,
+                            output_class: CELLS,
+                            ..Default::default()
+                        }),
+                    ),
+                ],
+            ),
+            pipeline(2, vec![step(1, classify(CELLS, ObjectClass::Global(4)))]),
+        ];
+        project
+    }
+
+    fn roles(plan: &GroupingPlan) -> Vec<(ObjectClass, ClassRole)> {
+        plan.classes
+            .iter()
+            .map(|c| (c.class, c.suggested))
+            .collect()
+    }
+
+    fn json(commands: Vec<PipelineCommand>) -> serde_json::Value {
+        serde_json::to_value(commands).unwrap()
+    }
+
+    fn commands_of_step(
+        project: &ProjectSettings,
+        pipeline: usize,
+        index: usize,
+    ) -> Vec<PipelineCommand> {
+        commands_of(project, &project.pipelines[pipeline].steps[index])
+    }
+
+    #[test]
+    fn classes_used_elsewhere_are_suggested_as_parameters_the_others_as_local() {
+        let plan = plan_grouping(&project(), PipelineId(1), 2..=4).unwrap();
+        assert_eq!(
+            roles(&plan),
+            [
+                (NUCLEI, ClassRole::Parameter), // the Threshold before makes it
+                (SEEDS, ClassRole::Local),      // only used by these steps
+                (CELLS, ClassRole::Parameter),  // pipeline 2 reads it
+            ]
+        );
+        assert_eq!(plan.classes[1].name, "Seeds");
+        assert!(!plan.classes[1].used_elsewhere);
+    }
+
+    #[test]
+    fn grouping_puts_the_steps_into_a_definition_and_a_step_using_it_in_their_place() {
+        let mut project = project();
+        let plan = plan_grouping(&project, PipelineId(1), 2..=4).unwrap();
+        let key = group_steps(
+            &mut project,
+            PipelineId(1),
+            2..=4,
+            "Cell reconstruction",
+            &roles(&plan),
+        )
+        .unwrap();
+
+        assert_eq!(key, "CELL_RECONSTRUCTION");
+        let steps = &project.pipelines[0].steps;
+        assert_eq!(steps.len(), 3);
+        let StepContent::Group(instance) = &steps[2].content else {
+            panic!("a group step in their place");
+        };
+        assert_eq!(instance.key, key);
+        let definition = &project.command_groups[0];
+        assert_eq!(definition.meta.name, "Cell reconstruction");
+        assert_eq!(definition.steps.len(), 3);
+        assert_eq!(definition.classes.len(), 1);
+        assert_eq!(
+            (
+                definition.classes[0].id,
+                definition.classes[0].name.as_str()
+            ),
+            (1, "Seeds")
+        );
+        let labels: Vec<&str> = definition
+            .parameters
+            .iter()
+            .map(|p| p.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Nuclei", "Cells"]);
+
+        // What runs: the seeds are the group's own now.
+        let commands = commands_of_step(&project, 0, 2);
+        let PipelineCommand::ClassifyObjects(classify) = &commands[1] else {
+            panic!("classify")
+        };
+        assert_eq!(
+            (classify.input_classes.as_slice(), classify.output_class),
+            (&[NUCLEI][..], ObjectClass::Local(1))
+        );
+        let PipelineCommand::Voronoi(voronoi) = &commands[2] else {
+            panic!("voronoi")
+        };
+        assert_eq!(
+            (voronoi.centers, voronoi.output_class),
+            (ObjectClass::Local(1), CELLS)
+        );
+    }
+
+    #[test]
+    fn without_local_classes_the_group_runs_exactly_what_the_steps_ran() {
+        let mut project = project();
+        let before: Vec<PipelineCommand> = project.pipelines[0].steps[2..=4]
+            .iter()
+            .filter_map(|s| s.command().cloned())
+            .collect();
+        let plan = plan_grouping(&project, PipelineId(1), 2..=4).unwrap();
+        let roles: Vec<_> = plan
+            .classes
+            .iter()
+            .map(|c| (c.class, ClassRole::Parameter))
+            .collect();
+        group_steps(&mut project, PipelineId(1), 2..=4, "Cells", &roles).unwrap();
+
+        assert_eq!(json(commands_of_step(&project, 0, 2)), json(before));
+        // Each use can pick other classes: a parameter per class.
+        assert_eq!(project.command_groups[0].parameters.len(), 3);
+    }
+
+    #[test]
+    fn a_class_segmented_and_extracted_inside_becomes_local_via_the_class_mapping() {
+        let mut project = project();
+        project.pipelines.push(pipeline(
+            3,
+            vec![
+                step(
+                    1,
+                    PipelineCommand::LoadChannel(LoadChannelSettings {
+                        channel: ImageChannelIdx(1),
+                    }),
+                ),
+                step(2, threshold(7)),
+                step(3, PipelineCommand::ConnectedComponents(Default::default())),
+                step(
+                    4,
+                    PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+                        max_objects_before_fail: 100_000,
+                        ..Default::default()
+                    }),
+                ),
+            ],
+        ));
+        let plan = plan_grouping(&project, PipelineId(3), 0..=3).unwrap();
+        assert_eq!(roles(&plan), [(ObjectClass::Global(7), ClassRole::Local)]);
+        assert_eq!(plan.channels, BTreeSet::from([1]));
+
+        group_steps(&mut project, PipelineId(3), 0..=3, "Spots", &roles(&plan)).unwrap();
+        let commands = commands_of_step(&project, 2, 0);
+        let PipelineCommand::ExtractObjects(extract) = &commands[3] else {
+            panic!("extract")
+        };
+        assert_eq!(extract.class_mapping.len(), 1);
+        assert_eq!(extract.class_mapping[0].object_class, ObjectClass::Local(1));
+        let channel = &project.command_groups[0].parameters[0];
+        assert_eq!(
+            (channel.label.as_str(), &channel.default),
+            ("Channel", &ParamValue::Int(1))
+        );
+    }
+
+    #[test]
+    fn a_class_only_segmented_here_without_extracting_stays_fixed() {
+        let mut project = project();
+        project
+            .pipelines
+            .push(pipeline(3, vec![step(1, threshold(8))]));
+        let plan = plan_grouping(&project, PipelineId(3), 0..=0).unwrap();
+        assert_eq!(roles(&plan), [(ObjectClass::Global(8), ClassRole::Fixed)]);
+    }
+
+    #[test]
+    fn keys_are_unique_and_mistakes_are_refused() {
+        let mut project = project();
+        let none: [(ObjectClass, ClassRole); 0] = [];
+        assert_eq!(
+            group_steps(&mut project, PipelineId(1), 1..=1, "Cells!", &none).unwrap(),
+            "CELLS"
+        );
+        assert_eq!(
+            group_steps(&mut project, PipelineId(1), 1..=1, "cells", &none).unwrap(),
+            "CELLS_2"
+        );
+        assert!(group_steps(&mut project, PipelineId(1), 0..=0, "  ", &none).is_err());
+        assert!(group_steps(&mut project, PipelineId(1), 0..=9, "Too many", &none).is_err());
+        assert!(plan_grouping(&project, PipelineId(9), 0..=0).is_err());
+    }
+}

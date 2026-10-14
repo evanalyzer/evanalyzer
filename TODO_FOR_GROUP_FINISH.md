@@ -10,7 +10,8 @@ the job generator expands each group into its commands
       "Scoping" below. Replaces the earlier plans "internal classes per
       instance" (created at insertion) and "renumber memory slots".
 - [x] **Groups in the command picker** – step 12 (library part with step 16).
-- [ ] **Creating groups in the editor** – see "Creating groups" below.
+- [ ] **Creating groups in the editor** – "Group steps" done (step 13);
+      "Open group", "Expose", "Ungroup" next (step 14).
 - [ ] **Focus classes for group steps** – `PipelineSettings::object_classes`
       ignores group steps (marked TODO); they should contribute the classes
       their commands use.
@@ -194,13 +195,32 @@ before 14: most groups are made from existing steps).
         Still open: "Library" section and "Update available" (need step 16),
         "Remove unused groups". Look not checked on screen (no headless
         screenshot in the tests).
-13. [ ] "Group selected steps" with automatic detection of input, output
+13. [x] "Group selected steps" with automatic detection of input, output
         and local classes.
+        Done (2026-10-14): "Group…" on each step card opens "Group steps"
+        (name, range from/to - instead of Shift-click selection, which the
+        step list doesn't have; can come later). Logic in the app layer
+        (`workspace/grouping.rs`, `evanalyzer_app::groups`): `plan_grouping`
+        lists the project classes the steps use with a suggested role -
+        used elsewhere too (other steps/pipelines, also inside groups; hand
+        annotations; tile merge) → group parameter, only here → internal
+        (local), only a segmentation class without Extract Objects among the
+        steps → fixed. No read/write distinction needed: a class parameter
+        binds the same either way. `group_steps` builds the definition
+        (steps keep their ids), local classes rewritten to `L1`, `L2`, ...
+        (an Extract Objects among the steps maps the segmentation class when
+        a step there makes it), parameters bound to every single-class
+        setting with the class (also a list with only it, and the matching
+        segmentation class); a list with other classes too stays as it is.
+        Load Image Channel steps' channels become parameters. The dialog
+        says internal classes don't reach the results. Tested: with no
+        internal classes the group runs exactly the commands the steps ran.
 14. [ ] "Open group" with breadcrumb, "Expose as group parameter",
         "Ungroup".
 15. [ ] Focus classes for group steps.
 16. [ ] Group library (`.evagroup`): save, insert, update while keeping the
         user's values.
+17. [ ] Allow to remove (unused) groups from project
 
 ## Scoping
 

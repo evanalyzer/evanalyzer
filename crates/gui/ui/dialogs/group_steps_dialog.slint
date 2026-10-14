@@ -1,0 +1,254 @@
+import { LineEdit, ComboBox, ScrollView } from "std-widgets.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
+
+// "Group steps": turns consecutive steps of a pipeline into a command group.
+// The host fills the class list with suggested roles (see
+// `evanalyzer_app::groups::plan_grouping`) and recomputes it when the range
+// changes.
+
+// -- Global state --------------------------------------------
+
+/// A project class the steps use, and what it becomes in the group.
+export struct GroupClassRow {
+    /// The class in its text form ("3") - how the host knows which it is.
+    class-text: string,
+    name: string,
+    /// "Only used by these steps" / "Also used elsewhere".
+    detail: string,
+    /// 0 = internal (the group's own), 1 = group parameter, 2 = fixed.
+    role: int,
+}
+
+export global GroupStepsState {
+    in property <int> pipeline-id: 0;
+    /// "1 · Threshold", "2 · Extract Objects", ... - for the range pickers.
+    in property <[string]> step-names: [];
+    in-out property <int> from-step: 0;
+    in-out property <int> to-step: 0;
+    in-out property <string> name: "";
+    in property <[GroupClassRow]> classes: [];
+    /// "Channel 1 becomes a group parameter", or empty.
+    in property <string> channels-text: "";
+    /// Why the group can't be made, or empty.
+    in property <string> error: "";
+    callback range-changed(int, int);
+    callback role-changed(int, int);
+    callback confirm();
+    callback cancel();
+}
+
+component RangeRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <[string]> model;
+    in property <int> current;
+    callback picked(int);
+
+    spacing: 8px;
+    Text {
+        text: label;
+        width: 40px;
+        font-size: 11px;
+        color: Theme.text-dim;
+        vertical-alignment: center;
+    }
+
+    ComboBox {
+        horizontal-stretch: 1;
+        model: root.model;
+        current-index: root.current;
+        selected(v) => {
+            root.picked(self.current-index);
+        }
+    }
+}
+
+// -- Dialog component -----------------------------------------
+
+export component GroupStepsDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    TouchArea {
+        clicked => {
+            GroupStepsState.cancel();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 480px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "Group steps";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
+
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: close-ta.has-hover ? Theme.raised : transparent;
+                    Text {
+                        text: "✕";
+                        font-size: 12px;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            GroupStepsState.cancel();
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: "The steps become one step - a command group you can use like a command, in this and other pipelines.";
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Group name";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    height: 30px;
+                    text: GroupStepsState.name;
+                    placeholder-text: "e.g. Cell reconstruction";
+                    font-size: 12px;
+                    edited(t) => {
+                        GroupStepsState.name = t;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 6px;
+                RangeRow {
+                    label: "From";
+                    model: GroupStepsState.step-names;
+                    current: GroupStepsState.from-step;
+                    picked(i) => {
+                        GroupStepsState.range-changed(i, GroupStepsState.to-step);
+                    }
+                }
+
+                RangeRow {
+                    label: "To";
+                    model: GroupStepsState.step-names;
+                    current: GroupStepsState.to-step;
+                    picked(i) => {
+                        GroupStepsState.range-changed(GroupStepsState.from-step, i);
+                    }
+                }
+            }
+
+            if GroupStepsState.classes.length > 0: VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: "Classes";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                for row[i] in GroupStepsState.classes: HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text {
+                            text: row.name;
+                            font-size: 12px;
+                            color: Theme.text;
+                        }
+
+                        Text {
+                            text: row.detail;
+                            font-size: 10px;
+                            color: Theme.text-mute;
+                        }
+                    }
+
+                    ComboBox {
+                        width: 190px;
+                        model: ["Internal (group only)", "Group parameter", "Fixed"];
+                        current-index: row.role;
+                        selected(v) => {
+                            GroupStepsState.role-changed(i, self.current-index);
+                        }
+                    }
+                }
+
+                Text {
+                    text: "Internal classes are the group's own: each use of the group has its own, and their objects don't reach the results.";
+                    font-size: 10px;
+                    color: Theme.text-mute;
+                    wrap: word-wrap;
+                }
+            }
+
+            if GroupStepsState.channels-text != "": Text {
+                text: GroupStepsState.channels-text;
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            if GroupStepsState.error != "": Text {
+                text: GroupStepsState.error;
+                font-size: 11px;
+                color: Theme.err;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        GroupStepsState.cancel();
+                    }
+                }
+
+                AppButton {
+                    text: "Create group";
+                    primary: true;
+                    clicked => {
+                        GroupStepsState.confirm();
+                    }
+                }
+            }
+        }
+
+        height: layout.preferred-height;
+    }
+}

@@ -8,6 +8,7 @@ pub mod crash_log;
 pub mod export;
 pub mod extensions;
 pub mod frontend;
+pub mod grouping;
 pub mod images;
 pub(crate) mod project_owner;
 pub mod settings;

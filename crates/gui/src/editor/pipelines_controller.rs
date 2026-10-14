@@ -8,13 +8,15 @@ use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     CommandDef, CommandParameter, CommandPickerState, DefaultParamPreview, GlobalAppState,
-    GroupItem, LeafParam, ParamType, Pipeline, PipelineCommand as SlintPipelineCommand,
-    PipelineStatus, PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
+    GroupClassRow, GroupItem, GroupStepsState, LeafParam, ParamType, Pipeline,
+    PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, RunAnalysisState,
+    StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use crate::{ResultItemData, ResultsListState};
 use evanalyzer_app::ai_learning::load_classifier_settings;
 use evanalyzer_app::fs::FileSystem;
+use evanalyzer_app::groups::ClassRole;
 use evanalyzer_app::project::ImageEntryExt;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::templates::load_pipeline_templates;
@@ -905,6 +907,111 @@ impl PipelinesController {
                     manager
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
+
+            // "Group…" on a step card: the dialog, starting with that step.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_group_steps(move |step_idx| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    let names: Vec<slint::SharedString> = {
+                        let project = manager.app_state.get_project();
+                        let Some(pipeline) =
+                            project.pipelines.iter().find(|p| p.id.0 == pipeline_id)
+                        else {
+                            return;
+                        };
+                        pipeline
+                            .steps
+                            .iter()
+                            .enumerate()
+                            .map(|(i, step)| {
+                                format!("{} · {}", i + 1, step_label(&project, step)).into()
+                            })
+                            .collect()
+                    };
+                    let state = ui.global::<GroupStepsState>();
+                    state.set_pipeline_id(pipeline_id as i32);
+                    state.set_step_names(ModelRc::new(VecModel::from(names)));
+                    state.set_name("".into());
+                    manager.refresh_group_plan(&ui, step_idx, step_idx);
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::GroupSteps);
+                });
+
+            let manager = self.clone();
+            ui.global::<GroupStepsState>()
+                .on_range_changed(move |from, to| {
+                    if let Some(ui) = manager.ui.upgrade() {
+                        manager.refresh_group_plan(&ui, from.min(to), from.max(to));
+                    }
+                });
+
+            let manager = self.clone();
+            ui.global::<GroupStepsState>()
+                .on_role_changed(move |row, role| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let rows = ui.global::<GroupStepsState>().get_classes();
+                    if let Some(mut data) = rows.row_data(row as usize) {
+                        data.role = role;
+                        rows.set_row_data(row as usize, data);
+                    }
+                });
+
+            let manager = self.clone();
+            ui.global::<GroupStepsState>().on_confirm(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                let state = ui.global::<GroupStepsState>();
+                let pipeline_id = PipelineId(state.get_pipeline_id() as u32);
+                let range = state.get_from_step() as usize..=state.get_to_step() as usize;
+                let roles: Vec<(ObjectClass, ClassRole)> = state
+                    .get_classes()
+                    .iter()
+                    .filter_map(|row| {
+                        let class = ObjectClass::from_text(row.class_text.as_str())?;
+                        let role = match row.role {
+                            0 => ClassRole::Local,
+                            1 => ClassRole::Parameter,
+                            _ => ClassRole::Fixed,
+                        };
+                        Some((class, role))
+                    })
+                    .collect();
+                let result = {
+                    let mut project = manager.app_state.get_project_write();
+                    evanalyzer_app::groups::group_steps(
+                        &mut project,
+                        pipeline_id,
+                        range,
+                        state.get_name().as_str(),
+                        &roles,
+                    )
+                };
+                match result {
+                    Ok(_) => {
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::None);
+                        manager.pipeline_settings_changed();
+                        manager.sync_steps_of_selected_pipeline_to_slint(pipeline_id, false);
+                    }
+                    Err(e) => state.set_error(e.to_string().into()),
+                }
+            });
+
+            let manager = self.clone();
+            ui.global::<GroupStepsState>().on_cancel(move || {
+                if let Some(ui) = manager.ui.upgrade() {
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::None);
+                }
+            });
 
             // Picker: cancel - close dialog
             let manager = self.clone();
@@ -2007,6 +2114,61 @@ impl PipelinesController {
         }
     }
 
+    /// Fills "Group steps" for steps `from..=to` of its pipeline: the range,
+    /// the classes with their suggested roles, the channels.
+    fn refresh_group_plan(self: &Arc<Self>, ui: &AppWindow, from: i32, to: i32) {
+        let state = ui.global::<GroupStepsState>();
+        state.set_from_step(from);
+        state.set_to_step(to);
+        state.set_error("".into());
+        let pipeline_id = PipelineId(state.get_pipeline_id() as u32);
+        let plan = {
+            let project = self.app_state.get_project();
+            evanalyzer_app::groups::plan_grouping(
+                &project,
+                pipeline_id,
+                from.max(0) as usize..=to.max(0) as usize,
+            )
+        };
+        match plan {
+            Ok(plan) => {
+                let rows: Vec<GroupClassRow> = plan
+                    .classes
+                    .iter()
+                    .map(|c| GroupClassRow {
+                        class_text: c.class.to_text().into(),
+                        name: c.name.clone().into(),
+                        detail: if c.used_elsewhere {
+                            "Also used elsewhere".into()
+                        } else {
+                            "Only used by these steps".into()
+                        },
+                        role: match c.suggested {
+                            ClassRole::Local => 0,
+                            ClassRole::Parameter => 1,
+                            ClassRole::Fixed => 2,
+                        },
+                    })
+                    .collect();
+                state.set_classes(ModelRc::new(VecModel::from(rows)));
+                let channels: Vec<String> = plan.channels.iter().map(|c| c.to_string()).collect();
+                state.set_channels_text(
+                    match channels.len() {
+                        0 => String::new(),
+                        1 => format!("Channel {} becomes a group parameter.", channels[0]),
+                        _ => format!("Channels {} become group parameters.", channels.join(", ")),
+                    }
+                    .into(),
+                );
+            }
+            Err(e) => {
+                state.set_classes(ModelRc::default());
+                state.set_channels_text("".into());
+                state.set_error(e.to_string().into());
+            }
+        }
+    }
+
     fn apply_picker_filter(self: &Arc<Self>, ui: &AppWindow, query: &str, filter_favorites: bool) {
         let q = query.to_ascii_lowercase();
         let metas = all_command_meta();
@@ -2730,6 +2892,18 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
         creation_time: "".into(),
     };
     detail
+}
+
+/// A step's name as lists show it: the command's, or the group's.
+fn step_label(project: &ProjectSettings, step: &PipelineStepSettings) -> String {
+    match &step.content {
+        StepContent::Command(command) => command.name().to_string(),
+        StepContent::Group(instance) => project
+            .command_groups
+            .iter()
+            .find(|d| d.key == instance.key)
+            .map_or_else(|| instance.key.clone(), |d| d.meta.name.clone()),
+    }
 }
 
 /// Picker ids of command groups start here - commands have small positive
@@ -4777,6 +4951,52 @@ mod tests {
             .row_data(1)
             .unwrap();
         assert_eq!(card.category, StepCategory::Group, "the group colour");
+    }
+
+    #[test]
+    fn group_steps_turns_the_chosen_steps_into_a_group() {
+        let (ui, ui_state, _controller) = selected(vec![
+            step("Threshold"),
+            step("Blur"),
+            step("Blur"),
+            step("Threshold"),
+        ]);
+        ui.global::<PipelinesPanelState>().invoke_group_steps(1);
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::GroupSteps);
+        let state = ui.global::<GroupStepsState>();
+        assert_eq!((state.get_from_step(), state.get_to_step()), (1, 1));
+        assert_eq!(state.get_step_names().row_count(), 4);
+        assert_eq!(state.get_step_names().row_data(1).unwrap(), "2 · Blur");
+
+        state.invoke_range_changed(2, 1); // either order
+        assert_eq!((state.get_from_step(), state.get_to_step()), (1, 2));
+
+        // A name is needed - the dialog stays open and says so.
+        state.invoke_confirm();
+        assert!(
+            state.get_error().contains("needs a name"),
+            "{}",
+            state.get_error()
+        );
+        assert_eq!(active_dialog(&ui), DialogType::GroupSteps);
+
+        state.set_name("Smooth twice".into());
+        state.invoke_confirm();
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::None);
+        let project = ui_state.get_project();
+        let steps = &project.pipelines[0].steps;
+        assert_eq!(steps.len(), 3);
+        assert!(matches!(&steps[1].content, StepContent::Group(g) if g.key == "SMOOTH_TWICE"));
+        assert_eq!(project.command_groups[0].steps.len(), 2);
+        drop(project);
+        let card = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(1)
+            .unwrap();
+        assert_eq!(card.name, "Smooth twice");
     }
 
     #[test]

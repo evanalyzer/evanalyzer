@@ -23,6 +23,9 @@ pub mod ai {
 
 /// Command groups as the editor shows them: a group card's parameters.
 pub mod groups {
+    pub use crate::workspace::grouping::{
+        ClassRole, GroupingClass, GroupingPlan, group_steps, plan_grouping,
+    };
     pub use evanalyzer_core::group_parameters;
     pub use evanalyzer_core::set_group_parameter;
 }
