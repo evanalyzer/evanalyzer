@@ -1671,4 +1671,96 @@ mod tests {
 
         assert_eq!(runs(), 1, "only the earlier analysis");
     }
+
+    /// A command group written by hand into the project file - local
+    /// classes, a group parameter bound to an inner setting, an instance with
+    /// its value - loads like a saved project and runs: the objects the group
+    /// extracts internally (`L1`) leave it reclassified into the project class
+    /// the instance chose.
+    #[test]
+    fn a_hand_written_command_group_loads_and_runs() {
+        use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
+            ObjectClassifyObjectsClassifyMatchHandlingSettings, ThresholdEntrySettings,
+            ThresholdSettings,
+        };
+        use serde_json::json;
+        let command = |command: PipelineCommand| serde_json::to_value(command).unwrap();
+        let threshold = command(PipelineCommand::Threshold(ThresholdSettings {
+            thresholds: vec![ThresholdEntrySettings {
+                object_class_id: SegmentationClass(1),
+                ..Default::default()
+            }],
+        }));
+        let components = command(PipelineCommand::ConnectedComponents(Default::default()));
+        let extract = command(PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+            class_mapping: vec![ExtractClassMappingSettings {
+                segmentation_class: SegmentationClass(1),
+                object_class: ObjectClass::Local(1),
+            }],
+            ..Default::default()
+        }));
+        let reclassify = command(PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+            input_classes: vec![ObjectClass::Local(1)],
+            match_handling: ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch,
+            output_class: ObjectClass::Global(5),
+            ..Default::default()
+        }));
+
+        let mut project = project_with(
+            Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests"))),
+            vec![],
+        );
+        let image = evanalyzer_cfg::settings::images_settings::ImageEntry {
+            rel_path: PathBuf::from("multi-channel-4D-series.ome.tif"),
+            series: std::collections::BTreeMap::from([(0, Default::default())]),
+            ..Default::default()
+        };
+        project.images.list.insert(image.rel_path.clone(), image);
+        let mut raw = serde_json::to_value(&project).unwrap();
+        raw["schemaVersion"] = json!(evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION);
+        // Written by hand: no step ids in the pipeline, the group's steps
+        // numbered because the binding names them.
+        raw["pipelines"] = json!([{
+            "id": 1, "name": "Cells", "imageSource": {"channel": 0}, "enabled": true,
+            "steps": [
+                {"enabled": true, "command": threshold},
+                {"enabled": true, "command": components},
+                {"enabled": true, "group": {"key": "CELLS", "values": {"1": 7}}}
+            ]
+        }]);
+        raw["commandGroups"] = json!([{
+            "key": "CELLS",
+            "meta": serde_json::to_value(evanalyzer_cfg::settings::meta_data::MetaData::default()).unwrap(),
+            "classes": [{"id": 1, "color": "#FF0000", "name": "Candidates", "notes": ""}],
+            "steps": [
+                {"id": 1, "enabled": true, "command": extract},
+                {"id": 2, "enabled": true, "command": reclassify}
+            ],
+            "parameters": [{
+                "id": 1, "label": "Cell class", "default": 5,
+                "bindings": [{"step": 2, "param": "output_class"}]
+            }]
+        }]);
+
+        let loaded =
+            evanalyzer_cfg::load_project_settings(raw).expect("the hand-written project loads");
+        let project_dir = tempfile::tempdir().unwrap();
+        let (job, out_objects) =
+            generate_preview_job_from_project_settings(loaded, project_dir.path().into()).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+            .unwrap();
+
+        let objects = out_objects.lock().unwrap();
+        assert!(!objects.is_empty(), "the fixture image has objects");
+        for object in objects.iter() {
+            assert_eq!(
+                object.object_class,
+                std::collections::HashSet::from([ObjectClass::Global(7)]),
+                "reclassified into the instance's class, nothing local left"
+            );
+        }
+    }
 }

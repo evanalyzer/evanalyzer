@@ -10,7 +10,9 @@ use crate::pipeline::scope::{Scope, ScopeId};
 use evanalyzer_cfg::{
     core_types::{GroupParamId, InternalErrors, ObjectClass, StepId},
     settings::{
-        command_groups::{GroupDefinition, GroupInstance, ParamValue},
+        command_groups::{
+            GroupDefinition, GroupInstance, GroupParameterDef, ParamBinding, ParamValue,
+        },
         parameter_def::ParameterDef,
         pipeline_command::{CommandCategory, PipelineCommand},
         pipeline_command_settings::{
@@ -120,38 +122,7 @@ fn expand_group(
         ));
     }
 
-    // The steps with this instance's values written into what they're
-    // bound to - the instance's value, else the definition's default.
-    let mut steps = definition.steps.clone();
-    for parameter in &definition.parameters {
-        let value = instance
-            .values
-            .get(&parameter.id)
-            .unwrap_or(&parameter.default);
-        for binding in &parameter.bindings {
-            let step = steps
-                .iter_mut()
-                .find(|s| s.id == binding.step)
-                .ok_or_else(|| {
-                    group_error(
-                        &definition.key,
-                        format!(
-                            "parameter \"{}\" is bound to step {}, which the group doesn't have",
-                            parameter.label, binding.step
-                        ),
-                    )
-                })?;
-            set_bound_value(step, &binding.param, value).map_err(|why| {
-                group_error(
-                    &definition.key,
-                    format!(
-                        "parameter \"{}\" can't set {} of step {}: {why}",
-                        parameter.label, binding.param, binding.step
-                    ),
-                )
-            })?;
-        }
-    }
+    let steps = steps_with_values(instance, definition)?;
 
     let scope = scopes.next();
     open.push(instance.key.clone());
@@ -201,6 +172,201 @@ fn expand_group(
     }
     open.pop();
     Ok(commands)
+}
+
+/// `definition`'s steps with `instance`'s values written into what they're
+/// bound to - the instance's value, else the definition's default.
+fn steps_with_values(
+    instance: &GroupInstance,
+    definition: &GroupDefinition,
+) -> Result<Vec<PipelineStepSettings>, InternalErrors> {
+    let mut steps = definition.steps.clone();
+    for parameter in &definition.parameters {
+        let value = instance
+            .values
+            .get(&parameter.id)
+            .unwrap_or(&parameter.default);
+        for binding in &parameter.bindings {
+            let step = steps
+                .iter_mut()
+                .find(|s| s.id == binding.step)
+                .ok_or_else(|| {
+                    group_error(
+                        &definition.key,
+                        format!(
+                            "parameter \"{}\" is bound to step {}, which the group doesn't have",
+                            parameter.label, binding.step
+                        ),
+                    )
+                })?;
+            set_bound_value(step, &binding.param, value).map_err(|why| {
+                group_error(
+                    &definition.key,
+                    format!(
+                        "parameter \"{}\" can't set {} of step {}: {why}",
+                        parameter.label, binding.param, binding.step
+                    ),
+                )
+            })?;
+        }
+    }
+    Ok(steps)
+}
+
+/// The parameters a group card shows for `instance`: each group parameter
+/// as the inner parameter it's bound to (its first binding) - same type,
+/// options and range, so the card gets the same control as the command -
+/// with the instance's value, the group parameter's id as `name`, its label
+/// and description, and its default.
+pub fn group_parameters(
+    instance: &GroupInstance,
+    definitions: &[GroupDefinition],
+) -> Result<Vec<ParameterDef>, InternalErrors> {
+    let definition = definition_of(instance, definitions)?;
+    let steps = steps_with_values(instance, definition)?;
+    definition
+        .parameters
+        .iter()
+        .map(|parameter| {
+            let binding = parameter.bindings.first().ok_or_else(|| {
+                group_error(
+                    &definition.key,
+                    format!("parameter \"{}\" isn't bound to anything", parameter.label),
+                )
+            })?;
+            let step = steps
+                .iter()
+                .find(|s| s.id == binding.step)
+                .ok_or_else(|| missing_step(definition, parameter, binding))?;
+            let bound = match &step.content {
+                StepContent::Command(command) => {
+                    find_param(&command.to_parameters(), &binding.param).cloned()
+                }
+                StepContent::Group(inner) => group_parameters(inner, definitions)?
+                    .into_iter()
+                    .find(|p| p.name == binding.param),
+            };
+            let mut shown = bound.ok_or_else(|| {
+                group_error(
+                    &definition.key,
+                    format!(
+                        "parameter \"{}\" is bound to {} of step {}, which doesn't exist",
+                        parameter.label, binding.param, binding.step
+                    ),
+                )
+            })?;
+            shown.name = parameter.id.0.to_string();
+            shown.display_name = parameter.label.clone();
+            if !parameter.description.is_empty() {
+                shown.description = parameter.description.clone();
+            }
+            shown.default_value = value_text(&parameter.default);
+            // Exposed on purpose - never hidden behind "advanced".
+            shown.advanced = false;
+            Ok(shown)
+        })
+        .collect()
+}
+
+/// Sets `instance`'s value of group parameter `id` from `text` - a value as
+/// the card's control reports it (`apply_param_change`'s format, e.g. a
+/// dropdown label or "toggle:3"). It's applied to a copy of the bound
+/// command and read back, so the value is the one the command took.
+pub fn set_group_parameter(
+    instance: &mut GroupInstance,
+    definitions: &[GroupDefinition],
+    id: GroupParamId,
+    text: &str,
+) -> Result<(), InternalErrors> {
+    let definition = definition_of(instance, definitions)?;
+    let parameter = definition
+        .parameters
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| group_error(&definition.key, format!("has no parameter {}", id.0)))?;
+    let binding = parameter.bindings.first().ok_or_else(|| {
+        group_error(
+            &definition.key,
+            format!("parameter \"{}\" isn't bound to anything", parameter.label),
+        )
+    })?;
+    let mut step = steps_with_values(instance, definition)?
+        .into_iter()
+        .find(|s| s.id == binding.step)
+        .ok_or_else(|| missing_step(definition, parameter, binding))?;
+    let value = match &mut step.content {
+        StepContent::Command(command) => {
+            command.apply_param_change(&binding.param, text);
+            let now = find_param(&command.to_parameters(), &binding.param)
+                .map(|p| p.value.clone())
+                .unwrap_or_default();
+            value_from_text(&now)
+        }
+        StepContent::Group(inner) => {
+            let inner_id = binding
+                .param
+                .parse()
+                .map(GroupParamId)
+                .map_err(|_| group_error(&definition.key, "binds a group by id".into()))?;
+            set_group_parameter(inner, definitions, inner_id, text)?;
+            let inner_definition = definition_of(inner, definitions)?;
+            inner.values.get(&inner_id).cloned().unwrap_or_else(|| {
+                inner_definition
+                    .parameters
+                    .iter()
+                    .find(|p| p.id == inner_id)
+                    .map_or(ParamValue::Text(String::new()), |p| p.default.clone())
+            })
+        }
+    };
+    instance.values.insert(id, value);
+    Ok(())
+}
+
+fn definition_of<'a>(
+    instance: &GroupInstance,
+    definitions: &'a [GroupDefinition],
+) -> Result<&'a GroupDefinition, InternalErrors> {
+    definitions
+        .iter()
+        .find(|d| d.key == instance.key)
+        .ok_or_else(|| group_error(&instance.key, "isn't defined in this project".into()))
+}
+
+fn missing_step(
+    definition: &GroupDefinition,
+    parameter: &GroupParameterDef,
+    binding: &ParamBinding,
+) -> InternalErrors {
+    group_error(
+        &definition.key,
+        format!(
+            "parameter \"{}\" is bound to step {}, which the group doesn't have",
+            parameter.label, binding.step
+        ),
+    )
+}
+
+/// A parameter's text value (`ParameterDef::value`) as a typed group value -
+/// the reverse of [`value_text`]: `true`/`false`, whole and decimal numbers,
+/// comma-separated lists (e.g. classes "1,3"), else text.
+fn value_from_text(text: &str) -> ParamValue {
+    if text.contains(',') {
+        return ParamValue::List(text.split(',').map(|t| value_from_text(t.trim())).collect());
+    }
+    match text {
+        "true" => ParamValue::Bool(true),
+        "false" => ParamValue::Bool(false),
+        _ => {
+            if let Ok(int) = text.parse::<i64>() {
+                ParamValue::Int(int)
+            } else if let Ok(float) = text.parse::<f64>() {
+                ParamValue::Float(float)
+            } else {
+                ParamValue::Text(text.to_string())
+            }
+        }
+    }
 }
 
 /// Why `command` would give objects local and project classes at once, if
@@ -927,6 +1093,94 @@ mod tests {
         assert!(
             error.contains("memory slot can't be passed into a nested group"),
             "{error}"
+        );
+    }
+
+    // ---- The group card's parameters ----
+
+    fn instance(key: &str, values: &[(u32, ParamValue)]) -> GroupInstance {
+        let StepContent::Group(instance) = group_step(1, key, values).content else {
+            unreachable!()
+        };
+        instance
+    }
+
+    #[test]
+    fn a_group_parameter_shows_as_the_parameter_it_is_bound_to() {
+        let definitions = [cell_reconstruction()];
+        let shown = group_parameters(
+            &instance("CELL_RECONSTRUCTION", &[(2, ParamValue::Int(4))]),
+            &definitions,
+        )
+        .unwrap();
+
+        assert_eq!(shown.len(), 2);
+        let blur = &shown[0];
+        assert_eq!(
+            (blur.name.as_str(), blur.display_name.as_str()),
+            ("1", "Parameter 1")
+        );
+        assert_eq!(blur.value, "3", "the definition's default");
+        let blur_kernel = find_param(
+            &PipelineCommand::Blur(BlurSettings::default()).to_parameters(),
+            "kernel_size",
+        )
+        .unwrap()
+        .clone();
+        assert_eq!(
+            blur.param_type, blur_kernel.param_type,
+            "the command's control"
+        );
+        assert_eq!((blur.min, blur.max), (blur_kernel.min, blur_kernel.max));
+
+        let cell_class = &shown[1];
+        assert_eq!(cell_class.value, "4", "the instance's value");
+        assert_eq!(cell_class.default_value, "1", "the group's default");
+    }
+
+    #[test]
+    fn setting_a_group_parameter_stores_what_the_command_took() {
+        let definitions = [cell_reconstruction()];
+        let mut cells = instance("CELL_RECONSTRUCTION", &[]);
+
+        set_group_parameter(&mut cells, &definitions, GroupParamId(1), "5").unwrap();
+        set_group_parameter(&mut cells, &definitions, GroupParamId(2), "L1").unwrap();
+        assert_eq!(cells.values[&GroupParamId(1)], ParamValue::Int(5));
+        assert_eq!(
+            cells.values[&GroupParamId(2)],
+            ParamValue::Text("L1".into())
+        );
+
+        // Text the command doesn't take leaves the value as it was.
+        set_group_parameter(&mut cells, &definitions, GroupParamId(1), "big").unwrap();
+        assert_eq!(cells.values[&GroupParamId(1)], ParamValue::Int(5));
+
+        assert!(set_group_parameter(&mut cells, &definitions, GroupParamId(9), "1").is_err());
+    }
+
+    #[test]
+    fn a_parameter_bound_to_a_nested_groups_parameter_works_the_same() {
+        let outer = definition(
+            "OUTER",
+            vec![group_step(1, "CELL_RECONSTRUCTION", &[])],
+            vec![parameter(1, ParamValue::Int(7), &[(1, "2")])],
+        );
+        let definitions = [cell_reconstruction(), outer];
+        let mut outer = instance("OUTER", &[]);
+
+        let shown = group_parameters(&outer, &definitions).unwrap();
+        assert_eq!(shown[0].value, "7");
+
+        set_group_parameter(&mut outer, &definitions, GroupParamId(1), "8").unwrap();
+        assert_eq!(outer.values[&GroupParamId(1)], ParamValue::Int(8));
+        let commands = expand(
+            &group_step(1, "OUTER", &[(1, ParamValue::Int(8))]),
+            &definitions,
+        )
+        .unwrap();
+        assert_eq!(
+            voronoi(&commands[1].command).centers,
+            ObjectClass::Global(8)
         );
     }
 }

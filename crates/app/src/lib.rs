@@ -21,6 +21,12 @@ pub mod ai {
     pub use evanalyzer_core::ai_devices::parse_gpu_slots;
 }
 
+/// Command groups as the editor shows them: a group card's parameters.
+pub mod groups {
+    pub use evanalyzer_core::group_parameters;
+    pub use evanalyzer_core::set_group_parameter;
+}
+
 pub mod global {
     pub use crate::workspace::AppHandle;
     pub use crate::workspace::Frontend;

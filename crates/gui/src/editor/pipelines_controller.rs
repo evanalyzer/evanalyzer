@@ -18,6 +18,7 @@ use evanalyzer_app::fs::FileSystem;
 use evanalyzer_app::project::ImageEntryExt;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::templates::load_pipeline_templates;
+use evanalyzer_cfg::core_types::GroupParamId;
 use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::PipelineId;
@@ -1016,17 +1017,39 @@ impl PipelinesController {
 
                     let (new_summary, params_now, needs_full_resync) = {
                         let mut project = manager.app_state.get_project_write();
+                        let definitions = project.command_groups.clone();
                         let Some(pipeline) =
                             project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
                         else {
                             return;
                         };
-                        // A command group's parameters can't be edited here (yet).
-                        let Some(command) = pipeline
-                            .steps
-                            .get_mut(step_idx as usize)
-                            .and_then(|step| step.command_mut())
-                        else {
+                        let Some(step) = pipeline.steps.get_mut(step_idx as usize) else {
+                            return;
+                        };
+                        // A command group: its parameter is named by its id.
+                        if let StepContent::Group(instance) = &mut step.content {
+                            let id = param_name.parse().map(GroupParamId);
+                            match id.map(|id| {
+                                evanalyzer_app::groups::set_group_parameter(
+                                    instance,
+                                    &definitions,
+                                    id,
+                                    &value_str,
+                                )
+                            }) {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => warn!("Group parameter {param_name}: {e}"),
+                                Err(_) => warn!("Group parameter {param_name}: not an id"),
+                            }
+                            drop(project);
+                            manager.sync_steps_of_selected_pipeline_to_slint(
+                                PipelineId(pipeline_id),
+                                false,
+                            );
+                            manager.pipeline_settings_changed();
+                            return;
+                        }
+                        let Some(command) = step.command_mut() else {
                             return;
                         };
                         command.apply_param_change(&param_name, &value_str);
@@ -2260,21 +2283,31 @@ impl PipelinesController {
                             enabled: step.enabled,
                             parameters: command.to_parameters(),
                         },
-                        // A simple card for now: the group's name, no
-                        // parameters yet (TODO: the group's parameters).
-                        StepContent::Group(group) => StepData {
-                            idx: idx as i32,
-                            id: step.id,
-                            name: project
-                                .command_groups
-                                .iter()
-                                .find(|d| d.key == group.key)
-                                .map_or_else(|| group.key.clone(), |d| d.meta.name.clone()),
-                            summary: "Command group".into(),
-                            category: StepCategory::Preprocess,
-                            enabled: step.enabled,
-                            parameters: Vec::new(),
-                        },
+                        // The group's name and parameters - each shown with the
+                        // control of the inner setting it's bound to.
+                        StepContent::Group(group) => {
+                            let (summary, parameters) =
+                                match evanalyzer_app::groups::group_parameters(
+                                    group,
+                                    &project.command_groups,
+                                ) {
+                                    Ok(parameters) => ("Command group".to_string(), parameters),
+                                    Err(e) => (e.to_string(), Vec::new()),
+                                };
+                            StepData {
+                                idx: idx as i32,
+                                id: step.id,
+                                name: project
+                                    .command_groups
+                                    .iter()
+                                    .find(|d| d.key == group.key)
+                                    .map_or_else(|| group.key.clone(), |d| d.meta.name.clone()),
+                                summary,
+                                category: StepCategory::Preprocess,
+                                enabled: step.enabled,
+                                parameters,
+                            }
+                        }
                     })
                     .collect();
                 let total = steps.len() as i32;
@@ -4434,6 +4467,69 @@ mod tests {
         assert_eq!(card.name, "Cell reconstruction");
         assert_eq!(card.summary, "Command group");
         assert_eq!(card.parameters.row_count(), 0);
+    }
+
+    #[test]
+    fn a_group_card_shows_the_groups_parameters_and_edits_the_instance() {
+        use evanalyzer_cfg::settings::command_groups::{
+            GroupDefinition, GroupInstance, GroupParameterDef, ParamBinding, ParamValue,
+        };
+        use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
+        let group = PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(2),
+            enabled: true,
+            content: StepContent::Group(GroupInstance {
+                key: "SMOOTH".into(),
+                values: Default::default(),
+            }),
+        };
+        let (ui, ui_state, controller) = selected(vec![group]);
+        ui_state
+            .get_project_write()
+            .command_groups
+            .push(GroupDefinition {
+                key: "SMOOTH".into(),
+                meta: Default::default(),
+                classes: vec![],
+                steps: vec![PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId(1),
+                    enabled: true,
+                    content: StepContent::Command(PipelineCommand::Blur(BlurSettings::default())),
+                }],
+                parameters: vec![GroupParameterDef {
+                    id: GroupParamId(1),
+                    label: "Smoothing".into(),
+                    description: String::new(),
+                    default: ParamValue::Int(3),
+                    bindings: vec![ParamBinding {
+                        step: evanalyzer_cfg::core_types::StepId(1),
+                        param: "kernel_size".into(),
+                    }],
+                }],
+                origin: None,
+            });
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+
+        let card = |ui: &AppWindow| {
+            ui.global::<PipelinesPanelState>()
+                .get_active_commands()
+                .row_data(0)
+                .unwrap()
+        };
+        let parameter = card(&ui).parameters.row_data(0).unwrap();
+        assert_eq!(parameter.display_name, "Smoothing");
+        assert_eq!(parameter.value, "3");
+
+        ui.global::<PipelinesPanelState>()
+            .invoke_param_changed(0, "1".into(), "5".into());
+        drain_ui_queue();
+        let StepContent::Group(instance) = &ui_state.get_project().pipelines[0].steps[0].content
+        else {
+            panic!("still a group");
+        };
+        assert_eq!(instance.values[&GroupParamId(1)], ParamValue::Int(5));
+        assert_eq!(card(&ui).parameters.row_data(0).unwrap().value, "5");
     }
 
     #[test]

@@ -5,9 +5,7 @@ Status 2026-10-14. Done so far: the data model (`command_groups.rs`,
 the job generator expands each group into its commands
 (`core/src/job/command_groups.rs`, `expand_step`). Concept: VISION_GROUP.md.
 
-- [ ] **Group card with parameters** – show the group's exposed parameters
-      on its card and let the user edit the instance's values (today the card
-      shows only the name and "Command group").
+- [x] **Group card with parameters** – done (step 11).
 - [ ] **Scoping for classes, objects and memory slots** – decided, see
       "Scoping" below. Replaces the earlier plans "internal classes per
       instance" (created at insertion) and "renumber memory slots".
@@ -147,16 +145,41 @@ before 14: most groups are made from existing steps).
        3.96–4.17 GB - the scratch pad was only allocated briefly, so the peak
        doesn't change.
 
-**Phase D – validation**
+**Phase D – validation** (postponed 2026-10-14 - Phase E first)
 
 10. [ ] **One validation function in the app layer** (load and editor):
         unique keys, every instance's key exists, bindings exist and fit
         (types, values), local classes only inside groups and not in
-        dataset steps, optional coloc warning.
+        dataset steps, optional coloc warning. Also from step 4: a mapping
+        to `Global(n)` (ExtractObjects) needs class n in the project.
 
-**Phase E – editor and picker**
+        **Open question - memory slots across pipelines** (found in step 8):
+        `GlobalPipelineCache::clear_pipeline_context` runs at the end of
+        *every* pipeline and deletes every memory slot, `ProjectCache` ones
+        included (only image channels stay) - the per-tile cache passes
+        through the pipelines in order (`job_executor`, tile loop). So a
+        pipeline can't read a slot an earlier pipeline stored: the pipeline
+        dialog's image source "Memory slot" can never find its image, and
+        `Pipeline::missing_start_image_message` ("add an Image Cache step that
+        stores it to a pipeline running before") describes something that
+        can't work. The test
+        `clear_pipeline_context_also_drops_scratchpad_and_project_cache_via_catch_all`
+        pins the behaviour as "possibly surprising"; the function's doc
+        comment only mentions `PipelineContext` slots. Suggestion: clear only
+        `PipelineContext` (and group) slots per pipeline, keep `ProjectCache`
+        slots until the image (plane) is done. Not decided - ask first.
 
-11. [ ] Group card with editable parameters.
+**Phase E – editor and picker** (started 2026-10-14; decisions under
+"Command picker" and "Creating groups")
+
+11. [x] Group card with editable parameters.
+        Done (2026-10-14): `group_parameters` / `set_group_parameter` (core,
+        re-exported as `evanalyzer_app::groups`). Each group parameter shows
+        as the inner setting of its first binding - same control, options and
+        range - with its label, description and default; a change is applied
+        to a copy of the bound command and read back, so only values the
+        command takes are stored. Works through nested groups. Icon/colour of
+        the card: with step 12.
 12. [ ] Picker: groups in the category lists, "Groups" chip (in the project
         / library), "Update available".
 13. [ ] "Group selected steps" with automatic detection of input, output
@@ -322,17 +345,29 @@ fine; it runs after all images, long after the group's scope has ended.
 
 ## Command picker
 
-- **Groups appear in the category lists like any other command**, not in
-  the Templates tab: they behave like commands (insert, move, set
-  parameters), and a search for "cell" should find commands and groups
-  together. Their category comes from the first step (derived).
-- **Pipeline templates stay in the Templates tab** – a different action
-  (inserts many steps at once).
-- **A group badge** on the row (icon, "group" in the detail view).
-- **New chip "Groups"**: filters to all groups, in two sections – "In this
-  project" first, then "Library".
-- **A group in both (same key)** appears once, as the project version; if
-  the library has a newer `version`: "Update available".
+Decided 2026-10-14 (replaces the earlier "groups in the category lists"):
+
+- **Two sources of groups.** Groups made in the project live only there
+  (`ProjectSettings::command_groups`). Groups from a library file
+  (`.evagroup`) are **copied** into the project when first used and live
+  there from then on: changes affect only the project, never the file, and
+  the project stays complete without it - like project templates.
+  `GroupDefinition::origin` remembers the file, key and version ("Update
+  available" later; an update must not silently overwrite the project's own
+  changes - needs a "modified since inserted" marker or hash).
+- **Own chip "Groups"**, not mixed into the category lists - a project easily
+  has several variants of one group, which would crowd out the commands. Two
+  sections: "In this project" first, then "Library" (not yet in the
+  project; inserting copies it).
+- **Search finds groups too** (e.g. "cell" finds commands and groups), marked
+  as groups.
+- **Recognisable as a group**: own icon and an accent colour - the same on
+  the picker row and on the group card in the pipeline. The category derived
+  from the first and last command is shown as a small tag on the row.
+- **Against variant clutter**: "used N×" on each row; "Remove unused groups".
+- **Pipeline templates** (`.evapipe`) hold only steps - a pipeline with a
+  group step saved as template misses the definition elsewhere. Carry the
+  used definitions along (with step 16).
 
 ## Creating groups
 
@@ -357,3 +392,11 @@ fine; it runs after all images, long after the group's scope has ended.
 5. **"New empty group"** – rarely needed once 1 and 2 exist.
 
 Order: first 1 and 2, then 3; the library actions after.
+
+**Editing a group** (decided 2026-10-14): one entry point, "Edit group". If
+several steps use the definition, the dialog says so ("Used by 3 steps in 2
+pipelines") and offers **"Edit for all"** (default - the definition changes,
+every instance follows) or **"Only this step"** (clones the definition as
+"Name (2)" with a new key, points just this step at the clone, opens the
+clone). Used only once: edited directly.
+
