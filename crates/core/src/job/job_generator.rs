@@ -544,7 +544,7 @@ mod tests {
 
     fn blur_step(enabled: bool) -> PipelineStepSettings {
         PipelineStepSettings {
-            id: evanalyzer_cfg::core_types::StepId::generate(),
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled,
             command: PipelineCommand::Blur(BlurSettings::default()),
         }
@@ -1042,7 +1042,7 @@ mod tests {
 
     fn tracker_step(enabled: bool) -> PipelineStepSettings {
         PipelineStepSettings {
-            id: evanalyzer_cfg::core_types::StepId::generate(),
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled,
             command: PipelineCommand::SimpleTracker(
                 evanalyzer_cfg::settings::pipeline_command_settings::SimpleTrackerSettings::default(
@@ -1100,7 +1100,10 @@ mod tests {
     fn each_command_keeps_the_id_of_its_project_step() {
         let project_dir = tempfile::tempdir().unwrap();
         let image_root = tempfile::tempdir().unwrap();
-        let steps = vec![blur_step(true), blur_step(false), blur_step(true)];
+        let mut steps = vec![blur_step(true), blur_step(false), blur_step(true)];
+        for (i, step) in steps.iter_mut().enumerate() {
+            step.id = evanalyzer_cfg::core_types::StepId(i as u32 + 1);
+        }
         let ids = [steps[0].id, steps[2].id];
         let project = project_with(
             Some(image_root.path().to_path_buf()),

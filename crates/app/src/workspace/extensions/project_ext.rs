@@ -1516,7 +1516,8 @@ impl ProjectExt for ProjectWithRuntime {
         }
     }
 
-    fn add_pipeline(&mut self, pipeline_settings: PipelineSettings) {
+    fn add_pipeline(&mut self, mut pipeline_settings: PipelineSettings) {
+        super::utils::assign_step_ids(&mut pipeline_settings.steps);
         self.pipelines.push(pipeline_settings);
     }
     fn add_pipeline_from_template_file(&mut self, files: &dyn FileSystem, template_file: &PathBuf) {
@@ -1547,7 +1548,7 @@ impl ProjectExt for ProjectWithRuntime {
             description: Some(template.meta.short_description),
             image_source: ImageAddress::default(),
             enabled: true,
-            steps: super::utils::with_new_step_ids(template.steps),
+            steps: template.steps, // numbered by `add_pipeline`
         });
     }
 
@@ -1559,7 +1560,7 @@ impl ProjectExt for ProjectWithRuntime {
             .iter()
             .cloned()
             .map(|mut pipeline| {
-                pipeline.steps = super::utils::with_new_step_ids(pipeline.steps);
+                super::utils::assign_step_ids(&mut pipeline.steps);
                 pipeline
             })
             .collect();
@@ -1756,10 +1757,16 @@ pub fn load_project(
         serde_json::from_str(&data).map_err(|e| InternalErrors::ParseError(e.to_string()))?;
     let mut inner: ProjectSettings = evanalyzer_cfg::load_project_settings(raw)?;
 
-    // Steps copied within a hand-written file share an id - each needs its own.
-    let renewed = super::utils::renew_duplicate_step_ids(&mut inner.pipelines);
-    if renewed > 0 {
-        warn!("{renewed} pipeline step(s) had an id another step already had - renewed");
+    // Steps written without an id (or copied within a hand-written file,
+    // sharing one) get the next number of their pipeline.
+    for pipeline in &mut inner.pipelines {
+        let assigned = super::utils::assign_step_ids(&mut pipeline.steps);
+        if assigned > 0 {
+            info!(
+                "Pipeline {}: {assigned} step(s) without an id of their own got one",
+                pipeline.id
+            );
+        }
     }
 
     // Reverse of the relativization `save_project_as` does on write - resolve
@@ -1796,8 +1803,11 @@ pub fn import_legacy_project(
     path: &PathBuf,
 ) -> Result<(ProjectWithRuntime, Vec<String>, Option<String>), InternalErrors> {
     let data = read_text(files, path)?;
-    let outcome = evanalyzer_cfg::import_legacy_project(&data)
+    let mut outcome = evanalyzer_cfg::import_legacy_project(&data)
         .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
+    for pipeline in &mut outcome.project.pipelines {
+        super::utils::assign_step_ids(&mut pipeline.steps);
+    }
     let project = ProjectWithRuntime {
         settings: outcome.project,
         tmp_settings: ProjectTmpSettings::default(),
@@ -2480,7 +2490,7 @@ mod tests {
         let mut project = ProjectWithRuntime::default();
         let mut step_pipeline = pipeline(1);
         step_pipeline.steps.push(PipelineStepSettings {
-            id: evanalyzer_cfg::core_types::StepId::generate(),
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled: true,
             command: PipelineCommand::PixelClassifier(PixelClassifierSettings {
                 model_path: absolute_model_path.clone(),
@@ -2596,12 +2606,12 @@ mod tests {
         let mut p = pipeline(1);
         p.steps = vec![
             PipelineStepSettings {
-                id: evanalyzer_cfg::core_types::StepId::generate(),
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
                 command: PipelineCommand::Blur(Default::default()),
             },
             PipelineStepSettings {
-                id: evanalyzer_cfg::core_types::StepId::generate(),
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
                 command: PipelineCommand::Blur(Default::default()),
             },
@@ -2998,7 +3008,7 @@ mod tests {
             image_source: source,
             enabled: true,
             steps: vec![PipelineStepSettings {
-                id: evanalyzer_cfg::core_types::StepId::generate(),
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
                 command: PipelineCommand::TransformObjects(TransformObjectsSettings {
                     input_class: ObjectClass::Valid(input),
@@ -3560,7 +3570,7 @@ mod tests {
         let mut project = ProjectWithRuntime::default();
         let mut p = pipeline(1);
         p.steps = vec![PipelineStepSettings {
-            id: evanalyzer_cfg::core_types::StepId::generate(),
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled: true,
             command: PipelineCommand::Blur(Default::default()),
         }];

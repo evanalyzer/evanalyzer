@@ -401,7 +401,7 @@ impl PipelinesController {
                                     project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
                                 let mut clone = p.clone();
                                 clone.id = PipelineId(next_id);
-                                clone.steps = evanalyzer_app::utils::with_new_step_ids(clone.steps);
+                                // Keeps its step ids: they're unique per pipeline.
                                 clone.name = format!("{} (Copy)", p.name);
                                 clone
                             })
@@ -642,7 +642,22 @@ impl PipelinesController {
                         {
                             let idx = step_idx as usize;
                             if idx < pipeline.steps.len() {
-                                pipeline.steps.remove(idx);
+                                let removed = pipeline.steps.remove(idx);
+                                // Its number may be given to the next new step
+                                // (the highest + 1) - the breakpoint must not move
+                                // there.
+                                let mut breakpoint = manager.breakpoint.lock().unwrap();
+                                if breakpoint.is_some_and(|(p, step, _)| {
+                                    p == pipeline_id && step == removed.id
+                                }) {
+                                    *breakpoint = None;
+                                    drop(breakpoint);
+                                    ui.global::<PipelinesPanelState>()
+                                        .set_breakpoint_pipeline_id(-1);
+                                    ui.global::<PipelinesPanelState>()
+                                        .set_breakpoint_step_id("".into());
+                                    ui.global::<PipelinesPanelState>().set_breakpoint_mode(0);
+                                }
                             }
                         }
                     }
@@ -669,8 +684,9 @@ impl PipelinesController {
                             let idx = step_idx as usize;
                             if idx < pipeline.steps.len() {
                                 let mut cloned = pipeline.steps[idx].clone();
-                                cloned.id = evanalyzer_cfg::core_types::StepId::generate();
+                                cloned.id = evanalyzer_cfg::core_types::StepId::UNASSIGNED;
                                 pipeline.steps.insert(idx + 1, cloned);
+                                evanalyzer_app::utils::assign_step_ids(&mut pipeline.steps);
                             }
                         }
                     }
@@ -809,15 +825,15 @@ impl PipelinesController {
                             warn!("picker confirm: unknown template id {}", command_id);
                             return;
                         };
-                        // Inserting it twice must not give two steps one id.
-                        evanalyzer_app::utils::with_new_step_ids(template.steps.clone())
+                        // Numbered in this pipeline once inserted.
+                        evanalyzer_app::utils::unassigned(template.steps.clone())
                     } else {
                         let Some(cmd) = default_command(command_id) else {
                             warn!("picker confirm: unknown command id {}", command_id);
                             return;
                         };
                         vec![PipelineStepSettings {
-                            id: evanalyzer_cfg::core_types::StepId::generate(),
+                            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                             enabled: true,
                             command: cmd,
                         }]
@@ -834,6 +850,7 @@ impl PipelinesController {
                                 ((after_idx as usize) + 1).min(pipeline.steps.len())
                             };
                             pipeline.steps.splice(insert_at..insert_at, new_steps);
+                            evanalyzer_app::utils::assign_step_ids(&mut pipeline.steps);
                         }
                     }
                     ui.global::<GlobalAppState>()
@@ -886,7 +903,7 @@ impl PipelinesController {
                                 match result {
                                     Ok(configured) => {
                                         let step = PipelineStepSettings {
-                                            id: evanalyzer_cfg::core_types::StepId::generate(),
+                                            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                                             enabled: true,
                                             command: configured.command,
                                         };
@@ -901,6 +918,9 @@ impl PipelinesController {
                                                     ((after_idx as usize) + 1).min(pipeline.steps.len())
                                                 };
                                                 pipeline.steps.insert(insert_at, step);
+                                                evanalyzer_app::utils::assign_step_ids(
+                                                    &mut pipeline.steps,
+                                                );
                                             }
                                         }
                                         ui.global::<GlobalAppState>()
@@ -2792,16 +2812,14 @@ fn advanced_stats(params: &[ParameterDef]) -> (usize, usize) {
 /// advanced dropdown options - except the selected one, so a field never
 /// shows a value missing from its list. (Top-level advanced settings are
 /// split off by the caller.)
-/// A step id as Slint carries it: the hex form it has in the project file.
+/// A step id as Slint carries it.
 fn step_id_text(id: evanalyzer_cfg::core_types::StepId) -> SharedString {
-    format!("{:032x}", id.0).into()
+    id.0.to_string().into()
 }
 
 /// The step id `text` (see [`step_id_text`]) names - `None` for none.
 fn parse_step_id(text: &str) -> Option<evanalyzer_cfg::core_types::StepId> {
-    u128::from_str_radix(text, 16)
-        .ok()
-        .map(evanalyzer_cfg::core_types::StepId)
+    text.parse().ok().map(evanalyzer_cfg::core_types::StepId)
 }
 
 fn filter_for_display(params: Vec<ParameterDef>, show_advanced: bool) -> Vec<ParameterDef> {
@@ -3127,7 +3145,7 @@ mod tests {
     fn template_to_command_def_takes_its_category_from_the_first_step() {
         // id 6 is "ConnectedComponents" -> CommandCategory::InstanceSegmentation.
         let step = PipelineStepSettings {
-            id: evanalyzer_cfg::core_types::StepId::generate(),
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled: true,
             command: default_command(6).unwrap(),
         };
@@ -3432,7 +3450,7 @@ mod tests {
                 image_source: ImageAddress::Channel(0),
                 enabled: true,
                 steps: vec![PipelineStepSettings {
-                    id: evanalyzer_cfg::core_types::StepId::generate(),
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
                     command: PipelineCommand::Threshold(ThresholdSettings {
                         thresholds: vec![ThresholdEntrySettings {
@@ -3474,7 +3492,7 @@ mod tests {
                 image_source: ImageAddress::Channel(0),
                 enabled: true,
                 steps: vec![PipelineStepSettings {
-                    id: evanalyzer_cfg::core_types::StepId::generate(),
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
                     command: PipelineCommand::Threshold(ThresholdSettings {
                         thresholds: vec![
@@ -3781,7 +3799,7 @@ mod tests {
             .find(|m| m.name == command_name)
             .unwrap_or_else(|| panic!("no command {command_name}"));
         PipelineStepSettings {
-            id: evanalyzer_cfg::core_types::StepId::generate(),
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled: true,
             command: default_command(meta.id).unwrap(),
         }
@@ -4282,8 +4300,24 @@ mod tests {
     }
 
     #[test]
+    fn removing_the_breakpoints_step_clears_the_breakpoint() {
+        let (ui, ui_state, controller) = selected(vec![step("Threshold"), step("Colocalization")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        let last = ui_state.get_project().pipelines[0].steps[1].id;
+        panel.invoke_set_breakpoint(1, step_id_text(last), 1);
+        panel.set_breakpoint_step_id(step_id_text(last));
+
+        // The highest number is free again - a new step may get it.
+        panel.invoke_remove_step(1);
+        drain_ui_queue();
+
+        assert!(controller.breakpoint.lock().unwrap().is_none());
+        assert_eq!(panel.get_breakpoint_step_id(), "");
+    }
+
+    #[test]
     fn step_ids_go_to_slint_and_back_unchanged() {
-        let id = evanalyzer_cfg::core_types::StepId::generate();
+        let id = evanalyzer_cfg::core_types::StepId::UNASSIGNED;
         assert_eq!(parse_step_id(&step_id_text(id)), Some(id));
         assert_eq!(parse_step_id(""), None);
     }
@@ -4311,9 +4345,9 @@ mod tests {
             assert_eq!(project.pipelines[1].id, PipelineId(2));
             assert_eq!(project.pipelines[1].name, "Pipeline 1 (Copy)");
             assert_eq!(project.pipelines[1].steps.len(), 1);
-            assert_ne!(
+            assert_eq!(
                 project.pipelines[1].steps[0].id, project.pipelines[0].steps[0].id,
-                "the copy's steps have ids of their own"
+                "step ids are unique per pipeline - the copy keeps them"
             );
         }
         assert_eq!(panel.get_active_pipeline_id(), 2);

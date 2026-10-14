@@ -147,57 +147,38 @@ impl fmt::Display for GroupId {
 )]
 pub struct GroupParamId(pub u32);
 
-/// A pipeline step's id. Stored as a hex string, not a number: project files
-/// are loaded through `serde_json::Value`, which keeps numbers above 2^64 only
-/// as `f64` - a random 128-bit id would come back wrong (or not at all).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, JsonSchema, Ord, PartialOrd)]
-pub struct StepId(#[schemars(with = "String")] pub u128);
+/// A pipeline step's id: a small number, unique within its list of steps
+/// (a pipeline, or a group definition), so it reads well in a hand-written
+/// project file (`"id": 7`) and in references to the step. Assigned by
+/// whoever adds a step - the next number after the list's highest, never
+/// reused within the list. `0` ([`StepId::UNASSIGNED`]) means "not
+/// assigned yet": a step written without an id gets one when the project is
+/// loaded.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Default,
+    JsonSchema,
+    Ord,
+    PartialOrd,
+)]
+pub struct StepId(pub u32);
 
-impl Serialize for StepId {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if serializer.is_human_readable() {
-            serializer.serialize_str(&format!("{:032x}", self.0))
-        } else {
-            serializer.serialize_u128(self.0)
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for StepId {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Visitor;
-        impl serde::de::Visitor<'_> for Visitor {
-            type Value = StepId;
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a step id: a hex string")
-            }
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<StepId, E> {
-                u128::from_str_radix(v, 16).map(StepId).map_err(E::custom)
-            }
-            // A plain number, if someone writes one by hand.
-            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<StepId, E> {
-                Ok(StepId(v as u128))
-            }
-        }
-        if deserializer.is_human_readable() {
-            deserializer.deserialize_any(Visitor)
-        } else {
-            u128::deserialize(deserializer).map(StepId)
-        }
-    }
+impl StepId {
+    /// Not assigned yet - also the id of a command that isn't a project
+    /// step (e.g. tile merging), which no breakpoint can target.
+    pub const UNASSIGNED: StepId = StepId(0);
 }
 
 impl fmt::Display for StepId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "StepId({})", self.0) // Or just self.0
-    }
-}
-
-impl StepId {
-    /// A new, globally unique id (a UUIDv7, like [`ObjectId::next`]) - so
-    /// steps copied between projects or groups never clash.
-    pub fn generate() -> StepId {
-        StepId(fast_uuid_v7::gen_id_u128())
+        write!(f, "{}", self.0)
     }
 }
 
@@ -518,22 +499,6 @@ mod tests {
     #[test]
     fn track_id_default_is_zero() {
         assert_eq!(TrackId::default(), TrackId(0));
-    }
-}
-
-#[cfg(test)]
-mod step_id_tests {
-    use super::*;
-
-    #[test]
-    fn generated_step_ids_are_unique_and_survive_a_json_round_trip() {
-        let ids: std::collections::HashSet<StepId> =
-            (0..1000).map(|_| StepId::generate()).collect();
-        assert_eq!(ids.len(), 1000);
-
-        let id = StepId::generate();
-        let json = serde_json::to_string(&id).unwrap();
-        assert_eq!(serde_json::from_str::<StepId>(&json).unwrap(), id);
     }
 }
 

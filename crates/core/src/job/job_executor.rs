@@ -2440,16 +2440,20 @@ mod full_run_integration_tests {
         // assigned to the same segmentation class, so the fixture image
         // (known non-empty from image_reader's tests on the same file)
         // reliably produces at least one connected component.
-        pipeline.add_command(Box::new(Threshold {
-            thresholds: vec![ThresholdEntry {
-                method: ThresholdMethod::Manual,
-                min_threshold: 0.0,
-                max_threshold: 255.0,
-                unit: PixelUnits::Bit,
-                object_class_id: SegmentationClass(1),
-                value_source: ThresholdValueSource::ActualImage,
-            }],
-        }));
+        // A project step (id 1): what the breakpoint tests target.
+        pipeline.add_step(
+            evanalyzer_cfg::core_types::StepId(1),
+            Box::new(Threshold {
+                thresholds: vec![ThresholdEntry {
+                    method: ThresholdMethod::Manual,
+                    min_threshold: 0.0,
+                    max_threshold: 255.0,
+                    unit: PixelUnits::Bit,
+                    object_class_id: SegmentationClass(1),
+                    value_source: ThresholdValueSource::ActualImage,
+                }],
+            }),
+        );
         pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
         pipeline.add_command(Box::new(ExtractObjects {
             max_objects_before_fail: 100_000,
@@ -3126,16 +3130,20 @@ mod tile_merge_end_to_end_tests {
                 start_image: ImageAddress::Channel(0),
             },
         );
-        pipeline.add_command(Box::new(Threshold {
-            thresholds: vec![ThresholdEntry {
-                method: ThresholdMethod::Manual,
-                min_threshold: 0.0,
-                max_threshold: 255.0,
-                unit: PixelUnits::Bit,
-                object_class_id: SegmentationClass(1),
-                value_source: ThresholdValueSource::ActualImage,
-            }],
-        }));
+        // A project step (id 1): what the breakpoint tests target.
+        pipeline.add_step(
+            evanalyzer_cfg::core_types::StepId(1),
+            Box::new(Threshold {
+                thresholds: vec![ThresholdEntry {
+                    method: ThresholdMethod::Manual,
+                    min_threshold: 0.0,
+                    max_threshold: 255.0,
+                    unit: PixelUnits::Bit,
+                    object_class_id: SegmentationClass(1),
+                    value_source: ThresholdValueSource::ActualImage,
+                }],
+            }),
+        );
         pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
         pipeline.add_command(Box::new(ExtractObjects {
             max_objects_before_fail: 100_000,

@@ -90,7 +90,7 @@ fn main() {
         },
     );
     let step = |command| PipelineStepSettings {
-        id: evanalyzer_cfg::core_types::StepId::generate(),
+        id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
         enabled: true,
         command,
     };

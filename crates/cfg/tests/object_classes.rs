@@ -9,7 +9,7 @@ use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStep
 
 fn step(enabled: bool, command: PipelineCommand) -> PipelineStepSettings {
     PipelineStepSettings {
-        id: evanalyzer_cfg::core_types::StepId::generate(),
+        id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
         enabled,
         command,
     }

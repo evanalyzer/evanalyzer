@@ -96,7 +96,7 @@ impl Pipeline {
     /// Adds a command that isn't a project step (e.g. `TileMerge`), so no
     /// breakpoint can target it.
     pub fn add_command(&mut self, command: Box<dyn ImageAlgorithm>) {
-        self.add_step(StepId::generate(), command);
+        self.add_step(StepId::UNASSIGNED, command);
     }
 
     // Add dependency
@@ -198,7 +198,7 @@ impl Pipeline {
             // run. Comparing against the command's step id (not its
             // position in `commands`) is what lets a breakpoint resolve
             // correctly regardless of which scope's list it's run through.
-            if breakpoint_step == Some(step_id) {
+            if step_id != StepId::UNASSIGNED && breakpoint_step == Some(step_id) {
                 let capture = BreakpointCapture {
                     image: ctx.image.clone(),
                     segmentation: ctx.segmentation_map.as_ref().map(|s| {

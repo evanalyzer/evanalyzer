@@ -9,8 +9,7 @@ use std::collections::BTreeSet;
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineStepSettings {
-    /// Randomly generated unique pipeline step id
-    #[serde(default = "StepId::generate")]
+    #[serde(default)]
     pub id: StepId,
 
     /// If enabled, the command is executed, if not enabled, this command is skiped during pipeline execution

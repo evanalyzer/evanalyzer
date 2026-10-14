@@ -127,7 +127,7 @@ mod tests {
     use crate::settings::pipeline_command_settings::BlurSettings;
 
     fn definition() -> GroupDefinition {
-        let step = StepId::generate();
+        let step = StepId::UNASSIGNED;
         GroupDefinition {
             key: "CELL_RECONSTRUCTION".into(),
             name: "Cell reconstruction".into(),
