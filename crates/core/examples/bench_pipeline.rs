@@ -8,6 +8,8 @@
 // `--classify N` adds N Classify Objects steps (class filtering by size).
 // `--source 1` starts from the scratchpad, `--source 2` from no image, both
 // with a Load Image Channel step first (0: the channel itself, the default).
+// `--shared 1`: pipeline 1 stores channel 0 in shared memory slot 1, the
+// detection pipeline starts from that slot (an image passed between pipelines).
 // `--group 1` adds a command group instance that turns the larger objects
 // into local (internal) objects - they don't reach the results.
 
@@ -73,6 +75,7 @@ fn main() {
     let classify = arg("--classify", 0);
     let group = arg("--group", 0);
     let source = arg("--source", 0);
+    let shared = arg("--shared", 0);
     let images_dir = workdir.join(format!("images_{size}_{spots}"));
     std::fs::create_dir_all(&images_dir).unwrap();
 
@@ -110,6 +113,9 @@ fn main() {
         name: "bench".into(),
         description: None,
         image_source: match source {
+            _ if shared > 0 => {
+                ImageAddress::Memory(evanalyzer_cfg::core_types::MemoryId::ProjectCache(1))
+            }
             1 => ImageAddress::Scratchpad,
             2 => ImageAddress::None,
             _ => ImageAddress::Channel(0),
@@ -169,6 +175,25 @@ fn main() {
     });
     if group > 0 {
         project.command_groups.push(internal_objects_group());
+    }
+    if shared > 0 {
+        // The storing pipeline runs first.
+        project.pipelines.insert(
+            0,
+            PipelineSettings {
+                id: evanalyzer_cfg::core_types::PipelineId(2),
+                name: "store".into(),
+                description: None,
+                image_source: ImageAddress::Channel(0),
+                enabled: true,
+                steps: vec![step(PipelineCommand::ImageCache(
+                    evanalyzer_cfg::settings::pipeline_command_settings::ImageCacheSettings {
+                        mode: evanalyzer_cfg::settings::pipeline_command_settings::MathImageCacheImageCacheModeSettings::Store,
+                        address: ImageAddress::Memory(evanalyzer_cfg::core_types::MemoryId::ProjectCache(1)),
+                    },
+                ))],
+            },
+        );
     }
 
     let job = evanalyzer_core::generate_analyze_job_from_project_settings(

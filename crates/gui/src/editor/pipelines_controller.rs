@@ -8,7 +8,7 @@ use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     CommandDef, CommandParameter, CommandPickerState, DefaultParamPreview, ExposeChoiceState,
-    GlobalAppState, GroupClassRow, GroupEditChoiceState, GroupItem, GroupStepsState,
+    GlobalAppState, GroupClassRow, GroupEditChoiceState, GroupItem, GroupParamRow, GroupStepsState,
     GroupUpdateState, LeafParam, ParamType, Pipeline, PipelineCommand as SlintPipelineCommand,
     PipelineStatus, PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
 };
@@ -113,6 +113,11 @@ pub struct PipelinesController {
     /// definition, so every use of the group - instead of the pipeline's.
     open_group: Mutex<Option<(u32, String)>>,
 
+    /// The opened group is only looked at ("View" on a group card): the step
+    /// index of the card it was opened from, for "Edit" in the bar. Nothing
+    /// can be changed meanwhile.
+    viewing_from: Mutex<Option<usize>>,
+
     /// A setting waiting for "Expose setting": (pipeline id, step index,
     /// setting path, the parameters it could be added to).
     pending_expose: Mutex<Option<(u32, usize, String, Vec<GroupParamId>)>>,
@@ -148,6 +153,7 @@ impl PipelinesController {
             pipeline_templates: Mutex::new(Vec::new()),
             focus_controller,
             open_group: Mutex::new(None),
+            viewing_from: Mutex::new(None),
             pending_expose: Mutex::new(None),
             group_library: Mutex::new(Vec::new()),
             pending_update: Mutex::new(None),
@@ -286,7 +292,7 @@ impl PipelinesController {
                 .on_select_pipeline(move |pipeline_id| {
                     // Another pipeline: an opened group is closed.
                     if manager.open_group_key(pipeline_id as u32).is_none() {
-                        *manager.open_group.lock().expect("Poisoned") = None;
+                        manager.close_open_group();
                     }
                     manager.sync_steps_of_selected_pipeline_to_slint(
                         PipelineId(pipeline_id as u32),
@@ -634,6 +640,13 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                        return;
+                    }
                     if manager.open_group_key(pipeline_id).is_some() {
                         let mut project = manager.app_state.get_project_write();
                         if let Some(step) = manager
@@ -679,6 +692,13 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                        return;
+                    }
                     if let Some(key) = manager.open_group_key(pipeline_id) {
                         // A step of the opened group: its bindings go with it.
                         let mut project = manager.app_state.get_project_write();
@@ -731,6 +751,13 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                        return;
+                    }
                     {
                         let mut project = manager.app_state.get_project_write();
                         if let Some(steps) = manager.shown_steps_mut(&mut project, pipeline_id) {
@@ -898,6 +925,9 @@ impl PipelinesController {
                     let picker = ui.global::<CommandPickerState>();
                     let pipeline_id = picker.get_pipeline_id() as u32;
                     let after_idx = picker.get_insert_after_idx();
+                    if manager.viewing(pipeline_id) {
+                        return;
+                    }
 
                     let new_steps: Vec<PipelineStepSettings> = if command_id
                         >= LIBRARY_GROUP_PICKER_ID_BASE
@@ -1053,7 +1083,7 @@ impl PipelinesController {
                         ui.global::<GlobalAppState>()
                             .set_active_dialog(DialogType::GroupEditChoice);
                     } else {
-                        manager.open_group_in_panel(pipeline_id, step_idx as usize);
+                        manager.open_group_in_panel(pipeline_id, step_idx as usize, false);
                     }
                 });
 
@@ -1069,6 +1099,7 @@ impl PipelinesController {
                 manager.open_group_in_panel(
                     choice.get_pipeline_id() as u32,
                     choice.get_step_idx() as usize,
+                    false,
                 );
             });
 
@@ -1094,7 +1125,7 @@ impl PipelinesController {
                 match copied {
                     Ok(_) => {
                         manager.pipeline_settings_changed();
-                        manager.open_group_in_panel(pipeline_id, step_idx);
+                        manager.open_group_in_panel(pipeline_id, step_idx, false);
                     }
                     Err(e) => warn!("Could not copy the group: {e}"),
                 }
@@ -1114,11 +1145,111 @@ impl PipelinesController {
                 let Some(ui) = manager.ui.upgrade() else {
                     return;
                 };
-                *manager.open_group.lock().expect("Poisoned") = None;
+                manager.close_open_group();
                 let pipeline_id =
                     ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
                 manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), true);
             });
+
+            // "View" on a group card: its steps in the panel, read only.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_view_group(move |step_idx| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    manager.open_group_in_panel(pipeline_id, step_idx as usize, true);
+                });
+
+            // "Edit" in the bar of a viewed group: as "Edit" on its card.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_edit_open_group(move || {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let viewed_from = *manager.viewing_from.lock().expect("Poisoned");
+                    if let Some(step_idx) = viewed_from {
+                        ui.global::<PipelinesPanelState>()
+                            .invoke_open_group(step_idx as i32);
+                    }
+                });
+
+            // A parameter of the opened group renamed or its help text edited.
+            // No resync: the line being typed in keeps its focus.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_group_parameter_edited(move |id, label, description| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        return;
+                    }
+                    let Some(key) = manager.open_group_key(pipeline_id) else {
+                        return;
+                    };
+                    let edited = {
+                        let mut project = manager.app_state.get_project_write();
+                        project
+                            .command_groups
+                            .iter_mut()
+                            .find(|d| d.key == key)
+                            .is_some_and(|definition| {
+                                evanalyzer_app::groups::edit_parameter(
+                                    definition,
+                                    GroupParamId(id as u32),
+                                    &label,
+                                    &description,
+                                )
+                            })
+                    };
+                    if edited {
+                        manager.app_state.mark_dirty();
+                    }
+                });
+
+            // ↑/↓ on a parameter of the opened group: its place on the card.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_group_parameter_moved(move |id, delta| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        return;
+                    }
+                    let Some(key) = manager.open_group_key(pipeline_id) else {
+                        return;
+                    };
+                    let moved = {
+                        let mut project = manager.app_state.get_project_write();
+                        project
+                            .command_groups
+                            .iter_mut()
+                            .find(|d| d.key == key)
+                            .is_some_and(|definition| {
+                                evanalyzer_app::groups::move_parameter(
+                                    definition,
+                                    GroupParamId(id as u32),
+                                    delta,
+                                )
+                            })
+                    };
+                    if moved {
+                        manager.app_state.mark_dirty();
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                    }
+                });
 
             // "Ungroup" on a group card: its steps in its place.
             let manager = self.clone();
@@ -1129,6 +1260,13 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                        return;
+                    }
                     let result = {
                         let mut project = manager.app_state.get_project_write();
                         evanalyzer_app::groups::ungroup(
@@ -1161,6 +1299,13 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                        return;
+                    }
                     let Some(key) = manager.open_group_key(pipeline_id) else {
                         return;
                     };
@@ -1306,6 +1451,13 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                        return;
+                    }
                     let found = {
                         let project = manager.app_state.get_project();
                         project
@@ -1339,6 +1491,13 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                        return;
+                    }
                     let found = {
                         let project = manager.app_state.get_project();
                         let library = manager.group_library.lock().expect("Poisoned");
@@ -1436,6 +1595,13 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                        return;
+                    }
                     if manager.open_group_key(pipeline_id).is_some() {
                         // Groups inside groups: from the pipeline, for now.
                         return;
@@ -1596,6 +1762,9 @@ impl PipelinesController {
                     let picker = ui.global::<CommandPickerState>();
                     let pipeline_id = picker.get_pipeline_id() as u32;
                     let after_idx = picker.get_insert_after_idx();
+                    if manager.viewing(pipeline_id) {
+                        return;
+                    }
 
                     let request = FileRequest::open_file("Import bioimage.io model")
                         .filter("bioimage.io RDF", &["yaml", "yml"]);
@@ -1693,6 +1862,13 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                        return;
+                    }
                     let param_name = parameter_name.as_str().to_owned();
                     let value_str = value.as_str().to_owned();
 
@@ -2553,6 +2729,18 @@ impl PipelinesController {
             .map(|(_, key)| key.clone())
     }
 
+    /// Whether pipeline `pipeline_id`'s panel shows a group only to look at.
+    fn viewing(&self, pipeline_id: u32) -> bool {
+        self.open_group_key(pipeline_id).is_some()
+            && self.viewing_from.lock().expect("Poisoned").is_some()
+    }
+
+    /// Closes the opened group, if any.
+    fn close_open_group(&self) {
+        *self.open_group.lock().expect("Poisoned") = None;
+        *self.viewing_from.lock().expect("Poisoned") = None;
+    }
+
     /// The steps the panel shows for pipeline `pipeline_id`: an opened
     /// group's, else the pipeline's.
     fn shown_steps<'a>(
@@ -2574,12 +2762,15 @@ impl PipelinesController {
         }
     }
 
-    /// [`Self::shown_steps`], to edit.
+    /// [`Self::shown_steps`], to edit - `None` while a group is only viewed.
     fn shown_steps_mut<'a>(
         &self,
         project: &'a mut ProjectSettings,
         pipeline_id: u32,
     ) -> Option<&'a mut Vec<PipelineStepSettings>> {
+        if self.viewing(pipeline_id) {
+            return None;
+        }
         match self.open_group_key(pipeline_id) {
             Some(key) => project
                 .command_groups
@@ -2594,8 +2785,9 @@ impl PipelinesController {
         }
     }
 
-    /// Opens group step `step_idx` of pipeline `pipeline_id` in the panel.
-    fn open_group_in_panel(self: &Arc<Self>, pipeline_id: u32, step_idx: usize) {
+    /// Opens group step `step_idx` of pipeline `pipeline_id` in the panel -
+    /// to edit, or with `read_only` only to look at.
+    fn open_group_in_panel(self: &Arc<Self>, pipeline_id: u32, step_idx: usize, read_only: bool) {
         let key = {
             let project = self.app_state.get_project();
             let Some(StepContent::Group(instance)) = project
@@ -2610,6 +2802,7 @@ impl PipelinesController {
             instance.key.clone()
         };
         *self.open_group.lock().expect("Poisoned") = Some((pipeline_id, key));
+        *self.viewing_from.lock().expect("Poisoned") = read_only.then_some(step_idx);
         self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), true);
     }
 
@@ -3170,7 +3363,7 @@ impl PipelinesController {
                 .iter()
                 .any(|d| &d.key == key)
         {
-            *self.open_group.lock().expect("Poisoned") = None;
+            self.close_open_group();
             open_group = None;
         }
         let open_group_problem: String = open_group
@@ -3181,6 +3374,40 @@ impl PipelinesController {
                     .next()
             })
             .map(|problem| problem.message)
+            .unwrap_or_default();
+        let read_only = open_group.is_some() && self.viewing(pipeline_id.0);
+        let open_group_parameters: Vec<GroupParamRow> = open_group
+            .as_ref()
+            .and_then(|key| {
+                let project = self.app_state.get_project();
+                let definition = project.command_groups.iter().find(|d| &d.key == key)?;
+                Some(
+                    definition
+                        .parameters
+                        .iter()
+                        .map(|parameter| GroupParamRow {
+                            id: parameter.id.0 as i32,
+                            label: parameter.label.clone().into(),
+                            description: parameter.description.clone().into(),
+                            sets: parameter
+                                .bindings
+                                .iter()
+                                .filter_map(|binding| {
+                                    let step =
+                                        definition.steps.iter().find(|s| s.id == binding.step)?;
+                                    let (_, label) = evanalyzer_app::groups::setting_at(
+                                        step.command()?,
+                                        &binding.param,
+                                    )?;
+                                    Some(format!("{} › {label}", step_label(&project, step)))
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                                .into(),
+                        })
+                        .collect(),
+                )
+            })
             .unwrap_or_default();
         let open_group_name: String = open_group
             .as_ref()
@@ -3550,6 +3777,9 @@ impl PipelinesController {
                 state.set_active_pipeline_name(pipeline_name.into());
                 state.set_open_group_name(open_group_name.into());
                 state.set_open_group_problem(open_group_problem.into());
+                state.set_open_group_read_only(read_only);
+                state
+                    .set_open_group_parameters(ModelRc::new(VecModel::from(open_group_parameters)));
                 state.set_active_pipeline_image_source(pipeline_image_source.into());
                 state.set_active_commands(ModelRc::new(VecModel::from(commands)));
 
@@ -6183,13 +6413,132 @@ mod tests {
                 "{label:?} ends at {right}, the step list at {edge}"
             );
         };
-        for label in ["Open", "Ungroup", "Save to library…", "Duplicate"] {
+        for label in ["View", "Edit", "Ungroup", "Save", "Duplicate"] {
             fits(label);
         }
 
         ui.global::<PipelinesPanelState>().invoke_open_group(1);
         drain_ui_queue();
         fits("Changes apply to every use of this group · ◇ exposes a setting");
+
+        ui.global::<PipelinesPanelState>().invoke_close_group();
+        ui.global::<PipelinesPanelState>().invoke_view_group(1);
+        drain_ui_queue();
+        fits("Viewing · read only");
+        fits("Edit");
+    }
+
+    #[test]
+    fn a_viewed_group_shows_its_steps_but_changes_nothing_until_edit() {
+        let (ui, ui_state, _controller) = with_a_group();
+        let panel = ui.global::<PipelinesPanelState>();
+        let before = {
+            let p = ui_state.get_project();
+            serde_json::to_value((&p.pipelines, &p.command_groups)).unwrap()
+        };
+
+        panel.invoke_view_group(1);
+        drain_ui_queue();
+        assert_eq!(panel.get_open_group_name(), "Smooth");
+        assert!(panel.get_open_group_read_only());
+        assert_eq!(card_names(&ui), ["Blur", "Blur"]);
+
+        panel.invoke_param_changed(0, "kernel_size".into(), "7".into());
+        panel.invoke_toggle_step(0);
+        panel.invoke_duplicate_step(0);
+        panel.invoke_remove_step(1);
+        panel.invoke_toggle_exposed(0, "kernel_size".into());
+        panel.invoke_add_group_item(0, "thresholds".into());
+        drain_ui_queue();
+        assert_eq!(
+            {
+                let p = ui_state.get_project();
+                serde_json::to_value((&p.pipelines, &p.command_groups)).unwrap()
+            },
+            before,
+            "nothing changed"
+        );
+        assert_eq!(card_names(&ui), ["Blur", "Blur"]);
+        assert_eq!(active_dialog(&ui), DialogType::None);
+
+        // "Edit" in the bar: the same group, now editable.
+        panel.invoke_edit_open_group();
+        drain_ui_queue();
+        assert!(!panel.get_open_group_read_only());
+        assert_eq!(panel.get_open_group_name(), "Smooth");
+        panel.invoke_param_changed(0, "kernel_size".into(), "7".into());
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        let PipelineCommand::Blur(blur) = project.command_groups[0].steps[0].command().unwrap()
+        else {
+            panic!("blur")
+        };
+        assert_eq!(blur.kernel_size, 7);
+    }
+
+    #[test]
+    fn closing_a_viewed_group_and_opening_it_again_makes_it_editable() {
+        let (ui, _ui_state, _controller) = with_a_group();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_view_group(1);
+        drain_ui_queue();
+        panel.invoke_close_group();
+        drain_ui_queue();
+        assert!(!panel.get_open_group_read_only());
+        panel.invoke_open_group(1);
+        drain_ui_queue();
+        assert!(!panel.get_open_group_read_only());
+    }
+
+    #[test]
+    fn the_opened_groups_parameters_are_renamed_described_and_reordered() {
+        let (ui, ui_state, _controller) = with_a_group();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_group(1);
+        drain_ui_queue();
+        panel.invoke_toggle_exposed(0, "kernel_size".into());
+        drain_ui_queue();
+        panel.invoke_toggle_exposed(1, "kernel_size".into());
+        drain_ui_queue();
+        // A second, own parameter.
+        ui.global::<ExposeChoiceState>().invoke_chosen(0);
+        drain_ui_queue();
+
+        let rows = || -> Vec<GroupParamRow> { panel.get_open_group_parameters().iter().collect() };
+        assert_eq!(rows().len(), 2);
+        assert!(
+            rows()[0].sets.contains("Blur"),
+            "names what it sets: {}",
+            rows()[0].sets
+        );
+        let (first, second) = (rows()[0].id, rows()[1].id);
+
+        panel.invoke_group_parameter_edited(first, "Radius".into(), "How strong".into());
+        drain_ui_queue();
+        {
+            let project = ui_state.get_project();
+            let parameter = &project.command_groups[0].parameters[0];
+            assert_eq!(
+                (parameter.label.as_str(), parameter.description.as_str()),
+                ("Radius", "How strong")
+            );
+        }
+
+        panel.invoke_group_parameter_moved(second, -1);
+        drain_ui_queue();
+        let ids: Vec<i32> = rows().iter().map(|r| r.id).collect();
+        assert_eq!(ids, [second, first]);
+        assert_eq!(rows()[1].label, "Radius");
+
+        // Not while only viewing.
+        panel.invoke_close_group();
+        panel.invoke_view_group(1);
+        drain_ui_queue();
+        panel.invoke_group_parameter_edited(first, "Changed".into(), "".into());
+        panel.invoke_group_parameter_moved(first, -1);
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        assert_eq!(project.command_groups[0].parameters[1].label, "Radius");
     }
 
     #[test]

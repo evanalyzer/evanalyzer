@@ -529,6 +529,37 @@ pub fn toggle_exposed(
     true
 }
 
+/// Renames parameter `id` of `definition` and sets its help text. Returns
+/// whether the parameter exists.
+pub fn edit_parameter(
+    definition: &mut GroupDefinition,
+    id: GroupParamId,
+    label: &str,
+    description: &str,
+) -> bool {
+    let Some(parameter) = definition.parameters.iter_mut().find(|p| p.id == id) else {
+        return false;
+    };
+    parameter.label = label.to_string();
+    parameter.description = description.to_string();
+    true
+}
+
+/// Moves parameter `id` of `definition` `delta` places (-1 up, +1 down) -
+/// the order on the group card. Returns whether it moved.
+pub fn move_parameter(definition: &mut GroupDefinition, id: GroupParamId, delta: i32) -> bool {
+    let Some(from) = definition.parameters.iter().position(|p| p.id == id) else {
+        return false;
+    };
+    let to = from as i64 + delta as i64;
+    if to < 0 || to >= definition.parameters.len() as i64 || to == from as i64 {
+        return false;
+    }
+    let parameter = definition.parameters.remove(from);
+    definition.parameters.insert(to as usize, parameter);
+    true
+}
+
 /// The setting at `path` of `command` - a top-level one ("min_area") or one
 /// of a list entry ("thresholds.1.min_threshold") - and a label for it as a
 /// group parameter ("Thresholds 2 · Min Threshold").
@@ -1355,6 +1386,39 @@ mod tests {
             before,
             "nothing bound to it any more"
         );
+    }
+
+    #[test]
+    fn a_parameter_is_renamed_described_and_moved() {
+        let mut project = grouped();
+        let definition = &mut project.command_groups[0];
+        toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
+        let ids = |d: &GroupDefinition| d.parameters.iter().map(|p| p.id).collect::<Vec<_>>();
+        let before = ids(definition);
+        let last = *before.last().unwrap();
+
+        assert!(edit_parameter(
+            definition,
+            last,
+            "Min. area",
+            "Smaller objects are dropped"
+        ));
+        let edited = definition.parameters.last().unwrap();
+        assert_eq!(
+            (edited.label.as_str(), edited.description.as_str()),
+            ("Min. area", "Smaller objects are dropped")
+        );
+        assert!(!edit_parameter(definition, GroupParamId(999), "x", ""));
+
+        assert!(move_parameter(definition, last, -1));
+        let mut expected = before.clone();
+        let n = expected.len();
+        expected.swap(n - 1, n - 2);
+        assert_eq!(ids(definition), expected);
+        assert!(move_parameter(definition, last, 1));
+        assert_eq!(ids(definition), before);
+        assert!(!move_parameter(definition, last, 1), "already last");
+        assert!(!move_parameter(definition, before[0], -1), "already first");
     }
 
     #[test]

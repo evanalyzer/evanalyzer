@@ -291,6 +291,16 @@ before 14: most groups are made from existing steps).
         while used), `remove_unused_groups`. Picker: "Remove from project" in
         the detail of an unused project group; "N groups no pipeline uses ·
         Remove" in the Groups section.
+18. [x] "View" and "Edit" on a group card ("Edit" is the former "Open")
+        Done (2026-10-14): "View" opens the group read only - no insert
+        points / "Add step", no step buttons, no ◇, settings and the enable
+        toggle can't be changed (an overlay over the expanded settings; every
+        editing handler refuses too). The bar says "Viewing · read only" and
+        has "Edit", which goes the same way as "Edit" on the card (asking if
+        the group is used more than once). Also: the parameter editor in the
+        bar of an edited group - per parameter its name, help text (the "?"),
+        ↑/↓ for the order on the group card, and which settings it sets
+        (`edit_parameter`, `move_parameter`).
 
 ## Scoping
 
