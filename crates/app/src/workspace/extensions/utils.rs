@@ -67,19 +67,27 @@ fn file_path_changes(
 /// Windows) is left absolute.
 pub fn relativize_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
     for pipeline in pipelines {
-        // TODO (command groups, stage 2): the definitions' steps too.
-        for step in &mut pipeline.steps {
-            let StepContent::Command(command) = &mut step.content else {
-                continue;
-            };
-            let changes = file_path_changes(
-                command,
-                |path| path.is_absolute(),
-                |path| diff_paths(path, project_dir),
-            );
-            for (name, relative) in changes {
-                command.apply_param_change(&name, &relative.to_string_lossy());
-            }
+        relativize_step_paths(&mut pipeline.steps, project_dir);
+    }
+}
+
+/// [`relativize_file_paths`] for the steps of `groups`' definitions.
+pub fn relativize_group_file_paths(groups: &mut [GroupDefinition], project_dir: &Path) {
+    for group in groups {
+        relativize_step_paths(&mut group.steps, project_dir);
+    }
+}
+
+fn relativize_step_paths(steps: &mut [PipelineStepSettings], project_dir: &Path) {
+    // A group instance holds no paths itself - its definition's steps do.
+    for command in steps.iter_mut().filter_map(|step| step.command_mut()) {
+        let changes = file_path_changes(
+            command,
+            |path| path.is_absolute(),
+            |path| diff_paths(path, project_dir),
+        );
+        for (name, relative) in changes {
+            command.apply_param_change(&name, &relative.to_string_lossy());
         }
     }
 }
@@ -91,18 +99,26 @@ pub fn relativize_file_paths(pipelines: &mut [PipelineSettings], project_dir: &P
 /// its doc comment.
 pub fn resolve_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
     for pipeline in pipelines {
-        for step in &mut pipeline.steps {
-            let StepContent::Command(command) = &mut step.content else {
-                continue;
-            };
-            let changes = file_path_changes(
-                command,
-                |path| path.is_relative(),
-                |path| Some(project_dir.join(path)),
-            );
-            for (name, absolute) in changes {
-                command.apply_param_change(&name, &absolute.to_string_lossy());
-            }
+        resolve_step_paths(&mut pipeline.steps, project_dir);
+    }
+}
+
+/// [`resolve_file_paths`] for the steps of `groups`' definitions.
+pub fn resolve_group_file_paths(groups: &mut [GroupDefinition], project_dir: &Path) {
+    for group in groups {
+        resolve_step_paths(&mut group.steps, project_dir);
+    }
+}
+
+fn resolve_step_paths(steps: &mut [PipelineStepSettings], project_dir: &Path) {
+    for command in steps.iter_mut().filter_map(|step| step.command_mut()) {
+        let changes = file_path_changes(
+            command,
+            |path| path.is_relative(),
+            |path| Some(project_dir.join(path)),
+        );
+        for (name, absolute) in changes {
+            command.apply_param_change(&name, &absolute.to_string_lossy());
         }
     }
 }
@@ -526,6 +542,37 @@ mod tests {
             pixel_classifier_model_path(&pipelines[0]),
             &PathBuf::from("/elsewhere/models/nuclei.evamodel")
         );
+    }
+
+    #[test]
+    fn model_paths_in_group_definitions_are_stored_relative_too() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::CellposeSettings;
+
+        let original = PathBuf::from("/data/project/models/cyto.pt");
+        let mut groups = vec![GroupDefinition {
+            key: "SEGMENT".into(),
+            meta: Default::default(),
+            steps: pipeline_with(PipelineCommand::Cellpose(CellposeSettings {
+                model_path: original.clone(),
+                ..Default::default()
+            }))
+            .steps,
+            parameters: vec![],
+            origin: None,
+        }];
+        let project_dir = Path::new("/data/project");
+
+        relativize_group_file_paths(&mut groups, project_dir);
+        let Some(PipelineCommand::Cellpose(stored)) = groups[0].steps[0].command() else {
+            panic!("expected Cellpose");
+        };
+        assert_eq!(stored.model_path, PathBuf::from("models/cyto.pt"));
+
+        resolve_group_file_paths(&mut groups, project_dir);
+        let Some(PipelineCommand::Cellpose(loaded)) = groups[0].steps[0].command() else {
+            panic!("expected Cellpose");
+        };
+        assert_eq!(loaded.model_path, original);
     }
 
     #[test]

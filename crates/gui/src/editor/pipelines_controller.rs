@@ -2248,7 +2248,7 @@ impl PipelinesController {
                             parameters: command.to_parameters(),
                         },
                         // A simple card for now: the group's name, no
-                        // parameters (TODO, command groups stage 2).
+                        // parameters yet (TODO: the group's parameters).
                         StepContent::Group(group) => StepData {
                             idx: idx as i32,
                             id: step.id,
@@ -2257,7 +2257,7 @@ impl PipelinesController {
                                 .iter()
                                 .find(|d| d.key == group.key)
                                 .map_or_else(|| group.key.clone(), |d| d.meta.name.clone()),
-                            summary: "Command group - can't run yet".into(),
+                            summary: "Command group".into(),
                             category: StepCategory::Preprocess,
                             enabled: step.enabled,
                             parameters: Vec::new(),
@@ -4416,7 +4416,7 @@ mod tests {
             .row_data(1)
             .unwrap();
         assert_eq!(card.name, "Cell reconstruction");
-        assert!(card.summary.contains("can't run yet"));
+        assert_eq!(card.summary, "Command group");
         assert_eq!(card.parameters.row_count(), 0);
     }
 

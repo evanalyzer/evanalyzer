@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
-use evanalyzer_core::into_pipeline_step;
+use evanalyzer_core::{expand_step, into_pipeline_step};
 
 /// Renders every enabled pipeline as an ASCII/Unicode flow diagram followed
 /// by a consolidated reference list of every citation used, and writes the
@@ -44,23 +44,31 @@ pub fn cite_project(
 
         let mut rows = Vec::with_capacity(steps.len());
         for (i, step) in steps.iter().enumerate() {
-            let command = match &step.content {
+            // A group is cited with every method its commands use.
+            let (name, cites) = match &step.content {
                 evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command) => {
-                    command
+                    // Image and dataset steps alike.
+                    let algo = into_pipeline_step(command.clone())?;
+                    (algo.name().to_string(), algo.cite())
                 }
                 evanalyzer_cfg::settings::pipeline_settings::StepContent::Group(group) => {
-                    // TODO (command groups, stage 2): cite the group's commands.
-                    rows.push((
-                        format!("[Step {}] Command group {}", i + 1, group.key),
-                        "(cited with its commands once groups run)".to_string(),
-                    ));
-                    continue;
+                    let mut cites: Vec<&'static CitationMetadata> = Vec::new();
+                    for (_, command) in expand_step(step, &config.command_groups)? {
+                        for cite in into_pipeline_step(command)?.cite() {
+                            if !cites.iter().any(|c| c.cite_key == cite.cite_key) {
+                                cites.push(cite);
+                            }
+                        }
+                    }
+                    let name = config
+                        .command_groups
+                        .iter()
+                        .find(|d| d.key == group.key)
+                        .map_or_else(|| group.key.clone(), |d| d.meta.name.clone());
+                    (format!("Group: {name}"), cites)
                 }
             };
-            // Image and dataset steps alike.
-            let algo = into_pipeline_step(command.clone())?;
-            let label = format!("[Step {}] {}", i + 1, algo.name());
-            let cites = algo.cite();
+            let label = format!("[Step {}] {}", i + 1, name);
             let citation_marker = if cites.is_empty() {
                 "(Uncited)".to_string()
             } else {
@@ -157,6 +165,65 @@ mod tests {
         SegmentationThresholdThresholdMethodSettings, ThresholdEntrySettings, ThresholdSettings,
     };
     use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+
+    #[test]
+    fn a_group_step_is_cited_with_the_methods_of_its_commands() {
+        let threshold = |method| PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(1),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::Threshold(ThresholdSettings {
+                    thresholds: vec![ThresholdEntrySettings {
+                        method,
+                        ..Default::default()
+                    }],
+                }),
+            ),
+        };
+        let mut config = ProjectSettings::default();
+        config
+            .command_groups
+            .push(evanalyzer_cfg::settings::command_groups::GroupDefinition {
+                key: "SEGMENT".into(),
+                meta: evanalyzer_cfg::settings::meta_data::MetaData {
+                    name: "Segment nuclei".into(),
+                    ..Default::default()
+                },
+                steps: vec![threshold(SegmentationThresholdThresholdMethodSettings::Li)],
+                parameters: vec![],
+                origin: None,
+            });
+        config.pipelines.push(PipelineSettings {
+            id: PipelineId(1),
+            name: "Nuclei".to_string(),
+            image_source: ImageAddress::Scratchpad,
+            enabled: true,
+            steps: vec![PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId(1),
+                enabled: true,
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Group(
+                    evanalyzer_cfg::settings::command_groups::GroupInstance {
+                        key: "SEGMENT".into(),
+                        values: Default::default(),
+                    },
+                ),
+            }],
+            description: None,
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let output_file = dir.path().join("cite.md");
+        cite_project(&LocalFileSystem::default(), &config, &output_file).unwrap();
+        let content = std::fs::read_to_string(&output_file).unwrap();
+        assert!(
+            content.contains("[Step 1] Group: Segment nuclei"),
+            "{content}"
+        );
+        assert!(
+            content.contains("Li"),
+            "the threshold method is cited: {content}"
+        );
+    }
 
     #[test]
     fn a_step_with_several_citations_lists_all_of_them() {

@@ -5,6 +5,7 @@ use crate::{
     image::PixelSizes,
     job::{
         algos_from_config::into_pipeline_step,
+        command_groups::expand_step,
         job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
         pipeline_step::PipelineStep,
     },
@@ -14,12 +15,13 @@ use crate::{
 use chrono::Utc;
 use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types::ImageAddress};
 use evanalyzer_cfg::{
-    core_types::InternalErrors,
+    core_types::{InternalErrors, StepId},
     settings::{
+        command_groups::GroupDefinition,
         images_settings::ImageEntry,
         object_settings::ObjectMetricSettings,
         pipeline_command::{CommandCategory, PipelineCommand},
-        pipeline_settings::{PipelineStepSettings, StepContent},
+        pipeline_settings::PipelineStepSettings,
         project_settings::ProjectSettings,
     },
 };
@@ -495,14 +497,16 @@ fn generate_job_from_project_settings_intenal(
             },
         );
 
-        for step in &pipeline_setting.steps {
-            if step.enabled {
-                let command = step_command(&pipeline_setting.name, step)?;
-                match into_pipeline_step(command.clone())? {
+        for step in pipeline_setting.steps.iter().filter(|s| s.enabled) {
+            // A group runs as its commands.
+            for (id, command) in
+                step_commands(&pipeline_setting.name, step, &config.command_groups)?
+            {
+                match into_pipeline_step(command)? {
                     // Kept with its id: what a breakpoint targets.
                     PipelineStep::Image(algo) => match algo.execution_scope() {
-                        ExecutionScope::Tile => pipeline_pre_process.add_step(step.id, algo),
-                        ExecutionScope::WholeImage => pipeline_post_process.add_step(step.id, algo),
+                        ExecutionScope::Tile => pipeline_pre_process.add_step(id, algo),
+                        ExecutionScope::WholeImage => pipeline_post_process.add_step(id, algo),
                     },
                     // Runs once after every image, whatever its place in the pipeline.
                     PipelineStep::Dataset(step) => job.add_dataset_step(step),
@@ -517,20 +521,19 @@ fn generate_job_from_project_settings_intenal(
     Ok(job)
 }
 
-/// The command `step` runs - an error for a command group, which can't run
-/// yet (groups get expanded into their commands in a later stage).
-fn step_command<'a>(
+/// The commands `step` runs, with their breakpoint ids (see
+/// [`expand_step`]) - a group's error says which pipeline and step it is.
+fn step_commands(
     pipeline_name: &str,
-    step: &'a PipelineStepSettings,
-) -> Result<&'a PipelineCommand, InternalErrors> {
-    match &step.content {
-        StepContent::Command(command) => Ok(command),
-        StepContent::Group(group) => Err(InternalErrors::InvalidArgument(format!(
-            "Pipeline \"{pipeline_name}\", step {}: command group {} - command groups can't \
-             run yet",
-            step.id, group.key
-        ))),
-    }
+    step: &PipelineStepSettings,
+    definitions: &[GroupDefinition],
+) -> Result<Vec<(StepId, PipelineCommand)>, InternalErrors> {
+    expand_step(step, definitions).map_err(|e| {
+        InternalErrors::InvalidArgument(format!(
+            "Pipeline \"{pipeline_name}\", step {}: {e}",
+            step.id
+        ))
+    })
 }
 
 /// The enabled dataset steps of `config`'s enabled pipelines, in pipeline
@@ -542,12 +545,13 @@ pub(crate) fn dataset_steps_from_project_settings(
     let mut steps = Vec::new();
     for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
         for step in pipeline.steps.iter().filter(|s| s.enabled) {
-            let command = step_command(&pipeline.name, step)?;
-            if !matches!(command.category(), CommandCategory::Dataset) {
-                continue;
-            }
-            if let PipelineStep::Dataset(step) = into_pipeline_step(command.clone())? {
-                steps.push(step);
+            for (_, command) in step_commands(&pipeline.name, step, &config.command_groups)? {
+                if !matches!(command.category(), CommandCategory::Dataset) {
+                    continue;
+                }
+                if let PipelineStep::Dataset(step) = into_pipeline_step(command)? {
+                    steps.push(step);
+                }
             }
         }
     }
@@ -1088,21 +1092,60 @@ mod tests {
         )
     }
 
-    #[test]
-    fn a_command_group_is_refused_with_a_clear_error_until_groups_can_run() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let image_root = tempfile::tempdir().unwrap();
-        let group = PipelineStepSettings {
+    fn group_step(key: &str) -> PipelineStepSettings {
+        PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId(4),
             enabled: true,
-            content: StepContent::Group(evanalyzer_cfg::settings::command_groups::GroupInstance {
-                key: "CELL_RECONSTRUCTION".into(),
-                values: Default::default(),
-            }),
-        };
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Group(
+                evanalyzer_cfg::settings::command_groups::GroupInstance {
+                    key: key.into(),
+                    values: Default::default(),
+                },
+            ),
+        }
+    }
+
+    #[test]
+    fn a_command_group_runs_as_its_commands() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let mut project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![group_step("TWO_BLURS")])],
+        );
+        project
+            .command_groups
+            .push(evanalyzer_cfg::settings::command_groups::GroupDefinition {
+                key: "TWO_BLURS".into(),
+                meta: Default::default(),
+                steps: vec![blur_step(true), blur_step(true)],
+                parameters: vec![],
+                origin: None,
+            });
+
+        let (job, _out_objects) =
+            generate_preview_job_from_project_settings(project, project_dir.path().into()).unwrap();
+
+        let commands = &job.pipelines_pre_process[&PipelineId(1)].commands;
+        assert_eq!(commands.len(), 2, "the group's two blurs");
+        assert_eq!(
+            commands[1].0,
+            evanalyzer_cfg::core_types::StepId(4),
+            "a breakpoint on the group stops after it"
+        );
+    }
+
+    #[test]
+    fn a_group_the_project_doesnt_define_is_refused_with_a_clear_error() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
         let project = project_with(
             Some(image_root.path().to_path_buf()),
-            vec![pipeline(1, true, vec![blur_step(true), group])],
+            vec![pipeline(
+                1,
+                true,
+                vec![blur_step(true), group_step("MISSING")],
+            )],
         );
 
         let err = generate_preview_job_from_project_settings(project, project_dir.path().into())
@@ -1110,7 +1153,7 @@ mod tests {
             .expect("refused")
             .to_string();
         assert!(
-            err.contains("CELL_RECONSTRUCTION") && err.contains("can't run yet"),
+            err.contains("Pipeline") && err.contains("step 4") && err.contains("MISSING"),
             "{err}"
         );
     }

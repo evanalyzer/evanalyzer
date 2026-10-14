@@ -1394,6 +1394,10 @@ impl ProjectExt for ProjectWithRuntime {
                 &mut on_disk_settings.pipelines,
                 project_dir,
             );
+            crate::workspace::extensions::utils::relativize_group_file_paths(
+                &mut on_disk_settings.command_groups,
+                project_dir,
+            );
         }
 
         let json = serde_json::to_string_pretty(&on_disk_settings)
@@ -1787,6 +1791,10 @@ pub fn load_project(
     // plain absolute paths.
     if let Some(project_dir) = path.parent() {
         crate::workspace::extensions::utils::resolve_file_paths(&mut inner.pipelines, project_dir);
+        crate::workspace::extensions::utils::resolve_group_file_paths(
+            &mut inner.command_groups,
+            project_dir,
+        );
     }
 
     let mut project = ProjectWithRuntime {
