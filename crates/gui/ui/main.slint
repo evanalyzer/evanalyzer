@@ -83,6 +83,9 @@ import {
 import {
     GroupUpdateDialog,
     GroupUpdateState,
+    GroupSettingsDialog,
+    GroupSettingsState,
+    GroupParamRow,
 } from "dialogs/group_steps_dialog.slint";
 import {
     GroupStepsDialog,
@@ -206,6 +209,8 @@ export {
     GroupEditChoiceState,
     ExposeChoiceState,
     GroupUpdateState,
+    GroupSettingsState,
+    GroupParamRow,
     PipelineDeleteConfirmState,
     PipelineRunningState,
     TemplateMetaState,
@@ -475,6 +480,10 @@ export component AppWindow inherits Window {
                 height: 100%;
             }
             if (GlobalAppState.active_dialog == DialogType.group-update): GroupUpdateDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.group-settings): GroupSettingsDialog {
                 width: 100%;
                 height: 100%;
             }

@@ -1,4 +1,4 @@
-import { LineEdit, ComboBox, ScrollView } from "std-widgets.slint";
+import { LineEdit, ComboBox, ScrollView, TextEdit } from "std-widgets.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Theme } from "../style.slint";
 
@@ -499,5 +499,294 @@ export component GroupUpdateDialog inherits Rectangle {
         }
 
         height: layout.preferred-height;
+    }
+}
+
+// -- Group settings ------------------------------------------------
+
+/// A parameter of the group, as it shows on the group card.
+export struct GroupParamRow {
+    id: int,
+    label: string,
+    description: string,
+    /// The default value, as text.
+    default-value: string,
+    /// What it sets: "Blur › Kernel size, Blur › Kernel size".
+    sets: string,
+}
+
+/// The opened group's name, description and parameters (name, help text,
+/// order). Opened from "Settings…" in the opened group's bar, or from ✎ on
+/// an exposed setting (`focus-index` is then that parameter's row).
+export global GroupSettingsState {
+    in property <string> name: "";
+    in property <string> description: "";
+    in property <[GroupParamRow]> parameters: [];
+    /// Opened from "View": nothing can be changed.
+    in property <bool> read-only: false;
+    /// The row to scroll to and highlight, or -1.
+    in property <int> focus-index: -1;
+    callback name-edited(string);
+    callback description-edited(string);
+    /// id, name, help text
+    callback parameter-edited(int, string, string);
+    /// id, -1 up / +1 down
+    callback parameter-moved(int, int);
+    /// id: stop exposing it - its settings go back to the group's values.
+    callback parameter-removed(int);
+    callback close();
+}
+
+export component GroupSettingsDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+    property <length> row-height: 132px;
+    property <length> row-spacing: 8px;
+
+    TouchArea {
+        clicked => {
+            GroupSettingsState.close();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 520px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: GroupSettingsState.read-only ? "Group settings · read only" : "Group settings";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
+
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: close-ta.has-hover ? Theme.raised : transparent;
+                    Text {
+                        text: "✕";
+                        font-size: 12px;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            GroupSettingsState.close();
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Name";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    text: GroupSettingsState.name;
+                    read-only: GroupSettingsState.read-only;
+                    placeholder-text: "Group name";
+                    edited(t) => {
+                        GroupSettingsState.name-edited(t);
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Description (shown in the command picker)";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    text: GroupSettingsState.description;
+                    read-only: GroupSettingsState.read-only;
+                    placeholder-text: "What the group does";
+                    edited(t) => {
+                        GroupSettingsState.description-edited(t);
+                    }
+                }
+            }
+
+            Text {
+                text: GroupSettingsState.parameters.length == 0 ? "No parameters yet - ◇ next to a setting of the opened group exposes it on the group card." : "Parameters on the group card, in this order";
+                font-size: 11px;
+                font-weight: 600;
+                color: Theme.cat-group;
+                wrap: word-wrap;
+            }
+
+            // Rows have a fixed height, so the scroll position of the
+            // focused one is known before the list is laid out.
+            if GroupSettingsState.parameters.length > 0: list := ScrollView {
+                property <length> pitch: root.row-height + root.row-spacing;
+                property <length> total: GroupSettingsState.parameters.length * self.pitch - root.row-spacing;
+                height: min(self.total, 440px);
+                init => {
+                    if GroupSettingsState.focus-index > 0 {
+                        self.content-y = max(-GroupSettingsState.focus-index * self.pitch, min(0px, self.height - self.total));
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: root.row-spacing;
+                    for param[pi] in GroupSettingsState.parameters: Rectangle {
+                        height: root.row-height;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: pi == GroupSettingsState.focus-index ? Theme.cat-group : Theme.border;
+                        background: Theme.raised.with-alpha(0.4);
+
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 6px;
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit {
+                                    horizontal-stretch: 1;
+                                    text: param.label;
+                                    read-only: GroupSettingsState.read-only;
+                                    placeholder-text: "Name on the group card";
+                                    accessible-label: "Parameter name";
+                                    edited(t) => {
+                                        GroupSettingsState.parameter-edited(param.id, t, param.description);
+                                    }
+                                }
+
+                                Text {
+                                    text: "default \{param.default-value}";
+                                    font-size: 10px;
+                                    color: Theme.text-mute;
+                                    vertical-alignment: center;
+                                }
+
+                                if !GroupSettingsState.read-only: HorizontalLayout {
+                                    spacing: 2px;
+                                    Rectangle {
+                                        width: 24px;
+                                        opacity: pi > 0 ? 1 : 0.3;
+                                        border-radius: 4px;
+                                        background: up-ta.has-hover && pi > 0 ? Theme.raised : transparent;
+                                        Text {
+                                            text: "↑";
+                                            color: Theme.text-dim;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+
+                                        up-ta := TouchArea {
+                                            enabled: pi > 0;
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                GroupSettingsState.parameter-moved(param.id, -1);
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 24px;
+                                        opacity: pi < GroupSettingsState.parameters.length - 1 ? 1 : 0.3;
+                                        border-radius: 4px;
+                                        background: down-ta.has-hover && pi < GroupSettingsState.parameters.length - 1 ? Theme.raised : transparent;
+                                        Text {
+                                            text: "↓";
+                                            color: Theme.text-dim;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+
+                                        down-ta := TouchArea {
+                                            enabled: pi < GroupSettingsState.parameters.length - 1;
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                GroupSettingsState.parameter-moved(param.id, 1);
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 24px;
+                                        border-radius: 4px;
+                                        background: remove-ta.has-hover ? Theme.raised : transparent;
+                                        Text {
+                                            text: "✕";
+                                            font-size: 11px;
+                                            color: remove-ta.has-hover ? Theme.warn : Theme.text-dim;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+
+                                        remove-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                GroupSettingsState.parameter-removed(param.id);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            TextEdit {
+                                height: 46px;
+                                text: param.description;
+                                read-only: GroupSettingsState.read-only;
+                                wrap: word-wrap;
+                                placeholder-text: "Help text, shown as ? next to the parameter";
+                                edited(t) => {
+                                    GroupSettingsState.parameter-edited(param.id, param.label, t);
+                                }
+                            }
+
+                            Text {
+                                text: "sets \{param.sets}";
+                                font-size: 10px;
+                                color: Theme.text-mute;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                AppButton {
+                    text: "Close";
+                    primary: true;
+                    clicked => {
+                        GroupSettingsState.close();
+                    }
+                }
+            }
+        }
+
+        height: min(layout.preferred-height, root.height - 40px);
     }
 }

@@ -560,6 +560,31 @@ pub fn move_parameter(definition: &mut GroupDefinition, id: GroupParamId, delta:
     true
 }
 
+/// Stops exposing parameter `id` of `definition`: the settings it set keep
+/// the group's own values. Returns whether it existed.
+pub fn remove_parameter(definition: &mut GroupDefinition, id: GroupParamId) -> bool {
+    let before = definition.parameters.len();
+    definition.parameters.retain(|p| p.id != id);
+    definition.parameters.len() != before
+}
+
+/// The parameter of `definition` that sets `path` of step `step_id`, if any.
+pub fn parameter_for_setting(
+    definition: &GroupDefinition,
+    step_id: StepId,
+    path: &str,
+) -> Option<GroupParamId> {
+    definition
+        .parameters
+        .iter()
+        .find(|p| {
+            p.bindings
+                .iter()
+                .any(|b| b.step == step_id && b.param == path)
+        })
+        .map(|p| p.id)
+}
+
 /// The setting at `path` of `command` - a top-level one ("min_area") or one
 /// of a list entry ("thresholds.1.min_threshold") - and a label for it as a
 /// group parameter ("Thresholds 2 · Min Threshold").
@@ -1419,6 +1444,25 @@ mod tests {
         assert_eq!(ids(definition), before);
         assert!(!move_parameter(definition, last, 1), "already last");
         assert!(!move_parameter(definition, before[0], -1), "already first");
+    }
+
+    #[test]
+    fn a_parameter_is_found_by_its_setting_and_removed() {
+        let mut project = grouped();
+        let definition = &mut project.command_groups[0];
+        toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
+        let id = parameter_for_setting(definition, StepId(4), "min_area").unwrap();
+        assert_eq!(
+            parameter_for_setting(definition, StepId(4), "max_area"),
+            None
+        );
+
+        assert!(remove_parameter(definition, id));
+        assert_eq!(
+            parameter_for_setting(definition, StepId(4), "min_area"),
+            None
+        );
+        assert!(!remove_parameter(definition, id), "gone already");
     }
 
     #[test]

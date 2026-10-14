@@ -8,9 +8,10 @@ use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     CommandDef, CommandParameter, CommandPickerState, DefaultParamPreview, ExposeChoiceState,
-    GlobalAppState, GroupClassRow, GroupEditChoiceState, GroupItem, GroupParamRow, GroupStepsState,
-    GroupUpdateState, LeafParam, ParamType, Pipeline, PipelineCommand as SlintPipelineCommand,
-    PipelineStatus, PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
+    GlobalAppState, GroupClassRow, GroupEditChoiceState, GroupItem, GroupParamRow,
+    GroupSettingsState, GroupStepsState, GroupUpdateState, LeafParam, ParamType, Pipeline,
+    PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, RunAnalysisState,
+    StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use crate::{ResultItemData, ResultsListState};
@@ -1177,79 +1178,122 @@ impl PipelinesController {
                     }
                 });
 
-            // A parameter of the opened group renamed or its help text edited.
-            // No resync: the line being typed in keeps its focus.
+            // "Settings…" in the opened group's bar: the group settings dialog.
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
-                .on_group_parameter_edited(move |id, label, description| {
+                .on_open_group_settings(move || {
+                    manager.show_group_settings(None);
+                });
+
+            // ✎ next to an exposed setting: the dialog at its parameter.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_edit_exposed(move |step_idx, path| {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
-                    if manager.viewing(pipeline_id) {
-                        return;
-                    }
                     let Some(key) = manager.open_group_key(pipeline_id) else {
                         return;
                     };
-                    let edited = {
-                        let mut project = manager.app_state.get_project_write();
+                    let id = {
+                        let project = manager.app_state.get_project();
                         project
                             .command_groups
-                            .iter_mut()
+                            .iter()
                             .find(|d| d.key == key)
-                            .is_some_and(|definition| {
-                                evanalyzer_app::groups::edit_parameter(
-                                    definition,
-                                    GroupParamId(id as u32),
-                                    &label,
-                                    &description,
+                            .and_then(|definition| {
+                                let step = definition.steps.get(step_idx as usize)?;
+                                evanalyzer_app::groups::parameter_for_setting(
+                                    definition, step.id, &path,
                                 )
                             })
                     };
-                    if edited {
-                        manager.app_state.mark_dirty();
+                    if id.is_some() {
+                        manager.show_group_settings(id);
                     }
                 });
 
-            // ↑/↓ on a parameter of the opened group: its place on the card.
+            // The dialog's name and description. No refill: the line being
+            // typed in keeps its focus.
             let manager = self.clone();
-            ui.global::<PipelinesPanelState>()
-                .on_group_parameter_moved(move |id, delta| {
-                    let Some(ui) = manager.ui.upgrade() else {
-                        return;
-                    };
-                    let pipeline_id =
-                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
-                    if manager.viewing(pipeline_id) {
-                        return;
-                    }
-                    let Some(key) = manager.open_group_key(pipeline_id) else {
-                        return;
-                    };
-                    let moved = {
-                        let mut project = manager.app_state.get_project_write();
-                        project
-                            .command_groups
-                            .iter_mut()
-                            .find(|d| d.key == key)
-                            .is_some_and(|definition| {
-                                evanalyzer_app::groups::move_parameter(
-                                    definition,
-                                    GroupParamId(id as u32),
-                                    delta,
-                                )
-                            })
-                    };
-                    if moved {
-                        manager.app_state.mark_dirty();
-                        manager.sync_steps_of_selected_pipeline_to_slint(
-                            PipelineId(pipeline_id),
-                            false,
-                        );
+            ui.global::<GroupSettingsState>()
+                .on_name_edited(move |name| {
+                    manager.edit_open_group_definition(|definition| {
+                        let name = name.trim();
+                        if name.is_empty() {
+                            return false;
+                        }
+                        definition.meta.name = name.to_string();
+                        true
+                    });
+                });
+            let manager = self.clone();
+            ui.global::<GroupSettingsState>()
+                .on_description_edited(move |description| {
+                    manager.edit_open_group_definition(|definition| {
+                        definition.meta.short_description = description.to_string();
+                        true
+                    });
+                });
+
+            // A parameter renamed or its help text edited - no refill either.
+            let manager = self.clone();
+            ui.global::<GroupSettingsState>()
+                .on_parameter_edited(move |id, label, description| {
+                    manager.edit_open_group_definition(|definition| {
+                        evanalyzer_app::groups::edit_parameter(
+                            definition,
+                            GroupParamId(id as u32),
+                            &label,
+                            &description,
+                        )
+                    });
+                });
+
+            // ↑/↓: the parameter's place on the group card.
+            let manager = self.clone();
+            ui.global::<GroupSettingsState>()
+                .on_parameter_moved(move |id, delta| {
+                    if manager.edit_open_group_definition(|definition| {
+                        evanalyzer_app::groups::move_parameter(
+                            definition,
+                            GroupParamId(id as u32),
+                            delta,
+                        )
+                    }) {
+                        manager.fill_group_settings(-1);
                     }
                 });
+
+            // ✕: the parameter is no longer exposed.
+            let manager = self.clone();
+            ui.global::<GroupSettingsState>()
+                .on_parameter_removed(move |id| {
+                    if manager.edit_open_group_definition(|definition| {
+                        evanalyzer_app::groups::remove_parameter(
+                            definition,
+                            GroupParamId(id as u32),
+                        )
+                    }) {
+                        manager.pipeline_settings_changed();
+                        manager.fill_group_settings(-1);
+                    }
+                });
+
+            // Close: the panel shows the new name and ◆/◇.
+            let manager = self.clone();
+            ui.global::<GroupSettingsState>().on_close(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::None);
+                let pipeline_id =
+                    ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+            });
 
             // "Ungroup" on a group card: its steps in its place.
             let manager = self.clone();
@@ -2741,6 +2785,102 @@ impl PipelinesController {
         *self.viewing_from.lock().expect("Poisoned") = None;
     }
 
+    /// Opens the group settings dialog for the opened group - read only
+    /// while it's only viewed - at parameter `focus`, if given.
+    fn show_group_settings(&self, focus: Option<GroupParamId>) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+        let Some(key) = self.open_group_key(pipeline_id) else {
+            return;
+        };
+        let focus_index = {
+            let project = self.app_state.get_project();
+            let Some(definition) = project.command_groups.iter().find(|d| d.key == key) else {
+                return;
+            };
+            let state = ui.global::<GroupSettingsState>();
+            state.set_name(definition.meta.name.clone().into());
+            state.set_description(definition.meta.short_description.clone().into());
+            state.set_read_only(self.viewing(pipeline_id));
+            focus
+                .and_then(|id| definition.parameters.iter().position(|p| p.id == id))
+                .map_or(-1, |index| index as i32)
+        };
+        self.fill_group_settings(focus_index);
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::GroupSettings);
+    }
+
+    /// The group settings dialog's parameter rows, from the opened group.
+    fn fill_group_settings(&self, focus_index: i32) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+        let Some(key) = self.open_group_key(pipeline_id) else {
+            return;
+        };
+        let project = self.app_state.get_project();
+        let Some(definition) = project.command_groups.iter().find(|d| d.key == key) else {
+            return;
+        };
+        let rows: Vec<GroupParamRow> = definition
+            .parameters
+            .iter()
+            .map(|parameter| GroupParamRow {
+                id: parameter.id.0 as i32,
+                label: parameter.label.clone().into(),
+                description: parameter.description.clone().into(),
+                default_value: param_value_display(&parameter.default).into(),
+                sets: parameter
+                    .bindings
+                    .iter()
+                    .filter_map(|binding| {
+                        let step = definition.steps.iter().find(|s| s.id == binding.step)?;
+                        let (_, label) =
+                            evanalyzer_app::groups::setting_at(step.command()?, &binding.param)?;
+                        Some(format!("{} › {label}", step_label(&project, step)))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+                    .into(),
+            })
+            .collect();
+        let state = ui.global::<GroupSettingsState>();
+        state.set_focus_index(focus_index);
+        state.set_parameters(ModelRc::new(VecModel::from(rows)));
+    }
+
+    /// Applies `edit` to the opened group's definition - not while it's only
+    /// viewed. Returns whether it changed something (the project is then
+    /// marked as changed).
+    fn edit_open_group_definition(&self, edit: impl FnOnce(&mut GroupDefinition) -> bool) -> bool {
+        let Some(ui) = self.ui.upgrade() else {
+            return false;
+        };
+        let pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+        if self.viewing(pipeline_id) {
+            return false;
+        }
+        let Some(key) = self.open_group_key(pipeline_id) else {
+            return false;
+        };
+        let edited = {
+            let mut project = self.app_state.get_project_write();
+            project
+                .command_groups
+                .iter_mut()
+                .find(|d| d.key == key)
+                .is_some_and(edit)
+        };
+        if edited {
+            self.app_state.mark_dirty();
+        }
+        edited
+    }
+
     /// The steps the panel shows for pipeline `pipeline_id`: an opened
     /// group's, else the pipeline's.
     fn shown_steps<'a>(
@@ -3376,39 +3516,6 @@ impl PipelinesController {
             .map(|problem| problem.message)
             .unwrap_or_default();
         let read_only = open_group.is_some() && self.viewing(pipeline_id.0);
-        let open_group_parameters: Vec<GroupParamRow> = open_group
-            .as_ref()
-            .and_then(|key| {
-                let project = self.app_state.get_project();
-                let definition = project.command_groups.iter().find(|d| &d.key == key)?;
-                Some(
-                    definition
-                        .parameters
-                        .iter()
-                        .map(|parameter| GroupParamRow {
-                            id: parameter.id.0 as i32,
-                            label: parameter.label.clone().into(),
-                            description: parameter.description.clone().into(),
-                            sets: parameter
-                                .bindings
-                                .iter()
-                                .filter_map(|binding| {
-                                    let step =
-                                        definition.steps.iter().find(|s| s.id == binding.step)?;
-                                    let (_, label) = evanalyzer_app::groups::setting_at(
-                                        step.command()?,
-                                        &binding.param,
-                                    )?;
-                                    Some(format!("{} › {label}", step_label(&project, step)))
-                                })
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                                .into(),
-                        })
-                        .collect(),
-                )
-            })
-            .unwrap_or_default();
         let open_group_name: String = open_group
             .as_ref()
             .map(|key| {
@@ -3778,8 +3885,6 @@ impl PipelinesController {
                 state.set_open_group_name(open_group_name.into());
                 state.set_open_group_problem(open_group_problem.into());
                 state.set_open_group_read_only(read_only);
-                state
-                    .set_open_group_parameters(ModelRc::new(VecModel::from(open_group_parameters)));
                 state.set_active_pipeline_image_source(pipeline_image_source.into());
                 state.set_active_commands(ModelRc::new(VecModel::from(commands)));
 
@@ -6420,12 +6525,14 @@ mod tests {
         ui.global::<PipelinesPanelState>().invoke_open_group(1);
         drain_ui_queue();
         fits("Changes apply to every use of this group · ◇ exposes a setting");
+        fits("Settings…");
 
         ui.global::<PipelinesPanelState>().invoke_close_group();
         ui.global::<PipelinesPanelState>().invoke_view_group(1);
         drain_ui_queue();
         fits("Viewing · read only");
         fits("Edit");
+        fits("Settings…");
     }
 
     #[test]
@@ -6490,9 +6597,10 @@ mod tests {
         assert!(!panel.get_open_group_read_only());
     }
 
-    #[test]
-    fn the_opened_groups_parameters_are_renamed_described_and_reordered() {
-        let (ui, ui_state, _controller) = with_a_group();
+    /// The opened group with both blurs' kernel sizes exposed as two
+    /// parameters.
+    fn with_two_parameters() -> (AppWindow, Arc<UiState>, Arc<PipelinesController>) {
+        let (ui, ui_state, controller) = with_a_group();
         let panel = ui.global::<PipelinesPanelState>();
         panel.invoke_open_group(1);
         drain_ui_queue();
@@ -6503,42 +6611,177 @@ mod tests {
         // A second, own parameter.
         ui.global::<ExposeChoiceState>().invoke_chosen(0);
         drain_ui_queue();
+        (ui, ui_state, controller)
+    }
 
-        let rows = || -> Vec<GroupParamRow> { panel.get_open_group_parameters().iter().collect() };
-        assert_eq!(rows().len(), 2);
+    fn settings_rows(ui: &AppWindow) -> Vec<GroupParamRow> {
+        ui.global::<GroupSettingsState>()
+            .get_parameters()
+            .iter()
+            .collect()
+    }
+
+    #[test]
+    fn the_group_settings_dialog_renames_describes_and_reorders() {
+        let (ui, ui_state, _controller) = with_two_parameters();
+        ui.global::<PipelinesPanelState>()
+            .invoke_open_group_settings();
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::GroupSettings);
+        let dialog = ui.global::<GroupSettingsState>();
+        assert!(!dialog.get_read_only());
+        assert_eq!(dialog.get_name(), "Smooth");
+        assert_eq!(dialog.get_focus_index(), -1);
+        assert_eq!(settings_rows(&ui).len(), 2);
         assert!(
-            rows()[0].sets.contains("Blur"),
+            settings_rows(&ui)[0].sets.contains("Blur"),
             "names what it sets: {}",
-            rows()[0].sets
+            settings_rows(&ui)[0].sets
         );
-        let (first, second) = (rows()[0].id, rows()[1].id);
+        let (first, second) = (settings_rows(&ui)[0].id, settings_rows(&ui)[1].id);
 
-        panel.invoke_group_parameter_edited(first, "Radius".into(), "How strong".into());
+        dialog.invoke_name_edited("Smoothing".into());
+        dialog.invoke_name_edited("  ".into());
+        dialog.invoke_description_edited("Blurs twice".into());
+        dialog.invoke_parameter_edited(first, "Radius".into(), "How strong".into());
         drain_ui_queue();
         {
             let project = ui_state.get_project();
-            let parameter = &project.command_groups[0].parameters[0];
+            let definition = &project.command_groups[0];
+            assert_eq!(
+                definition.meta.name, "Smoothing",
+                "an empty name is ignored"
+            );
+            assert_eq!(definition.meta.short_description, "Blurs twice");
+            let parameter = &definition.parameters[0];
             assert_eq!(
                 (parameter.label.as_str(), parameter.description.as_str()),
                 ("Radius", "How strong")
             );
         }
 
-        panel.invoke_group_parameter_moved(second, -1);
+        dialog.invoke_parameter_moved(second, -1);
         drain_ui_queue();
-        let ids: Vec<i32> = rows().iter().map(|r| r.id).collect();
+        let ids: Vec<i32> = settings_rows(&ui).iter().map(|r| r.id).collect();
         assert_eq!(ids, [second, first]);
-        assert_eq!(rows()[1].label, "Radius");
+        assert_eq!(settings_rows(&ui)[1].label, "Radius");
 
-        // Not while only viewing.
+        dialog.invoke_close();
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::None);
+        assert_eq!(
+            ui.global::<PipelinesPanelState>().get_open_group_name(),
+            "Smoothing"
+        );
+    }
+
+    #[test]
+    fn the_pen_next_to_an_exposed_setting_opens_the_dialog_at_its_parameter() {
+        let (ui, ui_state, _controller) = with_two_parameters();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_edit_exposed(1, "kernel_size".into());
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::GroupSettings);
+        assert_eq!(ui.global::<GroupSettingsState>().get_focus_index(), 1);
+
+        // ✕ stops exposing it: the setting shows ◇ again.
+        let second = settings_rows(&ui)[1].id;
+        ui.global::<GroupSettingsState>()
+            .invoke_parameter_removed(second);
+        drain_ui_queue();
+        assert_eq!(settings_rows(&ui).len(), 1);
+        assert_eq!(ui_state.get_project().command_groups[0].parameters.len(), 1);
+        ui.global::<GroupSettingsState>().invoke_close();
+        drain_ui_queue();
+        assert!(!ui_param(&ui, 1, "kernel_size").exposed);
+        assert!(ui_param(&ui, 0, "kernel_size").exposed);
+
+        // A setting that isn't exposed has no parameter to show.
+        panel.invoke_edit_exposed(1, "kernel_size".into());
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::None);
+    }
+
+    /// ✎ on a parameter far down the list scrolls the dialog to it, and
+    /// the dialog fits the window however many parameters there are.
+    #[test]
+    fn the_dialog_scrolls_to_the_pens_parameter_and_fits_the_window() {
+        use evanalyzer_cfg::settings::command_groups::{GroupParameterDef, ParamBinding};
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, ui_state, _controller) = with_two_parameters();
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 800.0));
+        {
+            let mut project = ui_state.get_project_write();
+            let definition = &mut project.command_groups[0];
+            let fillers = (0..10).map(|i| GroupParameterDef {
+                id: GroupParamId(100 + i),
+                label: format!("Filler {i}"),
+                description: String::new(),
+                default: ParamValue::Int(0),
+                bindings: vec![ParamBinding {
+                    step: evanalyzer_cfg::core_types::StepId(999),
+                    param: "kernel_size".into(),
+                }],
+            });
+            definition.parameters.splice(0..0, fillers);
+        }
+        let last = ui_state.get_project().command_groups[0].parameters.len() - 1;
+        ui.global::<PipelinesPanelState>()
+            .invoke_edit_exposed(1, "kernel_size".into());
+        drain_ui_queue();
+        assert_eq!(
+            ui.global::<GroupSettingsState>().get_focus_index(),
+            last as i32
+        );
+
+        let label = settings_rows(&ui)[last].label.to_string();
+        let edits: Vec<_> = ElementHandle::find_by_accessible_label(&ui, "Parameter name")
+            .filter(|e| e.accessible_value().is_some_and(|v| v == label))
+            .collect();
+        let row = edits.last().expect("the parameter's name field");
+        let y = row.absolute_position().y;
+        assert!(
+            (0.0..800.0 - row.size().height).contains(&y),
+            "the focused parameter is scrolled into view: y = {y}"
+        );
+        let close = ElementHandle::find_by_accessible_label(&ui, "Close")
+            .last()
+            .expect("Close");
+        assert!(
+            close.absolute_position().y + close.size().height <= 800.0,
+            "the dialog fits the window"
+        );
+    }
+
+    #[test]
+    fn a_viewed_groups_settings_open_read_only_and_change_nothing() {
+        let (ui, ui_state, _controller) = with_two_parameters();
+        let panel = ui.global::<PipelinesPanelState>();
         panel.invoke_close_group();
         panel.invoke_view_group(1);
         drain_ui_queue();
-        panel.invoke_group_parameter_edited(first, "Changed".into(), "".into());
-        panel.invoke_group_parameter_moved(first, -1);
+        let before = {
+            let p = ui_state.get_project();
+            serde_json::to_value(&p.command_groups).unwrap()
+        };
+
+        panel.invoke_open_group_settings();
         drain_ui_queue();
-        let project = ui_state.get_project();
-        assert_eq!(project.command_groups[0].parameters[1].label, "Radius");
+        let dialog = ui.global::<GroupSettingsState>();
+        assert_eq!(active_dialog(&ui), DialogType::GroupSettings);
+        assert!(dialog.get_read_only());
+        let first = settings_rows(&ui)[0].id;
+        dialog.invoke_name_edited("Changed".into());
+        dialog.invoke_description_edited("Changed".into());
+        dialog.invoke_parameter_edited(first, "Changed".into(), "".into());
+        dialog.invoke_parameter_moved(first, 1);
+        dialog.invoke_parameter_removed(first);
+        drain_ui_queue();
+        let after = {
+            let p = ui_state.get_project();
+            serde_json::to_value(&p.command_groups).unwrap()
+        };
+        assert_eq!(after, before);
     }
 
     #[test]
