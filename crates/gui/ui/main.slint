@@ -420,6 +420,8 @@ export component AppWindow inherits Window {
                 cat-count-mea: CommandPickerState.cat-count-mea;
                 cat-count-fav: CommandPickerState.cat-count-fav;
                 cat-count-grp: CommandPickerState.cat-count-grp;
+                unused-group-count: CommandPickerState.unused-group-count;
+                detail-removable: CommandPickerState.detail-removable;
                 query <=> CommandPickerState.query;
                 fcat-pre <=> CommandPickerState.fcat-pre;
                 fcat-seg <=> CommandPickerState.fcat-seg;
@@ -438,6 +440,12 @@ export component AppWindow inherits Window {
                 }
                 confirm(id) => {
                     CommandPickerState.confirm(id);
+                }
+                remove-group(id) => {
+                    CommandPickerState.remove-group(id);
+                }
+                remove-unused-groups => {
+                    CommandPickerState.remove-unused-groups();
                 }
                 cancel => {
                     CommandPickerState.cancel();

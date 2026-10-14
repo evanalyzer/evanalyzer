@@ -842,6 +842,8 @@ impl PipelinesController {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
+                    ui.global::<CommandPickerState>()
+                        .set_detail_removable(false);
                     if command_id >= LIBRARY_GROUP_PICKER_ID_BASE {
                         let idx = (command_id - LIBRARY_GROUP_PICKER_ID_BASE) as usize;
                         let library = manager.group_library.lock().expect("Poisoned");
@@ -860,6 +862,10 @@ impl PipelinesController {
                             let picker = ui.global::<CommandPickerState>();
                             picker.set_detail(detail);
                             picker.set_has_detail(true);
+                            picker.set_detail_removable(
+                                evanalyzer_app::groups::unused_groups(&project)
+                                    .contains(&definition.key),
+                            );
                         }
                         return;
                     }
@@ -1531,6 +1537,46 @@ impl PipelinesController {
                         .set_active_dialog(DialogType::None);
                 }
             });
+
+            // Picker: "Remove from project" on an unused group.
+            let manager = self.clone();
+            ui.global::<CommandPickerState>()
+                .on_remove_group(move |command_id| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    if !(GROUP_PICKER_ID_BASE..LIBRARY_GROUP_PICKER_ID_BASE).contains(&command_id) {
+                        return;
+                    }
+                    let idx = (command_id - GROUP_PICKER_ID_BASE) as usize;
+                    let result = {
+                        let mut project = manager.app_state.get_project_write();
+                        match project.command_groups.get(idx).map(|d| d.key.clone()) {
+                            Some(key) => evanalyzer_app::groups::remove_group(&mut project, &key),
+                            None => return,
+                        }
+                    };
+                    if let Err(e) = result {
+                        warn!("Could not remove the group: {e}");
+                        return;
+                    }
+                    manager.after_groups_removed(&ui);
+                });
+
+            // Picker: "Remove" next to "N groups no pipeline uses".
+            let manager = self.clone();
+            ui.global::<CommandPickerState>()
+                .on_remove_unused_groups(move || {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let removed = evanalyzer_app::groups::remove_unused_groups(
+                        &mut manager.app_state.get_project_write(),
+                    );
+                    if !removed.is_empty() {
+                        manager.after_groups_removed(&ui);
+                    }
+                });
 
             // Picker: cancel - close dialog
             let manager = self.clone();
@@ -2711,6 +2757,19 @@ impl PipelinesController {
         }
     }
 
+    /// After groups were removed: the picker's list and detail anew (ids
+    /// moved), the project changed.
+    fn after_groups_removed(self: &Arc<Self>, ui: &AppWindow) {
+        let picker = ui.global::<CommandPickerState>();
+        picker.set_has_detail(false);
+        picker.set_detail_removable(false);
+        picker.set_selected_id(-1);
+        let query = picker.get_query().to_string();
+        let filter_favorites = picker.get_filter_favorites();
+        self.apply_picker_filter(ui, &query, filter_favorites);
+        self.pipeline_settings_changed();
+    }
+
     /// Fills "Group steps" for steps `from..=to` of its pipeline: the range,
     /// the classes with their suggested roles, the channels.
     fn refresh_group_plan(self: &Arc<Self>, ui: &AppWindow, from: i32, to: i32) {
@@ -2953,6 +3012,9 @@ impl PipelinesController {
         picker.set_shown_dataset(ModelRc::new(VecModel::from(dat)));
         picker.set_shown_templates(ModelRc::new(VecModel::from(templates)));
         picker.set_shown_groups(ModelRc::new(VecModel::from(groups)));
+        picker.set_unused_group_count(
+            evanalyzer_app::groups::unused_groups(&self.app_state.get_project()).len() as i32,
+        );
         picker.set_shown_library_groups(ModelRc::new(VecModel::from(library_groups)));
         picker.set_cat_count_grp(cg);
         picker.set_total_shown(total);
@@ -3116,6 +3178,15 @@ impl PipelinesController {
             *self.open_group.lock().expect("Poisoned") = None;
             open_group = None;
         }
+        let open_group_problem: String = open_group
+            .as_ref()
+            .and_then(|key| {
+                evanalyzer_app::groups::check_group(&self.app_state.get_project(), key)
+                    .into_iter()
+                    .next()
+            })
+            .map(|problem| problem.message)
+            .unwrap_or_default();
         let open_group_name: String = open_group
             .as_ref()
             .map(|key| {
@@ -3168,7 +3239,14 @@ impl PipelinesController {
                             idx: idx as i32,
                             id: step.id,
                             name: command.name().to_owned(),
-                            summary: command.to_summary(),
+                            // What a run would refuse (e.g. a group's class
+                            // outside a group), else the settings' summary.
+                            summary: match open_group {
+                                Some(_) => command.to_summary(),
+                                None => evanalyzer_app::groups::step_problem(&project, step)
+                                    .map(|problem| format!("⚠ {problem}"))
+                                    .unwrap_or_else(|| command.to_summary()),
+                            },
                             category: step_category(*command.category()),
                             enabled: step.enabled,
                             parameters: command.to_parameters(),
@@ -3185,8 +3263,13 @@ impl PipelinesController {
                                     group,
                                     &project.command_groups,
                                 ) {
-                                    Ok(parameters) => ("Command group".to_string(), parameters),
-                                    Err(e) => (e.to_string(), Vec::new()),
+                                    Ok(parameters) => (
+                                        evanalyzer_app::groups::step_problem(&project, step)
+                                            .map(|problem| format!("⚠ {problem}"))
+                                            .unwrap_or_else(|| "Command group".to_string()),
+                                        parameters,
+                                    ),
+                                    Err(e) => (format!("⚠ {e}"), Vec::new()),
                                 };
                             StepData {
                                 idx: idx as i32,
@@ -3468,6 +3551,7 @@ impl PipelinesController {
                     .collect();
                 state.set_active_pipeline_name(pipeline_name.into());
                 state.set_open_group_name(open_group_name.into());
+                state.set_open_group_problem(open_group_problem.into());
                 state.set_active_pipeline_image_source(pipeline_image_source.into());
                 state.set_active_commands(ModelRc::new(VecModel::from(commands)));
 
@@ -6004,6 +6088,70 @@ mod tests {
         );
         drop(project);
         assert_eq!(card(&ui).update_version, "", "up to date");
+    }
+
+    #[test]
+    fn unused_groups_can_be_removed_in_the_picker() {
+        let (ui, ui_state, controller) = with_a_group(); // SMOOTH, used
+        ui_state.get_project_write().command_groups.extend([
+            group_definition("OLD", "Old"),
+            group_definition("OLDER", "Older"),
+        ]);
+        let picker = ui.global::<CommandPickerState>();
+        picker.set_filter_groups(true);
+        controller.apply_picker_filter(&ui, "", false);
+        assert_eq!(picker.get_unused_group_count(), 2);
+
+        picker.invoke_select(GROUP_PICKER_ID_BASE);
+        assert!(!picker.get_detail_removable(), "SMOOTH is used");
+        picker.invoke_select(GROUP_PICKER_ID_BASE + 1);
+        assert!(picker.get_detail_removable());
+        picker.invoke_remove_group(GROUP_PICKER_ID_BASE + 1);
+        assert_eq!(picker.get_unused_group_count(), 1);
+        assert!(!picker.get_has_detail());
+
+        picker.invoke_remove_unused_groups();
+        assert_eq!(picker.get_unused_group_count(), 0);
+        let keys: Vec<String> = ui_state
+            .get_project()
+            .command_groups
+            .iter()
+            .map(|d| d.key.clone())
+            .collect();
+        assert_eq!(keys, ["SMOOTH"]);
+    }
+
+    #[test]
+    fn a_group_step_whose_values_dont_work_says_so_on_its_card() {
+        let (ui, ui_state, controller) = with_a_group();
+        {
+            let mut project = ui_state.get_project_write();
+            let definition = &mut project.command_groups[0];
+            evanalyzer_app::groups::toggle_exposed(
+                definition,
+                definition.steps[0].id,
+                "kernel_size",
+                "Size",
+                "3",
+            );
+            let id = definition.parameters[0].id;
+            let StepContent::Group(instance) = &mut project.pipelines[0].steps[1].content else {
+                panic!("group step")
+            };
+            instance.values.insert(
+                id,
+                evanalyzer_cfg::settings::command_groups::ParamValue::Text("big".into()),
+            );
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let card = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(1)
+            .unwrap();
+        assert!(card.summary.starts_with("⚠ "), "{}", card.summary);
+        assert!(card.summary.contains("big"), "{}", card.summary);
     }
 
     #[test]

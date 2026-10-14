@@ -1813,6 +1813,11 @@ pub fn load_project(
         );
     }
 
+    // Group mistakes show in the editor too; here they're logged.
+    for problem in crate::workspace::group_checks::check_groups(&inner) {
+        warn!("{}", problem.message);
+    }
+
     let mut project = ProjectWithRuntime {
         settings: inner,
         tmp_settings: ProjectTmpSettings::default(),

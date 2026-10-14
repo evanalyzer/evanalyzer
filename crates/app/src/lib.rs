@@ -21,8 +21,12 @@ pub mod ai {
     pub use evanalyzer_core::ai_devices::parse_gpu_slots;
 }
 
-/// Command groups as the editor shows them: a group card's parameters.
+/// Command groups in the editor: group cards, grouping steps, the library,
+/// checks.
 pub mod groups {
+    pub use crate::workspace::group_checks::{
+        GroupProblem, Severity, check_group, check_groups, step_problem,
+    };
     pub use crate::workspace::group_library::{
         content_hash, groups_used_by, insert_group_template, library_name, merge_group_definitions,
         modified_since_inserted, project_copy, save_group_template, update_available,
@@ -31,7 +35,8 @@ pub mod groups {
     pub use crate::workspace::grouping::{
         ClassRole, GroupingClass, GroupingPlan, add_binding, clone_group_for_step,
         compatible_parameters, exposed_settings, group_steps, group_uses, list_entry_removed,
-        plan_grouping, remove_group_step, setting_at, toggle_exposed, ungroup,
+        plan_grouping, remove_group, remove_group_step, remove_unused_groups, setting_at,
+        toggle_exposed, ungroup, unused_groups,
     };
     pub use evanalyzer_core::group_parameters;
     pub use evanalyzer_core::set_group_parameter;

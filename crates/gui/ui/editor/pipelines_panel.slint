@@ -2524,6 +2524,8 @@ export global PipelinesPanelState {
         /// The command group opened in the panel (its steps are shown), or
         /// empty.
         in property <string> open-group-name: "";
+        /// What's wrong with the opened group (its checks), or empty.
+        in property <string> open-group-problem: "";
         callback open-group(int);
         callback close-group();
         callback ungroup(int);
@@ -2879,7 +2881,7 @@ export component PipelinesPanel inherits Rectangle {
 
                         // -- An opened command group --
                     if PipelinesPanelState.open-group-name != "": Rectangle {
-                            height: 52px;
+                            height: PipelinesPanelState.open-group-problem == "" ? 52px : 72px;
                             border-radius: 6px;
                             background: Theme.cat-group.with-alpha(0.10);
                             border-width: 1px;
@@ -2924,6 +2926,13 @@ export component PipelinesPanel inherits Rectangle {
                                         text: "Changes apply to every use of this group · ◇ exposes a setting";
                                         font-size: 10px;
                                         color: Theme.text-mute;
+                                    }
+
+                                    if PipelinesPanelState.open-group-problem != "": Text {
+                                        text: "⚠ \{PipelinesPanelState.open-group-problem}";
+                                        font-size: 10px;
+                                        color: Theme.warn;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }

@@ -10,7 +10,7 @@ the job generator expands each group into its commands
 - [x] **Groups in the command picker** – step 12 (library part with step 16).
 - [x] **Creating groups in the editor** – steps 13 and 14.
 - [x] **Focus classes for group steps** – step 15.
-- [ ] **Validation in the editor** – today mistakes surface when a run starts.
+- [x] **Validation in the editor** – step 10. Was: mistakes surfaced only when a run started.
       Check earlier, when loading/editing: unique group keys, every instance's
       key is defined, bindings point to existing steps/parameters, all
       bindings of a parameter have the same type, values fit the bound
@@ -141,13 +141,25 @@ before 14: most groups are made from existing steps).
        3.96–4.17 GB - the scratch pad was only allocated briefly, so the peak
        doesn't change.
 
-**Phase D – validation** (postponed 2026-10-14 - Phase E first)
+**Phase D – validation** (done 2026-10-14 after Phase E)
 
-10. [ ] **One validation function in the app layer** (load and editor):
+10. [x] **One validation function in the app layer** (load and editor):
         unique keys, every instance's key exists, bindings exist and fit
         (types, values), local classes only inside groups and not in
         dataset steps, optional coloc warning. Also from step 4: a mapping
         to `Global(n)` (ExtractObjects) needs class n in the project.
+        Done (2026-10-14): `workspace/group_checks.rs` - `check_groups`
+        (all), `check_group` (one definition), `step_problem` (one step).
+        Errors: duplicate keys, duplicate step ids in a group, a binding to a
+        setting the step doesn't have, a parameter binding settings of
+        different kinds, and everything a run would refuse (the group at its
+        defaults expanded: undeclared local classes, mixing, local classes in
+        dataset steps, cycles, group slots); per step: a missing group, its
+        values not fitting - only if the group itself is fine, so one
+        mistake isn't repeated per use. Warnings: a parameter binding
+        nothing, Colocalization with a local class, an Extract Objects
+        mapping to a project class that doesn't exist. Shown as "⚠ …" on step
+        and group cards and in the opened group's bar; logged on load.
 
         **Open question - memory slots across pipelines** (found in step 8):
         `GlobalPipelineCache::clear_pipeline_context` runs at the end of
@@ -262,7 +274,12 @@ before 14: most groups are made from existing steps).
         section under the project's groups (files not in the project yet).
         Pipeline templates now carry the groups their steps use
         (`command_groups`), merged into the project on insert.
-17. [ ] Allow to remove (unused) groups from project
+17. [x] Allow to remove (unused) groups from project
+        Done (2026-10-14): `unused_groups` (not reachable from any pipeline -
+        also a group only an unused group uses), `remove_group` (refused
+        while used), `remove_unused_groups`. Picker: "Remove from project" in
+        the detail of an unused project group; "N groups no pipeline uses ·
+        Remove" in the Groups section.
 
 ## Scoping
 

@@ -373,7 +373,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
     // Wherever an Object step may follow, a dataset step may too: both
     // need extracted objects.
-    let expected: [(&str, &[CommandCategory]); 40] = [
+    let expected: [(&str, &[CommandCategory]); 41] = [
         ("AI Object Classifier", &[Object, Dataset]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Measure]),
@@ -399,6 +399,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("Hessian", &[Segment, Preprocess]),
         ("IlluminationCorrection", &[Segment, Preprocess]),
         ("ImageCache", &[Segment, Preprocess]),
+        ("LoadChannel", &[Segment, Preprocess]),
         ("ImageMath", &[Segment, Preprocess]),
         ("IntensityTransformation", &[Segment, Preprocess]),
         ("Laplacian", &[Segment, Preprocess]),

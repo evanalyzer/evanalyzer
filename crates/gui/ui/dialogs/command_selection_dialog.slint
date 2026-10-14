@@ -102,6 +102,10 @@ export global CommandPickerState {
     in property <int> cat-count-mea;
     in property <int> cat-count-fav;
     in property <int> cat-count-grp;
+    /// The project's groups no pipeline uses ("Remove N unused").
+    in property <int> unused-group-count;
+    /// The selected entry is a project group no pipeline uses.
+    in property <bool> detail-removable;
     /// -1 = no context (empty pipeline); 0..4 = display_order of the last step's category.
     /// Used to auto-pre-select the filter chip for "what comes next".
     in property <int> context-category: -1;
@@ -124,6 +128,8 @@ export global CommandPickerState {
     callback query-changed(string);
     callback select(int);
     callback confirm(int);
+    callback remove-group(int);
+    callback remove-unused-groups();
     callback cancel();
     callback import-bioimageio();
 }
@@ -412,6 +418,9 @@ component CommandRow inherits Rectangle {
 component DetailPane inherits Rectangle {
     in property <CommandDef> cmd;
     in property <bool> has-selection: false;
+    /// A project group no pipeline uses: "Remove from project".
+    in property <bool> removable: false;
+    callback remove();
 
     background: Theme.bg;
 
@@ -637,6 +646,17 @@ component DetailPane inherits Rectangle {
                     font-family: Theme.font-mono;
                 }
             }
+
+            if cmd.is-group && root.removable: HorizontalLayout {
+                alignment: start;
+                padding-top: 6px;
+                AppButton {
+                    text: "Remove from project";
+                    clicked => {
+                        root.remove();
+                    }
+                }
+            }
         }
     }
 }
@@ -690,6 +710,10 @@ export component CommandSelectionDialog inherits Rectangle {
     in property <int> cat-count-mea;
     in property <int> cat-count-fav;
     in property <int> cat-count-grp;
+    /// The project's groups no pipeline uses ("Remove N unused").
+    in property <int> unused-group-count;
+    /// The selected entry is a project group no pipeline uses.
+    in property <bool> detail-removable;
     in property <int> cat-count-rec;
 
     // ---- Outbound callbacks ----
@@ -697,6 +721,8 @@ export component CommandSelectionDialog inherits Rectangle {
     callback select(int);            // by id
     callback toggle-favorite(int);
     callback confirm(int);           // commit: insert this id
+    callback remove-group(int);
+    callback remove-unused-groups();
     callback cancel();
     callback import-bioimageio();    // open a bioimage.io rdf.yaml and insert the configured command
 
@@ -1324,6 +1350,46 @@ export component CommandSelectionDialog inherits Rectangle {
                             if (filter-groups || query != "") && !filter-favorites: VerticalLayout {
                                     spacing: 0;
 
+                                    if filter-groups && unused-group-count > 0: Rectangle {
+                                        height: 30px;
+                                        HorizontalLayout {
+                                            padding-left: 14px;
+                                            padding-right: 14px;
+                                            spacing: 8px;
+                                            Text {
+                                                text: unused-group-count == 1 ? "1 group no pipeline uses" : "\{unused-group-count} groups no pipeline uses";
+                                                color: Theme.text-mute;
+                                                font-size: 10.5px;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                            }
+
+                                            Rectangle {
+                                                width: 70px;
+                                                height: 22px;
+                                                y: (parent.height - 22px) / 2;
+                                                border-radius: 4px;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                background: remove-unused-ta.has-hover ? Theme.raised : transparent;
+                                                Text {
+                                                    text: "Remove";
+                                                    color: Theme.text-dim;
+                                                    font-size: 10.5px;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                remove-unused-ta := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        root.remove-unused-groups();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     if filter-groups && shown-groups.length == 0 && shown-library-groups.length == 0: VerticalLayout {
                                         padding-top: 60px;
                                         spacing: 10px;
@@ -1464,6 +1530,10 @@ export component CommandSelectionDialog inherits Rectangle {
                         horizontal-stretch: 1;
                         cmd: root.detail;
                         has-selection: root.has-detail;
+                        removable: root.detail-removable;
+                        remove => {
+                            root.remove-group(root.detail.id);
+                        }
                     }
                 }
             }
@@ -1625,6 +1695,10 @@ export component CommandPickerModal inherits Rectangle {
     in property <int> cat-count-mea;
     in property <int> cat-count-fav;
     in property <int> cat-count-grp;
+    /// The project's groups no pipeline uses ("Remove N unused").
+    in property <int> unused-group-count;
+    /// The selected entry is a project group no pipeline uses.
+    in property <bool> detail-removable;
     in property <int> cat-count-rec;
 
     in-out property <string> query: "";
@@ -1643,6 +1717,8 @@ export component CommandPickerModal inherits Rectangle {
     callback select(int);
     callback toggle-favorite(int);
     callback confirm(int);
+    callback remove-group(int);
+    callback remove-unused-groups();
     callback cancel();
     callback import-bioimageio();
 
@@ -1682,6 +1758,8 @@ export component CommandPickerModal inherits Rectangle {
         cat-count-mea: root.cat-count-mea;
         cat-count-fav: root.cat-count-fav;
         cat-count-grp: root.cat-count-grp;
+        unused-group-count: root.unused-group-count;
+        detail-removable: root.detail-removable;
         cat-count-rec: root.cat-count-rec;
         query <=> root.query;
         fcat-pre <=> root.fcat-pre;
@@ -1709,6 +1787,12 @@ export component CommandPickerModal inherits Rectangle {
         }
         confirm(id) => {
             root.confirm(id);
+        }
+        remove-group(id) => {
+            root.remove-group(id);
+        }
+        remove-unused-groups => {
+            root.remove-unused-groups();
         }
         cancel => {
             root.cancel();

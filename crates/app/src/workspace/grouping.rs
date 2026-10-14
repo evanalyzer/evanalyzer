@@ -302,6 +302,55 @@ pub fn group_uses(project: &ProjectSettings, key: &str) -> usize {
         .count()
 }
 
+/// The keys of the groups no pipeline uses - not even through another
+/// group (a group only an unused group uses is unused too).
+pub fn unused_groups(project: &ProjectSettings) -> Vec<String> {
+    let mut used: Vec<&str> = Vec::new();
+    let mut next: Vec<&PipelineStepSettings> = project
+        .pipelines
+        .iter()
+        .flat_map(|p| p.steps.iter())
+        .collect();
+    while let Some(step) = next.pop() {
+        if let StepContent::Group(instance) = &step.content
+            && !used.contains(&instance.key.as_str())
+        {
+            used.push(&instance.key);
+            if let Some(definition) = project
+                .command_groups
+                .iter()
+                .find(|d| d.key == instance.key)
+            {
+                next.extend(definition.steps.iter());
+            }
+        }
+    }
+    project
+        .command_groups
+        .iter()
+        .filter(|d| !used.contains(&d.key.as_str()))
+        .map(|d| d.key.clone())
+        .collect()
+}
+
+/// Removes group `key` from the project - refused while a pipeline uses it.
+pub fn remove_group(project: &mut ProjectSettings, key: &str) -> Result<(), InternalErrors> {
+    if !unused_groups(project).iter().any(|k| k == key) {
+        return Err(InternalErrors::InvalidArgument(format!(
+            "command group {key} is still used - remove the steps using it first"
+        )));
+    }
+    project.command_groups.retain(|d| d.key != key);
+    Ok(())
+}
+
+/// Removes every group no pipeline uses; returns their keys.
+pub fn remove_unused_groups(project: &mut ProjectSettings) -> Vec<String> {
+    let unused = unused_groups(project);
+    project.command_groups.retain(|d| !unused.contains(&d.key));
+    unused
+}
+
 /// "Only this step": gives step `step_index` of pipeline `pipeline_id` (a
 /// group step) a copy of its group - "Name (2)" with a key of its own - so
 /// changes to it don't affect the group's other uses. Returns the copy's key.
@@ -1443,5 +1492,47 @@ mod tests {
             4,
             "the removed entry's parameter went"
         );
+    }
+
+    // ---- Removing groups ----
+
+    #[test]
+    fn only_groups_no_pipeline_reaches_count_as_unused_and_can_be_removed() {
+        let mut project = grouped(); // CELL_RECONSTRUCTION, used by pipeline 1
+        let definition = |key: &str, steps: Vec<PipelineStepSettings>| GroupDefinition {
+            key: key.into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps,
+            parameters: vec![],
+            origin: None,
+        };
+        let uses = |key: &str| PipelineStepSettings {
+            id: StepId(1),
+            enabled: true,
+            content: StepContent::Group(GroupInstance {
+                key: key.into(),
+                values: Default::default(),
+            }),
+        };
+        // OUTER is used by nothing; INNER only by OUTER.
+        project
+            .command_groups
+            .push(definition("OUTER", vec![uses("INNER")]));
+        project.command_groups.push(definition("INNER", vec![]));
+        assert_eq!(unused_groups(&project), ["OUTER", "INNER"]);
+
+        assert!(
+            remove_group(&mut project, "CELL_RECONSTRUCTION").is_err(),
+            "still used"
+        );
+        remove_group(&mut project, "INNER").unwrap();
+        assert_eq!(remove_unused_groups(&mut project), ["OUTER"]);
+        let keys: Vec<&str> = project
+            .command_groups
+            .iter()
+            .map(|d| d.key.as_str())
+            .collect();
+        assert_eq!(keys, ["CELL_RECONSTRUCTION"]);
     }
 }
