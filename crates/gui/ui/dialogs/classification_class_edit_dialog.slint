@@ -69,8 +69,8 @@ export component ClassEditDialog inherits Rectangle {
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 450px;
-        height: 400px;
+        width: 486px;
+        height: 450px;
         background: Theme.panel;
         border-radius: 10px;
         border-width: 1px;
@@ -196,8 +196,8 @@ export component ClassEditDialog inherits Rectangle {
                         spacing: 10px;
                         Text {
                             text: "Color:";
-                            font-weight: 700;
                             width: 110px;
+                            vertical-alignment: center;
                         }
 
                         GridLayout {
@@ -215,7 +215,9 @@ export component ClassEditDialog inherits Rectangle {
                                     #00FA9A,
                                     #87CEFA,
                                     #FF66CC,
-                                    #FF1493, // Added: Deep Pink
+                                    #FF1493,
+                                    #7B00FF, // Added: Electric Purple
+                                    #00FF88, // Added: Bright Mint Neon
                                 ]: ColorTile {
                                         item_color: c;
                                     }
@@ -234,7 +236,9 @@ export component ClassEditDialog inherits Rectangle {
                                         #EEDD82,
                                         #BC8F8F,
                                         #FF8C00,
-                                        #FF7F50, // Added: Coral
+                                        #FF7F50,
+                                        #C71585, // Added: Medium Violet Red
+                                    #E9967A, // Added: Dark Salmon
                                 ]: ColorTile {
                                             item_color: c;
                                         }
@@ -253,7 +257,9 @@ export component ClassEditDialog inherits Rectangle {
                                             #B0C4DE,
                                             #66CDAA,
                                             #9932CC,
-                                            #20B2AA, // Added: Light Sea Green
+                                            #20B2AA,
+                                            #5F9EA0, // Added: Cadet Blue
+                                    #4169E1, // Added: Royal Blue
                                 ]: ColorTile {
                                                 item_color: c;
                                             }
@@ -272,7 +278,9 @@ export component ClassEditDialog inherits Rectangle {
                                                 #F5FFFA,
                                                 #F0F8FF,
                                                 #FFFFFF,
-                                                #FFF0F5, // Added: Lavender Blush
+                                                #FFF0F5,
+                                                #FFE4E1, // Added: Misty Rose
+                                    #E0FFFF, // Added: Light Cyan / Ice Blue
                                 ]: ColorTile {
                                                     item_color: c;
                                                 }
