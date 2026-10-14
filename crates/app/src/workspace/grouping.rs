@@ -215,16 +215,28 @@ pub fn group_steps(
                 });
             }
             ClassRole::Parameter => {
-                let bindings: Vec<ParamBinding> = steps
+                let mut bindings: Vec<(bool, ParamBinding)> = steps
                     .iter()
                     .filter_map(|s| s.command().map(|c| (s.id, c)))
                     .flat_map(|(id, command)| {
+                        // Only the object-class side: a segmentation class
+                        // with the class's number is the group's own
+                        // business (as for a local class).
                         class_paths(command, *class)
                             .into_iter()
-                            .filter(|(_, kind)| *kind != PathKind::Multi)
-                            .map(move |(param, _)| ParamBinding { step: id, param })
+                            .filter(|(_, kind)| *kind == PathKind::Single)
+                            .map(move |(param, _)| {
+                                let list = setting_at(command, &param)
+                                    .is_some_and(|(s, _)| s.param_type == ParamType::MultiObjClass);
+                                (list, ParamBinding { step: id, param })
+                            })
                     })
                     .collect();
+                // A single class setting first: the card shows its control,
+                // which can set the class lists too (see `same_kind`).
+                bindings.sort_by_key(|(list, _)| *list);
+                let bindings: Vec<ParamBinding> =
+                    bindings.into_iter().map(|(_, binding)| binding).collect();
                 if bindings.is_empty() {
                     continue;
                 }
@@ -634,11 +646,27 @@ pub fn compatible_parameters(
         .parameters
         .iter()
         .zip(shown)
-        .filter(|(_, shown)| {
-            shown.param_type == setting.param_type && shown.options == setting.options
-        })
+        .filter(|(_, shown)| same_kind(shown, setting))
         .map(|(parameter, _)| (parameter.id, parameter.label.clone()))
         .collect()
+}
+
+/// Whether a group parameter shown with the control of setting `shown`
+/// (its first binding) can also set `other`: the same type and options -
+/// or `shown` is a single object class and `other` a class list (the value
+/// is then a list of one). Not the other way round: a list picks several
+/// classes, a single class setting takes one. A segmentation class is its
+/// own kind: a segmentation's number, not a project class.
+pub(crate) fn same_kind(shown: &ParameterDef, other: &ParameterDef) -> bool {
+    if shown.param_type == ParamType::ObjClass
+        && matches!(
+            other.param_type,
+            ParamType::ObjClass | ParamType::MultiObjClass
+        )
+    {
+        return true;
+    }
+    shown.param_type == other.param_type && shown.options == other.options
 }
 
 /// Adds setting `path` of step `step_id` to parameter `id` of `definition`:
@@ -1463,6 +1491,83 @@ mod tests {
             None
         );
         assert!(!remove_parameter(definition, id), "gone already");
+    }
+
+    /// Threshold → Extract Objects (Seg 1 → class 1) → Classify, class 1 as
+    /// a parameter: the parameter is the class the objects get - the
+    /// segmentation class stays the group's own, and the check is happy.
+    #[test]
+    fn a_class_parameter_sets_the_object_classes_not_the_segmentation_class() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::ExtractClassMappingSettings;
+        let mut project = project();
+        project.pipelines[0].steps = vec![
+            step(1, threshold(1)),
+            step(
+                2,
+                PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+                    class_mapping: vec![ExtractClassMappingSettings {
+                        segmentation_class: SegmentationClass(1),
+                        object_class: NUCLEI,
+                    }],
+                    ..Default::default()
+                }),
+            ),
+            step(3, classify(NUCLEI, ObjectClass::Unset)),
+        ];
+        group_steps(
+            &mut project,
+            PipelineId(1),
+            0..=2,
+            "Detect",
+            &[(NUCLEI, ClassRole::Parameter)],
+        )
+        .unwrap();
+
+        let definition = &project.command_groups[0];
+        let class_parameters: Vec<&GroupParameterDef> = definition
+            .parameters
+            .iter()
+            .filter(|p| p.label == "Nuclei")
+            .collect();
+        assert_eq!(class_parameters.len(), 1);
+        let bound: Vec<&str> = class_parameters[0]
+            .bindings
+            .iter()
+            .map(|b| b.param.as_str())
+            .collect();
+        assert_eq!(
+            bound,
+            ["class_mapping.0.object_class", "input_classes"],
+            "not the Threshold's or the mapping's segmentation class"
+        );
+        let problems = crate::workspace::group_checks::check_group(&project, &definition.key);
+        assert!(
+            !problems
+                .iter()
+                .any(|p| p.severity == crate::workspace::group_checks::Severity::Error),
+            "{:?}",
+            problems.iter().map(|p| &p.message).collect::<Vec<_>>()
+        );
+
+        // Shown as the list (several classes) it couldn't set the mapping's
+        // single class.
+        let id = class_parameters[0].id;
+        let definition = &mut project.command_groups[0];
+        let parameter = definition
+            .parameters
+            .iter_mut()
+            .find(|p| p.id == id)
+            .unwrap();
+        parameter.bindings.reverse();
+        let key = definition.key.clone();
+        let problems = crate::workspace::group_checks::check_group(&project, &key);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("different kinds of setting")),
+            "{:?}",
+            problems.iter().map(|p| &p.message).collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! settings of different kinds, and warnings for what works but probably
 //! isn't meant.
 
-use crate::workspace::grouping::setting_at;
+use crate::workspace::grouping::{same_kind, setting_at};
 use evanalyzer_cfg::{
     core_types::{ObjectClass, PipelineId, StepId},
     settings::{
@@ -191,9 +191,7 @@ fn check_definition(project: &ProjectSettings, definition: &GroupDefinition) -> 
             };
             if let Some(command) = step.command() {
                 match setting_at(command, &binding.param) {
-                    Some((setting, label)) => {
-                        kinds.push((setting.param_type, setting.options, label))
-                    }
+                    Some((setting, label)) => kinds.push((setting, label)),
                     None => problems.push(error(named(format!(
                         "parameter \"{}\" is bound to {} of step {}, which {} doesn't have",
                         parameter.label,
@@ -204,10 +202,10 @@ fn check_definition(project: &ProjectSettings, definition: &GroupDefinition) -> 
                 }
             }
         }
-        if let Some((first_type, first_options, first)) = kinds.first()
-            && let Some((_, _, other)) = kinds
+        if let Some((first_setting, first)) = kinds.first()
+            && let Some((_, other)) = kinds
                 .iter()
-                .find(|(t, o, _)| t != first_type || o != first_options)
+                .find(|(setting, _)| !same_kind(first_setting, setting))
         {
             problems.push(error(named(format!(
                 "parameter \"{}\" sets {first} and {other}, which are different kinds of setting",
