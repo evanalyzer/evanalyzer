@@ -1247,6 +1247,16 @@ impl PipelinesController {
                     });
                 });
 
+            // The first author: both empty removes it.
+            let manager = self.clone();
+            ui.global::<GroupSettingsState>()
+                .on_author_edited(move |name, organization| {
+                    manager.edit_open_group_definition(|definition| {
+                        set_first_author(&mut definition.meta.authors, &name, &organization);
+                        true
+                    });
+                });
+
             // "Reset help text": the bound setting's own help again.
             let manager = self.clone();
             ui.global::<GroupSettingsState>()
@@ -1757,7 +1767,29 @@ impl PipelinesController {
                     )
                 };
                 match result {
-                    Ok(_) => {
+                    Ok(key) => {
+                        // The user (app settings) is the new group's author.
+                        let author = manager
+                            .app_state
+                            .app_settings
+                            .lock()
+                            .expect("Poisoned")
+                            .author
+                            .clone();
+                        if let Some(author) = author
+                            && let Some(definition) = manager
+                                .app_state
+                                .get_project_write()
+                                .command_groups
+                                .iter_mut()
+                                .find(|d| d.key == key)
+                        {
+                            set_first_author(
+                                &mut definition.meta.authors,
+                                &author.full_name,
+                                &author.organization,
+                            );
+                        }
                         ui.global::<GlobalAppState>()
                             .set_active_dialog(DialogType::None);
                         manager.pipeline_settings_changed();
@@ -2837,6 +2869,19 @@ impl PipelinesController {
             state.set_name(definition.meta.name.clone().into());
             state.set_description(definition.meta.short_description.clone().into());
             state.set_long_description(definition.meta.description.clone().into());
+            let author = definition.meta.authors.first();
+            state.set_author_name(
+                author
+                    .map(|a| a.full_name.clone())
+                    .unwrap_or_default()
+                    .into(),
+            );
+            state.set_author_organization(
+                author
+                    .map(|a| a.organization.clone())
+                    .unwrap_or_default()
+                    .into(),
+            );
             focus
                 .and_then(|id| definition.parameters.iter().position(|p| p.id == id))
                 .map_or(-1, |index| index as i32)
@@ -2874,7 +2919,14 @@ impl PipelinesController {
                         let step = definition.steps.iter().find(|s| s.id == binding.step)?;
                         let (setting, _) =
                             evanalyzer_app::groups::setting_at(step.command()?, &binding.param)?;
-                        Some(setting.description)
+                        // One line, shortened in the dialog.
+                        Some(
+                            setting
+                                .description
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        )
                     })
                     .unwrap_or_default()
                     .into(),
@@ -4027,6 +4079,26 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
 }
 
 /// The step-card / picker category of a command category.
+/// Sets the first of `authors` - adds it if there's none; both texts empty
+/// removes it.
+fn set_first_author(authors: &mut Vec<AuthorInformation>, name: &str, organization: &str) {
+    let (name, organization) = (name.trim(), organization.trim());
+    if name.is_empty() && organization.is_empty() {
+        if !authors.is_empty() {
+            authors.remove(0);
+        }
+        return;
+    }
+    let author = AuthorInformation {
+        full_name: name.to_string(),
+        organization: organization.to_string(),
+    };
+    match authors.first_mut() {
+        Some(first) => *first = author,
+        None => authors.push(author),
+    }
+}
+
 /// A short and a long description as one help text: either alone, or both
 /// with a blank line between.
 fn join_help(short: &str, long: &str) -> String {
@@ -4219,14 +4291,37 @@ fn group_to_command_def(
             definition.key.to_ascii_lowercase()
         )
         .into(),
-        source: format!("this project{flow}").into(),
+        source: format!(
+            "this project{}{flow}",
+            definition
+                .meta
+                .version
+                .map(|v| format!(" · v{v}"))
+                .unwrap_or_default()
+        )
+        .into(),
         favorite: false,
         recent: false,
         default_params: ModelRc::new(VecModel::from(defaults)),
         is_template: false,
         is_group: true,
-        authors: ModelRc::default(),
-        creation_time: "".into(),
+        authors: ModelRc::new(VecModel::from(
+            definition
+                .meta
+                .authors
+                .iter()
+                .map(|a| CommandAuthor {
+                    full_name: a.full_name.clone().into(),
+                    organization: a.organization.clone().into(),
+                })
+                .collect::<Vec<_>>(),
+        )),
+        creation_time: definition
+            .meta
+            .creation_time
+            .format("%Y-%m-%d")
+            .to_string()
+            .into(),
     }
 }
 
@@ -5349,6 +5444,91 @@ mod tests {
         let found = picker.get_shown_groups();
         assert_eq!(found.row_count(), 1, "a search finds groups too");
         assert_eq!(found.row_data(0).unwrap().name, "Cell reconstruction");
+    }
+
+    #[test]
+    fn a_project_groups_picker_entry_has_its_authors_and_creation_date() {
+        let mut definition = group_definition("CELLS", "Cell reconstruction");
+        definition.meta.authors = vec![AuthorInformation {
+            full_name: "Ada".into(),
+            organization: "Lab".into(),
+        }];
+        definition.meta.version = Some(2);
+        let project = ProjectSettings::default();
+        let def = group_to_command_def(0, &definition, &project);
+        let authors: Vec<_> = def.authors.iter().collect();
+        assert_eq!(authors.len(), 1);
+        assert_eq!(
+            (
+                authors[0].full_name.as_str(),
+                authors[0].organization.as_str()
+            ),
+            ("Ada", "Lab")
+        );
+        assert_eq!(
+            def.creation_time,
+            definition.meta.creation_time.format("%Y-%m-%d").to_string()
+        );
+        assert!(def.source.contains("v2"), "{}", def.source);
+    }
+
+    #[test]
+    fn set_first_author_replaces_adds_and_removes_only_the_first() {
+        let author = |n: &str| AuthorInformation {
+            full_name: n.into(),
+            organization: String::new(),
+        };
+        let mut authors = Vec::new();
+        set_first_author(&mut authors, " Ada ", "");
+        assert_eq!(authors.len(), 1);
+        assert_eq!(authors[0].full_name, "Ada");
+        authors.push(author("Bob"));
+        set_first_author(&mut authors, "Ada", "Lab");
+        assert_eq!(
+            (authors.len(), authors[0].organization.as_str()),
+            (2, "Lab")
+        );
+        set_first_author(&mut authors, "", " ");
+        assert_eq!(authors.len(), 1);
+        assert_eq!(authors[0].full_name, "Bob", "the co-author stays");
+    }
+
+    /// The detail pane shows a group's and a template's author and
+    /// creation date, the rows together.
+    #[test]
+    fn the_picker_details_author_and_creation_date_stay_together() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, _controller) = make_controller(ui.as_weak());
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 800.0));
+        let mut definition = group_definition("CELLS", "Cell reconstruction");
+        definition.meta.authors = vec![AuthorInformation {
+            full_name: "Ada".into(),
+            organization: "Lab".into(),
+        }];
+        let group = group_to_command_def(0, &definition, &ui_state.get_project());
+        let template = template_to_command_def(0, &template("A", vec![step("Blur")]));
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::CommandSelectionDialog);
+
+        for (detail, author_text) in [(group, "Ada (Lab)"), (template, "Ada Lovelace")] {
+            let picker = ui.global::<CommandPickerState>();
+            picker.set_detail(detail);
+            picker.set_has_detail(true);
+            let y = |label: &str| {
+                ElementHandle::find_by_accessible_label(&ui, label)
+                    .next()
+                    .unwrap_or_else(|| panic!("{label:?} not found"))
+                    .absolute_position()
+                    .y
+            };
+            let (author, created) = (y("Author"), y("Created"));
+            assert!(
+                created > author && created - author < 40.0,
+                "{author_text}: Author at {author}, Created at {created}"
+            );
+            y(author_text);
+        }
     }
 
     // -- attach_callbacks (live AppWindow) -----------------------------------------

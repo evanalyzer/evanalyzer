@@ -529,12 +529,17 @@ export global GroupSettingsState {
     /// The full description, shown with the short one behind the group
     /// card's "?".
     in property <string> long-description: "";
+    /// The first author - shown in the command picker.
+    in property <string> author-name: "";
+    in property <string> author-organization: "";
     in property <[GroupParamRow]> parameters: [];
     /// The row to scroll to and highlight, or -1.
     in property <int> focus-index: -1;
     callback name-edited(string);
     callback description-edited(string);
     callback long-description-edited(string);
+    /// name, organization
+    callback author-edited(string, string);
     /// id, name, help text
     callback parameter-edited(int, string, string);
     /// id, -1 up / +1 down
@@ -548,7 +553,7 @@ export global GroupSettingsState {
 
 export component GroupSettingsDialog inherits Rectangle {
     background: Theme.modal-overlay;
-    property <length> row-height: 132px;
+    property <length> row-height: 158px;
     property <length> row-spacing: 8px;
 
     TouchArea {
@@ -641,6 +646,43 @@ export component GroupSettingsDialog inherits Rectangle {
                 }
             }
 
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    spacing: 5px;
+                    Text {
+                        text: "Author";
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                    }
+
+                    author-name-edit := LineEdit {
+                        text: GroupSettingsState.author-name;
+                        placeholder-text: "Full name";
+                        edited(t) => {
+                            GroupSettingsState.author-edited(t, author-organization-edit.text);
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 5px;
+                    Text {
+                        text: "Organization";
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                    }
+
+                    author-organization-edit := LineEdit {
+                        text: GroupSettingsState.author-organization;
+                        placeholder-text: "Lab, institute, company";
+                        edited(t) => {
+                            GroupSettingsState.author-edited(author-name-edit.text, t);
+                        }
+                    }
+                }
+            }
+
             VerticalLayout {
                 spacing: 5px;
                 Text {
@@ -677,6 +719,7 @@ export component GroupSettingsDialog inherits Rectangle {
                 min-height: min(self.total, root.row-height);
                 preferred-height: min(self.total, 440px);
                 vertical-stretch: 1;
+                vertical-scrollbar-policy: always-on;
                 init => {
                     if GroupSettingsState.focus-index > 0 {
                         self.content-y = max(-GroupSettingsState.focus-index * self.pitch, min(0px, self.height - self.total));
@@ -687,6 +730,7 @@ export component GroupSettingsDialog inherits Rectangle {
                     spacing: root.row-spacing;
                     for param[pi] in GroupSettingsState.parameters: Rectangle {
                         height: root.row-height;
+                        clip: true;
                         border-radius: 8px;
                         border-width: 1px;
                         border-color: pi == GroupSettingsState.focus-index ? Theme.cat-group : Theme.border;
@@ -785,17 +829,27 @@ export component GroupSettingsDialog inherits Rectangle {
                                 height: 46px;
                                 text: param.description;
                                             wrap: word-wrap;
-                                placeholder-text: param.default-description != "" ? param.default-description : "Help text, shown as ? next to the parameter";
+                                placeholder-text: "Help text, shown as ? next to the parameter";
                                 edited(t) => {
                                     GroupSettingsState.parameter-edited(param.id, param.label, t);
                                 }
                             }
 
+                            Text {
+                                text: "sets \{param.sets}";
+                                font-size: 10px;
+                                color: Theme.text-mute;
+                                overflow: elide;
+                            }
+
+                            // Which help the "?" shows: the setting's own while
+                            // there's none, else "Reset" back to it.
                             HorizontalLayout {
+                                height: 18px;
                                 spacing: 6px;
-                                Text {
+                                if param.description == "": Text {
                                     horizontal-stretch: 1;
-                                    text: "sets \{param.sets}";
+                                    text: param.default-description == "" ? "No help text" : "Setting's own help: \{param.default-description}";
                                     font-size: 10px;
                                     color: Theme.text-mute;
                                     overflow: elide;
@@ -804,12 +858,13 @@ export component GroupSettingsDialog inherits Rectangle {
 
                                 // Back to the setting's own help text.
                                 if param.description != "": Rectangle {
+                                    horizontal-stretch: 0;
                                     width: reset-text.preferred-width + 12px;
                                     height: 18px;
                                     border-radius: 4px;
                                     background: reset-ta.has-hover ? Theme.raised : transparent;
                                     reset-text := Text {
-                                        text: "Reset help text";
+                                        text: "Reset to the setting's own help";
                                         font-size: 10px;
                                         color: Theme.text-dim;
                                         horizontal-alignment: center;

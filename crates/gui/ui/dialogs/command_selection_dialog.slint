@@ -331,7 +331,19 @@ component CommandRow inherits Rectangle {
             background: Theme.bg;
             border-width: 1px;
             border-color: Theme.border-soft;
-            Text {
+            // The group diamond is drawn: as a glyph, the font's metrics
+            // put it off centre.
+            if cmd.icon-glyph == "◆": Path {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 12px;
+                height: 12px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                commands: "M 6 0 L 12 6 L 6 12 L 0 6 Z";
+                fill: PickerStyle.cmd-color(cmd);
+            }
+            if cmd.icon-glyph != "◆": Text {
                 text: cmd.icon-glyph;
                 color: PickerStyle.cmd-color(cmd);
                 font-size: 14px;
@@ -551,9 +563,14 @@ component DetailPane inherits Rectangle {
             background: Theme.border-soft;
         }
 
+        // Footer metadata: as tall as its rows - the spacer above takes the
+        // rest (empty rows here used to stretch it apart).
         VerticalLayout {
             spacing: 4px;
-            if cmd.is-template && cmd.authors.length > 0: HorizontalLayout {
+            vertical-stretch: 0;
+            alignment: start;
+            // Templates and groups: who made it, and when.
+            if (cmd.is-template || cmd.is-group) && cmd.authors.length > 0: HorizontalLayout {
                 spacing: 8px;
                 alignment: space-between;
                 Text {
@@ -563,7 +580,7 @@ component DetailPane inherits Rectangle {
                 }
 
                 Text {
-                    text: cmd.authors[0].full-name + " (" + cmd.authors[0].organization + ")";
+                    text: cmd.authors[0].organization == "" ? cmd.authors[0].full-name : cmd.authors[0].full-name + " (" + cmd.authors[0].organization + ")";
                     color: Theme.text-dim;
                     font-size: 10.5px;
                     font-family: Theme.font-mono;
@@ -571,9 +588,11 @@ component DetailPane inherits Rectangle {
                 }
             }
 
-            if cmd.is-template: VerticalLayout {
+            if (cmd.is-template || cmd.is-group) && cmd.authors.length > 1: VerticalLayout {
                 spacing: 4px;
+                vertical-stretch: 0;
                 for author[index] in cmd.authors: HorizontalLayout {
+                    vertical-stretch: 0;
                     if index > 0: HorizontalLayout {
                         spacing: 8px;
                         alignment: space-between;
@@ -585,7 +604,7 @@ component DetailPane inherits Rectangle {
                         }
 
                         Text {
-                            text: author.full-name + " (" + author.organization + ")";
+                            text: author.organization == "" ? author.full-name : author.full-name + " (" + author.organization + ")";
                             color: Theme.text-dim;
                             font-size: 10.5px;
                             font-family: Theme.font-mono;
@@ -595,7 +614,7 @@ component DetailPane inherits Rectangle {
                 }
             }
 
-            if cmd.is-template && cmd.creation-time != "": HorizontalLayout {
+            if (cmd.is-template || cmd.is-group) && cmd.creation-time != "": HorizontalLayout {
                 spacing: 8px;
                 alignment: space-between;
                 Text {
