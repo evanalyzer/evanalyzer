@@ -2,7 +2,9 @@ use evanalyzer_cfg::core_types::{InternalErrors, StepId};
 use evanalyzer_cfg::settings::command_groups::GroupDefinition;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
-use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+use evanalyzer_cfg::settings::pipeline_settings::{
+    PipelineSettings, PipelineStepSettings, StepContent,
+};
 use pathdiff::diff_paths;
 use std::{
     fs,
@@ -65,15 +67,18 @@ fn file_path_changes(
 /// Windows) is left absolute.
 pub fn relativize_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
     for pipeline in pipelines {
+        // TODO (command groups, stage 2): the definitions' steps too.
         for step in &mut pipeline.steps {
+            let StepContent::Command(command) = &mut step.content else {
+                continue;
+            };
             let changes = file_path_changes(
-                &step.command,
+                command,
                 |path| path.is_absolute(),
                 |path| diff_paths(path, project_dir),
             );
             for (name, relative) in changes {
-                step.command
-                    .apply_param_change(&name, &relative.to_string_lossy());
+                command.apply_param_change(&name, &relative.to_string_lossy());
             }
         }
     }
@@ -87,14 +92,16 @@ pub fn relativize_file_paths(pipelines: &mut [PipelineSettings], project_dir: &P
 pub fn resolve_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
     for pipeline in pipelines {
         for step in &mut pipeline.steps {
+            let StepContent::Command(command) = &mut step.content else {
+                continue;
+            };
             let changes = file_path_changes(
-                &step.command,
+                command,
                 |path| path.is_relative(),
                 |path| Some(project_dir.join(path)),
             );
             for (name, absolute) in changes {
-                step.command
-                    .apply_param_change(&name, &absolute.to_string_lossy());
+                command.apply_param_change(&name, &absolute.to_string_lossy());
             }
         }
     }
@@ -388,7 +395,9 @@ mod tests {
                 evanalyzer_cfg::settings::pipeline_settings::PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command,
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        command,
+                    ),
                 },
             ],
             description: None,
@@ -396,7 +405,8 @@ mod tests {
     }
 
     fn pixel_classifier_model_path(pipeline: &PipelineSettings) -> &PathBuf {
-        let PipelineCommand::PixelClassifier(settings) = &pipeline.steps[0].command else {
+        let PipelineCommand::PixelClassifier(settings) = pipeline.steps[0].command().unwrap()
+        else {
             panic!("expected a PixelClassifier command");
         };
         &settings.model_path
@@ -467,12 +477,12 @@ mod tests {
 
         relativize_file_paths(&mut pipelines, Path::new("/data/project"));
 
-        let PipelineCommand::Stardist(stardist) = &pipelines[0].steps[0].command else {
+        let PipelineCommand::Stardist(stardist) = pipelines[0].steps[0].command().unwrap() else {
             panic!("expected a Stardist command");
         };
         assert_eq!(stardist.model_path, PathBuf::from("models/stardist.pt"));
 
-        let PipelineCommand::UNet(unet) = &pipelines[1].steps[0].command else {
+        let PipelineCommand::UNet(unet) = pipelines[1].steps[0].command().unwrap() else {
             panic!("expected a UNet command");
         };
         assert_eq!(unet.model_path, PathBuf::from("models/unet.pt"));
@@ -532,7 +542,7 @@ mod tests {
         relativize_file_paths(&mut pipelines, project_dir);
         resolve_file_paths(&mut pipelines, project_dir);
 
-        let PipelineCommand::Cellpose(settings) = &pipelines[0].steps[0].command else {
+        let PipelineCommand::Cellpose(settings) = pipelines[0].steps[0].command().unwrap() else {
             panic!("expected a Cellpose command");
         };
         assert_eq!(settings.model_path, original);
@@ -653,7 +663,9 @@ mod tests {
         let step = |id| PipelineStepSettings {
             id: StepId(id),
             enabled: true,
-            command: PipelineCommand::Blur(BlurSettings::default()),
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::Blur(BlurSettings::default()),
+            ),
         };
         // A hand-written list: two without an id, a copied block with 3.
         let mut steps = vec![step(3), step(0), step(3), step(0), step(1)];
@@ -672,7 +684,9 @@ mod tests {
         let step = |id| PipelineStepSettings {
             id: StepId(id),
             enabled: true,
-            command: PipelineCommand::Blur(BlurSettings::default()),
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::Blur(BlurSettings::default()),
+            ),
         };
         let mut group = GroupDefinition {
             key: "CELL_RECONSTRUCTION".into(),

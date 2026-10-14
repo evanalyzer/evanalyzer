@@ -782,6 +782,30 @@
         }
       }
     },
+    "GroupInstance": {
+      "description": "A use of a group in a pipeline: which definition, with which values.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The group's key in the project.",
+          "type": "string"
+        },
+        "values": {
+          "description": "This instance's parameter values. A parameter missing here has its\ndefinition's default (e.g. one the definition gained later).",
+          "type": "object",
+          "additionalProperties": false,
+          "default": {},
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/ParamValue"
+            }
+          }
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
     "HessianSettings": {
       "description": "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.\n\nThis algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.\n\n# Examples\n\n```\n# use imagec::backend::algos::{Hessian, HessianMode};\nlet detector = Hessian {\nmode: HessianMode::Determinant,\n};\n```",
       "type": "object",
@@ -1712,6 +1736,33 @@
         }
       ]
     },
+    "ParamValue": {
+      "description": "A group parameter's value - written as plain JSON (`4`, `4.5`, `true`,\n`\"PARABOLOID\"`, `[1, 2]`). Typed by JSON kind only: what it means (a\nclass, a channel, a dropdown option) and which values are valid come\nfrom the bound inner parameters.",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "description": "Dropdown options, units, paths ...",
+          "type": "string"
+        },
+        {
+          "description": "Several values, e.g. a multi-class or multi-channel selection.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParamValue"
+          }
+        }
+      ]
+    },
     "PipelineCommand": {
       "oneOf": [
         {
@@ -2237,12 +2288,9 @@
       ]
     },
     "PipelineStepSettings": {
+      "description": "What a pipeline step runs. In JSON the variant name is the key, next to\n`id` and `enabled`: `\"command\": {...}` (as in files written before\ngroups existed) or `\"group\": {...}`.",
       "type": "object",
       "properties": {
-        "command": {
-          "description": "The pipeline command to execute in this step",
-          "$ref": "#/$defs/PipelineCommand"
-        },
         "enabled": {
           "description": "If enabled, the command is executed, if not enabled, this command is skiped during pipeline execution",
           "type": "boolean"
@@ -2252,9 +2300,32 @@
           "default": 0
         }
       },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PipelineCommand"
+            }
+          },
+          "required": [
+            "command"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "group": {
+              "$ref": "#/$defs/GroupInstance"
+            }
+          },
+          "required": [
+            "group"
+          ]
+        }
+      ],
       "required": [
-        "enabled",
-        "command"
+        "enabled"
       ]
     },
     "PixelClassifierSettings": {

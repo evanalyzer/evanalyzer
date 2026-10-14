@@ -16,8 +16,11 @@ use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types
 use evanalyzer_cfg::{
     core_types::InternalErrors,
     settings::{
-        images_settings::ImageEntry, object_settings::ObjectMetricSettings,
-        pipeline_command::CommandCategory, project_settings::ProjectSettings,
+        images_settings::ImageEntry,
+        object_settings::ObjectMetricSettings,
+        pipeline_command::{CommandCategory, PipelineCommand},
+        pipeline_settings::{PipelineStepSettings, StepContent},
+        project_settings::ProjectSettings,
     },
 };
 use log::{error, info, warn};
@@ -494,7 +497,8 @@ fn generate_job_from_project_settings_intenal(
 
         for step in &pipeline_setting.steps {
             if step.enabled {
-                match into_pipeline_step(step.command.clone())? {
+                let command = step_command(&pipeline_setting.name, step)?;
+                match into_pipeline_step(command.clone())? {
                     // Kept with its id: what a breakpoint targets.
                     PipelineStep::Image(algo) => match algo.execution_scope() {
                         ExecutionScope::Tile => pipeline_pre_process.add_step(step.id, algo),
@@ -513,6 +517,22 @@ fn generate_job_from_project_settings_intenal(
     Ok(job)
 }
 
+/// The command `step` runs - an error for a command group, which can't run
+/// yet (groups get expanded into their commands in a later stage).
+fn step_command<'a>(
+    pipeline_name: &str,
+    step: &'a PipelineStepSettings,
+) -> Result<&'a PipelineCommand, InternalErrors> {
+    match &step.content {
+        StepContent::Command(command) => Ok(command),
+        StepContent::Group(group) => Err(InternalErrors::InvalidArgument(format!(
+            "Pipeline \"{pipeline_name}\", step {}: command group {} - command groups can't \
+             run yet",
+            step.id, group.key
+        ))),
+    }
+}
+
 /// The enabled dataset steps of `config`'s enabled pipelines, in pipeline
 /// and step order. Image steps aren't built, so an image step this build
 /// can't run (e.g. an AI step without the `ai` feature) doesn't matter.
@@ -522,10 +542,11 @@ pub(crate) fn dataset_steps_from_project_settings(
     let mut steps = Vec::new();
     for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
         for step in pipeline.steps.iter().filter(|s| s.enabled) {
-            if !matches!(step.command.category(), CommandCategory::Dataset) {
+            let command = step_command(&pipeline.name, step)?;
+            if !matches!(command.category(), CommandCategory::Dataset) {
                 continue;
             }
-            if let PipelineStep::Dataset(step) = into_pipeline_step(step.command.clone())? {
+            if let PipelineStep::Dataset(step) = into_pipeline_step(command.clone())? {
                 steps.push(step);
             }
         }
@@ -546,7 +567,9 @@ mod tests {
         PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled,
-            command: PipelineCommand::Blur(BlurSettings::default()),
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::Blur(BlurSettings::default()),
+            ),
         }
     }
 
@@ -1044,10 +1067,10 @@ mod tests {
         PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled,
-            command: PipelineCommand::SimpleTracker(
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(PipelineCommand::SimpleTracker(
                 evanalyzer_cfg::settings::pipeline_command_settings::SimpleTrackerSettings::default(
                 ),
-            ),
+            )),
         }
     }
 
@@ -1063,6 +1086,33 @@ mod tests {
                 pipeline(2, false, vec![tracker_step(true)]),
             ],
         )
+    }
+
+    #[test]
+    fn a_command_group_is_refused_with_a_clear_error_until_groups_can_run() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let group = PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(4),
+            enabled: true,
+            content: StepContent::Group(evanalyzer_cfg::settings::command_groups::GroupInstance {
+                key: "CELL_RECONSTRUCTION".into(),
+                values: Default::default(),
+            }),
+        };
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![blur_step(true), group])],
+        );
+
+        let err = generate_preview_job_from_project_settings(project, project_dir.path().into())
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(
+            err.contains("CELL_RECONSTRUCTION") && err.contains("can't run yet"),
+            "{err}"
+        );
     }
 
     #[test]

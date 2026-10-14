@@ -92,7 +92,7 @@ fn main() {
     let step = |command| PipelineStepSettings {
         id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
         enabled: true,
-        command,
+        content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command),
     };
     project.pipelines.push(PipelineSettings {
         id: evanalyzer_cfg::core_types::PipelineId(1),

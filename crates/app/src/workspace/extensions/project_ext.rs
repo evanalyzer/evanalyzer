@@ -2504,10 +2504,12 @@ mod tests {
         step_pipeline.steps.push(PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled: true,
-            command: PipelineCommand::PixelClassifier(PixelClassifierSettings {
-                model_path: absolute_model_path.clone(),
-                ..Default::default()
-            }),
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::PixelClassifier(PixelClassifierSettings {
+                    model_path: absolute_model_path.clone(),
+                    ..Default::default()
+                }),
+            ),
         });
         project.add_pipeline(step_pipeline);
         project.save_project_as(&fs(), &path).unwrap();
@@ -2525,7 +2527,8 @@ mod tests {
         // Reloading resolves it straight back to the original absolute path
         // - the rest of the app never has to know about relative storage.
         let loaded = load_project(&fs(), &path).expect("load should succeed");
-        let PipelineCommand::PixelClassifier(settings) = &loaded.pipelines[0].steps[0].command
+        let PipelineCommand::PixelClassifier(settings) =
+            loaded.pipelines[0].steps[0].command().unwrap()
         else {
             panic!("expected a PixelClassifier command");
         };
@@ -2620,12 +2623,16 @@ mod tests {
             PipelineStepSettings {
                 id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
-                command: PipelineCommand::Blur(Default::default()),
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                    PipelineCommand::Blur(Default::default()),
+                ),
             },
             PipelineStepSettings {
                 id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
-                command: PipelineCommand::Blur(Default::default()),
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                    PipelineCommand::Blur(Default::default()),
+                ),
             },
         ];
         project.add_pipeline(p);
@@ -2710,7 +2717,7 @@ mod tests {
                 steps: vec![PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::Blur(Default::default()),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(PipelineCommand::Blur(Default::default())),
                 }],
                 parameters: vec![],
                 origin: None,
@@ -3043,11 +3050,13 @@ mod tests {
             steps: vec![PipelineStepSettings {
                 id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
-                command: PipelineCommand::TransformObjects(TransformObjectsSettings {
-                    input_class: ObjectClass::Valid(input),
-                    output_class: ObjectClass::Valid(output),
-                    ..Default::default()
-                }),
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                    PipelineCommand::TransformObjects(TransformObjectsSettings {
+                        input_class: ObjectClass::Valid(input),
+                        output_class: ObjectClass::Valid(output),
+                        ..Default::default()
+                    }),
+                ),
             }],
         }
     }
@@ -3605,7 +3614,9 @@ mod tests {
         p.steps = vec![PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled: true,
-            command: PipelineCommand::Blur(Default::default()),
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::Blur(Default::default()),
+            ),
         }];
         project.add_pipeline(p);
         project.add_pipeline(pipeline(2));

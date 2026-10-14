@@ -11,7 +11,7 @@ fn step(enabled: bool, command: PipelineCommand) -> PipelineStepSettings {
     PipelineStepSettings {
         id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
         enabled,
-        command,
+        content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command),
     }
 }
 

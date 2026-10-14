@@ -44,8 +44,21 @@ pub fn cite_project(
 
         let mut rows = Vec::with_capacity(steps.len());
         for (i, step) in steps.iter().enumerate() {
+            let command = match &step.content {
+                evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command) => {
+                    command
+                }
+                evanalyzer_cfg::settings::pipeline_settings::StepContent::Group(group) => {
+                    // TODO (command groups, stage 2): cite the group's commands.
+                    rows.push((
+                        format!("[Step {}] Command group {}", i + 1, group.key),
+                        "(cited with its commands once groups run)".to_string(),
+                    ));
+                    continue;
+                }
+            };
             // Image and dataset steps alike.
-            let algo = into_pipeline_step(step.command.clone())?;
+            let algo = into_pipeline_step(command.clone())?;
             let label = format!("[Step {}] {}", i + 1, algo.name());
             let cites = algo.cite();
             let citation_marker = if cites.is_empty() {
@@ -160,12 +173,14 @@ mod tests {
             steps: vec![PipelineStepSettings {
                 id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
-                command: PipelineCommand::Threshold(ThresholdSettings {
-                    thresholds: vec![
-                        entry(SegmentationThresholdThresholdMethodSettings::Li),
-                        entry(SegmentationThresholdThresholdMethodSettings::Triangle),
-                    ],
-                }),
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                    PipelineCommand::Threshold(ThresholdSettings {
+                        thresholds: vec![
+                            entry(SegmentationThresholdThresholdMethodSettings::Li),
+                            entry(SegmentationThresholdThresholdMethodSettings::Triangle),
+                        ],
+                    }),
+                ),
             }],
             description: None,
         });
@@ -196,17 +211,23 @@ mod tests {
                 PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::RollingBall(RollingBallSettings::default()),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::RollingBall(RollingBallSettings::default()),
+                    ),
                 },
                 PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::GaussianBlur(GaussianBlurSettings::default()),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::GaussianBlur(GaussianBlurSettings::default()),
+                    ),
                 },
                 PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: false,
-                    command: PipelineCommand::Blur(BlurSettings { kernel_size: 3 }),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::Blur(BlurSettings { kernel_size: 3 }),
+                    ),
                 },
             ],
             description: None,

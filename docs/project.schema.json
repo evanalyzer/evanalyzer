@@ -995,6 +995,30 @@
         "parameters"
       ]
     },
+    "GroupInstance": {
+      "description": "A use of a group in a pipeline: which definition, with which values.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The group's key in the project.",
+          "type": "string"
+        },
+        "values": {
+          "description": "This instance's parameter values. A parameter missing here has its\ndefinition's default (e.g. one the definition gained later).",
+          "type": "object",
+          "additionalProperties": false,
+          "default": {},
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/ParamValue"
+            }
+          }
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
     "GroupOrigin": {
       "description": "Where a definition came from: a group library file.",
       "type": "object",
@@ -1021,7 +1045,7 @@
       ]
     },
     "GroupParamId": {
-      "description": "A group parameter's id, unique within its group definition. The values a\ngroup instance holds are keyed by it, so they survive reordering and\nrelabelling the definition's parameters.",
+      "description": "A group parameter's id, unique within its group definition. The values a\ngroup instance holds are keyed by it, so they survive reordering and\nrelabelling the definition's parameters.\n\nAlso read from text (`\"1\"`): as a map key inside a pipeline step, serde\nhands it over as a string (the step's content is `#[serde(flatten)]`ed),\nwhich the derived number-only `Deserialize` would refuse.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0
@@ -2915,12 +2939,9 @@
       ]
     },
     "PipelineStepSettings": {
+      "description": "What a pipeline step runs. In JSON the variant name is the key, next to\n`id` and `enabled`: `\"command\": {...}` (as in files written before\ngroups existed) or `\"group\": {...}`.",
       "type": "object",
       "properties": {
-        "command": {
-          "description": "The pipeline command to execute in this step",
-          "$ref": "#/$defs/PipelineCommand"
-        },
         "enabled": {
           "description": "If enabled, the command is executed, if not enabled, this command is skiped during pipeline execution",
           "type": "boolean"
@@ -2930,9 +2951,32 @@
           "default": 0
         }
       },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PipelineCommand"
+            }
+          },
+          "required": [
+            "command"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "group": {
+              "$ref": "#/$defs/GroupInstance"
+            }
+          },
+          "required": [
+            "group"
+          ]
+        }
+      ],
       "required": [
-        "enabled",
-        "command"
+        "enabled"
       ]
     },
     "PixelClassifierSettings": {

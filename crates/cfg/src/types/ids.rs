@@ -131,21 +131,37 @@ impl fmt::Display for GroupId {
 /// A group parameter's id, unique within its group definition. The values a
 /// group instance holds are keyed by it, so they survive reordering and
 /// relabelling the definition's parameters.
+///
+/// Also read from text (`"1"`): as a map key inside a pipeline step, serde
+/// hands it over as a string (the step's content is `#[serde(flatten)]`ed),
+/// which the derived number-only `Deserialize` would refuse.
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    Default,
-    JsonSchema,
-    Ord,
-    PartialOrd,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Default, JsonSchema, Ord, PartialOrd,
 )]
 pub struct GroupParamId(pub u32);
+
+impl<'de> Deserialize<'de> for GroupParamId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = GroupParamId;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a group parameter id: a whole number")
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<GroupParamId, E> {
+                u32::try_from(v).map(GroupParamId).map_err(E::custom)
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<GroupParamId, E> {
+                v.parse().map(GroupParamId).map_err(E::custom)
+            }
+        }
+        if deserializer.is_human_readable() {
+            deserializer.deserialize_any(Visitor)
+        } else {
+            u32::deserialize(deserializer).map(GroupParamId)
+        }
+    }
+}
 
 /// A pipeline step's id: a small number, unique within its list of steps
 /// (a pipeline, or a group definition), so it reads well in a hand-written

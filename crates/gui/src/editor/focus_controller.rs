@@ -207,11 +207,13 @@ mod tests {
             steps: vec![PipelineStepSettings {
                 id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
-                command: PipelineCommand::TransformObjects(TransformObjectsSettings {
-                    input_class: ObjectClass::Valid(class),
-                    output_class: ObjectClass::Valid(class),
-                    ..Default::default()
-                }),
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                    PipelineCommand::TransformObjects(TransformObjectsSettings {
+                        input_class: ObjectClass::Valid(class),
+                        output_class: ObjectClass::Valid(class),
+                        ..Default::default()
+                    }),
+                ),
             }],
         }
     }

@@ -41,7 +41,9 @@ use evanalyzer_cfg::settings::pipeline_command_settings::{
     AiObjectClassifierSettings, ClassificationMappingSettings, PixelClassifierSettings,
     SegmentationMappingSettings,
 };
-use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+use evanalyzer_cfg::settings::pipeline_settings::{
+    PipelineSettings, PipelineStepSettings, StepContent,
+};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use evanalyzer_cfg::settings::templates::PipelineTemplate;
 use evanalyzer_gui_slint::CommandAuthor;
@@ -722,18 +724,19 @@ impl PipelinesController {
                             // Watershed and ExtractObjects are in view). These are only
                             // suggestions: the user can toggle any chip, and clearing
                             // them all shows every command.
-                            let (ctx_cat, suggested) =
-                                if p.steps.is_empty() || context_idx == usize::MAX {
-                                    (-1i32, [false; 6])
-                                } else {
-                                    let prev = &p.steps[context_idx].command;
+                            // A command group suggests nothing (yet).
+                            let prev = p.steps.get(context_idx).and_then(|s| s.command());
+                            let (ctx_cat, suggested) = match prev {
+                                Some(prev) => {
                                     let ctx_order = prev.category().display_order() as i32;
                                     let mut flags = [false; 6];
                                     for c in prev.allowed_next() {
                                         flags[c.display_order() as usize] = true;
                                     }
                                     (ctx_order, flags)
-                                };
+                                }
+                                None => (-1i32, [false; 6]),
+                            };
                             (name, p.steps.len() as i32, ctx_cat, suggested)
                         } else {
                             (String::new(), 0, -1i32, [false; 6])
@@ -835,7 +838,10 @@ impl PipelinesController {
                         vec![PipelineStepSettings {
                             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                             enabled: true,
-                            command: cmd,
+                            content:
+                                evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                                    cmd,
+                                ),
                         }]
                     };
 
@@ -905,7 +911,7 @@ impl PipelinesController {
                                         let step = PipelineStepSettings {
                                             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                                             enabled: true,
-                                            command: configured.command,
+                                            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(configured.command),
                                         };
                                         {
                                             let mut project = manager.app_state.get_project_write();
@@ -1008,10 +1014,15 @@ impl PipelinesController {
                         else {
                             return;
                         };
-                        let Some(step) = pipeline.steps.get_mut(step_idx as usize) else {
+                        // A command group's parameters can't be edited here (yet).
+                        let Some(command) = pipeline
+                            .steps
+                            .get_mut(step_idx as usize)
+                            .and_then(|step| step.command_mut())
+                        else {
                             return;
                         };
-                        step.command.apply_param_change(&param_name, &value_str);
+                        command.apply_param_change(&param_name, &value_str);
 
                         // A PixelClassifier/AiObjectClassifier's `segmentation_mapping`
                         // row count is driven by the loaded model's own class count,
@@ -1022,7 +1033,7 @@ impl PipelinesController {
                         // same as a changed field set does.
                         let mut needs_full_resync = false;
                         if param_name == "model_path" {
-                            match &mut step.command {
+                            match command {
                                 PipelineCommand::PixelClassifier(settings) => {
                                     reconcile_pixel_classifier_mapping(
                                         manager.app_state.backend().files(),
@@ -1042,8 +1053,8 @@ impl PipelinesController {
                         }
 
                         (
-                            step.command.to_summary(),
-                            step.command.to_parameters(),
+                            command.to_summary(),
+                            command.to_parameters(),
                             needs_full_resync,
                         )
                     }; // write lock dropped here
@@ -1519,7 +1530,11 @@ impl PipelinesController {
             .iter()
             .filter(|p| p.enabled)
             .flat_map(|p| &p.steps)
-            .any(|s| s.enabled && matches!(s.command.category(), CommandCategory::Dataset));
+            .any(|s| {
+                s.enabled
+                    && s.command()
+                        .is_some_and(|c| matches!(c.category(), CommandCategory::Dataset))
+            });
         // The earlier analyses, as the results list shows them (newest
         // first); the one open there is the default basis.
         let results = ui.global::<ResultsListState>();
@@ -1810,9 +1825,9 @@ impl PipelinesController {
             let Some(step) = pipeline.steps.get(step_idx) else {
                 return;
             };
-            match &step.command {
-                PipelineCommand::PixelClassifier(settings) => settings.model_path.clone(),
-                PipelineCommand::AiObjectClassifier(settings) => settings.model_path.clone(),
+            match step.command() {
+                Some(PipelineCommand::PixelClassifier(settings)) => settings.model_path.clone(),
+                Some(PipelineCommand::AiObjectClassifier(settings)) => settings.model_path.clone(),
                 _ => return,
             }
         };
@@ -1849,11 +1864,15 @@ impl PipelinesController {
         {
             let mut project = self.app_state.get_project_write();
             if let Some(pipeline) = project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id) {
-                if let Some(step) = pipeline.steps.get_mut(step_idx) {
+                if let Some(command) = pipeline
+                    .steps
+                    .get_mut(step_idx)
+                    .and_then(|step| step.command_mut())
+                {
                     if add {
-                        step.command.add_group_item(&param_name);
+                        command.add_group_item(&param_name);
                     } else if let Some(idx) = remove_idx {
-                        step.command.remove_group_item(&param_name, idx);
+                        command.remove_group_item(&param_name, idx);
                     }
                 }
             }
@@ -2218,14 +2237,31 @@ impl PipelinesController {
                     .steps
                     .iter()
                     .enumerate()
-                    .map(|(idx, step)| StepData {
-                        idx: idx as i32,
-                        id: step.id,
-                        name: step.command.name().to_owned(),
-                        summary: step.command.to_summary(),
-                        category: step_category(*step.command.category()),
-                        enabled: step.enabled,
-                        parameters: step.command.to_parameters(),
+                    .map(|(idx, step)| match &step.content {
+                        StepContent::Command(command) => StepData {
+                            idx: idx as i32,
+                            id: step.id,
+                            name: command.name().to_owned(),
+                            summary: command.to_summary(),
+                            category: step_category(*command.category()),
+                            enabled: step.enabled,
+                            parameters: command.to_parameters(),
+                        },
+                        // A simple card for now: the group's name, no
+                        // parameters (TODO, command groups stage 2).
+                        StepContent::Group(group) => StepData {
+                            idx: idx as i32,
+                            id: step.id,
+                            name: project
+                                .command_groups
+                                .iter()
+                                .find(|d| d.key == group.key)
+                                .map_or_else(|| group.key.clone(), |d| d.meta.name.clone()),
+                            summary: "Command group - can't run yet".into(),
+                            category: StepCategory::Preprocess,
+                            enabled: step.enabled,
+                            parameters: Vec::new(),
+                        },
                     })
                     .collect();
                 let total = steps.len() as i32;
@@ -2515,7 +2551,8 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
     let category = template
         .steps
         .first()
-        .map(|s| step_category(*s.command.category()))
+        .and_then(|s| s.command())
+        .map(|c| step_category(*c.category()))
         .unwrap_or(StepCategory::Preprocess);
 
     let authors: Vec<CommandAuthor> = template
@@ -3162,7 +3199,9 @@ mod tests {
         let step = PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled: true,
-            command: default_command(6).unwrap(),
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                default_command(6).unwrap(),
+            ),
         };
         let t = template("Multi", vec![step]);
         let def = template_to_command_def(0, &t);
@@ -3467,13 +3506,15 @@ mod tests {
                 steps: vec![PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::Threshold(ThresholdSettings {
-                        thresholds: vec![ThresholdEntrySettings {
-                            min_threshold: 0.5,
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::Threshold(ThresholdSettings {
+                            thresholds: vec![ThresholdEntrySettings {
+                                min_threshold: 0.5,
+                                ..Default::default()
+                            }],
                             ..Default::default()
-                        }],
-                        ..Default::default()
-                    }),
+                        }),
+                    ),
                 }],
             });
         }
@@ -3481,7 +3522,8 @@ mod tests {
         controller.modify_group_item(1, 0, "thresholds", true, None);
 
         let project = ui_state.get_project();
-        let PipelineCommand::Threshold(settings) = &project.pipelines[0].steps[0].command else {
+        let PipelineCommand::Threshold(settings) = project.pipelines[0].steps[0].command().unwrap()
+        else {
             panic!("expected a Threshold command");
         };
         assert_eq!(settings.thresholds.len(), 2);
@@ -3509,19 +3551,21 @@ mod tests {
                 steps: vec![PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::Threshold(ThresholdSettings {
-                        thresholds: vec![
-                            ThresholdEntrySettings {
-                                min_threshold: 0.1,
-                                ..Default::default()
-                            },
-                            ThresholdEntrySettings {
-                                min_threshold: 0.9,
-                                ..Default::default()
-                            },
-                        ],
-                        ..Default::default()
-                    }),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::Threshold(ThresholdSettings {
+                            thresholds: vec![
+                                ThresholdEntrySettings {
+                                    min_threshold: 0.1,
+                                    ..Default::default()
+                                },
+                                ThresholdEntrySettings {
+                                    min_threshold: 0.9,
+                                    ..Default::default()
+                                },
+                            ],
+                            ..Default::default()
+                        }),
+                    ),
                 }],
             });
         }
@@ -3529,7 +3573,8 @@ mod tests {
         controller.modify_group_item(1, 0, "thresholds", false, Some(0));
 
         let project = ui_state.get_project();
-        let PipelineCommand::Threshold(settings) = &project.pipelines[0].steps[0].command else {
+        let PipelineCommand::Threshold(settings) = project.pipelines[0].steps[0].command().unwrap()
+        else {
             panic!("expected a Threshold command");
         };
         assert_eq!(settings.thresholds.len(), 1);
@@ -3816,7 +3861,9 @@ mod tests {
         PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled: true,
-            command: default_command(meta.id).unwrap(),
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                default_command(meta.id).unwrap(),
+            ),
         }
     }
 
@@ -3862,7 +3909,7 @@ mod tests {
             .unwrap()
             .steps
             .iter()
-            .map(|s| s.command.name().to_string())
+            .map(|s| s.command().unwrap().name().to_string())
             .collect()
     }
 
@@ -3959,7 +4006,7 @@ mod tests {
     /// The (basic, advanced) top-level setting names a command declares - so
     /// these tests follow whatever split the command currently uses.
     fn declared_split(command_name: &str) -> (Vec<String>, Vec<String>) {
-        let params = step(command_name).command.to_parameters();
+        let params = step(command_name).command().unwrap().to_parameters();
         let names = |advanced: bool| {
             params
                 .iter()
@@ -3982,7 +4029,7 @@ mod tests {
         assert!(!advanced.is_empty());
         assert_eq!(ui_names(&cmd.parameters), basic);
         assert_eq!(cmd.advanced_parameters.row_count(), 0, "collapsed");
-        let expected = advanced_stats(&step("ClassifyObjects").command.to_parameters());
+        let expected = advanced_stats(&step("ClassifyObjects").command().unwrap().to_parameters());
         assert_eq!(
             (cmd.advanced_count as usize, cmd.advanced_changed as usize),
             expected
@@ -4052,7 +4099,7 @@ mod tests {
     #[test]
     fn advanced_fields_inside_threshold_entries_follow_the_section() {
         let mut threshold = step("Threshold");
-        if let PipelineCommand::Threshold(s) = &mut threshold.command {
+        if let PipelineCommand::Threshold(s) = threshold.command_mut().unwrap() {
             s.thresholds.push(Default::default());
         }
         let (ui, _ui_state, _controller) = selected(vec![threshold]);
@@ -4338,6 +4385,42 @@ mod tests {
     }
 
     #[test]
+    fn a_command_group_step_shows_as_a_card_with_the_groups_name() {
+        let group = PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+            enabled: true,
+            content: StepContent::Group(evanalyzer_cfg::settings::command_groups::GroupInstance {
+                key: "CELL_RECONSTRUCTION".into(),
+                values: Default::default(),
+            }),
+        };
+        let (ui, ui_state, controller) = selected(vec![step("Threshold"), group]);
+        ui_state.get_project_write().command_groups.push(
+            evanalyzer_cfg::settings::command_groups::GroupDefinition {
+                key: "CELL_RECONSTRUCTION".into(),
+                meta: evanalyzer_cfg::settings::meta_data::MetaData {
+                    name: "Cell reconstruction".into(),
+                    ..Default::default()
+                },
+                steps: Vec::new(),
+                parameters: Vec::new(),
+                origin: None,
+            },
+        );
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+
+        let card = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(1)
+            .unwrap();
+        assert_eq!(card.name, "Cell reconstruction");
+        assert!(card.summary.contains("can't run yet"));
+        assert_eq!(card.parameters.row_count(), 0);
+    }
+
+    #[test]
     fn a_duplicated_step_gets_an_id_of_its_own() {
         let (ui, ui_state, _controller) = selected(vec![step("Threshold")]);
         ui.global::<PipelinesPanelState>().invoke_duplicate_step(0);
@@ -4596,7 +4679,8 @@ mod tests {
         panel.invoke_param_changed(0, "min_coloc_area".into(), "5".into());
         assert_eq!(ui_param(&ui, 0, "min_coloc_area").value, "5");
         let project = ui_state.get_project();
-        let PipelineCommand::Colocalization(settings) = &project.pipelines[0].steps[0].command
+        let PipelineCommand::Colocalization(settings) =
+            project.pipelines[0].steps[0].command().unwrap()
         else {
             panic!("expected coloc");
         };
@@ -4689,7 +4773,10 @@ mod tests {
         drain_ui_queue();
         assert_eq!(ui_param(&ui, 0, "thresholds").group_items.row_count(), 1);
         let project = ui_state.get_project();
-        let params = project.pipelines[0].steps[0].command.to_parameters();
+        let params = project.pipelines[0].steps[0]
+            .command()
+            .unwrap()
+            .to_parameters();
         assert_eq!(
             params
                 .iter()
@@ -4709,7 +4796,8 @@ mod tests {
         panel.set_active_pipeline_id(42);
         panel.invoke_param_changed(0, "min_coloc_area".into(), "9".into());
         let project = ui_state.get_project();
-        let PipelineCommand::Colocalization(settings) = &project.pipelines[0].steps[0].command
+        let PipelineCommand::Colocalization(settings) =
+            project.pipelines[0].steps[0].command().unwrap()
         else {
             panic!("expected coloc");
         };
@@ -4719,7 +4807,7 @@ mod tests {
     #[test]
     fn show_model_info_reports_a_model_that_cannot_be_loaded() {
         let mut classifier = step(PIXEL_CLASSIFIER_COMMAND_NAME);
-        if let PipelineCommand::PixelClassifier(settings) = &mut classifier.command {
+        if let PipelineCommand::PixelClassifier(settings) = classifier.command_mut().unwrap() {
             settings.model_path = PathBuf::from("/nonexistent/model.evamodel");
         }
         let (ui, _ui_state, _controller) = selected(vec![classifier, step("Threshold")]);

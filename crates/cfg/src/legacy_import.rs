@@ -29,7 +29,7 @@ use crate::settings::images_settings::{
 use crate::settings::meta_data::MetaData;
 use crate::settings::pipeline_command::PipelineCommand;
 use crate::settings::pipeline_command_settings::*;
-use crate::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+use crate::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings, StepContent};
 use crate::settings::plate_settings::{GroupingMode, PlateSettings, PlateSize, WellLayout};
 use crate::settings::project_settings::ProjectSettings;
 
@@ -387,7 +387,7 @@ fn convert_pipeline(id: u32, old: &LegacyPipeline, warnings: &mut Vec<String>) -
             steps.push(PipelineStepSettings {
                 id: crate::types::ids::StepId::UNASSIGNED,
                 enabled,
-                command,
+                content: StepContent::Command(command),
             });
         }
 
@@ -413,12 +413,16 @@ fn push_segmentation_followup(steps: &mut Vec<PipelineStepSettings>) {
     steps.push(PipelineStepSettings {
         id: crate::types::ids::StepId::UNASSIGNED,
         enabled: true,
-        command: PipelineCommand::ConnectedComponents(ConnectedComponentsSettings { min_size: 0 }),
+        content: StepContent::Command(PipelineCommand::ConnectedComponents(
+            ConnectedComponentsSettings { min_size: 0 },
+        )),
     });
     steps.push(PipelineStepSettings {
         id: crate::types::ids::StepId::UNASSIGNED,
         enabled: true,
-        command: PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
+        content: StepContent::Command(PipelineCommand::ExtractObjects(
+            ExtractObjectsSettings::default(),
+        )),
     });
 }
 
@@ -1170,7 +1174,7 @@ mod tests {
 
         let names: Vec<&str> = steps
             .iter()
-            .map(|s| match &s.command {
+            .map(|s| match s.command().unwrap() {
                 PipelineCommand::RollingBall(_) => "RollingBall",
                 PipelineCommand::Blur(_) => "Blur",
                 PipelineCommand::Threshold(_) => "Threshold",
@@ -1204,7 +1208,7 @@ mod tests {
         let classify = outcome.project.pipelines[0]
             .steps
             .iter()
-            .find_map(|s| match &s.command {
+            .find_map(|s| match s.command().unwrap() {
                 PipelineCommand::ClassifyObjects(c) => Some(c),
                 _ => None,
             })
@@ -1234,7 +1238,7 @@ mod tests {
         let save = outcome.project.pipelines[0]
             .steps
             .iter()
-            .find_map(|s| match &s.command {
+            .find_map(|s| match s.command().unwrap() {
                 PipelineCommand::SaveImage(c) => Some(c),
                 _ => None,
             })
@@ -1260,7 +1264,7 @@ mod tests {
         let transform = outcome.project.pipelines[0]
             .steps
             .iter()
-            .find_map(|s| match &s.command {
+            .find_map(|s| match s.command().unwrap() {
                 PipelineCommand::TransformObjects(c) => Some(c),
                 _ => None,
             })
@@ -1291,7 +1295,7 @@ mod tests {
     }
 
     fn only_command(outcome: &LegacyImportOutcome) -> &PipelineCommand {
-        &outcome.project.pipelines[0].steps[0].command
+        outcome.project.pipelines[0].steps[0].command().unwrap()
     }
 
     #[test]
@@ -1414,7 +1418,7 @@ mod tests {
         let steps = &outcome.project.pipelines[0].steps;
         assert_eq!(steps.len(), 2);
         for step in steps {
-            match &step.command {
+            match step.command().unwrap() {
                 PipelineCommand::ClassifyObjects(c) => {
                     assert_eq!(c.origin_segmentation, vec![SegmentationClass(3)]);
                 }
@@ -2167,11 +2171,11 @@ mod tests {
         let steps = &outcome.project.pipelines[0].steps;
         assert_eq!(steps.len(), 2);
         assert!(matches!(
-            steps[0].command,
+            steps[0].command().unwrap().clone(),
             PipelineCommand::ConnectedComponents(_)
         ));
         assert!(matches!(
-            steps[1].command,
+            steps[1].command().unwrap().clone(),
             PipelineCommand::ExtractObjects(_)
         ));
     }
@@ -2185,7 +2189,7 @@ mod tests {
             ] } }"#,
         );
         let outcome = import_legacy_project(&json).unwrap();
-        match &outcome.project.pipelines[0].steps[0].command {
+        match outcome.project.pipelines[0].steps[0].command().unwrap() {
             PipelineCommand::Threshold(s) => {
                 assert!(
                     s.thresholds
@@ -2218,7 +2222,7 @@ mod tests {
     fn watershed_tolerance_is_clamped_to_a_minimum_of_0_1() {
         let json = pipeline_with_step(r#"{ "$watershed": { "maximumFinderTolerance": 0.0 } }"#);
         let outcome = import_legacy_project(&json).unwrap();
-        match &outcome.project.pipelines[0].steps[0].command {
+        match outcome.project.pipelines[0].steps[0].command().unwrap() {
             PipelineCommand::Watershed(s) => assert_eq!(s.maximum_finder_tolerance, 0.1),
             other => panic!("expected Watershed, got {other:?}"),
         }
@@ -2228,7 +2232,7 @@ mod tests {
     fn watershed_tolerance_above_the_minimum_is_kept_as_is() {
         let json = pipeline_with_step(r#"{ "$watershed": { "maximumFinderTolerance": 5.0 } }"#);
         let outcome = import_legacy_project(&json).unwrap();
-        match &outcome.project.pipelines[0].steps[0].command {
+        match outcome.project.pipelines[0].steps[0].command().unwrap() {
             PipelineCommand::Watershed(s) => assert_eq!(s.maximum_finder_tolerance, 5.0),
             other => panic!("expected Watershed, got {other:?}"),
         }

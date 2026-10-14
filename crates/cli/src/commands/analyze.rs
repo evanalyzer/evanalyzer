@@ -371,24 +371,28 @@ mod tests {
                 PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::Threshold(ThresholdSettings {
-                        thresholds: vec![ThresholdEntrySettings {
-                            object_class_id: SegmentationClass(1),
-                            ..Default::default()
-                        }],
-                    }),
-                },
-                PipelineStepSettings {
-                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                    enabled: true,
-                    command: PipelineCommand::ConnectedComponents(
-                        ConnectedComponentsSettings::default(),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::Threshold(ThresholdSettings {
+                            thresholds: vec![ThresholdEntrySettings {
+                                object_class_id: SegmentationClass(1),
+                                ..Default::default()
+                            }],
+                        }),
                     ),
                 },
                 PipelineStepSettings {
                     id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::ConnectedComponents(ConnectedComponentsSettings::default()),
+                    ),
+                },
+                PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                    enabled: true,
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
+                    ),
                 },
             ],
         }];
