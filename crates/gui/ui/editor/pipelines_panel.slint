@@ -94,7 +94,9 @@ export struct PipelineCommand {
         name: string,
         category: StepCategory,
         summary: string,        // "σ = 2.0 · per channel"
-    enabled: bool,
+        // What the command or group does - behind the card's "?" (empty: no "?").
+        help: string,
+        enabled: bool,
         expanded: bool,
         parameters: [CommandParameter],
         // Settings marked `visibility = Advanced`: shown below the "Advanced
@@ -2020,12 +2022,66 @@ component StepRow inherits Rectangle {
                         horizontal-stretch: 1;
                         padding-right: 8px;
 
-                        Text {
-                            text: step.name;
-                            color: Theme.text;
-                            font-size: 12px;
-                            font-weight: 500;
-                            overflow: elide;
+                        HorizontalLayout {
+                            spacing: 5px;
+                            Text {
+                                text: step.name;
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 500;
+                                overflow: elide;
+                            }
+
+                            if step.help != "": Rectangle {
+                                y: (parent.height - self.height) / 2;
+                                width: 14px;
+                                height: 14px;
+                                border-radius: 7px;
+                                background: step-help-ta.has-hover ? Theme.accent.with-alpha(0.3) : Theme.border-soft;
+                                accessible-role: button;
+                                accessible-label: "About \{step.name}";
+                                Text {
+                                    text: "?";
+                                    font-size: 8px;
+                                    color: Theme.text-dim;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                step-help-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        step-help-popup.show();
+                                    }
+                                }
+
+                                step-help-popup := PopupWindow {
+                                    x: 0px;
+                                    y: parent.height + 3px;
+                                    width: 300px;
+                                    Rectangle {
+                                        background: Theme.panel;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        border-radius: 6px;
+                                        drop-shadow-blur: 10px;
+                                        drop-shadow-color: #000000.with-alpha(0.35);
+                                        VerticalLayout {
+                                            padding: 10px;
+                                            Text {
+                                                text: step.help;
+                                                font-size: 11px;
+                                                color: Theme.text;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
                         }
 
                         Text {
@@ -2211,7 +2267,7 @@ component StepRow inherits Rectangle {
                                 Text {
                                     text: "View";
                                     font-size: 11px;
-                                    color: Theme.text-dim;
+                                    color: Theme.cat-group;
                                     vertical-alignment: center;
                                 }
                             }
@@ -2237,7 +2293,7 @@ component StepRow inherits Rectangle {
                                 Text {
                                     text: "Edit";
                                     font-size: 11px;
-                                    color: Theme.cat-group;
+                                    color: Theme.text-dim;
                                     vertical-alignment: center;
                                 }
                             }
@@ -2354,7 +2410,7 @@ component StepRow inherits Rectangle {
                                 padding-right: 10px;
                                 alignment: center;
                                 Text {
-                                    text: "Save";
+                                    text: "Save as";
                                     font-size: 11px;
                                     color: Theme.text-dim;
                                     vertical-alignment: center;
@@ -3062,13 +3118,12 @@ export component PipelinesPanel inherits Rectangle {
                                         wrap: word-wrap;
                                         height: self.preferred-height;
                                     }
-
                                 }
 
                                 VerticalLayout {
                                     alignment: center;
                                     spacing: 4px;
-                                    Rectangle {
+                                    if !PipelinesPanelState.open-group-read-only: Rectangle {
                                         width: 66px;
                                         height: 24px;
                                         border-radius: 4px;

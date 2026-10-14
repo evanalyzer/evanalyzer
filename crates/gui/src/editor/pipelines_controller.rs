@@ -1238,6 +1238,35 @@ impl PipelinesController {
                     });
                 });
 
+            let manager = self.clone();
+            ui.global::<GroupSettingsState>()
+                .on_long_description_edited(move |description| {
+                    manager.edit_open_group_definition(|definition| {
+                        definition.meta.description = description.to_string();
+                        true
+                    });
+                });
+
+            // "Reset help text": the bound setting's own help again.
+            let manager = self.clone();
+            ui.global::<GroupSettingsState>()
+                .on_parameter_help_reset(move |id| {
+                    let id = GroupParamId(id as u32);
+                    if manager.edit_open_group_definition(|definition| {
+                        let Some(label) = definition
+                            .parameters
+                            .iter()
+                            .find(|p| p.id == id)
+                            .map(|p| p.label.clone())
+                        else {
+                            return false;
+                        };
+                        evanalyzer_app::groups::edit_parameter(definition, id, &label, "")
+                    }) {
+                        manager.fill_group_settings(-1);
+                    }
+                });
+
             // A parameter renamed or its help text edited - no refill either.
             let manager = self.clone();
             ui.global::<GroupSettingsState>()
@@ -2792,6 +2821,10 @@ impl PipelinesController {
             return;
         };
         let pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+        // Only for a group opened to edit.
+        if self.viewing(pipeline_id) {
+            return;
+        }
         let Some(key) = self.open_group_key(pipeline_id) else {
             return;
         };
@@ -2803,7 +2836,7 @@ impl PipelinesController {
             let state = ui.global::<GroupSettingsState>();
             state.set_name(definition.meta.name.clone().into());
             state.set_description(definition.meta.short_description.clone().into());
-            state.set_read_only(self.viewing(pipeline_id));
+            state.set_long_description(definition.meta.description.clone().into());
             focus
                 .and_then(|id| definition.parameters.iter().position(|p| p.id == id))
                 .map_or(-1, |index| index as i32)
@@ -2834,6 +2867,17 @@ impl PipelinesController {
                 label: parameter.label.clone().into(),
                 description: parameter.description.clone().into(),
                 default_value: param_value_display(&parameter.default).into(),
+                default_description: parameter
+                    .bindings
+                    .first()
+                    .and_then(|binding| {
+                        let step = definition.steps.iter().find(|s| s.id == binding.step)?;
+                        let (setting, _) =
+                            evanalyzer_app::groups::setting_at(step.command()?, &binding.param)?;
+                        Some(setting.description)
+                    })
+                    .unwrap_or_default()
+                    .into(),
                 sets: parameter
                     .bindings
                     .iter()
@@ -3491,6 +3535,8 @@ impl PipelinesController {
             exposed: Vec<String>,
             /// A group step: the library's newer version, or empty.
             update_version: String,
+            /// What the command or group does (the card's "?").
+            help: String,
         }
         // The opened group's name, or empty. A group that's gone (e.g. undone)
         // is closed.
@@ -3586,6 +3632,7 @@ impl PipelinesController {
                                 .map(|d| evanalyzer_app::groups::exposed_settings(d, step.id))
                                 .unwrap_or_default(),
                             update_version: String::new(),
+                            help: command_help(command.name()),
                         },
                         // The group's name and parameters - each shown with the
                         // control of the inner setting it's bound to.
@@ -3627,6 +3674,14 @@ impl PipelinesController {
                                         )
                                     })
                                     .map(|(_, version)| version.to_string())
+                                    .unwrap_or_default(),
+                                help: project
+                                    .command_groups
+                                    .iter()
+                                    .find(|d| d.key == group.key)
+                                    .map(|d| {
+                                        join_help(&d.meta.short_description, &d.meta.description)
+                                    })
                                     .unwrap_or_default(),
                             }
                         }
@@ -3878,6 +3933,7 @@ impl PipelinesController {
                             advanced_count: advanced_count as i32,
                             advanced_changed: advanced_changed as i32,
                             update_version: d.update_version.into(),
+                            help: d.help.into(),
                         }
                     })
                     .collect();
@@ -3971,6 +4027,26 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
 }
 
 /// The step-card / picker category of a command category.
+/// A short and a long description as one help text: either alone, or both
+/// with a blank line between.
+fn join_help(short: &str, long: &str) -> String {
+    [short.trim(), long.trim()]
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// The help text of the command named `name` (as `PipelineCommand::name`):
+/// its summary and description from the command list.
+fn command_help(name: &str) -> String {
+    all_command_meta()
+        .iter()
+        .find(|meta| meta.name == name)
+        .map(|meta| join_help(meta.summary, meta.description))
+        .unwrap_or_default()
+}
+
 fn step_category(category: CommandCategory) -> StepCategory {
     match category {
         CommandCategory::Preprocess => StepCategory::Preprocess,
@@ -6518,7 +6594,14 @@ mod tests {
                 "{label:?} ends at {right}, the step list at {edge}"
             );
         };
-        for label in ["View", "Edit", "Ungroup", "Save", "Duplicate"] {
+        for label in [
+            "View",
+            "Edit",
+            "Ungroup",
+            "Save as",
+            "Duplicate",
+            "About Threshold",
+        ] {
             fits(label);
         }
 
@@ -6532,7 +6615,12 @@ mod tests {
         drain_ui_queue();
         fits("Viewing · read only");
         fits("Edit");
-        fits("Settings…");
+        assert!(
+            ElementHandle::find_by_accessible_label(&ui, "Settings…")
+                .next()
+                .is_none(),
+            "no group settings while only viewing"
+        );
     }
 
     #[test]
@@ -6629,7 +6717,6 @@ mod tests {
         drain_ui_queue();
         assert_eq!(active_dialog(&ui), DialogType::GroupSettings);
         let dialog = ui.global::<GroupSettingsState>();
-        assert!(!dialog.get_read_only());
         assert_eq!(dialog.get_name(), "Smooth");
         assert_eq!(dialog.get_focus_index(), -1);
         assert_eq!(settings_rows(&ui).len(), 2);
@@ -6754,34 +6841,91 @@ mod tests {
     }
 
     #[test]
-    fn a_viewed_groups_settings_open_read_only_and_change_nothing() {
-        let (ui, ui_state, _controller) = with_two_parameters();
+    fn a_viewed_groups_settings_do_not_open() {
+        let (ui, _ui_state, _controller) = with_two_parameters();
         let panel = ui.global::<PipelinesPanelState>();
         panel.invoke_close_group();
         panel.invoke_view_group(1);
         drain_ui_queue();
-        let before = {
-            let p = ui_state.get_project();
-            serde_json::to_value(&p.command_groups).unwrap()
-        };
 
         panel.invoke_open_group_settings();
+        panel.invoke_edit_exposed(0, "kernel_size".into());
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::None);
+    }
+
+    #[test]
+    fn the_long_description_is_edited_and_a_help_text_reset_to_the_settings_own() {
+        let (ui, ui_state, _controller) = with_two_parameters();
+        ui.global::<PipelinesPanelState>()
+            .invoke_open_group_settings();
         drain_ui_queue();
         let dialog = ui.global::<GroupSettingsState>();
-        assert_eq!(active_dialog(&ui), DialogType::GroupSettings);
-        assert!(dialog.get_read_only());
-        let first = settings_rows(&ui)[0].id;
-        dialog.invoke_name_edited("Changed".into());
-        dialog.invoke_description_edited("Changed".into());
-        dialog.invoke_parameter_edited(first, "Changed".into(), "".into());
-        dialog.invoke_parameter_moved(first, 1);
-        dialog.invoke_parameter_removed(first);
+        let row = settings_rows(&ui)[0].clone();
+        assert!(
+            !row.default_description.is_empty(),
+            "the blur's own help text shows while there's none"
+        );
+
+        dialog.invoke_long_description_edited("Two blurs.\nUse for noisy images.".into());
+        dialog.invoke_parameter_edited(row.id, row.label.clone(), "Own help".into());
         drain_ui_queue();
-        let after = {
-            let p = ui_state.get_project();
-            serde_json::to_value(&p.command_groups).unwrap()
+        assert_eq!(
+            ui_state.get_project().command_groups[0].meta.description,
+            "Two blurs.\nUse for noisy images."
+        );
+        assert_eq!(
+            ui_state.get_project().command_groups[0].parameters[0].description,
+            "Own help"
+        );
+
+        dialog.invoke_parameter_help_reset(row.id);
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        let parameter = &project.command_groups[0].parameters[0];
+        assert_eq!(parameter.description, "");
+        assert_eq!(parameter.label, row.label.as_str(), "the name stays");
+        drop(project);
+        assert_eq!(settings_rows(&ui)[0].description, "");
+    }
+
+    #[test]
+    fn step_cards_carry_the_commands_and_the_groups_descriptions() {
+        let (ui, ui_state, controller) = with_a_group();
+        let card = |i: usize| {
+            ui.global::<PipelinesPanelState>()
+                .get_active_commands()
+                .row_data(i)
+                .unwrap()
         };
-        assert_eq!(after, before);
+        let threshold = all_command_meta()
+            .into_iter()
+            .find(|m| m.name == "Threshold")
+            .unwrap();
+        assert!(card(0).help.starts_with(threshold.summary));
+        assert_eq!(card(1).help, "", "a group without descriptions has no ?");
+
+        {
+            let mut project = ui_state.get_project_write();
+            project.command_groups[0].meta.short_description = "Smooths.".into();
+            project.command_groups[0].meta.description = "Twice, with blurs.".into();
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), false);
+        drain_ui_queue();
+        assert_eq!(card(1).help, "Smooths.\n\nTwice, with blurs.");
+    }
+
+    #[test]
+    fn every_command_has_a_help_text_for_its_card() {
+        for meta in all_command_meta() {
+            let command = evanalyzer_cfg::settings::pipeline_command::default_command(meta.id)
+                .unwrap_or_else(|| panic!("{} has no default", meta.name));
+            assert!(
+                !command_help(command.name()).is_empty(),
+                "{} has no help text",
+                command.name()
+            );
+        }
     }
 
     #[test]

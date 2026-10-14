@@ -511,27 +511,36 @@ export struct GroupParamRow {
     description: string,
     /// The default value, as text.
     default-value: string,
+    /// The help text of the setting it's bound to - shown while
+    /// `description` is empty.
+    default-description: string,
     /// What it sets: "Blur › Kernel size, Blur › Kernel size".
     sets: string,
 }
 
-/// The opened group's name, description and parameters (name, help text,
-/// order). Opened from "Settings…" in the opened group's bar, or from ✎ on
-/// an exposed setting (`focus-index` is then that parameter's row).
+/// The opened group's name, descriptions and parameters (name, help text,
+/// order). Opened from "Settings…" in the bar of a group opened to edit, or
+/// from ✎ on an exposed setting (`focus-index` is then that parameter's
+/// row).
 export global GroupSettingsState {
     in property <string> name: "";
+    /// One line, shown in the command picker.
     in property <string> description: "";
+    /// The full description, shown with the short one behind the group
+    /// card's "?".
+    in property <string> long-description: "";
     in property <[GroupParamRow]> parameters: [];
-    /// Opened from "View": nothing can be changed.
-    in property <bool> read-only: false;
     /// The row to scroll to and highlight, or -1.
     in property <int> focus-index: -1;
     callback name-edited(string);
     callback description-edited(string);
+    callback long-description-edited(string);
     /// id, name, help text
     callback parameter-edited(int, string, string);
     /// id, -1 up / +1 down
     callback parameter-moved(int, int);
+    /// id: back to the bound setting's own help text.
+    callback parameter-help-reset(int);
     /// id: stop exposing it - its settings go back to the group's values.
     callback parameter-removed(int);
     callback close();
@@ -570,7 +579,7 @@ export component GroupSettingsDialog inherits Rectangle {
             HorizontalLayout {
                 alignment: space-between;
                 Text {
-                    text: GroupSettingsState.read-only ? "Group settings · read only" : "Group settings";
+                    text: "Group settings";
                     font-size: 16px;
                     font-weight: 700;
                     color: Theme.text;
@@ -608,7 +617,6 @@ export component GroupSettingsDialog inherits Rectangle {
 
                 LineEdit {
                     text: GroupSettingsState.name;
-                    read-only: GroupSettingsState.read-only;
                     placeholder-text: "Group name";
                     edited(t) => {
                         GroupSettingsState.name-edited(t);
@@ -619,17 +627,35 @@ export component GroupSettingsDialog inherits Rectangle {
             VerticalLayout {
                 spacing: 5px;
                 Text {
-                    text: "Description (shown in the command picker)";
+                    text: "Short description (one line, shown in the command picker)";
                     font-size: 11px;
                     color: Theme.text-dim;
                 }
 
                 LineEdit {
                     text: GroupSettingsState.description;
-                    read-only: GroupSettingsState.read-only;
                     placeholder-text: "What the group does";
                     edited(t) => {
                         GroupSettingsState.description-edited(t);
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Description (shown behind the group card's ?)";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                TextEdit {
+                    height: 72px;
+                    text: GroupSettingsState.long-description;
+                    wrap: word-wrap;
+                    placeholder-text: "How to use it, what it expects, references…";
+                    edited(t) => {
+                        GroupSettingsState.long-description-edited(t);
                     }
                 }
             }
@@ -647,7 +673,10 @@ export component GroupSettingsDialog inherits Rectangle {
             if GroupSettingsState.parameters.length > 0: list := ScrollView {
                 property <length> pitch: root.row-height + root.row-spacing;
                 property <length> total: GroupSettingsState.parameters.length * self.pitch - root.row-spacing;
-                height: min(self.total, 440px);
+                // Shrinks (down to about one row) when the window is small.
+                min-height: min(self.total, root.row-height);
+                preferred-height: min(self.total, 440px);
+                vertical-stretch: 1;
                 init => {
                     if GroupSettingsState.focus-index > 0 {
                         self.content-y = max(-GroupSettingsState.focus-index * self.pitch, min(0px, self.height - self.total));
@@ -672,8 +701,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                 LineEdit {
                                     horizontal-stretch: 1;
                                     text: param.label;
-                                    read-only: GroupSettingsState.read-only;
-                                    placeholder-text: "Name on the group card";
+                                                    placeholder-text: "Name on the group card";
                                     accessible-label: "Parameter name";
                                     edited(t) => {
                                         GroupSettingsState.parameter-edited(param.id, t, param.description);
@@ -687,7 +715,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                     vertical-alignment: center;
                                 }
 
-                                if !GroupSettingsState.read-only: HorizontalLayout {
+                                HorizontalLayout {
                                     spacing: 2px;
                                     Rectangle {
                                         width: 24px;
@@ -756,19 +784,45 @@ export component GroupSettingsDialog inherits Rectangle {
                             TextEdit {
                                 height: 46px;
                                 text: param.description;
-                                read-only: GroupSettingsState.read-only;
-                                wrap: word-wrap;
-                                placeholder-text: "Help text, shown as ? next to the parameter";
+                                            wrap: word-wrap;
+                                placeholder-text: param.default-description != "" ? param.default-description : "Help text, shown as ? next to the parameter";
                                 edited(t) => {
                                     GroupSettingsState.parameter-edited(param.id, param.label, t);
                                 }
                             }
 
-                            Text {
-                                text: "sets \{param.sets}";
-                                font-size: 10px;
-                                color: Theme.text-mute;
-                                overflow: elide;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: "sets \{param.sets}";
+                                    font-size: 10px;
+                                    color: Theme.text-mute;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+
+                                // Back to the setting's own help text.
+                                if param.description != "": Rectangle {
+                                    width: reset-text.preferred-width + 12px;
+                                    height: 18px;
+                                    border-radius: 4px;
+                                    background: reset-ta.has-hover ? Theme.raised : transparent;
+                                    reset-text := Text {
+                                        text: "Reset help text";
+                                        font-size: 10px;
+                                        color: Theme.text-dim;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    reset-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            GroupSettingsState.parameter-help-reset(param.id);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

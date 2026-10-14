@@ -297,14 +297,18 @@ before 14: most groups are made from existing steps).
         toggle can't be changed (an overlay over the expanded settings; every
         editing handler refuses too). The bar says "Viewing · read only" and
         has "Edit", which goes the same way as "Edit" on the card (asking if
-        the group is used more than once). Also: "Settings…" in the bar opens
-        the group settings dialog (read only when viewing) - the group's name
-        and description, and per parameter its name, help text (the "?"),
+        the group is used more than once). Also: "Settings…" in the bar of a
+        group opened to edit (hidden when viewing) opens the group settings
+        dialog - the group's name, short description (picker) and
+        description, and per parameter its name, help text (the "?"; empty
+        shows the bound setting's own, "Reset help text" goes back to it),
         default, which settings it sets, ↑/↓ for the order on the group card
         and ✕ to stop exposing it (`edit_parameter`, `move_parameter`,
         `remove_parameter`). ✎ next to a ◆ opens the dialog scrolled to that
         parameter (`parameter_for_setting`). A dialog, not the bar, so the
-        steps keep their room however many parameters there are.
+        steps keep their room however many parameters there are. Every step
+        card has a "?" with what it does: a command's summary and
+        description, a group's short and long description.
 
 ## Scoping
 
