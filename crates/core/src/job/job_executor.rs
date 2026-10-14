@@ -1001,8 +1001,9 @@ impl<'a> JobExecutor {
                     }
 
                     // Command groups' internal objects never reach the results.
-                    // TODO(groups step 5): replaced by `EndScope` after each
-                    // instance's last step, which also drops references to them.
+                    // `EndScope` after each instance's last command normally
+                    // removed them already (with the references to them) -
+                    // this catches a run stopped early by a breakpoint.
                     merged_cache
                         .object_cache
                         .retain(|_, object| object.scope() == Scope::Global);

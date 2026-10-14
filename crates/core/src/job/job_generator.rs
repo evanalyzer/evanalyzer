@@ -1,6 +1,6 @@
 use crate::{
     DuckDbExporter, MemoryExporter,
-    algos::{ExecutionScope, TileMerge},
+    algos::{EndScope, ExecutionScope, TileMerge},
     dataset::DatasetAlgorithm,
     image::PixelSizes,
     job::{
@@ -10,12 +10,13 @@ use crate::{
         pipeline_step::PipelineStep,
     },
     pipeline::pipeline::{CorePipelineSettings, Pipeline},
+    pipeline::scope::Scope,
     storage::PipelineResultExporter,
 };
 use chrono::Utc;
 use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types::ImageAddress};
 use evanalyzer_cfg::{
-    core_types::InternalErrors,
+    core_types::{InternalErrors, StepId},
     settings::{
         command_groups::GroupDefinition, images_settings::ImageEntry,
         object_settings::ObjectMetricSettings, pipeline_command::CommandCategory,
@@ -514,11 +515,56 @@ fn generate_job_from_project_settings_intenal(
             }
         }
 
+        end_scopes(&mut pipeline_pre_process, &mut pipeline_post_process);
         job.add_pre_process_pipeline(pipeline_pre_process);
         job.add_post_process_pipeline(pipeline_post_process);
     }
 
     Ok(job)
+}
+
+/// Adds an [`EndScope`] right after each group instance's last command
+/// across both phases: in the whole-image list if the instance has a
+/// command there (it runs after every tile command), else in the tile list -
+/// where it frees the instance's objects tile by tile, before they're ever
+/// merged into the whole image.
+fn end_scopes(tile: &mut Pipeline, whole_image: &mut Pipeline) {
+    let last_commands = |pipeline: &Pipeline| {
+        let mut last: Vec<(Scope, usize)> = Vec::new();
+        for (index, (_, scope, _)) in pipeline.commands.iter().enumerate() {
+            if *scope == Scope::Global {
+                continue;
+            }
+            match last.iter_mut().find(|(s, _)| s == scope) {
+                Some(entry) => entry.1 = index,
+                None => last.push((*scope, index)),
+            }
+        }
+        last
+    };
+    let in_whole_image = last_commands(whole_image);
+    let in_tiles: Vec<(Scope, usize)> = last_commands(tile)
+        .into_iter()
+        .filter(|(scope, _)| !in_whole_image.iter().any(|(s, _)| s == scope))
+        .collect();
+
+    for (pipeline, mut ends, phase) in [
+        (tile, in_tiles, ExecutionScope::Tile),
+        (whole_image, in_whole_image, ExecutionScope::WholeImage),
+    ] {
+        // Back to front, so the earlier positions stay valid.
+        ends.sort_by_key(|(_, index)| std::cmp::Reverse(*index));
+        for (scope, index) in ends {
+            pipeline.commands.insert(
+                index + 1,
+                (
+                    StepId::UNASSIGNED,
+                    Scope::Global,
+                    Box::new(EndScope { scope, phase }),
+                ),
+            );
+        }
+    }
 }
 
 /// The commands `step` runs, with their breakpoint ids and scopes (see
@@ -1133,12 +1179,127 @@ mod tests {
             generate_preview_job_from_project_settings(project, project_dir.path().into()).unwrap();
 
         let commands = &job.pipelines_pre_process[&PipelineId(1)].commands;
-        assert_eq!(commands.len(), 2, "the group's two blurs");
+        assert_eq!(
+            command_names(&job.pipelines_pre_process[&PipelineId(1)]),
+            ["Blur", "Blur", "End Scope"],
+            "the group's two blurs, then its scope ends"
+        );
         assert_eq!(
             commands[1].0,
             evanalyzer_cfg::core_types::StepId(4),
             "a breakpoint on the group stops after it"
         );
+    }
+
+    fn command_names(pipeline: &Pipeline) -> Vec<&'static str> {
+        pipeline.commands.iter().map(|(_, _, c)| c.name()).collect()
+    }
+
+    fn group(key: &str, steps: Vec<PipelineStepSettings>) -> GroupDefinition {
+        GroupDefinition {
+            key: key.into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps,
+            parameters: vec![],
+            origin: None,
+        }
+    }
+
+    fn classify_step() -> PipelineStepSettings {
+        PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(9),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::ClassifyObjects(Default::default()),
+            ),
+        }
+    }
+
+    /// The tile and whole-image command names of pipeline 1 of `project`.
+    fn phases(project: ProjectSettings) -> (Vec<&'static str>, Vec<&'static str>) {
+        let project_dir = tempfile::tempdir().unwrap();
+        let (job, _) =
+            generate_preview_job_from_project_settings(project, project_dir.path().into()).unwrap();
+        (
+            command_names(&job.pipelines_pre_process[&PipelineId(1)]),
+            command_names(&job.pipelines_post_process[&PipelineId(1)]),
+        )
+    }
+
+    #[test]
+    fn a_groups_scope_ends_after_its_last_command_across_both_phases() {
+        let image_root = tempfile::tempdir().unwrap();
+        let mut project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(
+                1,
+                true,
+                vec![
+                    group_step("BLUR_CLASSIFY"),
+                    blur_step(true),
+                    classify_step(),
+                ],
+            )],
+        );
+        project.command_groups.push(group(
+            "BLUR_CLASSIFY",
+            vec![blur_step(true), classify_step()],
+        ));
+
+        let (tiles, whole_image) = phases(project);
+        // The blur after the group is a tile command, but the group's last
+        // command (Classify) runs in the whole-image phase - it ends there.
+        assert_eq!(tiles, ["Blur", "Blur"]);
+        assert_eq!(
+            whole_image,
+            ["Classify Objects", "End Scope", "Classify Objects"]
+        );
+    }
+
+    #[test]
+    fn a_nested_group_ends_before_the_group_around_it() {
+        let image_root = tempfile::tempdir().unwrap();
+        let mut project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![group_step("OUTER")])],
+        );
+        project.command_groups.push(group(
+            "OUTER",
+            vec![
+                PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId(1),
+                    ..group_step("INNER")
+                },
+                classify_step(),
+            ],
+        ));
+        project
+            .command_groups
+            .push(group("INNER", vec![classify_step()]));
+
+        let (_, whole_image) = phases(project);
+        assert_eq!(
+            whole_image,
+            [
+                "Classify Objects",
+                "End Scope",
+                "Classify Objects",
+                "End Scope"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pipeline_without_groups_gets_no_scope_end() {
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![blur_step(true), classify_step()])],
+        );
+        let (tiles, whole_image) = phases(project);
+        assert_eq!(tiles, ["Blur"]);
+        assert_eq!(whole_image, ["Classify Objects"]);
     }
 
     #[test]

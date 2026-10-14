@@ -80,10 +80,24 @@ before 14: most groups are made from existing steps).
        2.20–2.23 GB). For step 10: a mapping to `Global(n)` needs class n in
        the project; `object_classes()` still also lists the mapped
        segmentation class as `Global(n)`.
-5. [ ] **`EndScope`** after an instance's last step across both phases:
+5. [x] **`EndScope`** after an instance's last step across both phases:
        removes the scope's objects and the references to them. **Benchmark
        speed and RAM before/after.** *Done when:* no local object reaches the
        export, RAM drops measurably at `EndScope`.
+       Done (2026-10-14): the job generator adds `EndScope(scope)` after an
+       instance's last command - in the whole-image list if it has a command
+       there, else in the tile list (frees the objects per tile, before the
+       merge). `EndScope` (`remove_scope`) removes the objects and the
+       references to them (parent, children, coloc partners, track members);
+       the filter before the export stays as a safety net for runs stopped at
+       a breakpoint. Micro-benchmark (`end_scope::tests::bench_end_scope`,
+       release, `--ignored`): 1M objects, half removed: 0.22 s (0.07 s of it
+       dropping the objects), RSS 717 → 467 MB; 5M: 1.0 s, 3062 → 2079 MB.
+       The map is rebuilt when ≥ 1/4 of the objects go - `retain` alone left
+       the `BTreeMap`'s nodes (objects inline, 480 bytes each) half empty and
+       freed nothing. End to end (8 × 4096², group making 70k of 90k objects
+       internal): 0.86 s vs 0.89–0.93 s, peak RSS 2.21–2.22 vs 2.23–2.24 GB.
+
 6. [ ] **The mixing rule** – `ReclassifyIfMatch` moves an object to
        `Global`; `AddOutputClassIfMatch` local → global is an error (checked
        at expansion, plus a runtime guard).

@@ -6,6 +6,8 @@
 //     <workdir> [--images N] [--size PX] [--threads N] [--spots N] [--classify N]
 //
 // `--classify N` adds N Classify Objects steps (class filtering by size).
+// `--group 1` adds a command group instance that turns the larger objects
+// into local (internal) objects - they don't reach the results.
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
 use evanalyzer_cfg::core_types::{ObjectClass, SizeUnits};
@@ -67,6 +69,7 @@ fn main() {
     let spots = arg("--spots", 20000) as u32;
     let blurs = arg("--blurs", 1);
     let classify = arg("--classify", 0);
+    let group = arg("--group", 0);
     let images_dir = workdir.join(format!("images_{size}_{spots}"));
     std::fs::create_dir_all(&images_dir).unwrap();
 
@@ -137,8 +140,21 @@ fn main() {
                     ..Default::default()
                 }))
             }))
+            .chain((group > 0).then(|| PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                enabled: true,
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Group(
+                    evanalyzer_cfg::settings::command_groups::GroupInstance {
+                        key: "INTERNAL".into(),
+                        values: Default::default(),
+                    },
+                ),
+            }))
             .collect(),
     });
+    if group > 0 {
+        project.command_groups.push(internal_objects_group());
+    }
 
     let job = evanalyzer_core::generate_analyze_job_from_project_settings(
         project,
@@ -177,4 +193,54 @@ fn main() {
         images as f64 / elapsed,
         mpx / elapsed
     );
+}
+
+/// A group that reclassifies the larger objects into a local class and
+/// classifies those once more - internal objects only.
+fn internal_objects_group() -> evanalyzer_cfg::settings::command_groups::GroupDefinition {
+    let classify = |id: u32, input: ObjectClass, handling, output: ObjectClass, min_area: f32| {
+        PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(id),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                    input_classes: vec![input],
+                    match_handling: handling,
+                    output_class: output,
+                    size_unit: SizeUnits::Pixels,
+                    min_area,
+                    ..Default::default()
+                }),
+            ),
+        }
+    };
+    let local_class = |id: u32| evanalyzer_cfg::settings::classification_settings::Class {
+        id,
+        color: 0,
+        name: format!("Local {id}"),
+        notes: String::new(),
+    };
+    evanalyzer_cfg::settings::command_groups::GroupDefinition {
+        key: "INTERNAL".into(),
+        meta: Default::default(),
+        classes: vec![local_class(1), local_class(2)],
+        steps: vec![
+            classify(
+                1,
+                ObjectClass::Global(1),
+                ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch,
+                ObjectClass::Local(1),
+                100.0,
+            ),
+            classify(
+                2,
+                ObjectClass::Local(1),
+                ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch,
+                ObjectClass::Local(2),
+                150.0,
+            ),
+        ],
+        parameters: vec![],
+        origin: None,
+    }
 }

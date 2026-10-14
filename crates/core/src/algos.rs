@@ -4,6 +4,7 @@
 #[cfg(feature = "ai")]
 mod ai_segmentation;
 mod filters;
+mod flow_control;
 mod math;
 mod morphology;
 mod object;
@@ -51,6 +52,7 @@ pub use self::filters::rolling_ball::RollingBall;
 pub use self::filters::structure_tensor::StructureTensor;
 pub use self::filters::structure_tensor::TensorMode;
 pub use self::filters::weighted_deviation::WeightedDeviation;
+pub(crate) use self::flow_control::end_scope::EndScope;
 pub use self::math::image_cache::ImageCache;
 pub use self::math::image_cache::ImageCacheMode;
 pub use self::math::image_math::ImageMath;
@@ -103,6 +105,7 @@ use crate::pipeline::pipeline_context::PipelineContext;
 use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::InternalErrors;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionScope {
     Tile,
     WholeImage,
