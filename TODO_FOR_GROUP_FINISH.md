@@ -98,13 +98,21 @@ before 14: most groups are made from existing steps).
        freed nothing. End to end (8 × 4096², group making 70k of 90k objects
        internal): 0.86 s vs 0.89–0.93 s, peak RSS 2.21–2.22 vs 2.23–2.24 GB.
 
-6. [ ] **The mixing rule** – `ReclassifyIfMatch` moves an object to
+6. [x] **The mixing rule** – `ReclassifyIfMatch` moves an object to
        `Global`; `AddOutputClassIfMatch` local → global is an error (checked
        at expansion, plus a runtime guard).
-7. [ ] **Tile merge by (scope, class, plane)** – key done with step 4
+       Done (2026-10-14): `mixed_classes` in `command_groups.rs`, checked per
+       command of a group after its values are applied: Classify Objects
+       ("add output class if (not) match") and the AI object classifier ("add
+       output class", per output class) may not add a class of the other kind
+       than their input classes - nor a local class with no input classes
+       (that's every object, the project's too). Reclassifying is fine.
+7. [x] **Tile merge by (scope, class, plane)** – key done with step 4
        (merged object keeps the scope; `classes_to_not_merge` only for
-       global objects); the seam test is still open – test with two instances'
-       seed fragments on one seam.
+       global objects). Seam test: two instances' seed fragments of `L1` at
+       the same spot of one seam merge per instance (the test fails without
+       the scope in the key).
+
 8. [ ] **`MemoryId::Group(slot)`** – scoped like classes, freed at
        `EndScope`.
 

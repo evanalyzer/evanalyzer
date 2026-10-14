@@ -588,6 +588,48 @@ mod tests {
         assert_eq!(unchanged.area, 100);
     }
 
+    /// Two instances of one command group, both with a fragment pair of
+    /// their local class 1 at the same spot on the same seam: each instance's
+    /// pair merges - never across instances, which would be one object in two
+    /// scopes.
+    #[test]
+    fn fragments_of_two_group_instances_on_one_seam_merge_per_instance() {
+        use crate::pipeline::scope::ScopeId;
+        let seed = ObjectClass::Local(1);
+        let fragment = |id: u128, bbox: [u32; 4], source: ImageTile, scope: Scope| {
+            let mut object = rect_object(
+                id,
+                bbox,
+                ObjectClass::Global(1),
+                ImagePlane::default(),
+                source,
+                false,
+            );
+            object.clear_object_classes();
+            object.add_object_class(seed, scope).unwrap();
+            object
+        };
+        let (first, second) = (Scope::Scoped(ScopeId(1)), Scope::Scoped(ScopeId(2)));
+        let mut cache = cache_with(vec![
+            fragment(1, [0, 0, 9, 19], tile(0, 0, 10, 20), first),
+            fragment(2, [10, 0, 19, 19], tile(10, 0, 10, 20), first),
+            fragment(3, [0, 0, 9, 19], tile(0, 0, 10, 20), second),
+            fragment(4, [10, 0, 19, 19], tile(10, 0, 10, 20), second),
+        ]);
+
+        run(&mut cache, tile_merge(Connectivity::EightConnected));
+
+        let mut merged: Vec<&Object> = cache.object_cache.values().collect();
+        merged.sort_by_key(|o| o.scope());
+        assert_eq!(merged.len(), 2, "one object per instance");
+        for (object, scope) in merged.iter().zip([first, second]) {
+            assert_eq!(object.scope(), scope);
+            assert!(object.is_of(&seed, scope));
+            assert_eq!(object.bbox, [0, 0, 19, 19]);
+            assert_eq!(object.area, 400);
+        }
+    }
+
     /// Two fragments from horizontally-adjacent tiles, sharing a full-height
     /// seam (A ends at x=9, B starts at x=10) - the common case: an organ cut
     /// straight down the middle by a tile boundary.

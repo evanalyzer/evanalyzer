@@ -583,10 +583,36 @@
         "equalizeHistogram"
       ]
     },
+    "ExtractClassMappingSettings": {
+      "description": "The object class the objects of one segmentation class get.",
+      "type": "object",
+      "properties": {
+        "objectClass": {
+          "description": "The object class its objects get: a project class, or inside a\ncommand group one of the group's own classes.",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "segmentationClass": {
+          "description": "The segmentation class, as set by Threshold, Pixel classifier, ...",
+          "$ref": "#/$defs/SegmentationClass"
+        }
+      },
+      "required": [
+        "segmentationClass",
+        "objectClass"
+      ]
+    },
     "ExtractObjectsSettings": {
       "description": "Represents a bounded object extracted from a labeled image.\nA command to extract spatial statistics and bounding boxes from labeled objects.",
       "type": "object",
       "properties": {
+        "classMapping": {
+          "description": "Which object class the objects of a segmentation class get.\n\nWithout an entry, a segmentation class's objects get the project class\nwith the same number - what the Threshold's class choice means. Inside\na command group, map to one of the group's own classes to keep the\nobjects internal to the group.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExtractClassMappingSettings"
+          }
+        },
         "maxObjectsBeforeFail": {
           "description": "Maximum allowed ROIs to extract.\n\nIf this limit is exceeded the pipeline fails.\nThis is a protection against memory overload.",
           "type": "integer",

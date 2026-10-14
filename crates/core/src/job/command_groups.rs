@@ -13,6 +13,10 @@ use evanalyzer_cfg::{
         command_groups::{GroupDefinition, GroupInstance, ParamValue},
         parameter_def::ParameterDef,
         pipeline_command::{CommandCategory, PipelineCommand},
+        pipeline_command_settings::{
+            ObjectAiObjectClassifierAiClassifyMatchHandlingSettings,
+            ObjectClassifyObjectsClassifyMatchHandlingSettings,
+        },
         pipeline_settings::{PipelineStepSettings, StepContent},
     },
 };
@@ -177,6 +181,12 @@ fn expand_group(
                         ));
                     }
                 }
+                if let Some(why) = mixed_classes(command) {
+                    return Err(group_error(
+                        &definition.key,
+                        format!("step {} {why}", step.id),
+                    ));
+                }
                 commands.push((scope, command.clone()))
             }
             StepContent::Group(inner) => {
@@ -186,6 +196,69 @@ fn expand_group(
     }
     open.pop();
     Ok(commands)
+}
+
+/// Why `command` would give objects local and project classes at once, if
+/// it would - see `Object::add_object_class`, which refuses it at run time.
+/// Only adding a class to existing objects can mix: reclassifying replaces
+/// the classes (the object moves to the new class's scope), and new objects
+/// get a single class.
+fn mixed_classes(command: &PipelineCommand) -> Option<String> {
+    let (inputs, outputs): (&[ObjectClass], Vec<ObjectClass>) = match command {
+        PipelineCommand::ClassifyObjects(s)
+            if matches!(
+                s.match_handling,
+                ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch
+                    | ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfNotMatch
+            ) =>
+        {
+            (&s.input_classes, vec![s.output_class])
+        }
+        PipelineCommand::AiObjectClassifier(s)
+            if matches!(
+                s.match_handling,
+                ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch
+            ) =>
+        {
+            (
+                &s.input_classes,
+                s.segmentation_mapping
+                    .iter()
+                    .map(|m| m.output_class)
+                    .collect(),
+            )
+        }
+        _ => return None,
+    };
+    let is_local = |class: &ObjectClass| matches!(class, ObjectClass::Local(_));
+    for output in outputs.iter().filter(|c| **c != ObjectClass::Unset) {
+        if inputs.is_empty() {
+            if is_local(output) {
+                return Some(format!(
+                    "adds the group class {} to all objects, also the project's - an object \
+                     can't have both; select the group classes it applies to",
+                    output.to_text()
+                ));
+            }
+            continue;
+        }
+        for input in inputs.iter().filter(|c| **c != ObjectClass::Unset) {
+            if is_local(input) != is_local(output) {
+                let (adding, to) = if is_local(output) {
+                    ("group class", "project class")
+                } else {
+                    ("project class", "group class")
+                };
+                return Some(format!(
+                    "adds the {adding} {} to objects of the {to} {} - an object can't have \
+                     both; use \"Reclassify\" to move them to the {adding}",
+                    output.to_text(),
+                    input.to_text()
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Writes `value` into `param` of `step`: a command's parameter (checked
@@ -288,8 +361,9 @@ mod tests {
     use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::command_groups::{GroupParameterDef, ParamBinding};
     use evanalyzer_cfg::settings::pipeline_command_settings::{
-        BlurSettings, ExtractClassMappingSettings, ExtractObjectsSettings, SimpleTrackerSettings,
-        VoronoiSettings,
+        AiObjectClassifierSettings, BlurSettings, ClassificationMappingSettings,
+        ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
+        SimpleTrackerSettings, VoronoiSettings,
     };
     use std::collections::BTreeMap;
 
@@ -644,6 +718,112 @@ mod tests {
         assert!(
             error.contains("dataset step using the group class L1"),
             "{error}"
+        );
+    }
+
+    // ---- Mixing local and project classes ----
+
+    fn classify(
+        input: Vec<ObjectClass>,
+        handling: ObjectClassifyObjectsClassifyMatchHandlingSettings,
+        output: ObjectClass,
+    ) -> PipelineCommand {
+        PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+            input_classes: input,
+            match_handling: handling,
+            output_class: output,
+            ..Default::default()
+        })
+    }
+
+    /// Expands a group with local classes 1 and 2 running `command`.
+    fn in_group(command: PipelineCommand) -> Result<Vec<ExpandedCommand>, InternalErrors> {
+        let mut group = definition("MIX", vec![command_step(3, command)], vec![]);
+        group.classes = vec![local_class(1), local_class(2)];
+        expand(&group_step(1, "MIX", &[]), &[group])
+    }
+
+    #[test]
+    fn adding_a_class_of_the_other_kind_to_existing_objects_is_refused() {
+        use ObjectClassifyObjectsClassifyMatchHandlingSettings::*;
+        let local = ObjectClass::Local(1);
+        let global = ObjectClass::Global(5);
+
+        let error = in_group(classify(vec![local], AddOutputClassIfMatch, global))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("step 3 adds the project class 5 to objects of the group class L1")
+                && error.contains("Reclassify"),
+            "{error}"
+        );
+        let error = in_group(classify(vec![global], AddOutputClassIfNotMatch, local))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("adds the group class L1 to objects of the project class 5"),
+            "{error}"
+        );
+        // No input classes: every object the command sees, the project's too.
+        let error = in_group(classify(vec![], AddOutputClassIfMatch, local))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("to all objects, also the project's"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn reclassifying_and_adding_a_class_of_the_same_kind_are_fine() {
+        use ObjectClassifyObjectsClassifyMatchHandlingSettings::*;
+        let (l1, l2, global) = (
+            ObjectClass::Local(1),
+            ObjectClass::Local(2),
+            ObjectClass::Global(5),
+        );
+        for command in [
+            classify(vec![l1], ReclassifyIfMatch, global),
+            classify(vec![global], ReclassifyIfNotMatch, l1),
+            classify(vec![], ReclassifyIfMatch, l1),
+            classify(vec![l1], AddOutputClassIfMatch, l2),
+            classify(vec![], AddOutputClassIfMatch, global),
+            classify(vec![l1], RemoveInputClassIfMatch, global),
+        ] {
+            assert!(in_group(command).is_ok());
+        }
+    }
+
+    #[test]
+    fn the_ai_object_classifier_is_checked_per_output_class() {
+        let ai = |handling| {
+            PipelineCommand::AiObjectClassifier(AiObjectClassifierSettings {
+                input_classes: vec![ObjectClass::Local(1)],
+                segmentation_mapping: vec![
+                    ClassificationMappingSettings {
+                        object_class: ObjectClass::Global(1),
+                        output_class: ObjectClass::Local(2),
+                    },
+                    ClassificationMappingSettings {
+                        object_class: ObjectClass::Global(2),
+                        output_class: ObjectClass::Global(7),
+                    },
+                ],
+                match_handling: handling,
+                ..Default::default()
+            })
+        };
+        let error = in_group(ai(
+            ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch,
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("adds the project class 7"), "{error}");
+        assert!(
+            in_group(ai(
+                ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch
+            ))
+            .is_ok()
         );
     }
 }
