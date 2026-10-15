@@ -56,8 +56,9 @@ pub struct ComponentDefinition {
     /// The component's parameters, shown on the component card.
     pub parameters: Vec<ComponentParameterDef>,
 
-    /// The library file this definition was inserted from, if any.
-    #[serde(default)]
+    /// The library file this definition was inserted from, if any. Not
+    /// written when absent, so library files (`.evacomp`) never carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<ComponentOrigin>,
 }
 
@@ -217,5 +218,37 @@ mod tests {
         json.as_object_mut().unwrap().remove("classes");
         let loaded: ComponentDefinition = serde_json::from_value(json).unwrap();
         assert!(loaded.classes.is_empty());
+    }
+
+    #[test]
+    fn a_library_file_holds_the_component_flat_and_without_origin() {
+        use crate::modules::templates::ComponentTemplate;
+        let definition = |key: &str| ComponentDefinition {
+            key: key.into(),
+            meta: MetaData::default(),
+            classes: vec![],
+            steps: vec![],
+            parameters: vec![],
+            origin: None,
+        };
+        let template = ComponentTemplate {
+            schema_version: 1,
+            component: definition("SMOOTH"),
+            uses: vec![definition("BLUR")],
+        };
+        let json = serde_json::to_value(&template).unwrap();
+        let file = json.as_object().unwrap();
+        assert!(!file.contains_key("component"), "no wrapper: {json}");
+        assert_eq!(file["key"], "SMOOTH");
+        assert!(file.contains_key("meta") && file.contains_key("steps"));
+        assert!(!file.contains_key("origin"));
+        assert!(!file["uses"][0].as_object().unwrap().contains_key("origin"));
+
+        // Projects load through `serde_json::Value`, library files the same.
+        let loaded: ComponentTemplate = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded.schema_version, 1);
+        assert_eq!(loaded.component.key, "SMOOTH");
+        assert!(loaded.component.origin.is_none());
+        assert_eq!(loaded.uses[0].key, "BLUR");
     }
 }

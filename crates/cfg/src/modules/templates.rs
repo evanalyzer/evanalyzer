@@ -18,8 +18,10 @@ pub struct ComponentTemplate {
     #[serde(default)]
     pub schema_version: u32,
 
-    /// The component. Its `meta` is the template's: name, description, authors,
-    /// version ("Update available" compares it).
+    /// The component, its fields at the top level of the file. Its `meta` is
+    /// the template's: name, description, authors, version ("Update
+    /// available" compares it).
+    #[serde(flatten)]
     pub component: ComponentDefinition,
 
     /// The components it uses inside, so the file is complete on its own.

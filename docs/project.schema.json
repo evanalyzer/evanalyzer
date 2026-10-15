@@ -553,7 +553,7 @@
           "$ref": "#/$defs/MetaData"
         },
         "origin": {
-          "description": "The library file this definition was inserted from, if any.",
+          "description": "The library file this definition was inserted from, if any. Not\nwritten when absent, so library files (`.evacomp`) never carry it.",
           "anyOf": [
             {
               "$ref": "#/$defs/ComponentOrigin"
@@ -561,8 +561,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "parameters": {
           "description": "The component's parameters, shown on the component card.",

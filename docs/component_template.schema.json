@@ -4,9 +4,39 @@
   "description": "A component saved to a library file (`.evacomp`). Inserting it copies\nthe component into a project, where it lives on its own from then on.",
   "type": "object",
   "properties": {
-    "component": {
-      "description": "The component. Its `meta` is the template's: name, description, authors,\nversion (\"Update available\" compares it).",
-      "$ref": "#/$defs/ComponentDefinition"
+    "classes": {
+      "description": "Local classes used by the component. These classes are scoped to the component only",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Class"
+      }
+    },
+    "key": {
+      "description": "Unique component key, prefere SCREAMING_SNAKE_CASE",
+      "type": "string"
+    },
+    "meta": {
+      "description": "Metadata of this component",
+      "$ref": "#/$defs/MetaData"
+    },
+    "origin": {
+      "description": "The library file this definition was inserted from, if any. Not\nwritten when absent, so library files (`.evacomp`) never carry it.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ComponentOrigin"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parameters": {
+      "description": "The component's parameters, shown on the component card.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ComponentParameterDef"
+      }
     },
     "schemaVersion": {
       "description": "On-disk format version (`.evacomp`), see\n`CURRENT_COMPONENT_TEMPLATE_SCHEMA_VERSION`. Like the other templates, not\nmigrated.",
@@ -14,6 +44,13 @@
       "format": "uint32",
       "default": 0,
       "minimum": 0
+    },
+    "steps": {
+      "description": "The steps which are executed in the given order",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PipelineStepSettings"
+      }
     },
     "uses": {
       "description": "The components it uses inside, so the file is complete on its own.",
@@ -25,7 +62,10 @@
     }
   },
   "required": [
-    "component"
+    "key",
+    "meta",
+    "steps",
+    "parameters"
   ],
   "$defs": {
     "AiObjectClassifierSettings": {
@@ -475,7 +515,7 @@
           "$ref": "#/$defs/MetaData"
         },
         "origin": {
-          "description": "The library file this definition was inserted from, if any.",
+          "description": "The library file this definition was inserted from, if any. Not\nwritten when absent, so library files (`.evacomp`) never carry it.",
           "anyOf": [
             {
               "$ref": "#/$defs/ComponentOrigin"
@@ -483,8 +523,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "parameters": {
           "description": "The component's parameters, shown on the component card.",
