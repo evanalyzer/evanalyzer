@@ -96,8 +96,30 @@
 
 
 
-# Grouping
+# Components
 
 - [x] If group or command name is too long the question mark to the right is not shown any more
 - [x] To organize group and command paramters allow to define a "parameter category/group" all parameters in same categeory get an own section in the parameter list in the ui. For algos this should be deifned using #cmdsmeta for group parameters an optional category field should be added which is editable by the user
 - [x] Expand featute for commands in the list. If a command or group gets many parameters the list may get a little bit overloaded. An exapnd feature would be noce which when clicked opens the command/group settings in a bigger dialog which shows the paremeter better organized simialr to the project settings.
+
+## Components – not started
+
+- [ ] **Project templates with a setup wizard** ("ready-to-use application"; the main selling point - rare on the market: map channels and classes, check a few values, run, yet still reproducible and open to experts).
+  `ProjectTemplate` gets its own parameters with bindings, the same mechanism as component parameters (`ComponentParameter` / bindings, applied before the run). Bindings point to steps in the pipelines (including component parameters) **and** to project settings. Two special kinds:
+  - **Channel roles:** "Nuclear channel", "Spot channel" - the user picks which image channel that is.
+  - **Class roles:** "Nuclei", "Spots" - keep, rename, or map to existing project classes.
+
+  Loading the template opens a **setup wizard**: name, images, channel roles, class roles, two or three values - done. Afterwards the same parameters stay available as a **"Template settings" panel**, so changing something later doesn't mean opening the pipelines.
+- [ ] **CLI `--set`** (after the template parameters): `evanalyzer analyze --template spots.evapt --images ./plate1 --set "Spot channel=2" --set "Spot size=3"` - sets template parameters by label, for servers and batch runs.
+- [ ] **Locking by the template author** - postponed on purpose: editing inside a component is always allowed today (an edited library component is detected by `origin.content_hash`).
+
+## Components – smaller gaps
+
+- [ ] **Breakpoints inside components.** Disabled inside an opened component; a breakpoint on the component card stops after the whole component. Needs a step path ("step 3, inside it step 2") instead of one `StepId` (`PipelineTask::breakpoint`, `expand_step`).
+- [ ] **Components inside components from an opened component.** "Component…" is only offered in the pipeline, not inside an opened component ([`pipelines_controller.rs`](crates/gui/src/editor/pipelines_controller.rs), "for now" comment).
+- [ ] **Shift-click step selection** for "Create component" - today a from/to range dialog (the step list has no multi-selection).
+- [ ] **"New empty component"** - not built; rarely needed since "Create component" exists.
+- [ ] **Run the component checks on save** - `check_components` runs on load ([`project_ext.rs`](crates/app/src/workspace/extensions/project_ext.rs)) and in the editor, not on save. Runs still refuse a broken component at expansion, so mostly cosmetic.
+- [ ] **LLM prompt doesn't know components** (`crates/llm`, unfinished anyway).
+- [ ] **Check the picker's component look on screen** (◆ Components chip, component colour, "used N×", Library section) - never looked at, no headless screenshot in the tests.
+- [ ] Optional, only if someone needs it: "don't merge this local class" at the tile merge - `classes_to_not_merge` only knows project classes, so local objects are always merged; would need a setting in the component definition.

@@ -4,7 +4,9 @@
 // A component is defined once in the project ([`ComponentDefinition`]) and used in
 // pipelines as instances ([`ComponentInstance`]) - changing the definition
 // changes every instance. An instance only holds what differs per use: its
-// parameter values. See VISION_COMPONENT.md.
+// parameter values. Classes, objects and memory slots of an instance live
+// in its own scope (`ObjectClass::Local`, `MemoryId::ComponentContext`),
+// dropped when the instance's last step ran.
 // (Plain comments: build.rs include!s this file, where `//!` isn't allowed.)
 
 use crate::{
