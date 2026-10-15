@@ -101,3 +101,13 @@ date,commit,kind,crate,version,advisory_id,cve,cvss_vector,title
 2026-10-10T18:44:25Z,919ba8f2,unmaintained,smartstring,1.0.1,RUSTSEC-2026-0249,,,smartstring is unmaintained
 2026-10-10T18:44:25Z,919ba8f2,unsound,lru,0.16.4,RUSTSEC-2026-0253,,,Potential use-after-free due to lack of panic safety in `LruCache::pop()`
 2026-10-10T18:44:25Z,919ba8f2,yanked,chacha20,0.10.1,,,,chacha20 0.10.1 is yanked
+2026-10-15T18:00:35Z,6715c987,vulnerability,quick-xml,0.40.1,RUSTSEC-2026-0195,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service
+2026-10-15T18:00:35Z,6715c987,vulnerability,quick-xml,0.40.1,RUSTSEC-2026-0194,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Quadratic run time when checking a start tag for duplicate attribute names
+2026-10-15T18:00:35Z,6715c987,vulnerability,rustls,0.23.45,RUSTSEC-2026-0347,,CVSS:3.1/AV:L/AC:L/PR:H/UI:N/S:U/C:L/I:N/A:N,Buffered application data sent to outer server after ECH rejection
+2026-10-15T18:00:35Z,6715c987,vulnerability,rustls,0.23.45,RUSTSEC-2026-0348,,CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L,Brotli certificate decompression can allocate up to 1 GiB before authentication
+2026-10-15T18:00:35Z,6715c987,vulnerability,rustls,0.23.45,RUSTSEC-2026-0349,,CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N,Unauthenticated ServerHello can downgrade later connections to classical key exchange
+2026-10-15T18:00:35Z,6715c987,vulnerability,rustls,0.23.45,RUSTSEC-2026-0346,,CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:H/I:N/A:N,`Debug` impls for client session values expose TLS secrets
+2026-10-15T18:00:35Z,6715c987,unmaintained,smartstring,1.0.1,RUSTSEC-2026-0249,,,smartstring is unmaintained
+2026-10-15T18:00:35Z,6715c987,unmaintained,unsafe-libyaml,0.2.11,RUSTSEC-2024-0449,,,unsafe-libyaml is unmaintained
+2026-10-15T18:00:35Z,6715c987,unsound,lru,0.16.4,RUSTSEC-2026-0253,,,Potential use-after-free due to lack of panic safety in `LruCache::pop()`
+2026-10-15T18:00:35Z,6715c987,yanked,chacha20,0.10.1,,,,chacha20 0.10.1 is yanked
