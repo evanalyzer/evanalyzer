@@ -21,7 +21,7 @@ use evanalyzer_app::groups::ClassRole;
 use evanalyzer_app::project::ImageEntryExt;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::templates::{load_group_templates, load_pipeline_templates};
-use evanalyzer_cfg::core_types::GroupParamId;
+use evanalyzer_cfg::core_types::GroupParamKey;
 use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::PipelineId;
@@ -121,7 +121,7 @@ pub struct PipelinesController {
 
     /// A setting waiting for "Expose setting": (pipeline id, step index,
     /// setting path, the parameters it could be added to).
-    pending_expose: Mutex<Option<(u32, usize, String, Vec<GroupParamId>)>>,
+    pending_expose: Mutex<Option<(u32, usize, String, Vec<GroupParamKey>)>>,
 
     /// The group library: `.evagroup` files of the templates folders,
     /// reloaded with the pipeline templates.
@@ -1261,17 +1261,17 @@ impl PipelinesController {
             let manager = self.clone();
             ui.global::<GroupSettingsState>()
                 .on_parameter_help_reset(move |id| {
-                    let id = GroupParamId(id as u32);
+                    let id = GroupParamKey::from(id.as_str());
                     if manager.edit_open_group_definition(|definition| {
                         let Some(label) = definition
                             .parameters
                             .iter()
-                            .find(|p| p.id == id)
+                            .find(|p| p.key == id)
                             .map(|p| p.label.clone())
                         else {
                             return false;
                         };
-                        evanalyzer_app::groups::edit_parameter(definition, id, &label, "")
+                        evanalyzer_app::groups::edit_parameter(definition, &id, &label, "")
                     }) {
                         manager.fill_group_settings(-1);
                     }
@@ -1282,32 +1282,42 @@ impl PipelinesController {
             ui.global::<GroupSettingsState>()
                 .on_parameter_name_edited(move |id, label| {
                     manager.edit_open_group_definition(|definition| {
-                        let id = GroupParamId(id as u32);
+                        let id = GroupParamKey::from(id.as_str());
                         let Some(description) = definition
                             .parameters
                             .iter()
-                            .find(|p| p.id == id)
+                            .find(|p| p.key == id)
                             .map(|p| p.description.clone())
                         else {
                             return false;
                         };
-                        evanalyzer_app::groups::edit_parameter(definition, id, &label, &description)
+                        evanalyzer_app::groups::edit_parameter(
+                            definition,
+                            &id,
+                            &label,
+                            &description,
+                        )
                     });
                 });
             let manager = self.clone();
             ui.global::<GroupSettingsState>()
                 .on_parameter_help_edited(move |id, description| {
                     manager.edit_open_group_definition(|definition| {
-                        let id = GroupParamId(id as u32);
+                        let id = GroupParamKey::from(id.as_str());
                         let Some(label) = definition
                             .parameters
                             .iter()
-                            .find(|p| p.id == id)
+                            .find(|p| p.key == id)
                             .map(|p| p.label.clone())
                         else {
                             return false;
                         };
-                        evanalyzer_app::groups::edit_parameter(definition, id, &label, &description)
+                        evanalyzer_app::groups::edit_parameter(
+                            definition,
+                            &id,
+                            &label,
+                            &description,
+                        )
                     });
                 });
 
@@ -1318,7 +1328,7 @@ impl PipelinesController {
                     if manager.edit_open_group_definition(|definition| {
                         evanalyzer_app::groups::move_parameter(
                             definition,
-                            GroupParamId(id as u32),
+                            &GroupParamKey::from(id.as_str()),
                             delta,
                         )
                     }) {
@@ -1333,7 +1343,7 @@ impl PipelinesController {
                     if manager.edit_open_group_definition(|definition| {
                         evanalyzer_app::groups::remove_parameter(
                             definition,
-                            GroupParamId(id as u32),
+                            &GroupParamKey::from(id.as_str()),
                         )
                     }) {
                         manager.pipeline_settings_changed();
@@ -1514,9 +1524,9 @@ impl PipelinesController {
                         return;
                     };
                     match candidates.get((choice as usize).wrapping_sub(1)) {
-                        Some(&id) if choice > 0 => {
+                        Some(key) if choice > 0 => {
                             if let Err(e) =
-                                evanalyzer_app::groups::add_binding(definition, id, step_id, &path)
+                                evanalyzer_app::groups::add_binding(definition, key, step_id, &path)
                             {
                                 warn!("Could not add the setting to the parameter: {e}");
                             }
@@ -2029,20 +2039,15 @@ impl PipelinesController {
                         else {
                             return;
                         };
-                        // A command group: its parameter is named by its id.
+                        // A command group: its parameter is named by its key.
                         if let StepContent::Group(instance) = &mut step.content {
-                            let id = param_name.parse().map(GroupParamId);
-                            match id.map(|id| {
-                                evanalyzer_app::groups::set_group_parameter(
-                                    instance,
-                                    &definitions,
-                                    id,
-                                    &value_str,
-                                )
-                            }) {
-                                Ok(Ok(())) => {}
-                                Ok(Err(e)) => warn!("Group parameter {param_name}: {e}"),
-                                Err(_) => warn!("Group parameter {param_name}: not an id"),
+                            if let Err(e) = evanalyzer_app::groups::set_group_parameter(
+                                instance,
+                                &definitions,
+                                &GroupParamKey::from(param_name.as_str()),
+                                &value_str,
+                            ) {
+                                warn!("Group parameter {param_name}: {e}");
                             }
                             drop(project);
                             manager.sync_steps_of_selected_pipeline_to_slint(
@@ -2733,6 +2738,8 @@ impl PipelinesController {
     /// This avoids a flood of preview refreshes while the user is still typing.
     /// Connects the pipeline focus (see `focus_controller`).
     fn pipeline_settings_changed(self: &Arc<Self>) {
+        // Values for parameters a group no longer has go.
+        evanalyzer_app::groups::prune_group_values(&mut self.app_state.get_project_write());
         self.app_state.mark_dirty();
         self.focus_controller.refresh();
 
@@ -2923,7 +2930,7 @@ impl PipelinesController {
 
     /// Opens the group settings dialog for the opened group - read only
     /// while it's only viewed - at parameter `focus`, if given.
-    fn show_group_settings(&self, focus: Option<GroupParamId>) {
+    fn show_group_settings(&self, focus: Option<GroupParamKey>) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
@@ -2958,7 +2965,7 @@ impl PipelinesController {
                     .into(),
             );
             focus
-                .and_then(|id| definition.parameters.iter().position(|p| p.id == id))
+                .and_then(|key| definition.parameters.iter().position(|p| p.key == key))
                 .map_or(-1, |index| index as i32)
         };
         self.fill_group_settings(focus_index);
@@ -2983,7 +2990,7 @@ impl PipelinesController {
             .parameters
             .iter()
             .map(|parameter| GroupParamRow {
-                id: parameter.id.0 as i32,
+                key: parameter.key.to_string().into(),
                 label: parameter.label.clone().into(),
                 description: parameter.description.clone().into(),
                 default_value: param_value_display(&parameter.default).into(),
@@ -6400,7 +6407,7 @@ mod tests {
                     content: StepContent::Command(PipelineCommand::Blur(BlurSettings::default())),
                 }],
                 parameters: vec![GroupParameterDef {
-                    id: GroupParamId(1),
+                    key: GroupParamKey::from("1"),
                     label: "Smoothing".into(),
                     description: String::new(),
                     default: ParamValue::Int(3),
@@ -6431,7 +6438,10 @@ mod tests {
         else {
             panic!("still a group");
         };
-        assert_eq!(instance.values[&GroupParamId(1)], ParamValue::Int(5));
+        assert_eq!(
+            instance.values[&GroupParamKey::from("1")],
+            ParamValue::Int(5)
+        );
         assert_eq!(card(&ui).parameters.row_data(0).unwrap().value, "5");
     }
 
@@ -6692,7 +6702,9 @@ mod tests {
         // On the card: 42 - what the script gets.
         panel.invoke_close_group();
         drain_ui_queue();
-        let id = ui_state.get_project().command_groups[0].parameters[0].id;
+        let id = ui_state.get_project().command_groups[0].parameters[0]
+            .key
+            .clone();
         panel.invoke_param_changed(0, id.0.to_string().into(), "42".into());
         drain_ui_queue();
         let project = ui_state.get_project();
@@ -6974,7 +6986,7 @@ mod tests {
                 "Size",
                 "3",
             );
-            let id = definition.parameters[0].id;
+            let id = definition.parameters[0].key.clone();
             let StepContent::Group(instance) = &mut project.pipelines[0].steps[1].content else {
                 panic!("group step")
             };
@@ -7155,13 +7167,16 @@ mod tests {
             "names what it sets: {}",
             settings_rows(&ui)[0].sets
         );
-        let (first, second) = (settings_rows(&ui)[0].id, settings_rows(&ui)[1].id);
+        let (first, second) = (
+            settings_rows(&ui)[0].key.clone(),
+            settings_rows(&ui)[1].key.clone(),
+        );
 
         dialog.invoke_name_edited("Smoothing".into());
         dialog.invoke_name_edited("  ".into());
         dialog.invoke_description_edited("Blurs twice".into());
-        dialog.invoke_parameter_name_edited(first, "Radius".into());
-        dialog.invoke_parameter_help_edited(first, "How strong".into());
+        dialog.invoke_parameter_name_edited(first.clone(), "Radius".into());
+        dialog.invoke_parameter_help_edited(first.clone(), "How strong".into());
         drain_ui_queue();
         {
             let project = ui_state.get_project();
@@ -7178,9 +7193,9 @@ mod tests {
             );
         }
 
-        dialog.invoke_parameter_moved(second, -1);
+        dialog.invoke_parameter_moved(second.clone(), -1);
         drain_ui_queue();
-        let ids: Vec<i32> = settings_rows(&ui).iter().map(|r| r.id).collect();
+        let ids: Vec<SharedString> = settings_rows(&ui).iter().map(|r| r.key.clone()).collect();
         assert_eq!(ids, [second, first]);
         assert_eq!(settings_rows(&ui)[1].label, "Radius");
 
@@ -7234,7 +7249,7 @@ mod tests {
         assert_eq!(ui.global::<GroupSettingsState>().get_focus_index(), 1);
 
         // ✕ stops exposing it: the setting shows ◇ again.
-        let second = settings_rows(&ui)[1].id;
+        let second = settings_rows(&ui)[1].key.clone();
         ui.global::<GroupSettingsState>()
             .invoke_parameter_removed(second);
         drain_ui_queue();
@@ -7263,7 +7278,7 @@ mod tests {
             let mut project = ui_state.get_project_write();
             let definition = &mut project.command_groups[0];
             let fillers = (0..10).map(|i| GroupParameterDef {
-                id: GroupParamId(100 + i),
+                key: GroupParamKey(format!("filler_{i}")),
                 label: format!("Filler {i}"),
                 description: String::new(),
                 default: ParamValue::Int(0),
@@ -7330,7 +7345,7 @@ mod tests {
         );
 
         dialog.invoke_long_description_edited("Two blurs.\nUse for noisy images.".into());
-        dialog.invoke_parameter_help_edited(row.id, "Own help".into());
+        dialog.invoke_parameter_help_edited(row.key.clone(), "Own help".into());
         drain_ui_queue();
         assert_eq!(
             ui_state.get_project().command_groups[0].meta.description,
@@ -7341,7 +7356,7 @@ mod tests {
             "Own help"
         );
 
-        dialog.invoke_parameter_help_reset(row.id);
+        dialog.invoke_parameter_help_reset(row.key.clone());
         drain_ui_queue();
         let project = ui_state.get_project();
         let parameter = &project.command_groups[0].parameters[0];

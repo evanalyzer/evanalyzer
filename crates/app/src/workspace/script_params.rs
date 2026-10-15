@@ -153,7 +153,7 @@ pub fn sync_project_script_params(project: &mut ProjectSettings) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evanalyzer_cfg::core_types::GroupParamId;
+    use evanalyzer_cfg::core_types::GroupParamKey;
     use evanalyzer_cfg::core_types::{ImageChannelIdx, ObjectClass};
     use evanalyzer_cfg::settings::command_groups::{
         GroupInstance, GroupParameterDef, ParamBinding, ParamValue,
@@ -232,21 +232,21 @@ mod tests {
             steps: vec![],
             parameters: vec![
                 GroupParameterDef {
-                    id: GroupParamId(1),
+                    key: GroupParamKey::from("1"),
                     label: "Rounds".into(),
                     description: String::new(),
                     default: ParamValue::Int(10),
                     bindings: vec![binding(3, "params.0.value.0")],
                 },
                 GroupParameterDef {
-                    id: GroupParamId(2),
+                    key: GroupParamKey::from("2"),
                     label: "Start".into(),
                     description: String::new(),
                     default: ParamValue::Float(800.0),
                     bindings: vec![binding(3, "params.1.value.0")],
                 },
                 GroupParameterDef {
-                    id: GroupParamId(3),
+                    key: GroupParamKey::from("3"),
                     label: "Other step".into(),
                     description: String::new(),
                     default: ParamValue::Int(1),
@@ -292,7 +292,7 @@ mod tests {
                 content: StepContent::Command(PipelineCommand::Script(settings)),
             }],
             parameters: vec![GroupParameterDef {
-                id: GroupParamId(1),
+                key: GroupParamKey::from("1"),
                 label: "Rounds".into(),
                 description: String::new(),
                 default: ParamValue::Int(10),
@@ -302,7 +302,7 @@ mod tests {
         });
         let instance = GroupInstance {
             key: "G".into(),
-            values: [(GroupParamId(1), ParamValue::Int(42))].into(),
+            values: [(GroupParamKey::from("1"), ParamValue::Int(42))].into(),
         };
         assert!(
             crate::workspace::group_checks::check_groups(&project).is_empty(),

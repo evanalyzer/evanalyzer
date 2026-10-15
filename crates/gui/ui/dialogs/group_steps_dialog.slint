@@ -506,7 +506,8 @@ export component GroupUpdateDialog inherits Rectangle {
 
 /// A parameter of the group, as it shows on the group card.
 export struct GroupParamRow {
-    id: int,
+    // The parameter's key ("min_size").
+    key: string,
     label: string,
     description: string,
     /// The default value, as text.
@@ -540,17 +541,17 @@ export global GroupSettingsState {
     callback long-description-edited(string);
     /// name, organization
     callback author-edited(string, string);
-    /// id, name - the help text stays (the rows aren't refreshed while
+    /// key, name - the help text stays (the rows aren't refreshed while
     /// typing, so passing both would undo the other field's edit).
-    callback parameter-name-edited(int, string);
-    /// id, help text
-    callback parameter-help-edited(int, string);
-    /// id, -1 up / +1 down
-    callback parameter-moved(int, int);
-    /// id: back to the bound setting's own help text.
-    callback parameter-help-reset(int);
-    /// id: stop exposing it - its settings go back to the group's values.
-    callback parameter-removed(int);
+    callback parameter-name-edited(string, string);
+    /// key, help text
+    callback parameter-help-edited(string, string);
+    /// key, -1 up / +1 down
+    callback parameter-moved(string, int);
+    /// key: back to the bound setting's own help text.
+    callback parameter-help-reset(string);
+    /// key: stop exposing it - its settings go back to the group's values.
+    callback parameter-removed(string);
     callback close();
 }
 
@@ -751,7 +752,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                                     placeholder-text: "Name on the group card";
                                     accessible-label: "Parameter name";
                                     edited(t) => {
-                                        GroupSettingsState.parameter-name-edited(param.id, t);
+                                        GroupSettingsState.parameter-name-edited(param.key, t);
                                     }
                                 }
 
@@ -780,7 +781,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                             enabled: pi > 0;
                                             mouse-cursor: pointer;
                                             clicked => {
-                                                GroupSettingsState.parameter-moved(param.id, -1);
+                                                GroupSettingsState.parameter-moved(param.key, -1);
                                             }
                                         }
                                     }
@@ -801,7 +802,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                             enabled: pi < GroupSettingsState.parameters.length - 1;
                                             mouse-cursor: pointer;
                                             clicked => {
-                                                GroupSettingsState.parameter-moved(param.id, 1);
+                                                GroupSettingsState.parameter-moved(param.key, 1);
                                             }
                                         }
                                     }
@@ -821,7 +822,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                         remove-ta := TouchArea {
                                             mouse-cursor: pointer;
                                             clicked => {
-                                                GroupSettingsState.parameter-removed(param.id);
+                                                GroupSettingsState.parameter-removed(param.key);
                                             }
                                         }
                                     }
@@ -835,7 +836,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                 placeholder-text: "Help text, shown as ? next to the parameter";
                                 accessible-label: "Parameter help text";
                                 edited(t) => {
-                                    GroupSettingsState.parameter-help-edited(param.id, t);
+                                    GroupSettingsState.parameter-help-edited(param.key, t);
                                 }
                             }
 
@@ -878,7 +879,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                     reset-ta := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => {
-                                            GroupSettingsState.parameter-help-reset(param.id);
+                                            GroupSettingsState.parameter-help-reset(param.key);
                                         }
                                     }
                                 }

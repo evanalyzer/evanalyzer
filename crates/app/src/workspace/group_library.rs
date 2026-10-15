@@ -256,7 +256,7 @@ pub fn update_from_library(
 mod tests {
     use super::*;
     use crate::backend::LocalFileSystem;
-    use evanalyzer_cfg::core_types::{GroupParamId, PipelineId, StepId};
+    use evanalyzer_cfg::core_types::{GroupParamKey, PipelineId, StepId};
     use evanalyzer_cfg::settings::command_groups::{
         GroupInstance, GroupParameterDef, ParamBinding, ParamValue,
     };
@@ -293,7 +293,7 @@ mod tests {
             classes: vec![],
             steps,
             parameters: vec![GroupParameterDef {
-                id: GroupParamId(1),
+                key: GroupParamKey::from("1"),
                 label: "Size".into(),
                 description: String::new(),
                 default: ParamValue::Int(3),

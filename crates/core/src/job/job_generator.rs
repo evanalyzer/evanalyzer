@@ -1778,7 +1778,7 @@ mod tests {
             "steps": [
                 {"enabled": true, "command": threshold},
                 {"enabled": true, "command": components},
-                {"enabled": true, "group": {"key": "CELLS", "values": {"1": 7}}}
+                {"enabled": true, "group": {"key": "CELLS", "values": {"cell_class": 7}}}
             ]
         }]);
         raw["commandGroups"] = json!([{
@@ -1790,7 +1790,7 @@ mod tests {
                 {"id": 2, "enabled": true, "command": reclassify}
             ],
             "parameters": [{
-                "id": 1, "label": "Cell class", "default": 5,
+                "key": "cell_class", "label": "Cell class", "default": 5,
                 "bindings": [{"step": 2, "param": "output_class"}]
             }]
         }]);

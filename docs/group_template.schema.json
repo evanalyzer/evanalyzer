@@ -899,13 +899,10 @@
         "values": {
           "description": "This instance's parameter values. A parameter missing here has its\ndefinition's default (e.g. one the definition gained later).",
           "type": "object",
-          "additionalProperties": false,
-          "default": {},
-          "patternProperties": {
-            "^\\d+$": {
-              "$ref": "#/$defs/ParamValue"
-            }
-          }
+          "additionalProperties": {
+            "$ref": "#/$defs/ParamValue"
+          },
+          "default": {}
         }
       },
       "required": [
@@ -942,11 +939,9 @@
         "version"
       ]
     },
-    "GroupParamId": {
-      "description": "A group parameter's id, unique within its group definition. The values a\ngroup instance holds are keyed by it, so they survive reordering and\nrelabelling the definition's parameters.\n\nAlso read from text (`\"1\"`): as a map key inside a pipeline step, serde\nhands it over as a string (the step's content is `#[serde(flatten)]`ed),\nwhich the derived number-only `Deserialize` would refuse.",
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
+    "GroupParamKey": {
+      "description": "A group parameter's key, unique within its group definition and\nreadable in the file (`\"min_size\"`). The values a group instance holds\nare keyed by it, so they survive reordering and relabelling the\ndefinition's parameters, and updating it from the library. Made from the\nlabel when the parameter is made, then kept.",
+      "type": "string"
     },
     "GroupParameterDef": {
       "description": "One parameter of a group: what it sets inside the group, and its default.",
@@ -968,9 +963,9 @@
           "type": "string",
           "default": ""
         },
-        "id": {
-          "description": "Unique within the group definition.",
-          "$ref": "#/$defs/GroupParamId"
+        "key": {
+          "description": "Unique within the group definition, readable (`\"min_size\"`); the\ninstances' values are keyed by it.",
+          "$ref": "#/$defs/GroupParamKey"
         },
         "label": {
           "description": "Name shown to the user, e.g. \"Cell class\".",
@@ -978,7 +973,7 @@
         }
       },
       "required": [
-        "id",
+        "key",
         "label",
         "default",
         "bindings"

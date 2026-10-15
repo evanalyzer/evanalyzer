@@ -144,38 +144,32 @@ impl fmt::Display for GroupId {
     }
 }
 
-/// A group parameter's id, unique within its group definition. The values a
-/// group instance holds are keyed by it, so they survive reordering and
-/// relabelling the definition's parameters.
-///
-/// Also read from text (`"1"`): as a map key inside a pipeline step, serde
-/// hands it over as a string (the step's content is `#[serde(flatten)]`ed),
-/// which the derived number-only `Deserialize` would refuse.
+/// A group parameter's key, unique within its group definition and
+/// readable in the file (`"min_size"`). The values a group instance holds
+/// are keyed by it, so they survive reordering and relabelling the
+/// definition's parameters, and updating it from the library. Made from the
+/// label when the parameter is made, then kept.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Default, JsonSchema, Ord, PartialOrd,
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default, JsonSchema, Ord, PartialOrd,
 )]
-pub struct GroupParamId(pub u32);
+#[serde(transparent)]
+pub struct GroupParamKey(pub String);
 
-impl<'de> Deserialize<'de> for GroupParamId {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Visitor;
-        impl serde::de::Visitor<'_> for Visitor {
-            type Value = GroupParamId;
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a group parameter id: a whole number")
-            }
-            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<GroupParamId, E> {
-                u32::try_from(v).map(GroupParamId).map_err(E::custom)
-            }
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<GroupParamId, E> {
-                v.parse().map(GroupParamId).map_err(E::custom)
-            }
-        }
-        if deserializer.is_human_readable() {
-            deserializer.deserialize_any(Visitor)
-        } else {
-            u32::deserialize(deserializer).map(GroupParamId)
-        }
+impl GroupParamKey {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for GroupParamKey {
+    fn from(key: &str) -> Self {
+        Self(key.to_string())
+    }
+}
+
+impl fmt::Display for GroupParamKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 

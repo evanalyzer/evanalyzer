@@ -9,7 +9,7 @@
 use chrono::Utc;
 use evanalyzer_cfg::{
     core_types::{
-        GroupParamId, InternalErrors, ObjectClass, PipelineId, SegmentationClass, StepId,
+        GroupParamKey, InternalErrors, ObjectClass, PipelineId, SegmentationClass, StepId,
     },
     settings::{
         classification_settings::Class,
@@ -197,7 +197,6 @@ pub fn group_steps(
     };
 
     let mut next_local = 1;
-    let mut next_parameter = 1;
     for ((class, role), (_, class_name, color)) in roles.iter().zip(&names) {
         match role {
             ClassRole::Fixed => {}
@@ -248,14 +247,14 @@ pub fn group_steps(
                 if bindings.is_empty() {
                     continue;
                 }
+                let key = new_parameter_key(&definition, class_name);
                 definition.parameters.push(GroupParameterDef {
-                    id: GroupParamId(next_parameter),
+                    key,
                     label: class_name.clone(),
                     description: String::new(),
                     default: ParamValue::Text(class.to_text()),
                     bindings,
                 });
-                next_parameter += 1;
             }
         }
     }
@@ -272,13 +271,15 @@ pub fn group_steps(
     }
     let several = channels.len() > 1;
     for (channel, ids) in channels {
+        let label = if several {
+            format!("Channel {channel}")
+        } else {
+            "Channel".into()
+        };
+        let key = new_parameter_key(&definition, &label);
         definition.parameters.push(GroupParameterDef {
-            id: GroupParamId(next_parameter),
-            label: if several {
-                format!("Channel {channel}")
-            } else {
-                "Channel".into()
-            },
+            key,
+            label,
             description: String::new(),
             default: ParamValue::Int(channel as i64),
             bindings: ids
@@ -289,7 +290,6 @@ pub fn group_steps(
                 })
                 .collect(),
         });
-        next_parameter += 1;
     }
 
     // The pipeline's slots only these steps use become the group's own.
@@ -315,6 +315,44 @@ pub fn group_steps(
     assign_step_ids(&mut pipeline.steps);
     project.command_groups.push(definition);
     Ok(key)
+}
+
+/// Drops the values group steps hold for parameters their group no longer
+/// has (hidden again, removed in the group settings, its step or script
+/// param gone): a run never reads them, they'd only clutter the file.
+/// Returns how many went.
+pub fn prune_group_values(project: &mut ProjectSettings) -> usize {
+    let parameters: std::collections::HashMap<String, BTreeSet<GroupParamKey>> = project
+        .command_groups
+        .iter()
+        .map(|d| {
+            (
+                d.key.clone(),
+                d.parameters.iter().map(|p| p.key.clone()).collect(),
+            )
+        })
+        .collect();
+    let mut pruned = 0;
+    let steps = project
+        .pipelines
+        .iter_mut()
+        .flat_map(|p| p.steps.iter_mut())
+        .chain(
+            project
+                .command_groups
+                .iter_mut()
+                .flat_map(|d| d.steps.iter_mut()),
+        );
+    for step in steps {
+        if let StepContent::Group(instance) = &mut step.content
+            && let Some(keys) = parameters.get(&instance.key)
+        {
+            let before = instance.values.len();
+            instance.values.retain(|key, _| keys.contains(key));
+            pruned += before - instance.values.len();
+        }
+    }
+    pruned
 }
 
 /// How often the project uses group `key`: steps in its pipelines and in
@@ -536,15 +574,8 @@ pub fn toggle_exposed(
         definition.parameters.retain(|p| !p.bindings.is_empty());
         return false;
     }
-    let id = definition
-        .parameters
-        .iter()
-        .map(|p| p.id.0)
-        .max()
-        .unwrap_or(0)
-        + 1;
     definition.parameters.push(GroupParameterDef {
-        id: GroupParamId(id),
+        key: new_parameter_key(definition, label),
         label: label.to_string(),
         description: String::new(),
         default: evanalyzer_core::value_from_text(value),
@@ -556,15 +587,44 @@ pub fn toggle_exposed(
     true
 }
 
-/// Renames parameter `id` of `definition` and sets its help text. Returns
-/// whether the parameter exists.
+/// A key for a new parameter of `definition` labelled `label`: the label in
+/// `snake_case` ("Min Size" → `min_size`), with `_2`, `_3` … if taken. It
+/// stays when the label changes later - the instances' values are keyed by
+/// it.
+pub fn new_parameter_key(definition: &GroupDefinition, label: &str) -> GroupParamKey {
+    let mut base = String::new();
+    for c in label.trim().chars() {
+        if c.is_alphanumeric() {
+            base.extend(c.to_lowercase());
+        } else if !base.is_empty() && !base.ends_with('_') {
+            base.push('_');
+        }
+    }
+    let base = base.trim_end_matches('_');
+    let base = match base {
+        "" => "parameter".to_string(),
+        b if b.starts_with(|c: char| c.is_ascii_digit()) => format!("p_{b}"),
+        b => b.to_string(),
+    };
+    let taken = |key: &str| definition.parameters.iter().any(|p| p.key.as_str() == key);
+    let mut key = base.clone();
+    let mut n = 2;
+    while taken(&key) {
+        key = format!("{base}_{n}");
+        n += 1;
+    }
+    GroupParamKey(key)
+}
+
+/// Renames parameter `key` of `definition` (its key stays) and sets its
+/// help text. Returns whether the parameter exists.
 pub fn edit_parameter(
     definition: &mut GroupDefinition,
-    id: GroupParamId,
+    key: &GroupParamKey,
     label: &str,
     description: &str,
 ) -> bool {
-    let Some(parameter) = definition.parameters.iter_mut().find(|p| p.id == id) else {
+    let Some(parameter) = definition.parameters.iter_mut().find(|p| &p.key == key) else {
         return false;
     };
     parameter.label = label.to_string();
@@ -572,10 +632,10 @@ pub fn edit_parameter(
     true
 }
 
-/// Moves parameter `id` of `definition` `delta` places (-1 up, +1 down) -
+/// Moves parameter `key` of `definition` `delta` places (-1 up, +1 down) -
 /// the order on the group card. Returns whether it moved.
-pub fn move_parameter(definition: &mut GroupDefinition, id: GroupParamId, delta: i32) -> bool {
-    let Some(from) = definition.parameters.iter().position(|p| p.id == id) else {
+pub fn move_parameter(definition: &mut GroupDefinition, key: &GroupParamKey, delta: i32) -> bool {
+    let Some(from) = definition.parameters.iter().position(|p| &p.key == key) else {
         return false;
     };
     let to = from as i64 + delta as i64;
@@ -587,11 +647,11 @@ pub fn move_parameter(definition: &mut GroupDefinition, id: GroupParamId, delta:
     true
 }
 
-/// Stops exposing parameter `id` of `definition`: the settings it set keep
+/// Stops exposing parameter `key` of `definition`: the settings it set keep
 /// the group's own values. Returns whether it existed.
-pub fn remove_parameter(definition: &mut GroupDefinition, id: GroupParamId) -> bool {
+pub fn remove_parameter(definition: &mut GroupDefinition, key: &GroupParamKey) -> bool {
     let before = definition.parameters.len();
-    definition.parameters.retain(|p| p.id != id);
+    definition.parameters.retain(|p| &p.key != key);
     definition.parameters.len() != before
 }
 
@@ -600,7 +660,7 @@ pub fn parameter_for_setting(
     definition: &GroupDefinition,
     step_id: StepId,
     path: &str,
-) -> Option<GroupParamId> {
+) -> Option<GroupParamKey> {
     definition
         .parameters
         .iter()
@@ -609,7 +669,7 @@ pub fn parameter_for_setting(
                 .iter()
                 .any(|b| b.step == step_id && b.param == path)
         })
-        .map(|p| p.id)
+        .map(|p| p.key.clone())
 }
 
 /// The setting at `path` of `command` - a top-level one ("min_area") or one
@@ -646,7 +706,7 @@ pub fn compatible_parameters(
     definitions: &[GroupDefinition],
     key: &str,
     setting: &ParameterDef,
-) -> Vec<(GroupParamId, String)> {
+) -> Vec<(GroupParamKey, String)> {
     let Some(definition) = definitions.iter().find(|d| d.key == key) else {
         return Vec::new();
     };
@@ -662,7 +722,7 @@ pub fn compatible_parameters(
         .iter()
         .zip(shown)
         .filter(|(_, shown)| same_kind(shown, setting))
-        .map(|(parameter, _)| (parameter.id, parameter.label.clone()))
+        .map(|(parameter, _)| (parameter.key.clone(), parameter.label.clone()))
         .collect()
 }
 
@@ -684,20 +744,20 @@ pub(crate) fn same_kind(shown: &ParameterDef, other: &ParameterDef) -> bool {
     shown.param_type == other.param_type && shown.options == other.options
 }
 
-/// Adds setting `path` of step `step_id` to parameter `id` of `definition`:
-/// the parameter sets it too from now on.
+/// Adds setting `path` of step `step_id` to parameter `key` of
+/// `definition`: the parameter sets it too from now on.
 pub fn add_binding(
     definition: &mut GroupDefinition,
-    id: GroupParamId,
+    key: &GroupParamKey,
     step_id: StepId,
     path: &str,
 ) -> Result<(), InternalErrors> {
     let parameter = definition
         .parameters
         .iter_mut()
-        .find(|p| p.id == id)
+        .find(|p| &p.key == key)
         .ok_or_else(|| {
-            InternalErrors::InvalidArgument(format!("the group has no parameter {}", id.0))
+            InternalErrors::InvalidArgument(format!("the group has no parameter {key}"))
         })?;
     let binding = ParamBinding {
         step: step_id,
@@ -730,7 +790,7 @@ pub fn apply_defaults(definition: &GroupDefinition) -> Vec<PipelineStepSettings>
 /// replaces it at every run - and every setting the parameter sets shows
 /// it. Returns whether a parameter sets it.
 pub fn bound_setting_edited(definition: &mut GroupDefinition, step_id: StepId, path: &str) -> bool {
-    let Some(id) = parameter_for_setting(definition, step_id, path) else {
+    let Some(key) = parameter_for_setting(definition, step_id, path) else {
         return false;
     };
     let Some(value) = definition
@@ -743,7 +803,7 @@ pub fn bound_setting_edited(definition: &mut GroupDefinition, step_id: StepId, p
     else {
         return false;
     };
-    if let Some(parameter) = definition.parameters.iter_mut().find(|p| p.id == id) {
+    if let Some(parameter) = definition.parameters.iter_mut().find(|p| p.key == key) {
         parameter.default = evanalyzer_core::value_from_text(&value);
     }
     definition.steps = apply_defaults(definition);
@@ -1640,13 +1700,18 @@ mod tests {
         let mut project = grouped();
         let definition = &mut project.command_groups[0];
         toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
-        let ids = |d: &GroupDefinition| d.parameters.iter().map(|p| p.id).collect::<Vec<_>>();
+        let ids = |d: &GroupDefinition| {
+            d.parameters
+                .iter()
+                .map(|p| p.key.clone())
+                .collect::<Vec<_>>()
+        };
         let before = ids(definition);
-        let last = *before.last().unwrap();
+        let last = before.last().unwrap().clone();
 
         assert!(edit_parameter(
             definition,
-            last,
+            &last,
             "Min. area",
             "Smaller objects are dropped"
         ));
@@ -1655,17 +1720,22 @@ mod tests {
             (edited.label.as_str(), edited.description.as_str()),
             ("Min. area", "Smaller objects are dropped")
         );
-        assert!(!edit_parameter(definition, GroupParamId(999), "x", ""));
+        assert!(!edit_parameter(
+            definition,
+            &GroupParamKey::from("999"),
+            "x",
+            ""
+        ));
 
-        assert!(move_parameter(definition, last, -1));
+        assert!(move_parameter(definition, &last, -1));
         let mut expected = before.clone();
         let n = expected.len();
         expected.swap(n - 1, n - 2);
         assert_eq!(ids(definition), expected);
-        assert!(move_parameter(definition, last, 1));
+        assert!(move_parameter(definition, &last, 1));
         assert_eq!(ids(definition), before);
-        assert!(!move_parameter(definition, last, 1), "already last");
-        assert!(!move_parameter(definition, before[0], -1), "already first");
+        assert!(!move_parameter(definition, &last, 1), "already last");
+        assert!(!move_parameter(definition, &before[0], -1), "already first");
     }
 
     #[test]
@@ -1679,12 +1749,12 @@ mod tests {
             None
         );
 
-        assert!(remove_parameter(definition, id));
+        assert!(remove_parameter(definition, &id));
         assert_eq!(
             parameter_for_setting(definition, StepId(4), "min_area"),
             None
         );
-        assert!(!remove_parameter(definition, id), "gone already");
+        assert!(!remove_parameter(definition, &id), "gone already");
     }
 
     /// Threshold → Extract Objects (Seg 1 → class 1) → Classify, class 1 as
@@ -1745,12 +1815,12 @@ mod tests {
 
         // Shown as the list (several classes) it couldn't set the mapping's
         // single class.
-        let id = class_parameters[0].id;
+        let id = class_parameters[0].key.clone();
         let definition = &mut project.command_groups[0];
         let parameter = definition
             .parameters
             .iter_mut()
-            .find(|p| p.id == id)
+            .find(|p| p.key == id)
             .unwrap();
         parameter.bindings.reverse();
         let key = definition.key.clone();
@@ -1783,7 +1853,7 @@ mod tests {
             .apply_param_change("min_area", "80");
 
         assert!(bound_setting_edited(definition, StepId(4), "min_area"));
-        let parameter = definition.parameters.iter().find(|p| p.id == id).unwrap();
+        let parameter = definition.parameters.iter().find(|p| p.key == id).unwrap();
         assert_eq!(parameter.default, ParamValue::Int(80));
         // What runs for a use without values of its own.
         let instance = GroupInstance {
@@ -1802,6 +1872,66 @@ mod tests {
         assert!(
             !bound_setting_edited(definition, StepId(4), "max_area"),
             "not set by a parameter"
+        );
+    }
+
+    #[test]
+    fn parameters_get_readable_unique_keys_that_stay_when_relabelled() {
+        let mut project = grouped();
+        let keys = |d: &GroupDefinition| {
+            d.parameters
+                .iter()
+                .map(|p| p.key.to_string())
+                .collect::<Vec<_>>()
+        };
+        // Grouping: the class parameters are named after their classes.
+        assert!(keys(&project.command_groups[0]).contains(&"cells".to_string()));
+
+        let definition = &mut project.command_groups[0];
+        toggle_exposed(definition, StepId(4), "min_area", "Min. Size (px)", "50");
+        toggle_exposed(definition, StepId(4), "max_area", "Min. Size (px)", "500");
+        assert!(keys(definition).ends_with(&["min_size_px".into(), "min_size_px_2".into()]));
+
+        let key = GroupParamKey::from("min_size_px");
+        assert!(edit_parameter(definition, &key, "Smallest", ""));
+        assert!(
+            keys(definition).contains(&"min_size_px".to_string()),
+            "the key stays"
+        );
+
+        let empty = GroupDefinition {
+            parameters: vec![],
+            ..definition.clone()
+        };
+        assert_eq!(new_parameter_key(&empty, "  ").as_str(), "parameter");
+        assert_eq!(
+            new_parameter_key(&empty, "2nd class").as_str(),
+            "p_2nd_class"
+        );
+    }
+
+    #[test]
+    fn values_for_parameters_a_group_no_longer_has_are_dropped() {
+        let mut project = grouped();
+        let definition = &mut project.command_groups[0];
+        toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
+        let key = parameter_for_setting(definition, StepId(4), "min_area").unwrap();
+        let StepContent::Group(instance) = &mut project.pipelines[0].steps[2].content else {
+            panic!("group step")
+        };
+        instance.values.insert(key.clone(), ParamValue::Int(80));
+        instance.values.insert("cells".into(), ParamValue::Int(3));
+        assert_eq!(prune_group_values(&mut project), 0, "both exist");
+
+        remove_parameter(&mut project.command_groups[0], &key);
+        assert_eq!(prune_group_values(&mut project), 1);
+        let StepContent::Group(instance) = &project.pipelines[0].steps[2].content else {
+            panic!("group step")
+        };
+        assert!(!instance.values.contains_key(&key));
+        assert!(
+            instance.values.contains_key(&GroupParamKey::from("cells")),
+            "kept"
         );
     }
 
@@ -1846,7 +1976,7 @@ mod tests {
             "Minimum",
             "0"
         ));
-        let id = definition.parameters[0].id;
+        let id = definition.parameters[0].key.clone();
         let StepContent::Group(instance) = &mut project.pipelines[0].steps[0].content else {
             panic!("group step")
         };
@@ -1878,7 +2008,7 @@ mod tests {
 
         add_binding(
             &mut project.command_groups[0],
-            candidates[0].0,
+            &candidates[0].0,
             StepId(5),
             "mask",
         )
@@ -1891,7 +2021,7 @@ mod tests {
         assert!(
             add_binding(
                 &mut project.command_groups[0],
-                GroupParamId(99),
+                &GroupParamKey::from("99"),
                 StepId(5),
                 "mask"
             )

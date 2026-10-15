@@ -288,7 +288,7 @@ fn missing_mapped_classes(project: &ProjectSettings, command: &PipelineCommand) 
 mod tests {
     use super::*;
     use crate::workspace::grouping::{ClassRole, group_steps, plan_grouping};
-    use evanalyzer_cfg::core_types::{GroupParamId, SegmentationClass};
+    use evanalyzer_cfg::core_types::{GroupParamKey, SegmentationClass};
     use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::command_groups::{GroupParameterDef, ParamBinding, ParamValue};
     use evanalyzer_cfg::settings::pipeline_command_settings::{
@@ -313,7 +313,7 @@ mod tests {
                 key: key.into(),
                 values: values
                     .iter()
-                    .map(|(k, v)| (GroupParamId(*k), v.clone()))
+                    .map(|(k, v)| (GroupParamKey(k.to_string()), v.clone()))
                     .collect(),
             }),
         }
@@ -332,7 +332,7 @@ mod tests {
             classes: vec![],
             steps: vec![step(1, blur())],
             parameters: vec![GroupParameterDef {
-                id: GroupParamId(1),
+                key: GroupParamKey::from("1"),
                 label: "Size".into(),
                 description: String::new(),
                 default: ParamValue::Int(3),
@@ -455,7 +455,7 @@ mod tests {
             }),
         ));
         definition.parameters.push(GroupParameterDef {
-            id: GroupParamId(2),
+            key: GroupParamKey::from("2"),
             label: "Nothing".into(),
             description: String::new(),
             default: ParamValue::Int(1),

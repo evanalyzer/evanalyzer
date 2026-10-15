@@ -92,7 +92,8 @@ mod step_content_tests {
 
     #[test]
     fn a_group_step_loads_and_is_written_as_group() {
-        let json = r#"{"enabled":true,"group":{"key":"CELL_RECONSTRUCTION","values":{"1":3}}}"#;
+        let json =
+            r#"{"enabled":true,"group":{"key":"CELL_RECONSTRUCTION","values":{"cell_class":3}}}"#;
         let raw: serde_json::Value = serde_json::from_str(json).unwrap();
         let step: PipelineStepSettings = serde_json::from_value(raw).unwrap();
         let StepContent::Group(group) = &step.content else {

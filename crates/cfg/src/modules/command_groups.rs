@@ -12,7 +12,7 @@ use crate::{
         classification_settings::Class, meta_data::MetaData,
         pipeline_settings::PipelineStepSettings,
     },
-    types::ids::{GroupParamId, StepId},
+    types::ids::{GroupParamKey, StepId},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -63,8 +63,9 @@ pub struct GroupDefinition {
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupParameterDef {
-    /// Unique within the group definition.
-    pub id: GroupParamId,
+    /// Unique within the group definition, readable (`"min_size"`); the
+    /// instances' values are keyed by it.
+    pub key: GroupParamKey,
 
     /// Name shown to the user, e.g. "Cell class".
     pub label: String,
@@ -126,7 +127,7 @@ pub struct GroupInstance {
     /// This instance's parameter values. A parameter missing here has its
     /// definition's default (e.g. one the definition gained later).
     #[serde(default)]
-    pub values: BTreeMap<GroupParamId, ParamValue>,
+    pub values: BTreeMap<GroupParamKey, ParamValue>,
 }
 
 #[cfg(test)]
@@ -159,16 +160,16 @@ mod tests {
 
     #[test]
     fn an_instance_reads_naturally_and_survives_loading_through_a_json_value() {
-        let json = r#"{"key":"CELL_RECONSTRUCTION","values":{"1":3,"2":"PARABOLOID","3":4.5}}"#;
+        let json = r#"{"key":"CELL_RECONSTRUCTION","values":{"cell_class":3,"method":"PARABOLOID","radius":4.5}}"#;
         // Projects load through `serde_json::Value`.
         let raw: serde_json::Value = serde_json::from_str(json).unwrap();
         let instance: GroupInstance = serde_json::from_value(raw).unwrap();
-        assert_eq!(instance.values[&GroupParamId(1)], ParamValue::Int(3));
+        assert_eq!(instance.values[&"cell_class".into()], ParamValue::Int(3));
         assert_eq!(
-            instance.values[&GroupParamId(2)],
+            instance.values[&"method".into()],
             ParamValue::Text("PARABOLOID".into())
         );
-        assert_eq!(instance.values[&GroupParamId(3)], ParamValue::Float(4.5));
+        assert_eq!(instance.values[&"radius".into()], ParamValue::Float(4.5));
         assert_eq!(serde_json::to_string(&instance).unwrap(), json);
 
         let no_values: GroupInstance = serde_json::from_str(r#"{"key":"X"}"#).unwrap();
@@ -181,7 +182,7 @@ mod tests {
     #[test]
     fn a_parameter_definition_has_a_typed_default() {
         let parameter: GroupParameterDef = serde_json::from_str(
-            r#"{"id":1,"label":"Blur size","default":3,
+            r#"{"key":"blur_size","label":"Blur size","default":3,
                 "bindings":[{"step":2,"param":"kernel_size"}]}"#,
         )
         .unwrap();

@@ -74,7 +74,7 @@ pub mod core_types {
     pub use crate::types::events::TrainingProgressEvent;
     pub use crate::types::events::TrainingStats;
     pub use crate::types::ids::GroupId;
-    pub use crate::types::ids::GroupParamId;
+    pub use crate::types::ids::GroupParamKey;
     pub use crate::types::ids::ImageAddress;
     pub use crate::types::ids::ImageChannelIdx;
     pub use crate::types::ids::MemoryId;

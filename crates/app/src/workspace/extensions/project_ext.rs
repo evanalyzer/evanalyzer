@@ -1849,6 +1849,9 @@ pub fn load_project(
         warn!("{problem}");
     }
 
+    // Values for parameters a group no longer has (e.g. a hand edit).
+    crate::workspace::grouping::prune_group_values(&mut inner);
+
     // Group mistakes show in the editor too; here they're logged.
     for problem in crate::workspace::group_checks::check_groups(&inner) {
         warn!("{}", problem.message);

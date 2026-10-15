@@ -8,7 +8,7 @@
 
 use crate::pipeline::scope::{Scope, ScopeId};
 use evanalyzer_cfg::{
-    core_types::{GroupParamId, InternalErrors, ObjectClass, StepId},
+    core_types::{GroupParamKey, InternalErrors, ObjectClass, StepId},
     settings::{
         command_groups::{
             GroupDefinition, GroupInstance, GroupParameterDef, ParamBinding, ParamValue,
@@ -184,7 +184,7 @@ fn steps_with_values(
     for parameter in &definition.parameters {
         let value = instance
             .values
-            .get(&parameter.id)
+            .get(&parameter.key)
             .unwrap_or(&parameter.default);
         for binding in &parameter.bindings {
             let step = steps
@@ -264,7 +264,7 @@ pub fn group_parameters(
                     ),
                 )
             })?;
-            shown.name = parameter.id.0.to_string();
+            shown.name = parameter.key.to_string();
             shown.display_name = parameter.label.clone();
             if !parameter.description.is_empty() {
                 shown.description = parameter.description.clone();
@@ -277,22 +277,22 @@ pub fn group_parameters(
         .collect()
 }
 
-/// Sets `instance`'s value of group parameter `id` from `text` - a value as
+/// Sets `instance`'s value of group parameter `key` from `text` - a value as
 /// the card's control reports it (`apply_param_change`'s format, e.g. a
 /// dropdown label or "toggle:3"). It's applied to a copy of the bound
 /// command and read back, so the value is the one the command took.
 pub fn set_group_parameter(
     instance: &mut GroupInstance,
     definitions: &[GroupDefinition],
-    id: GroupParamId,
+    key: &GroupParamKey,
     text: &str,
 ) -> Result<(), InternalErrors> {
     let definition = definition_of(instance, definitions)?;
     let parameter = definition
         .parameters
         .iter()
-        .find(|p| p.id == id)
-        .ok_or_else(|| group_error(&definition.key, format!("has no parameter {}", id.0)))?;
+        .find(|p| &p.key == key)
+        .ok_or_else(|| group_error(&definition.key, format!("has no parameter {key}")))?;
     let binding = parameter.bindings.first().ok_or_else(|| {
         group_error(
             &definition.key,
@@ -312,23 +312,19 @@ pub fn set_group_parameter(
             value_from_text(&now)
         }
         StepContent::Group(inner) => {
-            let inner_id = binding
-                .param
-                .parse()
-                .map(GroupParamId)
-                .map_err(|_| group_error(&definition.key, "binds a group by id".into()))?;
-            set_group_parameter(inner, definitions, inner_id, text)?;
+            let inner_key = GroupParamKey::from(binding.param.as_str());
+            set_group_parameter(inner, definitions, &inner_key, text)?;
             let inner_definition = definition_of(inner, definitions)?;
-            inner.values.get(&inner_id).cloned().unwrap_or_else(|| {
+            inner.values.get(&inner_key).cloned().unwrap_or_else(|| {
                 inner_definition
                     .parameters
                     .iter()
-                    .find(|p| p.id == inner_id)
+                    .find(|p| p.key == inner_key)
                     .map_or(ParamValue::Text(String::new()), |p| p.default.clone())
             })
         }
     };
-    instance.values.insert(id, value);
+    instance.values.insert(key.clone(), value);
     Ok(())
 }
 
@@ -466,10 +462,7 @@ fn set_bound_value(
             }
         }
         StepContent::Group(inner) => {
-            let id = param
-                .parse()
-                .map(GroupParamId)
-                .map_err(|_| "a group's parameters are bound by their id".to_string())?;
+            let key = GroupParamKey::from(param);
             // The inner group would read it as one of its own local classes.
             if let Some(local) = local_class_in(value) {
                 return Err(format!(
@@ -483,7 +476,7 @@ fn set_bound_value(
                         .into(),
                 );
             }
-            inner.values.insert(id, value.clone());
+            inner.values.insert(key, value.clone());
             Ok(())
         }
     }
@@ -608,7 +601,7 @@ mod tests {
                 key: key.into(),
                 values: values
                     .iter()
-                    .map(|(k, v)| (GroupParamId(*k), v.clone()))
+                    .map(|(k, v)| (GroupParamKey(k.to_string()), v.clone()))
                     .collect::<BTreeMap<_, _>>(),
             }),
         }
@@ -616,7 +609,7 @@ mod tests {
 
     fn parameter(id: u32, default: ParamValue, bindings: &[(u32, &str)]) -> GroupParameterDef {
         GroupParameterDef {
-            id: GroupParamId(id),
+            key: GroupParamKey(id.to_string()),
             label: format!("Parameter {id}"),
             description: String::new(),
             default,
@@ -1152,19 +1145,21 @@ mod tests {
         let definitions = [cell_reconstruction()];
         let mut cells = instance("CELL_RECONSTRUCTION", &[]);
 
-        set_group_parameter(&mut cells, &definitions, GroupParamId(1), "5").unwrap();
-        set_group_parameter(&mut cells, &definitions, GroupParamId(2), "L1").unwrap();
-        assert_eq!(cells.values[&GroupParamId(1)], ParamValue::Int(5));
+        set_group_parameter(&mut cells, &definitions, &GroupParamKey::from("1"), "5").unwrap();
+        set_group_parameter(&mut cells, &definitions, &GroupParamKey::from("2"), "L1").unwrap();
+        assert_eq!(cells.values[&GroupParamKey::from("1")], ParamValue::Int(5));
         assert_eq!(
-            cells.values[&GroupParamId(2)],
+            cells.values[&GroupParamKey::from("2")],
             ParamValue::Text("L1".into())
         );
 
         // Text the command doesn't take leaves the value as it was.
-        set_group_parameter(&mut cells, &definitions, GroupParamId(1), "big").unwrap();
-        assert_eq!(cells.values[&GroupParamId(1)], ParamValue::Int(5));
+        set_group_parameter(&mut cells, &definitions, &GroupParamKey::from("1"), "big").unwrap();
+        assert_eq!(cells.values[&GroupParamKey::from("1")], ParamValue::Int(5));
 
-        assert!(set_group_parameter(&mut cells, &definitions, GroupParamId(9), "1").is_err());
+        assert!(
+            set_group_parameter(&mut cells, &definitions, &GroupParamKey::from("9"), "1").is_err()
+        );
     }
 
     #[test]
@@ -1180,8 +1175,8 @@ mod tests {
         let shown = group_parameters(&outer, &definitions).unwrap();
         assert_eq!(shown[0].value, "7");
 
-        set_group_parameter(&mut outer, &definitions, GroupParamId(1), "8").unwrap();
-        assert_eq!(outer.values[&GroupParamId(1)], ParamValue::Int(8));
+        set_group_parameter(&mut outer, &definitions, &GroupParamKey::from("1"), "8").unwrap();
+        assert_eq!(outer.values[&GroupParamKey::from("1")], ParamValue::Int(8));
         let commands = expand(
             &group_step(1, "OUTER", &[(1, ParamValue::Int(8))]),
             &definitions,

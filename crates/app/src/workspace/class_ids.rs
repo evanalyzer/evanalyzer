@@ -3,7 +3,7 @@
 
 use crate::workspace::grouping::{setting_at, uses_segmentation_class};
 use evanalyzer_cfg::{
-    core_types::{GroupParamId, InternalErrors, MAX_CLASS_ID, ObjectClass, SegmentationClass},
+    core_types::{GroupParamKey, InternalErrors, MAX_CLASS_ID, ObjectClass, SegmentationClass},
     settings::{
         classification_settings::ClassificationSettings,
         command_groups::{GroupDefinition, ParamValue},
@@ -124,7 +124,7 @@ pub fn change_class_id(
     for definition in &mut project.command_groups {
         if let Some(ids) = class_parameters.get(&definition.key) {
             for parameter in &mut definition.parameters {
-                if ids.contains(&parameter.id) {
+                if ids.contains(&parameter.key) {
                     change.references += rewrite_value(&mut parameter.default, from, to);
                 }
             }
@@ -210,7 +210,7 @@ fn all_commands(project: &ProjectSettings) -> impl Iterator<Item = &PipelineComm
 
 /// Per group key, its parameters that set a class (their card shows a class
 /// choice): those whose first setting is a class or a class list.
-fn class_parameters(definitions: &[GroupDefinition]) -> BTreeMap<String, BTreeSet<GroupParamId>> {
+fn class_parameters(definitions: &[GroupDefinition]) -> BTreeMap<String, BTreeSet<GroupParamKey>> {
     definitions
         .iter()
         .map(|definition| {
@@ -233,7 +233,7 @@ fn class_parameters(definitions: &[GroupDefinition]) -> BTreeMap<String, BTreeSe
                             })
                     })
                 })
-                .map(|parameter| parameter.id)
+                .map(|parameter| parameter.key.clone())
                 .collect();
             (definition.key.clone(), ids)
         })
@@ -465,11 +465,13 @@ mod tests {
             ],
         )
         .unwrap();
-        let parameter = project.command_groups[0].parameters[0].id;
+        let parameter = project.command_groups[0].parameters[0].key.clone();
         let StepContent::Group(instance) = &mut project.pipelines[0].steps[2].content else {
             panic!("group step")
         };
-        instance.values.insert(parameter, ParamValue::Int(3));
+        instance
+            .values
+            .insert(parameter.clone(), ParamValue::Int(3));
 
         change_class_id(&mut project, 3, 5).unwrap();
         let definition = &project.command_groups[0];
