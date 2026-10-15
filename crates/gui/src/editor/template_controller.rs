@@ -415,8 +415,8 @@ mod tests {
 
         let written = std::fs::read_to_string(&target).expect("component written");
         let json: serde_json::Value = serde_json::from_str(&written).unwrap();
-        assert_eq!(json["component"]["key"], "SMOOTH");
-        assert_eq!(json["component"]["meta"]["version"], 3);
+        assert_eq!(json["key"], "SMOOTH");
+        assert_eq!(json["meta"]["version"], 3);
         let project = ui_state.get_project();
         let origin = project.components[0]
             .origin
@@ -452,8 +452,8 @@ mod tests {
 
         let written = std::fs::read_to_string(&target).expect("component written");
         let json: serde_json::Value = serde_json::from_str(&written).unwrap();
-        assert_eq!(json["component"]["meta"]["name"], "Nuclei");
-        assert_eq!(json["component"]["steps"].as_array().unwrap().len(), 1);
+        assert_eq!(json["meta"]["name"], "Nuclei");
+        assert_eq!(json["steps"].as_array().unwrap().len(), 1);
         let project = ui_state.get_project();
         assert!(
             project.components.is_empty(),
