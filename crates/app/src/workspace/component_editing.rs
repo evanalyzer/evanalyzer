@@ -1440,6 +1440,132 @@ pub fn step_setting(
     }
 }
 
+/// Every setting of `step` a component parameter could set: (path, the
+/// setting, a label) - a command's, list entries' too ("thresholds.1.min"),
+/// or a component step's parameters (components looked up in `definitions`).
+pub fn step_settings(
+    definitions: &[ComponentDefinition],
+    step: &PipelineStepSettings,
+) -> Vec<(String, ParameterDef, String)> {
+    fn walk(
+        params: &[ParameterDef],
+        prefix: &str,
+        label_prefix: &str,
+        out: &mut Vec<(String, ParameterDef, String)>,
+    ) {
+        for param in params {
+            let path = format!("{prefix}{}", param.name);
+            let label = if param.display_name.is_empty() {
+                param.name.clone()
+            } else {
+                param.display_name.clone()
+            };
+            match param.param_type {
+                ParamType::Group => {
+                    for (index, entry) in param.groups.iter().enumerate() {
+                        walk(
+                            entry,
+                            &format!("{path}.{index}."),
+                            &format!("{label_prefix}{label} {} · ", index + 1),
+                            out,
+                        );
+                    }
+                }
+                ParamType::Label => {}
+                _ => out.push((path, param.clone(), format!("{label_prefix}{label}"))),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    match &step.content {
+        StepContent::Command(command) => walk(
+            &evanalyzer_core::command_parameters(command),
+            "",
+            "",
+            &mut out,
+        ),
+        StepContent::Component(instance) => {
+            for param in
+                evanalyzer_core::component_parameters(instance, definitions).unwrap_or_default()
+            {
+                let label = if param.display_name.is_empty() {
+                    param.name.clone()
+                } else {
+                    param.display_name.clone()
+                };
+                out.push((param.name.clone(), param, label));
+            }
+        }
+    }
+    out
+}
+
+/// The settings of component `key`'s steps its parameter `parameter` could
+/// also set: (step, path, label) - those with its control (see
+/// [`compatible_parameters`]) no parameter sets yet.
+pub fn bindable_settings(
+    definitions: &[ComponentDefinition],
+    key: &str,
+    parameter: &ComponentParamKey,
+) -> Vec<(StepId, String, String)> {
+    let Some(definition) = definitions.iter().find(|d| d.key == key) else {
+        return Vec::new();
+    };
+    let instance = ComponentInstance {
+        key: key.to_string(),
+        values: Default::default(),
+    };
+    let Ok(shown) = evanalyzer_core::component_parameters(&instance, definitions) else {
+        return Vec::new();
+    };
+    let Some(shown) = definition
+        .parameters
+        .iter()
+        .zip(shown)
+        .find(|(p, _)| &p.key == parameter)
+        .map(|(_, shown)| shown)
+    else {
+        return Vec::new();
+    };
+    definition
+        .steps
+        .iter()
+        .flat_map(|step| {
+            step_settings(definitions, step)
+                .into_iter()
+                .filter(|(path, setting, _)| {
+                    same_kind(&shown, setting)
+                        && parameter_for_setting(definition, step.id, path).is_none()
+                })
+                .map(|(path, _, label)| (step.id, path, label))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Parameter `key` of `definition` no longer sets `path` of step `step_id` -
+/// the setting keeps the value it shows. The parameter goes once it sets
+/// nothing. Returns whether something changed.
+pub fn remove_binding(
+    definition: &mut ComponentDefinition,
+    key: &ComponentParamKey,
+    step_id: StepId,
+    path: &str,
+) -> bool {
+    let Some(parameter) = definition.parameters.iter_mut().find(|p| &p.key == key) else {
+        return false;
+    };
+    let before = parameter.bindings.len();
+    parameter
+        .bindings
+        .retain(|b| !(b.step == step_id && b.param == path));
+    if parameter.bindings.len() == before {
+        return false;
+    }
+    definition.parameters.retain(|p| !p.bindings.is_empty());
+    true
+}
+
 /// The parameters of component `key` a setting like `setting` could be added
 /// to: those with the same control - type, and a dropdown's options.
 pub fn compatible_parameters(
@@ -2854,6 +2980,43 @@ mod tests {
             error.contains("step 3 uses it in a way that can't be handed"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_parameter_can_also_set_the_settings_with_its_control_and_lose_one_again() {
+        let mut project = with_outer_component();
+        let key = ComponentParamKey::from("cells");
+        let bindable = bindable_settings(&project.components, "OUTER", &key);
+        let paths: Vec<(StepId, &str)> =
+            bindable.iter().map(|(s, p, _)| (*s, p.as_str())).collect();
+        assert!(paths.contains(&(StepId(4), "output_class")), "{paths:?}");
+        assert!(
+            paths.contains(&(StepId(4), "input_classes")),
+            "a class list takes a single class too: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&(StepId(5), "output_class")),
+            "already set by it"
+        );
+        assert!(
+            !paths.iter().any(|(_, p)| *p == "min_area"),
+            "a number isn't a class"
+        );
+
+        let outer = project
+            .components
+            .iter_mut()
+            .find(|d| d.key == "OUTER")
+            .unwrap();
+        add_binding(outer, &key, StepId(4), "output_class").unwrap();
+        assert!(remove_binding(outer, &key, StepId(5), "output_class"));
+        assert_eq!(outer.parameters[0].bindings.len(), 1, "the other stays");
+        assert!(
+            !remove_binding(outer, &key, StepId(5), "output_class"),
+            "gone already"
+        );
+        assert!(remove_binding(outer, &key, StepId(4), "output_class"));
+        assert!(outer.parameters.is_empty(), "setting nothing, it goes");
     }
 
     #[test]

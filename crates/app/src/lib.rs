@@ -37,12 +37,13 @@ pub mod components {
     };
     pub use crate::workspace::component_editing::{
         ClassRole, ComponentPlan, ComponentPlanClass, StepList, add_binding, apply_defaults,
-        bound_setting_edited, clone_component_for_step, compatible_parameters, component_uses,
-        create_component, edit_parameter, expand_component, exposed_settings, list_entry_removed,
-        move_parameter, new_parameter_key, parameter_for_setting, plan_component,
-        prune_component_values, remove_component, remove_component_step, remove_parameter,
-        remove_unused_components, set_parameter_section, setting_at, step_setting, toggle_exposed,
-        unused_components, would_contain_itself,
+        bindable_settings, bound_setting_edited, clone_component_for_step, compatible_parameters,
+        component_uses, create_component, edit_parameter, expand_component, exposed_settings,
+        list_entry_removed, move_parameter, new_parameter_key, parameter_for_setting,
+        plan_component, prune_component_values, remove_binding, remove_component,
+        remove_component_step, remove_parameter, remove_unused_components, set_parameter_section,
+        setting_at, step_setting, step_settings, toggle_exposed, unused_components,
+        would_contain_itself,
     };
     pub use crate::workspace::component_library::{
         components_used_by, content_hash, insert_component_template, library_name,

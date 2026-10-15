@@ -1,4 +1,11 @@
 import { LineEdit, ComboBox, ScrollView, TextEdit } from "std-widgets.slint";
+import {
+    NavItem,
+    SectionHeader,
+    SettingsCard,
+    SettingRow,
+    SettingBlock,
+} from "../components/settings_layout.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Theme } from "../style.slint";
 
@@ -347,6 +354,9 @@ export global ExposeChoiceState {
     in property <string> setting-name: "";
     /// "New parameter", then "Add to “Cell class”", ...
     in property <[string]> choices: [];
+    /// For each choice, what that parameter sets already ("sets #2 EV
+    /// Detection › Output class"), or empty.
+    in property <[string]> details: [];
     callback chosen(int);
     callback cancel();
 }
@@ -363,7 +373,7 @@ export component ExposeChoiceDialog inherits Rectangle {
     card := Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 380px;
+        width: min(460px, parent.width - 48px);
         background: Theme.panel;
         border-radius: 12px;
         border-width: 1px;
@@ -393,11 +403,53 @@ export component ExposeChoiceDialog inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            for choice[i] in ExposeChoiceState.choices: AppButton {
-                text: choice;
-                primary: i == 0;
+            if ExposeChoiceState.choices.length > 0: AppButton {
+                text: ExposeChoiceState.choices[0];
+                primary: true;
                 clicked => {
-                    ExposeChoiceState.chosen(i);
+                    ExposeChoiceState.chosen(0);
+                }
+            }
+
+            // An existing parameter: its name, and below what it sets already -
+            // parameters of equal steps are often named alike.
+            for choice[i] in ExposeChoiceState.choices: Rectangle {
+                visible: i > 0;
+                height: i > 0 ? self.preferred-height : 0px;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: choice-ta.has-hover ? Theme.accent : Theme.border;
+                background: choice-ta.has-hover ? Theme.raised : Theme.bg;
+                accessible-role: button;
+                accessible-label: choice;
+
+                VerticalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 7px;
+                    padding-bottom: 7px;
+                    spacing: 2px;
+                    Text {
+                        text: choice;
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: Theme.text;
+                        overflow: elide;
+                    }
+
+                    if ExposeChoiceState.details[i] != "": Text {
+                        text: ExposeChoiceState.details[i];
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                        overflow: elide;
+                    }
+                }
+
+                choice-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        ExposeChoiceState.chosen(i);
+                    }
                 }
             }
 
@@ -504,6 +556,14 @@ export component ComponentUpdateDialog inherits Rectangle {
 
 // -- Component settings ------------------------------------------------
 
+/// A setting a parameter sets.
+export struct ComponentBindingRow {
+    /// "#2 EV Detection › Output class"
+    text: string,
+    step-id: int,
+    path: string,
+}
+
 /// A parameter of the component, as it shows on the component card.
 export struct ComponentParamRow {
     // The parameter's key ("min_size").
@@ -519,6 +579,11 @@ export struct ComponentParamRow {
     sets: string,
     /// The section it's shown in on the component card; empty: none.
     section: string,
+    /// What it sets, one by one.
+    bindings: [ComponentBindingRow],
+    /// "Also set…", then the settings it could also set (same control, set
+    /// by no parameter yet) - empty if there are none.
+    addable: [string],
 }
 
 /// The opened component's name, descriptions and parameters (name, help text,
@@ -556,13 +621,59 @@ export global ComponentSettingsState {
     callback parameter-help-reset(string);
     /// key: stop exposing it - its settings go back to the component's values.
     callback parameter-removed(string);
+    /// key, step id, path: it no longer sets that setting.
+    callback binding-removed(string, int, string);
+    /// key, index into its `addable` (after "Also set…"): it sets that
+    /// setting too.
+    callback binding-added(string, int);
     callback close();
 }
 
+// A small icon button of a parameter row (↑ ↓ ✎ ✕).
+component RowButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> danger: false;
+    in property <string> tooltip;
+    callback clicked;
+
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    opacity: root.enabled ? 1 : 0.3;
+    background: ta.has-hover && root.enabled ? Theme.raised : transparent;
+    accessible-role: button;
+    accessible-label: root.tooltip;
+
+    Text {
+        text: root.text;
+        font-size: 12px;
+        color: ta.has-hover && root.danger ? Theme.warn : Theme.text-dim;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The component's name, descriptions and parameters - laid out like the
+// project settings: sections on the left, rows of name/explanation and
+// control on the right. Changes apply right away.
 export component ComponentSettingsDialog inherits Rectangle {
     background: Theme.modal-overlay;
-    property <length> row-height: 190px;
-    property <length> row-spacing: 8px;
+
+    // 0 General, 1 Parameters. ✎ on an exposed setting opens its parameter.
+    property <int> current-section: ComponentSettingsState.focus-index >= 0 ? 1 : 0;
+    // The parameter opened to edit (its name, help, section, what it sets).
+    property <int> editing: ComponentSettingsState.focus-index;
+    // A closed parameter row's height - so the focused one can be scrolled to.
+    property <length> row-height: 66px;
 
     TouchArea {
         clicked => {
@@ -570,350 +681,450 @@ export component ComponentSettingsDialog inherits Rectangle {
         }
     }
 
-    card := Rectangle {
+    Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 520px;
-        background: Theme.panel;
+        width: min(860px, parent.width - 48px);
+        height: min(620px, parent.height - 48px);
+        background: Theme.bg;
         border-radius: 12px;
         border-width: 1px;
         border-color: Theme.border;
-        drop-shadow-blur: 40px;
         drop-shadow-color: Theme.shadow;
-        drop-shadow-offset-y: 12px;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 18px;
         clip: true;
 
         TouchArea { }
 
-        layout := VerticalLayout {
-            padding: 24px;
-            spacing: 12px;
+        VerticalLayout {
+            spacing: 0;
 
             HorizontalLayout {
-                alignment: space-between;
-                Text {
-                    text: "Component settings";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: Theme.text;
-                }
-
-                Rectangle {
-                    width: 22px;
-                    height: 22px;
-                    border-radius: 4px;
-                    background: close-ta.has-hover ? Theme.raised : transparent;
-                    Text {
-                        text: "✕";
-                        font-size: 12px;
-                        color: Theme.text-dim;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    close-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            ComponentSettingsState.close();
-                        }
-                    }
-                }
-            }
-
-            VerticalLayout {
-                spacing: 5px;
-                Text {
-                    text: "Name";
-                    font-size: 11px;
-                    color: Theme.text-dim;
-                }
-
-                LineEdit {
-                    text: ComponentSettingsState.name;
-                    placeholder-text: "Component name";
-                    edited(t) => {
-                        ComponentSettingsState.name-edited(t);
-                    }
-                }
-            }
-
-            VerticalLayout {
-                spacing: 5px;
-                Text {
-                    text: "Short description (one line, shown in the command picker)";
-                    font-size: 11px;
-                    color: Theme.text-dim;
-                }
-
-                LineEdit {
-                    text: ComponentSettingsState.description;
-                    placeholder-text: "What the component does";
-                    edited(t) => {
-                        ComponentSettingsState.description-edited(t);
-                    }
-                }
-            }
-
-            HorizontalLayout {
-                spacing: 8px;
-                VerticalLayout {
-                    spacing: 5px;
-                    Text {
-                        text: "Author";
-                        font-size: 11px;
-                        color: Theme.text-dim;
-                    }
-
-                    author-name-edit := LineEdit {
-                        text: ComponentSettingsState.author-name;
-                        placeholder-text: "Full name";
-                        edited(t) => {
-                            ComponentSettingsState.author-edited(t, author-organization-edit.text);
-                        }
-                    }
-                }
-
-                VerticalLayout {
-                    spacing: 5px;
-                    Text {
-                        text: "Organization";
-                        font-size: 11px;
-                        color: Theme.text-dim;
-                    }
-
-                    author-organization-edit := LineEdit {
-                        text: ComponentSettingsState.author-organization;
-                        placeholder-text: "Lab, institute, company";
-                        edited(t) => {
-                            ComponentSettingsState.author-edited(author-name-edit.text, t);
-                        }
-                    }
-                }
-            }
-
-            VerticalLayout {
-                spacing: 5px;
-                Text {
-                    text: "Description (shown behind the component card's ?)";
-                    font-size: 11px;
-                    color: Theme.text-dim;
-                }
-
-                TextEdit {
-                    height: 72px;
-                    text: ComponentSettingsState.long-description;
-                    wrap: word-wrap;
-                    placeholder-text: "How to use it, what it expects, references…";
-                    edited(t) => {
-                        ComponentSettingsState.long-description-edited(t);
-                    }
-                }
-            }
-
-            Text {
-                text: ComponentSettingsState.parameters.length == 0 ? "No parameters yet - ◇ next to a setting of the opened component exposes it on the component card." : "Parameters on the component card, in this order";
-                font-size: 11px;
-                font-weight: 600;
-                color: Theme.cat-component;
-                wrap: word-wrap;
-            }
-
-            // Rows have a fixed height, so the scroll position of the
-            // focused one is known before the list is laid out.
-            if ComponentSettingsState.parameters.length > 0: list := ScrollView {
-                property <length> pitch: root.row-height + root.row-spacing;
-                property <length> total: ComponentSettingsState.parameters.length * self.pitch - root.row-spacing;
-                // Shrinks (down to about one row) when the window is small.
-                min-height: min(self.total, root.row-height);
-                preferred-height: min(self.total, 440px);
                 vertical-stretch: 1;
-                vertical-scrollbar-policy: always-on;
-                init => {
-                    if ComponentSettingsState.focus-index > 0 {
-                        self.content-y = max(-ComponentSettingsState.focus-index * self.pitch, min(0px, self.height - self.total));
+                spacing: 0;
+
+                // -- Section list ----------------------------------------
+                Rectangle {
+                    width: 210px;
+                    background: Theme.sidebar;
+
+                    VerticalLayout {
+                        padding: 16px;
+                        padding-top: 18px;
+                        spacing: 4px;
+
+                        Text {
+                            text: "Component settings";
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+
+                        Text {
+                            text: "◆ " + ComponentSettingsState.name;
+                            font-size: 11px;
+                            color: Theme.cat-component;
+                            overflow: elide;
+                        }
+
+                        Rectangle {
+                            height: 14px;
+                        }
+
+                        NavItem {
+                            text: "General";
+                            icon: @image-url("../icons/regular-black/info.svg");
+                            active: root.current-section == 0;
+                            clicked => {
+                                root.current-section = 0;
+                            }
+                        }
+
+                        NavItem {
+                            text: "Parameters (\{ComponentSettingsState.parameters.length})";
+                            icon: @image-url("../icons/regular-black/faders-horizontal.svg");
+                            active: root.current-section == 1;
+                            clicked => {
+                                root.current-section = 1;
+                            }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                        }
+                    }
+
+                    Rectangle {
+                        x: parent.width - 1px;
+                        width: 1px;
+                        height: parent.height;
+                        background: Theme.border-soft;
                     }
                 }
 
-                VerticalLayout {
-                    spacing: root.row-spacing;
-                    for param[pi] in ComponentSettingsState.parameters: Rectangle {
-                        height: root.row-height;
-                        clip: true;
-                        border-radius: 8px;
-                        border-width: 1px;
-                        border-color: pi == ComponentSettingsState.focus-index ? Theme.cat-component : Theme.border;
-                        background: Theme.raised.with-alpha(0.4);
+                // -- Settings --------------------------------------------
+                if root.current-section == 0: ScrollView {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        alignment: start;
+                        padding: 28px;
+                        padding-top: 22px;
+                        spacing: 14px;
+
+                        SectionHeader {
+                            title: "General";
+                            scope: "Saved with the component";
+                            subtitle: "What the component is called and does - shown in the command picker and behind the component card's ?.";
+                        }
+
+                        SettingsCard {
+                            SettingRow {
+                                label: "Name";
+                                LineEdit {
+                                    text: ComponentSettingsState.name;
+                                    placeholder-text: "Component name";
+                                    edited(t) => {
+                                        ComponentSettingsState.name-edited(t);
+                                    }
+                                }
+                            }
+
+                            SettingRow {
+                                label: "Short description";
+                                description: "One line, shown in the command picker.";
+                                LineEdit {
+                                    text: ComponentSettingsState.description;
+                                    placeholder-text: "What the component does";
+                                    edited(t) => {
+                                        ComponentSettingsState.description-edited(t);
+                                    }
+                                }
+                            }
+
+                            SettingRow {
+                                label: "Author";
+                                author-name-edit := LineEdit {
+                                    text: ComponentSettingsState.author-name;
+                                    placeholder-text: "Full name";
+                                    edited(t) => {
+                                        ComponentSettingsState.author-edited(t, author-organization-edit.text);
+                                    }
+                                }
+                            }
+
+                            SettingRow {
+                                label: "Organization";
+                                author-organization-edit := LineEdit {
+                                    text: ComponentSettingsState.author-organization;
+                                    placeholder-text: "Lab, institute, company";
+                                    edited(t) => {
+                                        ComponentSettingsState.author-edited(author-name-edit.text, t);
+                                    }
+                                }
+                            }
+
+                            SettingBlock {
+                                label: "Description";
+                                description: "How to use it, what it expects, references - shown behind the component card's ?.";
+                                TextEdit {
+                                    height: 96px;
+                                    text: ComponentSettingsState.long-description;
+                                    wrap: word-wrap;
+                                    placeholder-text: "How to use it, what it expects, references…";
+                                    edited(t) => {
+                                        ComponentSettingsState.long-description-edited(t);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.current-section == 1: VerticalLayout {
+                    horizontal-stretch: 1;
+                    padding: 28px;
+                    padding-top: 22px;
+                    padding-bottom: 0px;
+                    spacing: 14px;
+
+                    SectionHeader {
+                        title: "Parameters";
+                        scope: "Saved with the component";
+                        subtitle: ComponentSettingsState.parameters.length == 0 ? "None yet - ◇ next to a setting of the opened component shows it on the component card." : "Shown on the component card in this order. ✎ edits a parameter's name, help, section and what it sets.";
+                    }
+
+                    if ComponentSettingsState.parameters.length > 0: list := ScrollView {
+                        vertical-stretch: 1;
+                        init => {
+                            if ComponentSettingsState.focus-index > 0 {
+                                self.content-y = -ComponentSettingsState.focus-index * root.row-height;
+                            }
+                        }
 
                         VerticalLayout {
-                            padding: 10px;
-                            spacing: 6px;
+                            alignment: start;
+                            padding-bottom: 20px;
 
-                            HorizontalLayout {
-                                spacing: 6px;
-                                LineEdit {
-                                    horizontal-stretch: 1;
-                                    text: param.label;
-                                                    placeholder-text: "Name on the component card";
-                                    accessible-label: "Parameter name";
-                                    edited(t) => {
-                                        ComponentSettingsState.parameter-name-edited(param.key, t);
-                                    }
-                                }
-
-                                Text {
-                                    text: "default \{param.default-value}";
-                                    font-size: 10px;
-                                    color: Theme.text-mute;
-                                    vertical-alignment: center;
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 2px;
+                            SettingsCard {
+                                for param[pi] in ComponentSettingsState.parameters: VerticalLayout {
+                                    // Divider, like a settings row.
                                     Rectangle {
-                                        width: 24px;
-                                        opacity: pi > 0 ? 1 : 0.3;
-                                        border-radius: 4px;
-                                        background: up-ta.has-hover && pi > 0 ? Theme.raised : transparent;
-                                        Text {
-                                            text: "↑";
-                                            color: Theme.text-dim;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
+                                        height: 1px;
+                                        background: Theme.border-soft;
+                                    }
 
-                                        up-ta := TouchArea {
-                                            enabled: pi > 0;
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                ComponentSettingsState.parameter-moved(param.key, -1);
+                                    // -- The parameter, closed --
+                                    Rectangle {
+                                        height: root.row-height - 1px;
+                                        background: pi == root.editing ? Theme.cat-component.with-alpha(0.06) : transparent;
+
+                                        HorizontalLayout {
+                                            padding-left: 16px;
+                                            padding-right: 10px;
+                                            spacing: 16px;
+
+                                            VerticalLayout {
+                                                horizontal-stretch: 1;
+                                                alignment: center;
+                                                spacing: 2px;
+
+                                                HorizontalLayout {
+                                                    spacing: 8px;
+                                                    Text {
+                                                        text: param.label;
+                                                        font-size: 12px;
+                                                        font-weight: 600;
+                                                        color: Theme.text;
+                                                        overflow: elide;
+                                                    }
+
+                                                    if param.section != "": VerticalLayout {
+                                                        alignment: center;
+                                                        Rectangle {
+                                                            height: 16px;
+                                                            width: section-text.preferred-width + 12px;
+                                                            border-radius: 8px;
+                                                            background: Theme.raised;
+                                                            section-text := Text {
+                                                                text: param.section;
+                                                                font-size: 10px;
+                                                                color: Theme.text-dim;
+                                                                horizontal-alignment: center;
+                                                                vertical-alignment: center;
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Rectangle {
+                                                        horizontal-stretch: 1;
+                                                    }
+                                                }
+
+                                                Text {
+                                                    text: param.description != "" ? param.description : (param.default-description != "" ? param.default-description : "No help text");
+                                                    font-size: 11px;
+                                                    color: param.description != "" ? Theme.text-dim : Theme.text-mute;
+                                                    overflow: elide;
+                                                }
+
+                                                Text {
+                                                    text: "sets \{param.sets}";
+                                                    font-size: 10px;
+                                                    color: Theme.text-mute;
+                                                    overflow: elide;
+                                                }
+                                            }
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                HorizontalLayout {
+                                                    spacing: 2px;
+                                                    Text {
+                                                        text: "default \{param.default-value}";
+                                                        font-size: 10px;
+                                                        color: Theme.text-mute;
+                                                        vertical-alignment: center;
+                                                    }
+
+                                                    Rectangle {
+                                                        width: 6px;
+                                                    }
+
+                                                    RowButton {
+                                                        text: "↑";
+                                                        tooltip: "Move up";
+                                                        enabled: pi > 0;
+                                                        clicked => {
+                                                            ComponentSettingsState.parameter-moved(param.key, -1);
+                                                        }
+                                                    }
+
+                                                    RowButton {
+                                                        text: "↓";
+                                                        tooltip: "Move down";
+                                                        enabled: pi < ComponentSettingsState.parameters.length - 1;
+                                                        clicked => {
+                                                            ComponentSettingsState.parameter-moved(param.key, 1);
+                                                        }
+                                                    }
+
+                                                    RowButton {
+                                                        text: "✎";
+                                                        tooltip: "Edit parameter";
+                                                        clicked => {
+                                                            root.editing = root.editing == pi ? -1 : pi;
+                                                        }
+                                                    }
+
+                                                    RowButton {
+                                                        text: "✕";
+                                                        tooltip: "Remove parameter";
+                                                        danger: true;
+                                                        clicked => {
+                                                            ComponentSettingsState.parameter-removed(param.key);
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
 
-                                    Rectangle {
-                                        width: 24px;
-                                        opacity: pi < ComponentSettingsState.parameters.length - 1 ? 1 : 0.3;
-                                        border-radius: 4px;
-                                        background: down-ta.has-hover && pi < ComponentSettingsState.parameters.length - 1 ? Theme.raised : transparent;
-                                        Text {
-                                            text: "↓";
-                                            color: Theme.text-dim;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
+                                    // -- The parameter, opened to edit --
+                                    if pi == root.editing: VerticalLayout {
+                                        padding-left: 16px;
+                                        padding-right: 16px;
+                                        padding-bottom: 14px;
+                                        spacing: 8px;
 
-                                        down-ta := TouchArea {
-                                            enabled: pi < ComponentSettingsState.parameters.length - 1;
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                ComponentSettingsState.parameter-moved(param.key, 1);
+                                        SettingRow {
+                                            label: "Name";
+                                            description: "On the component card.";
+                                            LineEdit {
+                                                text: param.label;
+                                                placeholder-text: "Name on the component card";
+                                                accessible-label: "Parameter name";
+                                                edited(t) => {
+                                                    ComponentSettingsState.parameter-name-edited(param.key, t);
+                                                }
                                             }
                                         }
-                                    }
 
-                                    Rectangle {
-                                        width: 24px;
-                                        border-radius: 4px;
-                                        background: remove-ta.has-hover ? Theme.raised : transparent;
-                                        Text {
-                                            text: "✕";
-                                            font-size: 11px;
-                                            color: remove-ta.has-hover ? Theme.warn : Theme.text-dim;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
-
-                                        remove-ta := TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                ComponentSettingsState.parameter-removed(param.key);
+                                        SettingRow {
+                                            label: "Section";
+                                            description: "Groups parameters on the card (optional).";
+                                            LineEdit {
+                                                text: param.section;
+                                                placeholder-text: "e.g. Detection";
+                                                accessible-label: "Parameter section";
+                                                edited(t) => {
+                                                    ComponentSettingsState.parameter-section-edited(param.key, t);
+                                                }
                                             }
                                         }
-                                    }
-                                }
-                            }
 
-                            TextEdit {
-                                height: 46px;
-                                text: param.description;
-                                            wrap: word-wrap;
-                                placeholder-text: "Help text, shown as ? next to the parameter";
-                                accessible-label: "Parameter help text";
-                                edited(t) => {
-                                    ComponentSettingsState.parameter-help-edited(param.key, t);
-                                }
-                            }
+                                        SettingBlock {
+                                            label: "Help text";
+                                            description: param.description == "" ? (param.default-description == "" ? "Shown as ? next to the parameter." : "Empty: the setting's own help is shown.") : "Shown as ? next to the parameter.";
+                                            TextEdit {
+                                                height: 56px;
+                                                text: param.description;
+                                                wrap: word-wrap;
+                                                placeholder-text: param.default-description != "" ? param.default-description : "Help text, shown as ? next to the parameter";
+                                                accessible-label: "Parameter help text";
+                                                edited(t) => {
+                                                    ComponentSettingsState.parameter-help-edited(param.key, t);
+                                                }
+                                            }
 
-                            LineEdit {
-                                text: param.section;
-                                placeholder-text: "Section on the component card (optional), e.g. Detection";
-                                accessible-label: "Parameter section";
-                                edited(t) => {
-                                    ComponentSettingsState.parameter-section-edited(param.key, t);
-                                }
-                            }
+                                            if param.description != "": HorizontalLayout {
+                                                alignment: start;
+                                                AppButton {
+                                                    text: "Reset to the setting's own help";
+                                                    clicked => {
+                                                        ComponentSettingsState.parameter-help-reset(param.key);
+                                                    }
+                                                }
+                                            }
+                                        }
 
-                            Text {
-                                text: "sets \{param.sets}";
-                                font-size: 10px;
-                                color: Theme.text-mute;
-                                overflow: elide;
-                            }
+                                        SettingBlock {
+                                            label: "Sets";
+                                            description: "The settings of the component's steps this parameter sets.";
 
-                            // Which help the "?" shows: the setting's own while
-                            // there's none, else "Reset" back to it.
-                            HorizontalLayout {
-                                height: 18px;
-                                spacing: 6px;
-                                if param.description == "": Text {
-                                    horizontal-stretch: 1;
-                                    text: param.default-description == "" ? "No help text" : "Setting's own help: \{param.default-description}";
-                                    font-size: 10px;
-                                    color: Theme.text-mute;
-                                    overflow: elide;
-                                    vertical-alignment: center;
-                                }
+                                            for binding in param.bindings: HorizontalLayout {
+                                                spacing: 6px;
+                                                height: 24px;
+                                                Text {
+                                                    horizontal-stretch: 1;
+                                                    text: binding.text;
+                                                    font-size: 11px;
+                                                    color: Theme.text;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
 
-                                // Back to the setting's own help text.
-                                if param.description != "": Rectangle {
-                                    horizontal-stretch: 0;
-                                    width: reset-text.preferred-width + 12px;
-                                    height: 18px;
-                                    border-radius: 4px;
-                                    background: reset-ta.has-hover ? Theme.raised : transparent;
-                                    reset-text := Text {
-                                        text: "Reset to the setting's own help";
-                                        font-size: 10px;
-                                        color: Theme.text-dim;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
+                                                RowButton {
+                                                    text: "✕";
+                                                    tooltip: "Stop setting \{binding.text}";
+                                                    danger: true;
+                                                    // The last one: remove the parameter instead.
+                                                    enabled: param.bindings.length > 1;
+                                                    clicked => {
+                                                        ComponentSettingsState.binding-removed(param.key, binding.step-id, binding.path);
+                                                    }
+                                                }
+                                            }
 
-                                    reset-ta := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            ComponentSettingsState.parameter-help-reset(param.key);
+                                            if param.addable.length > 1: also-set := ComboBox {
+                                                model: param.addable;
+                                                current-index: 0;
+                                                accessible-label: "Also set";
+                                                selected => {
+                                                    if also-set.current-index > 0 {
+                                                        ComponentSettingsState.binding-added(param.key, also-set.current-index - 1);
+                                                        also-set.current-index = 0;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
+
+                    if ComponentSettingsState.parameters.length == 0: Rectangle {
+                        vertical-stretch: 1;
+                    }
                 }
             }
 
-            HorizontalLayout {
-                alignment: end;
-                AppButton {
-                    text: "Close";
-                    primary: true;
-                    clicked => {
-                        ComponentSettingsState.close();
+            // -- Footer ----------------------------------------------------
+            Rectangle {
+                height: 56px;
+                Rectangle {
+                    y: 0;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    alignment: end;
+                    VerticalLayout {
+                        alignment: center;
+                        AppButton {
+                            text: "Close";
+                            primary: true;
+                            clicked => {
+                                ComponentSettingsState.close();
+                            }
+                        }
                     }
                 }
             }
         }
-
-        height: min(layout.preferred-height, root.height - 40px);
     }
 }
