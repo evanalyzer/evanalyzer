@@ -114,10 +114,10 @@ export component ClassListRow inherits Rectangle {
         height: parent.height - 2px;
         border-radius: Theme.radius-md;
 
-        background: root.selected ? Theme.list-select-row-bg                       // #1E3866
+        background: root.selected ? Theme.list-select-row-bg
             : (row_ta.has-hover ? Theme.raised : transparent);
         border-width: 1px;
-        border-color: root.selected ? Theme.list-select-row-border-color             // #4D8DFF
+        border-color: root.selected ? Theme.list-select-row-border-color
             : transparent;
         animate background { duration: 80ms; }
 

@@ -130,7 +130,13 @@ mod tests {
         ui: slint::Weak<AppWindow>,
     ) -> (Arc<UiState>, Arc<UndoRedoController>) {
         let ui_state = test_ui_state_with_project(project_with_one_image());
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
             ui_state.clone(),

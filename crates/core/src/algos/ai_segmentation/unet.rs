@@ -59,7 +59,7 @@ pub struct UNet {
     /// The class assigned to pixels whose predicted probability reaches
     /// `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.
     #[cmdsmeta(default = SegmentationClass(1))]
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
 
     /// Probability above which a pixel is classified as foreground.
     #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.01)]
@@ -199,7 +199,7 @@ impl ImageAlgorithm for UNet {
             },
         )?;
 
-        let foreground_class = self.object_class_id.as_u32();
+        let foreground_class = self.segmentation_class.as_u32();
         let output_slice = segmentation_map.as_slice_mut();
         output_slice.copy_from_slice(&Self::classify_pixels(
             &probabilities,
@@ -320,7 +320,7 @@ mod tests {
     fn unet(model_path: PathBuf) -> UNet {
         UNet {
             model_path,
-            object_class_id: SegmentationClass(FG),
+            segmentation_class: SegmentationClass(FG),
             probability_threshold: 0.5,
             output_mode: UNetOutputMode::SoftmaxClasses,
             foreground_channel: 1,

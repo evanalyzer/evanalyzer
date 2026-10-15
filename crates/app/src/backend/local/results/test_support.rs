@@ -113,6 +113,8 @@ pub(super) struct ObjectSpec {
     /// image heatmap needs a specific grid size.
     pub(super) image_width: u32,
     pub(super) image_height: u32,
+    /// 0 = not tracked, as the analysis writes it.
+    pub(super) track_id: u64,
 }
 
 impl ObjectSpec {
@@ -135,7 +137,13 @@ impl ObjectSpec {
             centroid_y_px: 0.0,
             image_width: 100,
             image_height: 100,
+            track_id: 0,
         }
+    }
+
+    pub(super) fn in_track(mut self, track_id: u64) -> Self {
+        self.track_id = track_id;
+        self
     }
 
     pub(super) fn at_plane(mut self, z_stack: i32, t_stack: i32) -> Self {
@@ -203,7 +211,7 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
                 pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, 0,
+                ?, ?, ?,
                 ?, ?, 0, 0,
                 0, 0, 10, 10,
                 0, 0, 0, 0,
@@ -222,6 +230,7 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
                 spec.class_id,
                 format!("[\"{}\"]", spec.class_name),
                 format!("[{}]", spec.class_id),
+                spec.track_id,
                 spec.centroid_x_px,
                 spec.centroid_y_px,
                 spec.area_px,

@@ -172,6 +172,9 @@ mod tests {
         let viewport_controller = Arc::new(ViewportController::new(
             slint::Weak::default(),
             ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
         ));
         Arc::new(HistogramController::new(
             slint::Weak::default(),

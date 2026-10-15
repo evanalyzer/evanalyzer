@@ -12,7 +12,6 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::editor::viewport_controller::{ZOrder, is_object_drawn};
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
-use evanalyzer_app::images::ImageContainer;
 use evanalyzer_app::images::object_from_mask;
 use evanalyzer_app::project::ObjectExt;
 use evanalyzer_app::project::ProjectExt;
@@ -227,8 +226,8 @@ impl ViewPortObjectController {
         let idx = (local_y as usize * ctx.image_w) + local_x as usize;
         let mut values = Vec::new();
         for channel in image_data.iter() {
-            if let ImageContainer::F32Gray(img) = &*channel.image {
-                if let Some(&raw_val) = img.as_slice().get(idx) {
+            if !channel.is_rgb {
+                if let Some(raw_val) = channel.value_at(idx) {
                     let scaled = raw_val * 2.0_f32.powf(ctx.bit_depth as f32);
                     values.push(format!("{}: {:.0}", channel.name, scaled));
                 }
@@ -527,7 +526,13 @@ mod tests {
         ui: slint::Weak<AppWindow>,
         ui_state: &Arc<UiState>,
     ) -> (Arc<ViewPortObjectController>, Arc<ViewportCache>) {
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
@@ -630,7 +635,7 @@ mod tests {
         let mut project = ui_state.get_project_write();
         let mut class = |name: &str| {
             project.classification.add_class(Class {
-                id: ObjectClass::Valid(0),
+                id: 0,
                 color: 0xff0000,
                 name: name.into(),
                 notes: String::new(),
@@ -733,7 +738,7 @@ mod tests {
             height: 20,
         };
         let image = Image::<f32, 1>::new(size, vec![0.5f32; 20 * 20]).unwrap();
-        let container = ImageContainer::F32Gray(ManagedImage {
+        let container = evanalyzer_app::images::ImageContainer::F32Gray(ManagedImage {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
             plane: None,
@@ -747,7 +752,9 @@ mod tests {
             is_rgb: false,
         };
         *viewport_cache.active_high_res_data.write().unwrap() = Some((
-            Arc::new(vec![channel]),
+            Arc::new(vec![crate::editor::view_channel::ViewChannel::wrap(
+                &channel,
+            )]),
             ReadContext {
                 zoom: 1.0,
                 image_w: 20,
@@ -785,7 +792,7 @@ mod tests {
             .get_project_write()
             .classification
             .add_class(Class {
-                id: ObjectClass::Valid(1),
+                id: 1,
                 color: 0xff0000,
                 name: "cl1".into(),
                 notes: "note".into(),
@@ -831,7 +838,7 @@ mod tests {
         };
         assert!(matches!(
             nuclei,
-            evanalyzer_cfg::core_types::ObjectClass::Valid(_)
+            evanalyzer_cfg::core_types::ObjectClass::Global(_)
         ));
         let (controller, viewport_cache) = controller_for(ui.as_weak(), &ui_state);
         seed_image_cache(&viewport_cache);
@@ -936,7 +943,7 @@ mod tests {
             .get_project_write()
             .classification
             .add_class(Class {
-                id: ObjectClass::Valid(1),
+                id: 1,
                 color: 0xff0000,
                 name: "cl1".into(),
                 notes: "note".into(),

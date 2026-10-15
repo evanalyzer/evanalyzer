@@ -63,12 +63,12 @@ pub fn pixel_class_labels_from_project(
         .classification
         .classes()
         .iter()
-        .filter(|class| class.id == ObjectClass::BACKGROUND || selected.contains(&class.id))
-        .filter_map(|class| {
-            class.id.to_u32().map(|id| PixelClassLabel {
-                class: SegmentationClass(id),
-                name: class.name.clone(),
-            })
+        .filter(|class| {
+            class.global() == ObjectClass::BACKGROUND || selected.contains(&class.global())
+        })
+        .map(|class| PixelClassLabel {
+            class: SegmentationClass(class.id),
+            name: class.name.clone(),
         })
         .collect()
 }
@@ -91,9 +91,11 @@ pub fn object_class_labels_from_project(
         .classification
         .classes()
         .iter()
-        .filter(|class| class.id == ObjectClass::BACKGROUND || selected.contains(&class.id))
+        .filter(|class| {
+            class.global() == ObjectClass::BACKGROUND || selected.contains(&class.global())
+        })
         .map(|class| ObjectClassLabel {
-            class: class.id,
+            class: class.global(),
             name: class.name.clone(),
         })
         .collect()
@@ -173,7 +175,7 @@ mod tests {
     fn used_object_classes_ignores_a_class_whose_only_object_is_excluded() {
         let mut project = ProjectSettings::default();
         let path = PathBuf::from("a.tif");
-        let mut excluded = labeled_object(1, ObjectClass::Valid(1));
+        let mut excluded = labeled_object(1, ObjectClass::Global(1));
         excluded.exclude_from_training = true;
         project.images.list.insert(
             path.clone(),
@@ -198,12 +200,12 @@ mod tests {
     fn pixel_class_labels_from_project_only_includes_the_selected_classes() {
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(1),
+            id: 1,
             name: "Cell".into(),
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(2),
+            id: 2,
             name: "Nucleus".into(),
             ..Default::default()
         });
@@ -221,8 +223,8 @@ mod tests {
                     0,
                     SeriesSettings {
                         objects: vec![
-                            labeled_object(1, ObjectClass::Valid(1)),
-                            labeled_object(2, ObjectClass::Valid(2)),
+                            labeled_object(1, ObjectClass::Global(1)),
+                            labeled_object(2, ObjectClass::Global(2)),
                         ],
                         ..Default::default()
                     },
@@ -230,7 +232,7 @@ mod tests {
             },
         );
 
-        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let selected = HashSet::from([ObjectClass::Global(1)]);
         let labels = pixel_class_labels_from_project(&project, &selected);
 
         // Background is always included ahead of the selection (see
@@ -248,12 +250,12 @@ mod tests {
         // `object_class_labels_from_project`, which never restricted this.
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(1),
+            id: 1,
             name: "Not Yet Painted".into(),
             ..Default::default()
         });
 
-        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let selected = HashSet::from([ObjectClass::Global(1)]);
         let labels = pixel_class_labels_from_project(&project, &selected);
 
         assert_eq!(labels.len(), 2);
@@ -273,18 +275,18 @@ mod tests {
         // *selected* class happens to be.
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(4),
+            id: 4,
             name: "Cell".into(),
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(8),
+            id: 8,
             name: "Nucleus".into(),
             ..Default::default()
         });
 
         // Background deliberately absent from `selected`.
-        let selected = HashSet::from([ObjectClass::Valid(4), ObjectClass::Valid(8)]);
+        let selected = HashSet::from([ObjectClass::Global(4), ObjectClass::Global(8)]);
         let labels = pixel_class_labels_from_project(&project, &selected);
 
         assert_eq!(labels.len(), 3);
@@ -298,12 +300,12 @@ mod tests {
     fn object_class_labels_from_project_only_includes_the_selected_classes() {
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(1),
+            id: 1,
             name: "Cell".into(),
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(2),
+            id: 2,
             name: "Nucleus".into(),
             ..Default::default()
         });
@@ -321,8 +323,8 @@ mod tests {
                     0,
                     SeriesSettings {
                         objects: vec![
-                            labeled_object(1, ObjectClass::Valid(1)),
-                            labeled_object(2, ObjectClass::Valid(2)),
+                            labeled_object(1, ObjectClass::Global(1)),
+                            labeled_object(2, ObjectClass::Global(2)),
                         ],
                         ..Default::default()
                     },
@@ -330,7 +332,7 @@ mod tests {
             },
         );
 
-        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let selected = HashSet::from([ObjectClass::Global(1)]);
         let labels = object_class_labels_from_project(&project, &selected);
 
         // Background is always included ahead of the selection (see
@@ -345,25 +347,25 @@ mod tests {
     fn object_class_labels_from_project_always_includes_background_at_index_zero() {
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(4),
+            id: 4,
             name: "Cell".into(),
             ..Default::default()
         });
         project.classification.classes_mut().push(Class {
-            id: ObjectClass::Valid(8),
+            id: 8,
             name: "Nucleus".into(),
             ..Default::default()
         });
 
         // Background deliberately absent from `selected`.
-        let selected = HashSet::from([ObjectClass::Valid(4), ObjectClass::Valid(8)]);
+        let selected = HashSet::from([ObjectClass::Global(4), ObjectClass::Global(8)]);
         let labels = object_class_labels_from_project(&project, &selected);
 
         assert_eq!(labels.len(), 3);
         assert_eq!(labels[0].class, ObjectClass::BACKGROUND);
         assert_eq!(labels[0].name, "Background");
-        assert_eq!(labels[1].class, ObjectClass::Valid(4));
-        assert_eq!(labels[2].class, ObjectClass::Valid(8));
+        assert_eq!(labels[1].class, ObjectClass::Global(4));
+        assert_eq!(labels[2].class, ObjectClass::Global(8));
     }
 
     #[test]

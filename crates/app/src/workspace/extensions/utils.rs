@@ -1,6 +1,8 @@
+use evanalyzer_cfg::core_types::{InternalErrors, StepId};
+use evanalyzer_cfg::settings::components::ComponentDefinition;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
-use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
+use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use pathdiff::diff_paths;
 use std::{
     fs,
@@ -63,16 +65,27 @@ fn file_path_changes(
 /// Windows) is left absolute.
 pub fn relativize_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
     for pipeline in pipelines {
-        for step in &mut pipeline.steps {
-            let changes = file_path_changes(
-                &step.command,
-                |path| path.is_absolute(),
-                |path| diff_paths(path, project_dir),
-            );
-            for (name, relative) in changes {
-                step.command
-                    .apply_param_change(&name, &relative.to_string_lossy());
-            }
+        relativize_step_paths(&mut pipeline.steps, project_dir);
+    }
+}
+
+/// [`relativize_file_paths`] for the steps of `components`' definitions.
+pub fn relativize_component_file_paths(components: &mut [ComponentDefinition], project_dir: &Path) {
+    for component in components {
+        relativize_step_paths(&mut component.steps, project_dir);
+    }
+}
+
+fn relativize_step_paths(steps: &mut [PipelineStepSettings], project_dir: &Path) {
+    // A component instance holds no paths itself - its definition's steps do.
+    for command in steps.iter_mut().filter_map(|step| step.command_mut()) {
+        let changes = file_path_changes(
+            command,
+            |path| path.is_absolute(),
+            |path| diff_paths(path, project_dir),
+        );
+        for (name, relative) in changes {
+            command.apply_param_change(&name, &relative.to_string_lossy());
         }
     }
 }
@@ -84,18 +97,76 @@ pub fn relativize_file_paths(pipelines: &mut [PipelineSettings], project_dir: &P
 /// its doc comment.
 pub fn resolve_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
     for pipeline in pipelines {
-        for step in &mut pipeline.steps {
-            let changes = file_path_changes(
-                &step.command,
-                |path| path.is_relative(),
-                |path| Some(project_dir.join(path)),
-            );
-            for (name, absolute) in changes {
-                step.command
-                    .apply_param_change(&name, &absolute.to_string_lossy());
-            }
+        resolve_step_paths(&mut pipeline.steps, project_dir);
+    }
+}
+
+/// [`resolve_file_paths`] for the steps of `components`' definitions.
+pub fn resolve_component_file_paths(components: &mut [ComponentDefinition], project_dir: &Path) {
+    for component in components {
+        resolve_step_paths(&mut component.steps, project_dir);
+    }
+}
+
+fn resolve_step_paths(steps: &mut [PipelineStepSettings], project_dir: &Path) {
+    for command in steps.iter_mut().filter_map(|step| step.command_mut()) {
+        let changes = file_path_changes(
+            command,
+            |path| path.is_relative(),
+            |path| Some(project_dir.join(path)),
+        );
+        for (name, absolute) in changes {
+            command.apply_param_change(&name, &absolute.to_string_lossy());
         }
     }
+}
+
+/// Gives every step of one list (a pipeline, or a component definition) that has
+/// no id yet - or one an earlier step of the list already has - the next
+/// number after the list's highest. The first of two equal ids keeps it.
+/// Call it after adding steps to a list. Returns how many got a new id.
+pub fn assign_step_ids(steps: &mut [PipelineStepSettings]) -> usize {
+    let mut next = steps.iter().map(|s| s.id.0).max().unwrap_or(0) + 1;
+    let mut seen = std::collections::HashSet::new();
+    let mut assigned = 0;
+    for step in steps {
+        if step.id == StepId::UNASSIGNED || !seen.insert(step.id) {
+            step.id = StepId(next);
+            seen.insert(step.id);
+            next += 1;
+            assigned += 1;
+        }
+    }
+    assigned
+}
+
+/// Numbers the steps of a component definition that have no id yet, like
+/// [`assign_step_ids`] - but two steps with the same id are an error, not
+/// renumbered: the component's bindings refer to steps by id, so which of the
+/// two one means can't be known. Returns how many got an id.
+pub fn assign_component_step_ids(
+    component: &mut ComponentDefinition,
+) -> Result<usize, InternalErrors> {
+    let mut seen = std::collections::HashSet::new();
+    for step in &component.steps {
+        if step.id != StepId::UNASSIGNED && !seen.insert(step.id) {
+            return Err(InternalErrors::ParseError(format!(
+                "Component {}: two steps have the id {} - its parameters can't tell \
+                 which one they set",
+                component.key, step.id
+            )));
+        }
+    }
+    Ok(assign_step_ids(&mut component.steps))
+}
+
+/// `steps` without their ids - copies to add to another list (a template's
+/// steps, a duplicated step), which [`assign_step_ids`] then numbers there.
+pub fn unassigned(mut steps: Vec<PipelineStepSettings>) -> Vec<PipelineStepSettings> {
+    for step in &mut steps {
+        step.id = StepId::UNASSIGNED;
+    }
+    steps
 }
 
 pub fn get_file_size(path: &Path) -> std::io::Result<u64> {
@@ -237,6 +308,7 @@ pub fn wavelength_to_rgb_float(wavelength: f32) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     const RED: [f32; 3] = DEFAULT_CHANNEL_COLORS[0];
@@ -337,8 +409,11 @@ mod tests {
             enabled: true,
             steps: vec![
                 evanalyzer_cfg::settings::pipeline_settings::PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command,
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        command,
+                    ),
                 },
             ],
             description: None,
@@ -346,7 +421,8 @@ mod tests {
     }
 
     fn pixel_classifier_model_path(pipeline: &PipelineSettings) -> &PathBuf {
-        let PipelineCommand::PixelClassifier(settings) = &pipeline.steps[0].command else {
+        let PipelineCommand::PixelClassifier(settings) = pipeline.steps[0].command().unwrap()
+        else {
             panic!("expected a PixelClassifier command");
         };
         &settings.model_path
@@ -417,12 +493,12 @@ mod tests {
 
         relativize_file_paths(&mut pipelines, Path::new("/data/project"));
 
-        let PipelineCommand::Stardist(stardist) = &pipelines[0].steps[0].command else {
+        let PipelineCommand::Stardist(stardist) = pipelines[0].steps[0].command().unwrap() else {
             panic!("expected a Stardist command");
         };
         assert_eq!(stardist.model_path, PathBuf::from("models/stardist.pt"));
 
-        let PipelineCommand::UNet(unet) = &pipelines[1].steps[0].command else {
+        let PipelineCommand::UNet(unet) = pipelines[1].steps[0].command().unwrap() else {
             panic!("expected a UNet command");
         };
         assert_eq!(unet.model_path, PathBuf::from("models/unet.pt"));
@@ -469,6 +545,38 @@ mod tests {
     }
 
     #[test]
+    fn model_paths_in_component_definitions_are_stored_relative_too() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::CellposeSettings;
+
+        let original = PathBuf::from("/data/project/models/cyto.pt");
+        let mut components = vec![ComponentDefinition {
+            key: "SEGMENT".into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: pipeline_with(PipelineCommand::Cellpose(CellposeSettings {
+                model_path: original.clone(),
+                ..Default::default()
+            }))
+            .steps,
+            parameters: vec![],
+            origin: None,
+        }];
+        let project_dir = Path::new("/data/project");
+
+        relativize_component_file_paths(&mut components, project_dir);
+        let Some(PipelineCommand::Cellpose(stored)) = components[0].steps[0].command() else {
+            panic!("expected Cellpose");
+        };
+        assert_eq!(stored.model_path, PathBuf::from("models/cyto.pt"));
+
+        resolve_component_file_paths(&mut components, project_dir);
+        let Some(PipelineCommand::Cellpose(loaded)) = components[0].steps[0].command() else {
+            panic!("expected Cellpose");
+        };
+        assert_eq!(loaded.model_path, original);
+    }
+
+    #[test]
     fn relativize_then_resolve_file_paths_round_trips() {
         use evanalyzer_cfg::settings::pipeline_command_settings::CellposeSettings;
 
@@ -482,7 +590,7 @@ mod tests {
         relativize_file_paths(&mut pipelines, project_dir);
         resolve_file_paths(&mut pipelines, project_dir);
 
-        let PipelineCommand::Cellpose(settings) = &pipelines[0].steps[0].command else {
+        let PipelineCommand::Cellpose(settings) = pipelines[0].steps[0].command().unwrap() else {
             panic!("expected a Cellpose command");
         };
         assert_eq!(settings.model_path, original);
@@ -595,5 +703,57 @@ mod tests {
     #[test]
     fn wavelength_to_rgb_u32_white_for_an_unset_wavelength() {
         assert_eq!(wavelength_to_rgb_u32(0.0), 0x00FFFFFF);
+    }
+
+    #[test]
+    fn steps_without_an_id_or_with_a_taken_one_get_the_next_number() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
+        let step = |id| PipelineStepSettings {
+            id: StepId(id),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::Blur(BlurSettings::default()),
+            ),
+        };
+        // A hand-written list: two without an id, a copied block with 3.
+        let mut steps = vec![step(3), step(0), step(3), step(0), step(1)];
+        assert_eq!(super::assign_step_ids(&mut steps), 3);
+        let ids: Vec<u32> = steps.iter().map(|s| s.id.0).collect();
+        assert_eq!(ids, [3, 4, 5, 6, 1], "the first 3 keeps its id");
+
+        assert_eq!(super::assign_step_ids(&mut steps), 0, "nothing left to do");
+        let copies = super::unassigned(steps.clone());
+        assert!(copies.iter().all(|s| s.id == StepId::UNASSIGNED));
+    }
+
+    #[test]
+    fn a_components_missing_step_ids_are_assigned_but_a_duplicate_is_an_error() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
+        let step = |id| PipelineStepSettings {
+            id: StepId(id),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::Blur(BlurSettings::default()),
+            ),
+        };
+        let mut component = ComponentDefinition {
+            key: "CELL_RECONSTRUCTION".into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: vec![step(2), step(0)],
+            parameters: Vec::new(),
+            origin: None,
+        };
+        assert_eq!(super::assign_component_step_ids(&mut component).unwrap(), 1);
+        assert_eq!(component.steps[1].id, StepId(3));
+
+        component.steps.push(step(2));
+        let err = super::assign_component_step_ids(&mut component)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("CELL_RECONSTRUCTION") && err.contains("id 2"),
+            "{err}"
+        );
     }
 }

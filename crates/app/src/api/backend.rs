@@ -224,6 +224,11 @@ pub struct AnalysisRequest {
     /// Worker count override; `None` picks it from the backend host's CPU
     /// cores and RAM.
     pub threads: Option<usize>,
+    /// Run only the dataset steps, on a copy of this earlier analysis's
+    /// results (its `.evadb`, in the project's `results` folder) - no image
+    /// is analysed. `None`: a full analysis.
+    #[serde(default)]
+    pub base_results: Option<PathBuf>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

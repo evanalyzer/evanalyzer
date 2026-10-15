@@ -1,3 +1,3 @@
 mod pipeline_generator;
 
-pub use pipeline_generator::generate_pipeline;
+pub use pipeline_generator::{GeneratedPipeline, generate_pipeline};

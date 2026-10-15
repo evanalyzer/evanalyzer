@@ -1,22 +1,35 @@
 use crate::{
     DuckDbExporter, MemoryExporter,
-    algos::TileMerge,
+    algos::{EndScope, ExecutionScope, TileMerge},
+    dataset::DatasetAlgorithm,
     image::PixelSizes,
-    job::job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
+    job::{
+        algos_from_config::into_pipeline_step,
+        components::{ExpandedCommand, ScopeCounter, expand_step},
+        job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
+        pipeline_step::PipelineStep,
+    },
     pipeline::pipeline::{CorePipelineSettings, Pipeline},
+    pipeline::scope::Scope,
     storage::PipelineResultExporter,
 };
 use chrono::Utc;
 use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types::ImageAddress};
 use evanalyzer_cfg::{
-    core_types::InternalErrors,
+    core_types::{InternalErrors, ObjectClass, StepId},
     settings::{
-        images_settings::ImageEntry, object_settings::ObjectMetricSettings,
+        components::ComponentDefinition,
+        images_settings::ImageEntry,
+        object_settings::ObjectMetricSettings,
+        pipeline_command::{CommandCategory, PipelineCommand},
+        pipeline_command_settings::MathImageCacheImageCacheModeSettings,
+        pipeline_settings::{PipelineSettings, PipelineStepSettings},
         project_settings::ProjectSettings,
     },
 };
 use log::{error, info, warn};
 use std::{
+    collections::BTreeSet,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -49,12 +62,16 @@ pub fn generate_preview_job_from_project_settings(
         return Err(InternalErrors::Io(format!("{e}")));
     }
 
-    let job = generate_job_from_project_settings_intenal(
+    let mut job = generate_job_from_project_settings_intenal(
         config,
         project_path,
         output_path,
         memory_storage,
     )?;
+    // A preview analyses one frame of the visible tiles - too little for a
+    // step over all images and frames, which would only show a misleading
+    // result (e.g. a tracker with nothing to link).
+    job.dataset_steps.clear();
     Ok((job, out_objects))
 }
 
@@ -82,31 +99,10 @@ pub fn generate_analyze_job_from_project_settings(
         .classification
         .classes()
         .iter()
-        .filter_map(|c| {
-            c.id.to_u32().map(|n| {
-                (
-                    evanalyzer_cfg::core_types::ObjectClass::Valid(n),
-                    (c.name.clone(), c.color),
-                )
-            })
-        })
+        .map(|c| (c.global(), (c.name.clone(), c.color)))
         .collect();
 
-    let now = Utc::now();
-    let file_date = now.format("%Y%m%dT%H%M%SZ").to_string();
-    let job_name = job_name
-        .as_deref()
-        .map(sanitize_job_name)
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| petname::petname(2, "_").expect("Problem in random job name generator"));
-    let output_path = project_path
-        .join("results")
-        .join(format!("{file_date}__{job_name}"));
-    info!("Creating output directory: {:?}", output_path);
-    if let Err(e) = std::fs::create_dir_all(&output_path) {
-        error!("Failed to create output directory: {e}");
-        return Err(InternalErrors::Io(format!("{e}")));
-    }
+    let (output_path, job_name) = create_results_dir(&project_path, job_name)?;
 
     config.meta.app_version = env!("CARGO_PKG_VERSION").to_string();
 
@@ -127,6 +123,136 @@ pub fn generate_analyze_job_from_project_settings(
     generate_job_from_project_settings_intenal(config, project_path, output_path, database_storage)
 }
 
+/// Generates a job that runs only the dataset steps, on the objects of an
+/// earlier analysis - the image phase is skipped.
+///
+/// The earlier analysis is never changed: its results folder (the one
+/// holding `base_results_db`, which must lie in the project's `results`
+/// folder) is copied to a new one, named like a full analysis's
+/// (`job_name`, or a random name if `None`), and the dataset steps write
+/// into that copy. The copy's `.evaproj` is this run's settings as usual;
+/// the earlier analysis's is kept beside it as `<job_name>.base.evaproj`.
+pub fn generate_dataset_job_from_project_settings(
+    mut config: ProjectSettings,
+    project_path: PathBuf,
+    job_name: Option<String>,
+    base_results_db: &Path,
+) -> Result<JobExecutor, InternalErrors> {
+    // Before anything is created on disk.
+    if dataset_steps_from_project_settings(&config)?.is_empty() {
+        return Err(InternalErrors::InvalidArgument(
+            "The project has no enabled dataset steps to run".into(),
+        ));
+    }
+    let base_dir = checked_base_results_dir(&project_path, base_results_db)?;
+    let base_name = base_results_db
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| InternalErrors::InvalidArgument("Invalid results database name".into()))?
+        .to_string();
+
+    let (output_path, job_name) = create_results_dir(&project_path, job_name)?;
+    let job = (|| {
+        copy_results_folder(&base_dir, &base_name, &output_path, &job_name)?;
+        config.meta.app_version = env!("CARGO_PKG_VERSION").to_string();
+        let db = output_path.join(format!("{job_name}.{RESULTS_FILE_EXTENSION}"));
+        let storage = Arc::new(DuckDbExporter::continue_run(&db, &config.meta)?);
+        write_project_snapshot(&config, &output_path, &job_name);
+        let mut job = generate_job_from_project_settings_intenal(
+            config,
+            project_path,
+            output_path.clone(),
+            storage,
+        )?;
+        job.skip_image_phase = true;
+        Ok(job)
+    })();
+    if job.is_err() {
+        // A failed start leaves no half-copied results behind.
+        let _ = std::fs::remove_dir_all(&output_path);
+    }
+    job
+}
+
+/// Creates `<project_path>/results/<date>__<job_name>` for a new run; a
+/// blank `job_name` gets a random one. Returns the folder and the name.
+fn create_results_dir(
+    project_path: &Path,
+    job_name: Option<String>,
+) -> Result<(PathBuf, String), InternalErrors> {
+    let file_date = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let job_name = job_name
+        .as_deref()
+        .map(sanitize_job_name)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| petname::petname(2, "_").expect("Problem in random job name generator"));
+    let output_path = project_path
+        .join("results")
+        .join(format!("{file_date}__{job_name}"));
+    info!("Creating output directory: {:?}", output_path);
+    if let Err(e) = std::fs::create_dir_all(&output_path) {
+        error!("Failed to create output directory: {e}");
+        return Err(InternalErrors::Io(format!("{e}")));
+    }
+    Ok((output_path, job_name))
+}
+
+/// The folder of `base_results_db` - refused unless it is an existing
+/// results database inside the project's `results` folder (on a server, the
+/// path comes from a client).
+fn checked_base_results_dir(
+    project_path: &Path,
+    base_results_db: &Path,
+) -> Result<PathBuf, InternalErrors> {
+    let refuse = |why: &str| {
+        InternalErrors::InvalidArgument(format!(
+            "Can't use {} as the basis: {why}",
+            base_results_db.display()
+        ))
+    };
+    if base_results_db.extension().and_then(|e| e.to_str()) != Some(RESULTS_FILE_EXTENSION) {
+        return Err(refuse("not a results database"));
+    }
+    let db = base_results_db
+        .canonicalize()
+        .map_err(|_| refuse("it doesn't exist"))?;
+    let results = project_path
+        .join("results")
+        .canonicalize()
+        .map_err(|_| refuse("the project has no results"))?;
+    match db.parent() {
+        Some(dir) if dir.starts_with(&results) && dir != results => Ok(dir.to_path_buf()),
+        _ => Err(refuse("it isn't one of this project's results")),
+    }
+}
+
+/// Copies the files of the results folder `from` into `to`, renaming the
+/// run's own files from `from_name` to `to_name` (`<name>.evadb`,
+/// `<name>.evadb.wal`, ...). The earlier run's settings snapshot becomes
+/// `<to_name>.base.<ext>`.
+fn copy_results_folder(
+    from: &Path,
+    from_name: &str,
+    to: &Path,
+    to_name: &str,
+) -> Result<(), InternalErrors> {
+    let io = |e: std::io::Error| InternalErrors::Io(format!("Copying the results failed: {e}"));
+    for entry in std::fs::read_dir(from).map_err(io)? {
+        let entry = entry.map_err(io)?;
+        if !entry.file_type().map_err(io)?.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let target = match file_name.strip_prefix(&format!("{from_name}.")) {
+            Some(PROJECT_FILE_EXTENSIONS) => format!("{to_name}.base.{PROJECT_FILE_EXTENSIONS}"),
+            Some(rest) => format!("{to_name}.{rest}"),
+            None => file_name,
+        };
+        std::fs::copy(entry.path(), to.join(target)).map_err(io)?;
+    }
+    Ok(())
+}
+
 /// Refuses to start when an enabled pipeline reads an image channel some of
 /// the images don't have - such a pipeline would silently produce nothing
 /// for them (the image reader skips channels an image lacks). Checked against
@@ -136,55 +262,128 @@ pub fn check_pipeline_channels(config: &ProjectSettings) -> Result<(), InternalE
     const LISTED: usize = 5;
     let mut problems = Vec::new();
     for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
-        let ImageAddress::Channel(channel) = pipeline.image_source else {
-            continue;
-        };
-        let missing: Vec<String> = config
-            .images
-            .list
-            .values()
-            .filter_map(|image| {
-                let active = active_series(image, config.images.settings.selected_series);
-                let series = image.series.get(&active)?;
-                if series.channels.is_empty() || series.channels.contains_key(&channel) {
-                    return None;
-                }
-                let available: Vec<String> =
-                    series.channels.keys().map(|c| c.to_string()).collect();
-                Some(format!(
-                    "{} (channels {})",
-                    image.rel_path.display(),
-                    available.join(", ")
-                ))
-            })
-            .collect();
-        if missing.is_empty() {
-            continue;
+        for channel in pipeline_channels(pipeline, &config.components) {
+            let missing: Vec<String> = config
+                .images
+                .list
+                .values()
+                .filter_map(|image| {
+                    let active = active_series(image, config.images.settings.selected_series);
+                    let series = image.series.get(&active)?;
+                    if series.channels.is_empty() || series.channels.contains_key(&channel) {
+                        return None;
+                    }
+                    let available: Vec<String> =
+                        series.channels.keys().map(|c| c.to_string()).collect();
+                    Some(format!(
+                        "{} (channels {})",
+                        image.rel_path.display(),
+                        available.join(", ")
+                    ))
+                })
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            let mut listed = missing
+                .iter()
+                .take(LISTED)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            if missing.len() > LISTED {
+                listed.push_str(&format!(" and {} more", missing.len() - LISTED));
+            }
+            let message = format!(
+                "pipeline '{}' reads channel {channel}, which {} image(s) don't have: {listed}",
+                pipeline.name,
+                missing.len()
+            );
+            warn!("{message}");
+            problems.push(message);
         }
-        let mut listed = missing
-            .iter()
-            .take(LISTED)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
-        if missing.len() > LISTED {
-            listed.push_str(&format!(" and {} more", missing.len() - LISTED));
-        }
-        let message = format!(
-            "pipeline '{}' reads channel {channel}, which {} image(s) don't have: {listed}",
-            pipeline.name,
-            missing.len()
-        );
-        warn!("{message}");
-        problems.push(message);
     }
     if problems.is_empty() {
         return Ok(());
     }
     Err(InternalErrors::InvalidArgument(format!(
-        "Cannot start: {}. Change the pipeline's image source, or remove those images.",
+        "Cannot start: {}. Change the pipeline's image source or load steps, or remove those \
+         images.",
         problems.join("; ")
     )))
+}
+
+/// The image channels `pipeline` reads: its image source's and those its
+/// steps load (Load Image Channel, Image Cache Load, Image Math's second
+/// image) - also inside components, with the instances' values. A component
+/// that can't be expanded is skipped here; building the job reports it.
+pub fn pipeline_channels(
+    pipeline: &PipelineSettings,
+    components: &[ComponentDefinition],
+) -> BTreeSet<i32> {
+    let mut channels = BTreeSet::new();
+    if let ImageAddress::Channel(channel) = pipeline.image_source {
+        channels.insert(channel);
+    }
+    for step in pipeline.steps.iter().filter(|s| s.enabled) {
+        let Ok(commands) = expand_step(step, components, &mut ScopeCounter::default()) else {
+            continue;
+        };
+        for ExpandedCommand { command, .. } in commands {
+            channels.extend(loaded_channel(&command));
+        }
+    }
+    channels
+}
+
+/// The project classes `pipeline`'s enabled steps use - also inside command
+/// components, with the instances' values (a component's own classes aren't project
+/// classes and are left out). A component that can't be expanded is skipped.
+pub fn pipeline_classes(
+    pipeline: &PipelineSettings,
+    components: &[ComponentDefinition],
+) -> BTreeSet<ObjectClass> {
+    pipeline
+        .steps
+        .iter()
+        .filter(|s| s.enabled)
+        .filter_map(|step| expand_step(step, components, &mut ScopeCounter::default()).ok())
+        .flatten()
+        .flat_map(|ExpandedCommand { command, .. }| command.object_classes())
+        .collect()
+}
+
+/// The image channel `command` reads, if it reads one.
+fn loaded_channel(command: &PipelineCommand) -> Option<i32> {
+    match command {
+        PipelineCommand::LoadChannel(s) => Some(s.channel.0 as i32),
+        PipelineCommand::ImageCache(s)
+            if matches!(s.mode, MathImageCacheImageCacheModeSettings::Load) =>
+        {
+            match s.address {
+                ImageAddress::Channel(channel) => Some(channel),
+                _ => None,
+            }
+        }
+        PipelineCommand::ImageMath(s) => match s.second_image_address {
+            ImageAddress::Channel(channel) => Some(channel),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `command` replaces the current image with a loaded one - what a
+/// pipeline without an image source must start with.
+fn loads_image(command: &PipelineCommand) -> bool {
+    match command {
+        PipelineCommand::LoadChannel(_) => true,
+        PipelineCommand::ImageCache(s) => {
+            matches!(s.mode, MathImageCacheImageCacheModeSettings::Load)
+                && s.address != ImageAddress::None
+        }
+        _ => false,
+    }
 }
 
 /// The series that counts for `image`: the project-wide choice
@@ -312,6 +511,13 @@ fn generate_job_from_project_settings_intenal(
         None => None,
     };
 
+    let class_colors = config
+        .classification
+        .classes()
+        .iter()
+        .map(|c| (c.global(), c.color))
+        .collect();
+
     let mut job = JobExecutor::new(
         project_path,
         output_path,
@@ -320,6 +526,7 @@ fn generate_job_from_project_settings_intenal(
         config.images.settings,
         result_storage,
         pixel_sizes,
+        Arc::new(class_colors),
     );
 
     // If tile merged is enabled, add this command as first post process pipeline.
@@ -340,6 +547,7 @@ fn generate_job_from_project_settings_intenal(
     }
 
     // Now generate the pipelines from the user settings
+    let mut scopes = ScopeCounter::default();
     for pipeline_setting in &config.pipelines {
         if !pipeline_setting.enabled {
             continue;
@@ -359,23 +567,138 @@ fn generate_job_from_project_settings_intenal(
             },
         );
 
-        for step in &pipeline_setting.steps {
-            if step.enabled {
-                let step = super::algos_from_config::into_algorithm(step.command.clone())?;
-                match step.execution_scope() {
-                    crate::algos::ExecutionScope::Tile => pipeline_pre_process.add_command(step),
-                    crate::algos::ExecutionScope::WholeImage => {
-                        pipeline_post_process.add_command(step)
-                    }
+        // A pipeline without an image source must load one first.
+        let mut needs_image = pipeline_setting.image_source == ImageAddress::None;
+        for step in pipeline_setting.steps.iter().filter(|s| s.enabled) {
+            // A component runs as its commands.
+            for ExpandedCommand {
+                step_id,
+                scope,
+                command,
+            } in step_commands(
+                &pipeline_setting.name,
+                step,
+                &config.components,
+                &mut scopes,
+            )? {
+                let loads = loads_image(&command);
+                match into_pipeline_step(command)? {
+                    // Kept with its id: what a breakpoint targets.
+                    PipelineStep::Image(algo) => match algo.execution_scope() {
+                        ExecutionScope::Tile => {
+                            if needs_image && !loads {
+                                return Err(InternalErrors::InvalidArgument(format!(
+                                    "Pipeline \"{}\" has no image source, so its first step \
+                                     must load one (Load Image Channel) - \"{}\" needs an image",
+                                    pipeline_setting.name,
+                                    algo.name()
+                                )));
+                            }
+                            needs_image = false;
+                            pipeline_pre_process.add_step(step_id, scope, algo)
+                        }
+                        ExecutionScope::WholeImage => {
+                            pipeline_post_process.add_step(step_id, scope, algo)
+                        }
+                    },
+                    // Runs once after every image, whatever its place in the pipeline.
+                    PipelineStep::Dataset(step) => job.add_dataset_step(step),
                 }
             }
         }
 
+        end_scopes(&mut pipeline_pre_process, &mut pipeline_post_process);
         job.add_pre_process_pipeline(pipeline_pre_process);
         job.add_post_process_pipeline(pipeline_post_process);
     }
 
     Ok(job)
+}
+
+/// Adds an [`EndScope`] right after each component instance's last command
+/// across both phases: in the whole-image list if the instance has a
+/// command there (it runs after every tile command), else in the tile list -
+/// where it frees the instance's objects tile by tile, before they're ever
+/// merged into the whole image.
+fn end_scopes(tile: &mut Pipeline, whole_image: &mut Pipeline) {
+    let last_commands = |pipeline: &Pipeline| {
+        let mut last: Vec<(Scope, usize)> = Vec::new();
+        for (index, (_, scope, _)) in pipeline.commands.iter().enumerate() {
+            if *scope == Scope::Global {
+                continue;
+            }
+            match last.iter_mut().find(|(s, _)| s == scope) {
+                Some(entry) => entry.1 = index,
+                None => last.push((*scope, index)),
+            }
+        }
+        last
+    };
+    let in_whole_image = last_commands(whole_image);
+    let in_tiles: Vec<(Scope, usize)> = last_commands(tile)
+        .into_iter()
+        .filter(|(scope, _)| !in_whole_image.iter().any(|(s, _)| s == scope))
+        .collect();
+
+    for (pipeline, mut ends, phase) in [
+        (tile, in_tiles, ExecutionScope::Tile),
+        (whole_image, in_whole_image, ExecutionScope::WholeImage),
+    ] {
+        // Back to front, so the earlier positions stay valid.
+        ends.sort_by_key(|(_, index)| std::cmp::Reverse(*index));
+        for (scope, index) in ends {
+            pipeline.commands.insert(
+                index + 1,
+                (
+                    StepId::UNASSIGNED,
+                    Scope::Global,
+                    Box::new(EndScope { scope, phase }),
+                ),
+            );
+        }
+    }
+}
+
+/// The commands `step` runs, with their breakpoint ids and scopes (see
+/// [`expand_step`]) - a component's error says which pipeline and step it is.
+fn step_commands(
+    pipeline_name: &str,
+    step: &PipelineStepSettings,
+    definitions: &[ComponentDefinition],
+    scopes: &mut ScopeCounter,
+) -> Result<Vec<ExpandedCommand>, InternalErrors> {
+    expand_step(step, definitions, scopes).map_err(|e| {
+        InternalErrors::InvalidArgument(format!(
+            "Pipeline \"{pipeline_name}\", step {}: {e}",
+            step.id
+        ))
+    })
+}
+
+/// The enabled dataset steps of `config`'s enabled pipelines, in pipeline
+/// and step order. Image steps aren't built, so an image step this build
+/// can't run (e.g. an AI step without the `ai` feature) doesn't matter.
+pub(crate) fn dataset_steps_from_project_settings(
+    config: &ProjectSettings,
+) -> Result<Vec<Box<dyn DatasetAlgorithm>>, InternalErrors> {
+    let mut steps = Vec::new();
+    // Dataset steps have no scope: they only use project classes.
+    let mut scopes = ScopeCounter::default();
+    for pipeline in config.pipelines.iter().filter(|p| p.enabled) {
+        for step in pipeline.steps.iter().filter(|s| s.enabled) {
+            for ExpandedCommand { command, .. } in
+                step_commands(&pipeline.name, step, &config.components, &mut scopes)?
+            {
+                if !matches!(command.category(), CommandCategory::Dataset) {
+                    continue;
+                }
+                if let PipelineStep::Dataset(step) = into_pipeline_step(command)? {
+                    steps.push(step);
+                }
+            }
+        }
+    }
+    Ok(steps)
 }
 
 #[cfg(test)]
@@ -389,8 +712,11 @@ mod tests {
 
     fn blur_step(enabled: bool) -> PipelineStepSettings {
         PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled,
-            command: PipelineCommand::Blur(BlurSettings::default()),
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::Blur(BlurSettings::default()),
+            ),
         }
     }
 
@@ -568,6 +894,109 @@ mod tests {
             vec![image("a.tif", &[0]), image("unknown.tif", &[])],
         );
         assert!(check_pipeline_channels(&project).is_ok());
+    }
+
+    fn load_channel_step(channel: u32) -> PipelineStepSettings {
+        PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::LoadChannel(
+                    evanalyzer_cfg::settings::pipeline_command_settings::LoadChannelSettings {
+                        channel: evanalyzer_cfg::core_types::ImageChannelIdx(channel),
+                    },
+                ),
+            ),
+        }
+    }
+
+    #[test]
+    fn a_pipelines_classes_are_its_enabled_steps_and_its_components_project_classes() {
+        use evanalyzer_cfg::core_types::ObjectClass;
+        use evanalyzer_cfg::settings::pipeline_command_settings::TransformObjectsSettings;
+        let transform = |input: ObjectClass, output: u32, enabled: bool| PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+            enabled,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::TransformObjects(TransformObjectsSettings {
+                    input_class: input,
+                    output_class: ObjectClass::Global(output),
+                    ..Default::default()
+                }),
+            ),
+        };
+        let mut pipeline = named(1, "Cells", ImageAddress::Channel(0), true);
+        pipeline.steps = vec![
+            transform(ObjectClass::Global(1), 10, true),
+            transform(ObjectClass::Global(3), 11, false),
+            component_step("INNER"),
+        ];
+        let mut inner = component("INNER", vec![transform(ObjectClass::Local(1), 12, true)]);
+        inner.steps[0].id = evanalyzer_cfg::core_types::StepId(1);
+        inner.classes = vec![evanalyzer_cfg::settings::classification_settings::Class {
+            id: 1,
+            ..Default::default()
+        }];
+        assert_eq!(
+            pipeline_classes(&pipeline, &[inner]),
+            BTreeSet::from([1, 10, 12].map(ObjectClass::Global)),
+            "disabled steps and the component's own class left out"
+        );
+    }
+
+    #[test]
+    fn the_channels_a_pipeline_reads_include_its_load_steps_also_in_components() {
+        let mut pipeline = named(1, "Cells", ImageAddress::Channel(0), true);
+        pipeline.steps = vec![load_channel_step(3), component_step("LOADS")];
+        let components = [component("LOADS", vec![load_channel_step(5)])];
+        assert_eq!(
+            pipeline_channels(&pipeline, &components),
+            BTreeSet::from([0, 3, 5])
+        );
+    }
+
+    #[test]
+    fn a_load_step_in_a_component_reading_a_missing_channel_is_refused() {
+        let mut pipeline = named(1, "Cells", ImageAddress::None, true);
+        pipeline.steps = vec![component_step("LOADS")];
+        let mut project = project_with_images(
+            vec![pipeline],
+            vec![image("a.tif", &[0, 1]), image("b.tif", &[0, 1, 2])],
+        );
+        project
+            .components
+            .push(component("LOADS", vec![load_channel_step(2)]));
+        let message = check_pipeline_channels(&project).unwrap_err().to_string();
+        assert!(
+            message.contains("pipeline 'Cells' reads channel 2"),
+            "{message}"
+        );
+        assert!(message.contains("a.tif (channels 0, 1)"), "{message}");
+    }
+
+    #[test]
+    fn a_pipeline_without_an_image_source_must_load_one_first() {
+        let image_root = tempfile::tempdir().unwrap();
+        let project_dir = tempfile::tempdir().unwrap();
+        let mut pipeline = named(1, "Cells", ImageAddress::None, true);
+        pipeline.steps = vec![blur_step(true), load_channel_step(0)];
+        let project = project_with(Some(image_root.path().to_path_buf()), vec![pipeline]);
+        let Err(error) =
+            generate_preview_job_from_project_settings(project.clone(), project_dir.path().into())
+        else {
+            panic!("a blur without an image must be refused");
+        };
+        let error = error.to_string();
+        assert!(
+            error.contains("has no image source") && error.contains("\"Blur\" needs an image"),
+            "{error}"
+        );
+
+        let mut fine = project;
+        fine.pipelines[0].steps = vec![load_channel_step(0), blur_step(true)];
+        assert!(
+            generate_preview_job_from_project_settings(fine, project_dir.path().into()).is_ok()
+        );
     }
 
     #[test]
@@ -880,5 +1309,512 @@ mod tests {
         assert_eq!(sanitize_job_name("  padded  "), "padded");
         assert_eq!(sanitize_job_name("///"), "");
         assert_eq!(sanitize_job_name(""), "");
+    }
+
+    // ---- dataset steps ----
+
+    fn tracker_step(enabled: bool) -> PipelineStepSettings {
+        PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+            enabled,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(PipelineCommand::SimpleTracker(
+                evanalyzer_cfg::settings::pipeline_command_settings::SimpleTrackerSettings::default(
+                ),
+            )),
+        }
+    }
+
+    fn project_with_dataset_steps(root: PathBuf) -> ProjectSettings {
+        project_with(
+            Some(root),
+            vec![
+                pipeline(
+                    1,
+                    true,
+                    vec![blur_step(true), tracker_step(true), tracker_step(false)],
+                ),
+                pipeline(2, false, vec![tracker_step(true)]),
+            ],
+        )
+    }
+
+    fn component_step(key: &str) -> PipelineStepSettings {
+        PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(4),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Component(
+                evanalyzer_cfg::settings::components::ComponentInstance {
+                    key: key.into(),
+                    values: Default::default(),
+                },
+            ),
+        }
+    }
+
+    #[test]
+    fn a_component_runs_as_its_commands() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let mut project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![component_step("TWO_BLURS")])],
+        );
+        project
+            .components
+            .push(evanalyzer_cfg::settings::components::ComponentDefinition {
+                key: "TWO_BLURS".into(),
+                meta: Default::default(),
+                classes: vec![],
+                steps: vec![blur_step(true), blur_step(true)],
+                parameters: vec![],
+                origin: None,
+            });
+
+        let (job, _out_objects) =
+            generate_preview_job_from_project_settings(project, project_dir.path().into()).unwrap();
+
+        let commands = &job.pipelines_pre_process[&PipelineId(1)].commands;
+        assert_eq!(
+            command_names(&job.pipelines_pre_process[&PipelineId(1)]),
+            ["Blur", "Blur", "End Scope"],
+            "the component's two blurs, then its scope ends"
+        );
+        assert_eq!(
+            commands[1].0,
+            evanalyzer_cfg::core_types::StepId(4),
+            "a breakpoint on the component stops after it"
+        );
+    }
+
+    fn command_names(pipeline: &Pipeline) -> Vec<&'static str> {
+        pipeline.commands.iter().map(|(_, _, c)| c.name()).collect()
+    }
+
+    fn component(key: &str, steps: Vec<PipelineStepSettings>) -> ComponentDefinition {
+        ComponentDefinition {
+            key: key.into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps,
+            parameters: vec![],
+            origin: None,
+        }
+    }
+
+    fn classify_step() -> PipelineStepSettings {
+        PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(9),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::ClassifyObjects(Default::default()),
+            ),
+        }
+    }
+
+    /// The tile and whole-image command names of pipeline 1 of `project`.
+    fn phases(project: ProjectSettings) -> (Vec<&'static str>, Vec<&'static str>) {
+        let project_dir = tempfile::tempdir().unwrap();
+        let (job, _) =
+            generate_preview_job_from_project_settings(project, project_dir.path().into()).unwrap();
+        (
+            command_names(&job.pipelines_pre_process[&PipelineId(1)]),
+            command_names(&job.pipelines_post_process[&PipelineId(1)]),
+        )
+    }
+
+    #[test]
+    fn a_components_scope_ends_after_its_last_command_across_both_phases() {
+        let image_root = tempfile::tempdir().unwrap();
+        let mut project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(
+                1,
+                true,
+                vec![
+                    component_step("BLUR_CLASSIFY"),
+                    blur_step(true),
+                    classify_step(),
+                ],
+            )],
+        );
+        project.components.push(component(
+            "BLUR_CLASSIFY",
+            vec![blur_step(true), classify_step()],
+        ));
+
+        let (tiles, whole_image) = phases(project);
+        // The blur after the component is a tile command, but the component's last
+        // command (Classify) runs in the whole-image phase - it ends there.
+        assert_eq!(tiles, ["Blur", "Blur"]);
+        assert_eq!(
+            whole_image,
+            ["Classify Objects", "End Scope", "Classify Objects"]
+        );
+    }
+
+    #[test]
+    fn a_nested_component_ends_before_the_component_around_it() {
+        let image_root = tempfile::tempdir().unwrap();
+        let mut project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![component_step("OUTER")])],
+        );
+        project.components.push(component(
+            "OUTER",
+            vec![
+                PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId(1),
+                    ..component_step("INNER")
+                },
+                classify_step(),
+            ],
+        ));
+        project
+            .components
+            .push(component("INNER", vec![classify_step()]));
+
+        let (_, whole_image) = phases(project);
+        assert_eq!(
+            whole_image,
+            [
+                "Classify Objects",
+                "End Scope",
+                "Classify Objects",
+                "End Scope"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pipeline_without_components_gets_no_scope_end() {
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![blur_step(true), classify_step()])],
+        );
+        let (tiles, whole_image) = phases(project);
+        assert_eq!(tiles, ["Blur"]);
+        assert_eq!(whole_image, ["Classify Objects"]);
+    }
+
+    #[test]
+    fn a_component_the_project_doesnt_define_is_refused_with_a_clear_error() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(
+                1,
+                true,
+                vec![blur_step(true), component_step("MISSING")],
+            )],
+        );
+
+        let err = generate_preview_job_from_project_settings(project, project_dir.path().into())
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(
+            err.contains("Pipeline") && err.contains("step 4") && err.contains("MISSING"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn dataset_steps_are_collected_apart_from_the_image_pipelines() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = project_with_dataset_steps(dir.path().to_path_buf());
+
+        let job = generate_job_from_project_settings_intenal(
+            project.clone(),
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Arc::new(MemoryExporter {
+                out_objects: Arc::new(Mutex::new(Vec::new())),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            job.dataset_steps.len(),
+            1,
+            "enabled ones of enabled pipelines"
+        );
+        assert_eq!(
+            job.pipelines_pre_process[&PipelineId(1)].commands.len(),
+            1,
+            "blur"
+        );
+        assert_eq!(
+            dataset_steps_from_project_settings(&project).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn each_command_keeps_the_id_of_its_project_step() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let mut steps = vec![blur_step(true), blur_step(false), blur_step(true)];
+        for (i, step) in steps.iter_mut().enumerate() {
+            step.id = evanalyzer_cfg::core_types::StepId(i as u32 + 1);
+        }
+        let ids = [steps[0].id, steps[2].id];
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, steps)],
+        );
+
+        let (job, _out_objects) =
+            generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
+                .unwrap();
+
+        let built: Vec<_> = job.pipelines_pre_process[&PipelineId(1)]
+            .commands
+            .iter()
+            .map(|(id, _, _)| *id)
+            .collect();
+        assert_eq!(
+            built, ids,
+            "what a breakpoint targets, whatever the position"
+        );
+    }
+
+    #[test]
+    fn a_preview_runs_no_dataset_steps() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with_dataset_steps(image_root.path().to_path_buf());
+
+        let (job, _out_objects) =
+            generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
+                .unwrap();
+
+        assert!(job.dataset_steps.is_empty());
+    }
+
+    /// An earlier analysis `results/<date>__base/` with three objects, its
+    /// settings snapshot and one more file. Returns its database.
+    fn earlier_analysis(project_dir: &Path) -> PathBuf {
+        use crate::object::{Object, ObjectInit};
+        use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+        use evanalyzer_cfg::core_types::ObjectId;
+
+        let dir = project_dir.join("results").join("20260101T000000Z__base");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join(format!("base.{RESULTS_FILE_EXTENSION}"));
+        let exporter = DuckDbExporter::new(&db, Default::default(), &Default::default()).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_rel_path = PathBuf::from("a.tif");
+        cache.image_meta.nr_of_bits = 8;
+        for id in 1..=3u128 {
+            cache.object_cache.insert(
+                ObjectId(id),
+                Object::new(ObjectInit {
+                    id: ObjectId(id),
+                    area: 1,
+                    bbox: [0, 0, 1, 1],
+                    ..Default::default()
+                }),
+            );
+        }
+        exporter.export(&cache).unwrap();
+        exporter.finish_run(&Ok(())).unwrap();
+        drop(exporter);
+        std::fs::write(dir.join(format!("base.{PROJECT_FILE_EXTENSIONS}")), "{}").unwrap();
+        std::fs::write(dir.join("notes.txt"), "kept").unwrap();
+        db
+    }
+
+    fn run_status(db: &Path) -> String {
+        crate::storage::duckdb::shared_connection(db)
+            .unwrap()
+            .query_row("SELECT status FROM run", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_dataset_only_run_works_on_a_renamed_copy_of_the_earlier_results() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let base_db = earlier_analysis(project_dir.path());
+        let project = project_with_dataset_steps(image_root.path().to_path_buf());
+
+        let mut job = generate_dataset_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+            Some("tracked".into()),
+            &base_db,
+        )
+        .unwrap();
+        assert!(job.skip_image_phase);
+        assert_eq!(job.dataset_steps.len(), 1, "the project's tracker");
+
+        // The tracker can't run yet - record what a dataset step sees instead.
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        job.dataset_steps = vec![Box::new(crate::dataset::test_support::RecordingStep {
+            seen: seen.clone(),
+            fail: false,
+        })];
+        let copy = job.output_path.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+            .unwrap();
+
+        assert_eq!(*seen.lock().unwrap(), [3], "the earlier analysis's objects");
+        let started = rx.into_iter().find_map(|e| match e {
+            crate::ProgressEvent::Started { total } => Some(total),
+            _ => None,
+        });
+        assert_eq!(started, Some(0), "no image analysed");
+
+        let name = copy.file_name().unwrap().to_string_lossy().to_string();
+        assert!(name.ends_with("__tracked") && name != "20260101T000000Z__tracked");
+        let new_db = copy.join(format!("tracked.{RESULTS_FILE_EXTENSION}"));
+        assert_eq!(run_status(&new_db), "finished");
+        assert!(
+            copy.join(format!("tracked.{PROJECT_FILE_EXTENSIONS}"))
+                .is_file()
+        );
+        assert_eq!(
+            std::fs::read_to_string(copy.join(format!("tracked.base.{PROJECT_FILE_EXTENSIONS}")))
+                .unwrap(),
+            "{}",
+            "the earlier run's settings"
+        );
+        assert!(copy.join("notes.txt").is_file());
+        assert!(base_db.is_file(), "the earlier analysis is untouched");
+        assert_eq!(run_status(&base_db), "finished");
+    }
+
+    #[test]
+    fn a_dataset_only_run_is_refused_before_anything_is_created() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let base_db = earlier_analysis(project_dir.path());
+        let results = project_dir.path().join("results");
+        let runs = || std::fs::read_dir(&results).unwrap().count();
+        let start = |project: ProjectSettings, base: &Path| {
+            generate_dataset_job_from_project_settings(
+                project,
+                project_dir.path().to_path_buf(),
+                None,
+                base,
+            )
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default()
+        };
+
+        let no_dataset_steps = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![blur_step(true)])],
+        );
+        assert!(start(no_dataset_steps, &base_db).contains("no enabled dataset steps"));
+
+        let project = project_with_dataset_steps(image_root.path().to_path_buf());
+        let elsewhere = image_root
+            .path()
+            .join(format!("other.{RESULTS_FILE_EXTENSION}"));
+        std::fs::write(&elsewhere, "").unwrap();
+        assert!(start(project.clone(), &elsewhere).contains("isn't one of this project's results"));
+        let missing = results
+            .join("x")
+            .join(format!("x.{RESULTS_FILE_EXTENSION}"));
+        assert!(start(project, &missing).contains("doesn't exist"));
+
+        assert_eq!(runs(), 1, "only the earlier analysis");
+    }
+
+    /// A component written by hand into the project file - local
+    /// classes, a component parameter bound to an inner setting, an instance with
+    /// its value - loads like a saved project and runs: the objects the component
+    /// extracts internally (`L1`) leave it reclassified into the project class
+    /// the instance chose.
+    #[test]
+    fn a_hand_written_component_loads_and_runs() {
+        use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
+            ObjectClassifyObjectsClassifyMatchHandlingSettings, ThresholdEntrySettings,
+            ThresholdSettings,
+        };
+        use serde_json::json;
+        let command = |command: PipelineCommand| serde_json::to_value(command).unwrap();
+        let threshold = command(PipelineCommand::Threshold(ThresholdSettings {
+            thresholds: vec![ThresholdEntrySettings {
+                segmentation_class: SegmentationClass(1),
+                ..Default::default()
+            }],
+        }));
+        let components = command(PipelineCommand::ConnectedComponents(Default::default()));
+        let extract = command(PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+            class_mapping: vec![ExtractClassMappingSettings {
+                segmentation_class: SegmentationClass(1),
+                object_class: ObjectClass::Local(1),
+            }],
+            ..Default::default()
+        }));
+        let reclassify = command(PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+            input_classes: vec![ObjectClass::Local(1)],
+            match_handling: ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch,
+            output_class: ObjectClass::Global(5),
+            ..Default::default()
+        }));
+
+        let mut project = project_with(
+            Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests"))),
+            vec![],
+        );
+        let image = evanalyzer_cfg::settings::images_settings::ImageEntry {
+            rel_path: PathBuf::from("multi-channel-4D-series.ome.tif"),
+            series: std::collections::BTreeMap::from([(0, Default::default())]),
+            ..Default::default()
+        };
+        project.images.list.insert(image.rel_path.clone(), image);
+        let mut raw = serde_json::to_value(&project).unwrap();
+        raw["schemaVersion"] = json!(evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION);
+        // Written by hand: no step ids in the pipeline, the component's steps
+        // numbered because the binding names them.
+        raw["pipelines"] = json!([{
+            "id": 1, "name": "Cells", "imageSource": {"channel": 0}, "enabled": true,
+            "steps": [
+                {"enabled": true, "command": threshold},
+                {"enabled": true, "command": components},
+                {"enabled": true, "component": {"key": "CELLS", "values": {"cell_class": 7}}}
+            ]
+        }]);
+        raw["components"] = json!([{
+            "key": "CELLS",
+            "meta": serde_json::to_value(evanalyzer_cfg::settings::meta_data::MetaData::default()).unwrap(),
+            "classes": [{"id": 1, "color": "#FF0000", "name": "Candidates", "notes": ""}],
+            "steps": [
+                {"id": 1, "enabled": true, "command": extract},
+                {"id": 2, "enabled": true, "command": reclassify}
+            ],
+            "parameters": [{
+                "key": "cell_class", "label": "Cell class", "default": 5,
+                "bindings": [{"step": 2, "param": "output_class"}]
+            }]
+        }]);
+
+        let loaded =
+            evanalyzer_cfg::load_project_settings(raw).expect("the hand-written project loads");
+        let project_dir = tempfile::tempdir().unwrap();
+        let (job, out_objects) =
+            generate_preview_job_from_project_settings(loaded, project_dir.path().into()).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+            .unwrap();
+
+        let objects = out_objects.lock().unwrap();
+        assert!(!objects.is_empty(), "the fixture image has objects");
+        for object in objects.iter() {
+            assert_eq!(
+                object.object_class,
+                std::collections::HashSet::from([ObjectClass::Global(7)]),
+                "reclassified into the instance's class, nothing local left"
+            );
+        }
     }
 }

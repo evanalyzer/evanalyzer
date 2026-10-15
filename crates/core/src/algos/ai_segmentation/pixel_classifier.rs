@@ -1,4 +1,6 @@
-use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
+use evanalyzer_cfg::core_types::{
+    CitationMetadata, InternalErrors, ModelSegmentationClass, SegmentationClass,
+};
 use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningClassifierSettings, PixelInputColor,
 };
@@ -21,12 +23,12 @@ use crate::{
 /// this is the bridge between the two.
 #[derive(CommandsMeta)]
 pub struct SegmentationMapping {
-    /// Segmentation class predicted by the classifier model.
-    pub segmentation_class: SegmentationClass,
+    /// The class the classifier model predicts.
+    pub model_class: ModelSegmentationClass,
 
     /// The project's own segmentation class pixels predicted as
-    /// `segmentation_class` are written as.
-    pub object_class_id: SegmentationClass,
+    /// `model_class` are written as.
+    pub segmentation_class: SegmentationClass,
 }
 
 /// A pixel classifier trained via the app's AI training dialog
@@ -93,7 +95,7 @@ impl ImageAlgorithm for PixelClassifier {
         let mapping: HashMap<SegmentationClass, u32> = self
             .segmentation_mapping
             .iter()
-            .map(|m| (m.segmentation_class, m.object_class_id.as_u32()))
+            .map(|m| (m.model_class, m.segmentation_class.as_u32()))
             .collect();
 
         let segmentation_map = ctx.get_segmentation_map_mut()?;
@@ -315,8 +317,8 @@ mod tests {
             // falls-back-to-BACKGROUND behavior `write_predictions`'s own
             // unit tests cover, but now through the full `execute` path.
             segmentation_mapping: vec![SegmentationMapping {
-                segmentation_class: SegmentationClass(6),
-                object_class_id: SegmentationClass(42),
+                model_class: SegmentationClass(6),
+                segmentation_class: SegmentationClass(42),
             }],
         };
 
@@ -440,12 +442,12 @@ mod tests {
             model_path: path,
             segmentation_mapping: vec![
                 SegmentationMapping {
-                    segmentation_class: SegmentationClass(5),
-                    object_class_id: SegmentationClass(41),
+                    model_class: SegmentationClass(5),
+                    segmentation_class: SegmentationClass(41),
                 },
                 SegmentationMapping {
-                    segmentation_class: SegmentationClass(6),
-                    object_class_id: SegmentationClass(42),
+                    model_class: SegmentationClass(6),
+                    segmentation_class: SegmentationClass(42),
                 },
             ],
         }

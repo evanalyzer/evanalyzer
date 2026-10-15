@@ -1,13 +1,13 @@
 use crate::UiState;
 use crate::editor::histogram_controller::HistogramController;
 use crate::editor::image_meta_controller::ImageMetaController;
-use crate::editor::viewport_cache::ViewportCache;
+use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb, this_computer_ram_bytes};
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     AppWindow, ChannelInfo, ChannelState, ImageMetaData, ImagePixelInfo, IntensityProjection,
-    ViewportState as ViewportSlintState,
+    ViewportMemoryState, ViewportState as ViewportSlintState,
 };
-use evanalyzer_app::images::ImageContainer;
+use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::{
@@ -65,9 +65,94 @@ impl ViewportImageController {
         }
     }
 
+    /// See `ViewportState.max_layer_extent` - i16 range in physical
+    /// pixels, with room for a display scale factor of 2.
+    const SOFTWARE_RENDERER_MAX_LAYER_EXTENT: f32 = 16000.0;
+
+    /// Shows `settings` in the settings dialog's Viewport section.
+    fn show_memory_settings(&self, settings: &ViewportMemorySettings) {
+        if let Some(ui) = self.ui.upgrade() {
+            let state = ui.global::<ViewportMemoryState>();
+            state.set_tile_history_enabled(settings.tile_history_enabled);
+            state.set_tile_history_budget_mb(settings.tile_history_budget_mb as i32);
+            state.set_object_overlay_margin_px(settings.object_overlay_margin_px as i32);
+            // With automatic sizing the sizes in effect are shown (and kept as
+            // the starting point if it's switched off).
+            let (tile_mb, overview_mb) = effective_cache_mb(settings);
+            let (auto_tile, auto_overview) =
+                ViewportMemorySettings::auto_cache_mb(this_computer_ram_bytes());
+            state.set_cache_sizes_auto(settings.cache_sizes_auto);
+            state.set_auto_cache_note(
+                format!(
+                    "{:.0} GB RAM: {auto_tile} MB tiles, {auto_overview} MB overviews",
+                    this_computer_ram_bytes() as f64 / (1024.0 * 1024.0 * 1024.0)
+                )
+                .into(),
+            );
+            state.set_tile_cache_mb(tile_mb as i32);
+            state.set_overview_cache_mb(overview_mb as i32);
+            state.set_free_caches_on_analysis(settings.free_caches_on_analysis);
+        }
+    }
+
+    /// Takes over what the settings dialog's Viewport section shows now -
+    /// only what changed, so an Apply of other settings costs nothing here.
+    fn apply_memory_settings_from_ui(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<ViewportMemoryState>();
+        let settings = ViewportMemorySettings {
+            tile_history_enabled: state.get_tile_history_enabled(),
+            tile_history_budget_mb: state.get_tile_history_budget_mb().max(0) as u32,
+            object_overlay_margin_px: state.get_object_overlay_margin_px().max(0) as u32,
+            tile_cache_mb: (state.get_tile_cache_mb().max(0) as u32)
+                .max(ViewportMemorySettings::MIN_CACHE_MB),
+            overview_cache_mb: (state.get_overview_cache_mb().max(0) as u32)
+                .max(ViewportMemorySettings::MIN_CACHE_MB),
+            free_caches_on_analysis: state.get_free_caches_on_analysis(),
+            cache_sizes_auto: state.get_cache_sizes_auto(),
+        };
+        if settings != self.viewport_controller.memory_settings() {
+            self.apply_memory_settings(settings);
+        }
+    }
+
+    /// Applies `settings` to the viewport and saves them on this computer.
+    fn apply_memory_settings(&self, settings: ViewportMemorySettings) {
+        self.viewport_controller
+            .set_memory_settings(settings.clone());
+        self.app_state.save_viewport_memory_settings(settings);
+    }
+
     pub fn attach_callbacks(self: &Arc<Self>) {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
+            // The software renderer (Windows) stores scene coordinates as
+            // i16 - layers scaled past that mid-gesture are hidden instead
+            // of drawn misplaced (see `ViewportState.max_layer_extent`).
+            if cfg!(target_os = "windows") {
+                ui.global::<ViewportSlintState>()
+                    .set_max_layer_extent(Self::SOFTWARE_RENDERER_MAX_LAYER_EXTENT);
+            }
+
+            // Viewport memory settings (Viewport section of the settings
+            // dialog): shown when it opens, taken over on Apply.
+            self.show_memory_settings(&self.viewport_controller.memory_settings());
+            let manager = self.clone();
+            ui.global::<ViewportMemoryState>().on_load(move || {
+                manager.show_memory_settings(&manager.viewport_controller.memory_settings());
+            });
+            let manager = self.clone();
+            ui.global::<ViewportMemoryState>().on_apply(move || {
+                manager.apply_memory_settings_from_ui();
+            });
+            let manager = self.clone();
+            ui.global::<ViewportMemoryState>()
+                .on_reset_to_defaults(move || {
+                    manager.show_memory_settings(&ViewportMemorySettings::default());
+                });
+
             // Viewport size changed
             let manager = self.clone();
             ui.global::<ViewportSlintState>()
@@ -207,35 +292,45 @@ impl ViewportImageController {
             return Ok(());
         }
 
-        // Trigger Low-Res IMMEDIATELY for smoothness
-        self.viewport_controller.trigger_redraw_low_res();
-
-        // Debounce the High-Res update
-        self.redraw_debounce_timer.stop(); // Cancel any existing pending high-res task
-        let self_in = self.clone();
-        self.redraw_debounce_timer.start(
-            TimerMode::SingleShot,
-            std::time::Duration::from_millis(150),
-            move || {
-                self_in
-                    .viewport_controller
-                    .trigger_redraw_low_res_and_high_res();
-                self_in.viewport_controller.trigger_image_redraw_objects();
-            },
-        );
+        self.on_viewport_transform_changed();
 
         Ok(())
     }
 
-    /// Rate limit for [`Self::trigger_redraw_low_res_throttled`]. A per-move
-    /// cap is still needed regardless of per-frame cost, since raw mouse-move
-    /// events fire at the input device's full poll rate (125-1000 Hz) - but
-    /// on non-Windows (see `viewport_worker.rs`'s STEP 7b: the expensive
-    /// viewport-sized CPU composite that used to dominate this cost is now
-    /// skipped entirely there, letting Skia scale the small native tile on
-    /// the GPU instead), a real frame now costs ~1-2ms, not 12-25ms - so this
-    /// is set to 60/sec (matching a typical display refresh rate) rather than
-    /// [`Self::PIXEL_INFO_THROTTLE`]'s more conservative ~30/sec.
+    /// Delay after the last pan/zoom/resize event before the sharp tile and
+    /// the objects are re-rendered for the new view. Until then the viewport
+    /// moves the textures already on screen (see `viewport.slint`).
+    const VIEWPORT_REDRAW_DEBOUNCE: Duration = Duration::from_millis(150);
+
+    /// Common follow-up of a pan, zoom or resize: the layers already follow
+    /// the new transform in Slint, so only the navigator is updated now and
+    /// the re-render waits until the gesture settles. The software renderer
+    /// (Windows) is the exception: its overview covers just the viewport,
+    /// so it is still re-rendered while moving (throttled).
+    fn on_viewport_transform_changed(self: &Arc<Self>) {
+        self.viewport_controller
+            .sync_navigator_from_viewport_state();
+
+        if cfg!(target_os = "windows") {
+            self.trigger_redraw_low_res_throttled();
+        }
+
+        self.redraw_debounce_timer.stop(); // Cancel any existing pending re-render
+        let self_in = self.clone();
+        self.redraw_debounce_timer.start(
+            TimerMode::SingleShot,
+            Self::VIEWPORT_REDRAW_DEBOUNCE,
+            move || {
+                self_in.viewport_controller.trigger_viewport_redraw();
+            },
+        );
+    }
+
+    /// Rate limit for [`Self::trigger_redraw_low_res_throttled`] (software
+    /// renderer only - see `on_viewport_transform_changed`). A per-move cap
+    /// is needed since raw mouse-move events fire at the input device's full
+    /// poll rate (125-1000 Hz); 60/sec matches a typical display refresh
+    /// rate.
     const LOW_RES_REDRAW_THROTTLE: Duration = Duration::from_millis(16);
 
     /// Throttled entry point for the "immediate" low-res redraw fired on
@@ -292,25 +387,7 @@ impl ViewportImageController {
             state.offset_y = offset_y;
         }
         self.viewport_controller.sync_scale_bar_to_slint();
-
-        // Trigger Low-Res for smoothness, throttled - see
-        // `trigger_redraw_low_res_throttled`'s doc comment for why this
-        // can't safely run unthrottled on a large viewport.
-        self.trigger_redraw_low_res_throttled();
-
-        // Debounce the High-Res update
-        self.redraw_debounce_timer.stop(); // Cancel any existing pending high-res task
-        let self_in = self.clone();
-        self.redraw_debounce_timer.start(
-            TimerMode::SingleShot,
-            std::time::Duration::from_millis(150),
-            move || {
-                self_in
-                    .viewport_controller
-                    .trigger_redraw_low_res_and_high_res();
-                self_in.viewport_controller.trigger_image_redraw_objects();
-            },
-        );
+        self.on_viewport_transform_changed();
 
         Ok(())
     }
@@ -329,24 +406,7 @@ impl ViewportImageController {
             state.offset_x = offset_x;
             state.offset_y = offset_y;
         }
-        // Trigger Low-Res for smoothness, throttled - see
-        // `trigger_redraw_low_res_throttled`'s doc comment for why this
-        // can't safely run unthrottled on a large viewport.
-        self.trigger_redraw_low_res_throttled();
-
-        // Debounce the High-Res update
-        self.redraw_debounce_timer.stop(); // Cancel any existing pending high-res task
-        let self_in = self.clone();
-        self.redraw_debounce_timer.start(
-            TimerMode::SingleShot,
-            std::time::Duration::from_millis(150),
-            move || {
-                self_in
-                    .viewport_controller
-                    .trigger_redraw_low_res_and_high_res();
-                self_in.viewport_controller.trigger_image_redraw_objects();
-            },
-        );
+        self.on_viewport_transform_changed();
 
         Ok(())
     }
@@ -467,8 +527,8 @@ impl ViewportImageController {
             // Format the string right here
             let mut pixel_values = Vec::new();
             for channel in image_data.iter() {
-                if let ImageContainer::F32Gray(img) = &*channel.image {
-                    if let Some(&raw_val) = img.as_slice().get(idx) {
+                if !channel.is_rgb {
+                    if let Some(raw_val) = channel.value_at(idx) {
                         let normalized_val = raw_val * 100.0;
                         let scaled_val = raw_val * 2.0f32.powf(ctx.bit_depth as f32);
                         pixel_values.push(format!(
@@ -562,10 +622,18 @@ impl ViewportImageController {
             z_range: z_range,
         });
 
+        // Frame navigation must not touch the project's frame interval.
+        let frame_interval = project
+            .images
+            .settings
+            .t_stack
+            .as_ref()
+            .and_then(|t| t.frame_interval);
         project.set_global_t_stack(&TStackSettings {
             playback_speed: playback_speed as f32,
             t_stack,
             stack_handling: TStackHandling::AllStacks,
+            frame_interval,
         });
 
         self.viewport_controller
@@ -722,11 +790,12 @@ mod tests {
 
     fn make_controller() -> (Arc<UiState>, Arc<ViewportImageController>) {
         let ui_state = test_ui_state_with_project(project_with_one_image());
+        let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
         let viewport_controller = Arc::new(ViewportController::new(
             slint::Weak::default(),
             ui_state.clone(),
+            viewport_cache.clone(),
         ));
-        let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
         let histogram_controller = Arc::new(HistogramController::new(
             slint::Weak::default(),
             ui_state.clone(),
@@ -946,6 +1015,7 @@ mod tests {
     #[test]
     fn update_channel_options_stores_playback_speed_and_t_stack() {
         let (ui_state, controller) = make_controller();
+        ui_state.get_project_write().set_frame_interval(Some(30.0));
 
         controller.update_channel_options_in_project(
             vec![],
@@ -959,6 +1029,7 @@ mod tests {
         let t = project.get_t_stack().expect("t-stack settings must be set");
         assert_eq!(t.t_stack, 7);
         assert_eq!(t.playback_speed, 2.5);
+        assert_eq!(t.frame_interval, Some(30.0), "frame navigation keeps it");
     }
 
     // -- update_active_channel_in_project ------------------------------------------
@@ -1014,7 +1085,13 @@ mod tests {
         ui: slint::Weak<AppWindow>,
     ) -> (Arc<UiState>, Arc<ViewportImageController>) {
         let ui_state = test_ui_state_with_project(project_with_one_image());
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
         let histogram_controller = Arc::new(HistogramController::new(
             ui.clone(),

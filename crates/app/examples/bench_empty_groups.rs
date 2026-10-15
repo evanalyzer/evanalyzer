@@ -344,7 +344,7 @@ fn main() {
                     .histogram(&HistogramFilter {
                         plane: plane.clone(),
                         images: None,
-                        object_classes: Some(vec![ObjectClass::Valid(4)]),
+                        object_classes: Some(vec![ObjectClass::Global(4)]),
                         column: Column::AreaSizePx,
                         bins: 50,
                     })

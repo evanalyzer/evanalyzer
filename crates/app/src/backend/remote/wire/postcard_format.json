@@ -1,5 +1,5 @@
 {
-  "protocol_version": 8,
+  "protocol_version": 13,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -172,9 +172,7 @@
     "Class": {
       "STRUCT": [
         {
-          "id": {
-            "TYPENAME": "ObjectClass"
-          }
+          "id": "U32"
         },
         {
           "color": "STR"
@@ -245,58 +243,61 @@
           "ObjectId": "UNIT"
         },
         "1": {
-          "ImageName": "UNIT"
+          "TrackId": "UNIT"
         },
         "2": {
-          "ObjectClass": "UNIT"
+          "ImageName": "UNIT"
         },
         "3": {
-          "Count": "UNIT"
+          "ObjectClass": "UNIT"
         },
         "4": {
-          "AreaSizePx": "UNIT"
+          "Count": "UNIT"
         },
         "5": {
-          "AreaSizeNm": "UNIT"
+          "AreaSizePx": "UNIT"
         },
         "6": {
-          "PerimeterPx": "UNIT"
+          "AreaSizeNm": "UNIT"
         },
         "7": {
-          "PerimeterNm": "UNIT"
+          "PerimeterPx": "UNIT"
         },
         "8": {
-          "Circularity": "UNIT"
+          "PerimeterNm": "UNIT"
         },
         "9": {
-          "Solidity": "UNIT"
+          "Circularity": "UNIT"
         },
         "10": {
-          "Eccentricity": "UNIT"
+          "Solidity": "UNIT"
         },
         "11": {
+          "Eccentricity": "UNIT"
+        },
+        "12": {
           "ColocCount": {
             "NEWTYPE": {
               "TYPENAME": "ObjectClass"
             }
           }
         },
-        "12": {
+        "13": {
           "IntensityAvg": {
             "NEWTYPE": "U32"
           }
         },
-        "13": {
+        "14": {
           "IntensitySum": {
             "NEWTYPE": "U32"
           }
         },
-        "14": {
+        "15": {
           "IntensityMin": {
             "NEWTYPE": "U32"
           }
         },
-        "15": {
+        "16": {
           "IntensityMax": {
             "NEWTYPE": "U32"
           }
@@ -597,7 +598,12 @@
           "UNSET": "UNIT"
         },
         "1": {
-          "VALID": {
+          "GLOBAL": {
+            "NEWTYPE": "U32"
+          }
+        },
+        "2": {
+          "LOCAL": {
             "NEWTYPE": "U32"
           }
         }

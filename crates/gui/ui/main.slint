@@ -33,6 +33,7 @@ import {
     ProjectSettingsDialog,
     ProjectSettingsState,
     ProjectSettingsSlint,
+    ViewportMemoryState,
 } from "dialogs/project_settings_dialog.slint";
 import {
     ImageItemData,
@@ -61,6 +62,7 @@ import {
 import {
     ViewportState,
     ViewportObjectState,
+    RetainedTile,
 } from "editor/viewport_state.slint";
 import {
     ConfirmDeleteObjectDialog,
@@ -79,6 +81,22 @@ import {
     PipelineDeleteConfirmState,
 } from "dialogs/pipeline_edit_dialog.slint";
 import {
+    ComponentUpdateDialog,
+    ComponentUpdateState,
+    ComponentSettingsDialog,
+    ComponentSettingsState,
+    ComponentParamRow,
+} from "dialogs/create_component_dialog.slint";
+import {
+    CreateComponentDialog,
+    CreateComponentState,
+    ComponentClassRow,
+    ComponentEditChoiceDialog,
+    ComponentEditChoiceState,
+    ExposeChoiceDialog,
+    ExposeChoiceState,
+} from "dialogs/create_component_dialog.slint";
+import {
     PipelineRunningDialog,
     PipelineRunningState,
 } from "dialogs/pipeline_running_dialog.slint";
@@ -93,7 +111,7 @@ import {
     ProjectTemplateDef,
     ProjectAuthor,
 } from "dialogs/project_template_dialog.slint";
-import { PipelinesPanelState } from "editor/pipelines_panel.slint";
+import { PipelinesPanelState, StepSettingsDialog } from "editor/pipelines_panel.slint";
 import {
     ScriptEditorPanel,
     ScriptEditorState,
@@ -152,6 +170,8 @@ import {
 
 export {
     GlobalAppState,
+    ViewportMemoryState,
+    RetainedTile,
     ProjectSettingsSlint,
     ProjectSettingsState,
     ImagePixelInfo,
@@ -184,6 +204,13 @@ export {
     CommandAuthor,
     DefaultParamPreview,
     PipelineEditState,
+    CreateComponentState,
+    ComponentClassRow,
+    ComponentEditChoiceState,
+    ExposeChoiceState,
+    ComponentUpdateState,
+    ComponentSettingsState,
+    ComponentParamRow,
     PipelineDeleteConfirmState,
     PipelineRunningState,
     TemplateMetaState,
@@ -382,8 +409,10 @@ export component AppWindow inherits Window {
                 shown-segment: CommandPickerState.shown-segment;
                 shown-object: CommandPickerState.shown-object;
                 shown-classify: CommandPickerState.shown-classify;
+                shown-dataset: CommandPickerState.shown-dataset;
                 shown-measure: CommandPickerState.shown-measure;
-                shown-templates: CommandPickerState.shown-templates;
+                shown-components: CommandPickerState.shown-components;
+                shown-library-components: CommandPickerState.shown-library-components;
                 detail: CommandPickerState.detail;
                 has-detail: CommandPickerState.has-detail;
                 total-shown: CommandPickerState.total-shown;
@@ -391,15 +420,19 @@ export component AppWindow inherits Window {
                 cat-count-seg: CommandPickerState.cat-count-seg;
                 cat-count-obj: CommandPickerState.cat-count-obj;
                 cat-count-cls: CommandPickerState.cat-count-cls;
+                cat-count-dat: CommandPickerState.cat-count-dat;
                 cat-count-mea: CommandPickerState.cat-count-mea;
-                cat-count-fav: CommandPickerState.cat-count-fav;
+                cat-count-grp: CommandPickerState.cat-count-grp;
+                unused-component-count: CommandPickerState.unused-component-count;
+                detail-removable: CommandPickerState.detail-removable;
                 query <=> CommandPickerState.query;
                 fcat-pre <=> CommandPickerState.fcat-pre;
                 fcat-seg <=> CommandPickerState.fcat-seg;
                 fcat-obj <=> CommandPickerState.fcat-obj;
                 fcat-mea <=> CommandPickerState.fcat-mea;
                 fcat-cls <=> CommandPickerState.fcat-cls;
-                filter-favorites <=> CommandPickerState.filter-favorites;
+                fcat-dat <=> CommandPickerState.fcat-dat;
+                filter-components <=> CommandPickerState.filter-components;
                 selected-id <=> CommandPickerState.selected-id;
                 query-changed(t) => {
                     CommandPickerState.query-changed(t);
@@ -409,6 +442,12 @@ export component AppWindow inherits Window {
                 }
                 confirm(id) => {
                     CommandPickerState.confirm(id);
+                }
+                remove-component(id) => {
+                    CommandPickerState.remove-component(id);
+                }
+                remove-unused-components => {
+                    CommandPickerState.remove-unused-components();
                 }
                 cancel => {
                     CommandPickerState.cancel();
@@ -424,6 +463,33 @@ export component AppWindow inherits Window {
             if (GlobalAppState.active_dialog == DialogType.pipeline-edit): PipelineEditDialog {
                 width: 100%;
                 height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.create-component): CreateComponentDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.component-edit-choice): ComponentEditChoiceDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.expose-choice): ExposeChoiceDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.component-update): ComponentUpdateDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.component-settings): ComponentSettingsDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.step-settings): StepSettingsDialog {
+                width: 100%;
+                height: 100%;
+                close => {
+                    GlobalAppState.active_dialog = DialogType.none;
+                }
             }
             if (GlobalAppState.active_dialog == DialogType.pipeline-delete-confirm): PipelineDeleteConfirmDialog {
                 width: 100%;

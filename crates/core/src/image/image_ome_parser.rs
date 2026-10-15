@@ -78,6 +78,32 @@ fn metadata_f64(series_metadata: &HashMap<String, MetadataValue>, key: &str) -> 
 /// (`ImageMetadata`/`OmeMetadata`), so there is no XML left to parse here -
 /// this is now a straight field-by-field mapping from the crate's model to
 /// this app's own `ImageMeta`/`ImageInfo`/`PyramidInfo` shape.
+/// The time between two frames [s]: the image's `TimeIncrement`, else
+/// derived from its planes' time stamps (`DeltaT`) - the mean step between
+/// the first and the last frame of channel 0, z 0. `None` without either,
+/// or for a single frame.
+fn frame_interval(
+    image: &bioformats::common::ome_metadata::OmeImage,
+    nr_t_stacks: i32,
+) -> Option<f32> {
+    let positive = |v: f64| (v.is_finite() && v > 0.0).then_some(v as f32);
+    if let Some(v) = image.time_increment.and_then(positive) {
+        return Some(v);
+    }
+    if nr_t_stacks < 2 {
+        return None;
+    }
+    let stamp = |t: u32| {
+        image
+            .planes
+            .iter()
+            .find(|p| p.the_c == 0 && p.the_z == 0 && p.the_t == t)
+            .and_then(|p| p.delta_t)
+    };
+    let last = (nr_t_stacks - 1) as u32;
+    positive((stamp(last)? - stamp(0)?) / last as f64)
+}
+
 pub(crate) fn build_image_meta(
     reader: &mut dyn FormatReader,
     path: &Path,
@@ -160,6 +186,8 @@ pub(crate) fn build_image_meta(
                 },
             );
         }
+
+        info.frame_interval = ome_image.and_then(|img| frame_interval(img, info.nr_t_stacks));
 
         if let Some(ome_image) = ome_image {
             info.pixel_sizes = PixelSizes {
@@ -446,5 +474,38 @@ mod tests {
         build_image_meta(reader.as_mut(), &path, ReadMode::Default).unwrap();
 
         assert_eq!(reader.resolution(), 0);
+    }
+
+    #[test]
+    fn the_frame_interval_comes_from_the_time_increment_else_the_plane_time_stamps() {
+        use bioformats::common::ome_metadata::{OmeImage, OmePlane};
+        let plane = |t: u32, c: u32, delta_t: f64| OmePlane {
+            the_t: t,
+            the_c: c,
+            delta_t: Some(delta_t),
+            ..Default::default()
+        };
+        let mut image = OmeImage {
+            time_increment: Some(2.5),
+            ..Default::default()
+        };
+        assert_eq!(frame_interval(&image, 3), Some(2.5));
+
+        // 0, 4.1, 7.9 s: 4 s on average; another channel's stamps are ignored.
+        image.time_increment = None;
+        image.planes = vec![
+            plane(0, 0, 0.0),
+            plane(0, 1, 0.3),
+            plane(1, 0, 4.1),
+            plane(2, 0, 7.9),
+            plane(2, 1, 99.0),
+        ];
+        assert_eq!(frame_interval(&image, 3), Some(3.95));
+
+        assert_eq!(frame_interval(&image, 1), None, "a single frame");
+        image.planes.clear();
+        assert_eq!(frame_interval(&image, 3), None, "no metadata");
+        image.time_increment = Some(0.0);
+        assert_eq!(frame_interval(&image, 3), None, "zero means unknown");
     }
 }

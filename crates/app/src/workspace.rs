@@ -4,6 +4,10 @@
 
 pub mod ai_learning;
 pub mod bioimageio;
+pub mod class_ids;
+pub mod component_checks;
+pub mod component_editing;
+pub mod component_library;
 pub mod crash_log;
 pub mod export;
 pub mod extensions;

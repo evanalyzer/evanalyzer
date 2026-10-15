@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use evanalyzer_cfg::{
-    core_types::{BreakpointMode, PipelineId},
+    core_types::{BreakpointMode, PipelineId, StepId},
     settings::project_settings::ProjectSettings,
 };
 
@@ -11,7 +11,7 @@ pub struct PipelineTask {
     pub project_path: PathBuf,
     pub preview: bool,
     /// Optional breakpoint: (pipeline_id, step_id, mode).
-    pub breakpoint: Option<(PipelineId, i32, BreakpointMode)>,
+    pub breakpoint: Option<(PipelineId, StepId, BreakpointMode)>,
     /// Optional user-chosen name for a full (non-preview) run, forwarded to
     /// `generate_analyze_job_from_project_settings`. Ignored for preview runs.
     pub job_name: Option<String>,
@@ -19,6 +19,9 @@ pub struct PipelineTask {
     /// already running on the server (started before this window existed,
     /// or before the connection dropped).
     pub attach: Option<String>,
+    /// Run only the dataset steps, on a copy of this earlier analysis's
+    /// results database - see `AnalysisRequest::base_results`.
+    pub base_results: Option<PathBuf>,
 }
 
 impl Default for PipelineTask {
@@ -30,6 +33,7 @@ impl Default for PipelineTask {
             breakpoint: None,
             job_name: None,
             attach: None,
+            base_results: None,
         }
     }
 }

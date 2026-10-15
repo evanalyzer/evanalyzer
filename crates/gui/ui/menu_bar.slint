@@ -152,6 +152,17 @@ export component CustomMenuBar inherits Rectangle {
                     MenuSeparator { }
 
                     MenuItem {
+                        text: "Settings…";
+                        icon: @image-url("icons/regular-black/gear.svg");
+                        clicked => {
+                            GlobalAppState.active-dialog = DialogType.project-settings;
+                            file-menu.close();
+                        }
+                    }
+
+                    MenuSeparator { }
+
+                    MenuItem {
                         text: ConnectionState.remote ? "Connect to other server…" : "Connect to server…";
                         icon: @image-url("icons/regular-black/cloud.svg");
                         clicked => {

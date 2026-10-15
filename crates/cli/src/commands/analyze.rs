@@ -41,6 +41,7 @@ pub fn run(args: AnalyzeArgs, backend: &dyn Backend) -> Result<(), InternalError
         project_path: project_dir,
         job_name: args.job_name.clone(),
         threads: args.threads,
+        base_results: None,
     })?;
     let output_path = job.output_path().clone();
     println!("Output:    {}", output_path.display());
@@ -368,23 +369,30 @@ mod tests {
             enabled: true,
             steps: vec![
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::Threshold(ThresholdSettings {
-                        thresholds: vec![ThresholdEntrySettings {
-                            object_class_id: SegmentationClass(1),
-                            ..Default::default()
-                        }],
-                    }),
-                },
-                PipelineStepSettings {
-                    enabled: true,
-                    command: PipelineCommand::ConnectedComponents(
-                        ConnectedComponentsSettings::default(),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::Threshold(ThresholdSettings {
+                            thresholds: vec![ThresholdEntrySettings {
+                                segmentation_class: SegmentationClass(1),
+                                ..Default::default()
+                            }],
+                        }),
                     ),
                 },
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::ConnectedComponents(ConnectedComponentsSettings::default()),
+                    ),
+                },
+                PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                    enabled: true,
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
+                    ),
                 },
             ],
         }];

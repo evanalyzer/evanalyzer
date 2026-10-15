@@ -243,7 +243,7 @@ mod tests {
 
     fn class_label(id: u32, name: &str) -> ObjectClassLabel {
         ObjectClassLabel {
-            class: ObjectClass::Valid(id),
+            class: ObjectClass::Global(id),
             name: name.into(),
         }
     }
@@ -251,21 +251,21 @@ mod tests {
     #[test]
     fn resolve_label_matches_the_one_configured_class() {
         let labels = vec![class_label(1, "Cell"), class_label(2, "Background")];
-        let object_class = HashSet::from([ObjectClass::Valid(2)]);
+        let object_class = HashSet::from([ObjectClass::Global(2)]);
         assert_eq!(resolve_label(&labels, &object_class), Ok(1));
     }
 
     #[test]
     fn resolve_label_errors_when_no_class_matches() {
         let labels = vec![class_label(1, "Cell")];
-        let object_class = HashSet::from([ObjectClass::Valid(99)]);
+        let object_class = HashSet::from([ObjectClass::Global(99)]);
         assert!(resolve_label(&labels, &object_class).is_err());
     }
 
     #[test]
     fn resolve_label_errors_when_multiple_classes_match() {
         let labels = vec![class_label(1, "Cell"), class_label(2, "Background")];
-        let object_class = HashSet::from([ObjectClass::Valid(1), ObjectClass::Valid(2)]);
+        let object_class = HashSet::from([ObjectClass::Global(1), ObjectClass::Global(2)]);
         assert!(resolve_label(&labels, &object_class).is_err());
     }
 
@@ -303,10 +303,10 @@ mod tests {
     #[test]
     fn run_trains_a_classifier_from_labeled_objects() {
         let job = object_job(vec![
-            labeled_object(1, ObjectClass::Valid(1), 1),
-            labeled_object(2, ObjectClass::Valid(1), 2),
-            labeled_object(3, ObjectClass::Valid(2), 100),
-            labeled_object(4, ObjectClass::Valid(2), 101),
+            labeled_object(1, ObjectClass::Global(1), 1),
+            labeled_object(2, ObjectClass::Global(1), 2),
+            labeled_object(3, ObjectClass::Global(2), 100),
+            labeled_object(4, ObjectClass::Global(2), 101),
         ]);
         let (tx, _rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -319,9 +319,9 @@ mod tests {
     #[test]
     fn run_skips_objects_with_an_unresolvable_class_and_reports_it() {
         let job = object_job(vec![
-            labeled_object(1, ObjectClass::Valid(1), 1),
-            labeled_object(2, ObjectClass::Valid(99), 2), // not in class_labels
-            labeled_object(3, ObjectClass::Valid(2), 100),
+            labeled_object(1, ObjectClass::Global(1), 1),
+            labeled_object(2, ObjectClass::Global(99), 2), // not in class_labels
+            labeled_object(3, ObjectClass::Global(2), 100),
         ]);
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn run_returns_cancelled_when_the_flag_is_already_set() {
-        let job = object_job(vec![labeled_object(1, ObjectClass::Valid(1), 1)]);
+        let job = object_job(vec![labeled_object(1, ObjectClass::Global(1), 1)]);
         let (tx, _rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(true));
 

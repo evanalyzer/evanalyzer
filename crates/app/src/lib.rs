@@ -21,6 +21,37 @@ pub mod ai {
     pub use evanalyzer_core::ai_devices::parse_gpu_slots;
 }
 
+/// A step's settings as the editor shows and changes them - the generated
+/// ones, and a Script step's `param`s (declared in its script).
+pub mod settings_of {
+    pub use evanalyzer_core::{apply_command_param, command_parameters, declared_script_params};
+}
+
+/// Components in the editor: component cards, creating and expanding components, the library,
+/// checks.
+pub mod components {
+    pub use crate::workspace::component_checks::{
+        ComponentProblem, Severity, check_component, check_components, step_problem,
+    };
+    pub use crate::workspace::component_editing::{
+        ClassRole, ComponentPlan, ComponentPlanClass, add_binding, apply_defaults,
+        bound_setting_edited, clone_component_for_step, compatible_parameters, component_uses,
+        create_component, edit_parameter, expand_component, exposed_settings, list_entry_removed,
+        move_parameter, new_parameter_key, parameter_for_setting, plan_component,
+        prune_component_values, remove_component, remove_component_step, remove_parameter,
+        remove_unused_components, set_parameter_section, setting_at, toggle_exposed,
+        unused_components,
+    };
+    pub use crate::workspace::component_library::{
+        components_used_by, content_hash, insert_component_template, library_name,
+        merge_component_definitions, modified_since_inserted, project_copy,
+        save_component_template, save_pipeline_as_component, update_available, update_from_library,
+    };
+    pub use evanalyzer_core::component_parameters;
+    pub use evanalyzer_core::component_steps_with_values;
+    pub use evanalyzer_core::set_component_parameter;
+}
+
 pub mod global {
     pub use crate::workspace::AppHandle;
     pub use crate::workspace::Frontend;
@@ -28,6 +59,7 @@ pub mod global {
     pub use crate::workspace::settings::AppSettings;
     pub use crate::workspace::settings::RecentServer;
     pub use crate::workspace::settings::UserInformation;
+    pub use crate::workspace::settings::ViewportMemorySettings;
 }
 
 pub mod results {
@@ -81,13 +113,18 @@ pub mod fs {
 pub mod utils {
     pub use crate::workspace::extensions::utils::channel_display_name;
     pub use crate::workspace::extensions::utils::wavelength_to_rgb_float;
+    pub use crate::workspace::extensions::utils::{assign_step_ids, unassigned};
 }
 
 pub mod project {
     pub use crate::workspace::ProjectOwner;
     pub use crate::workspace::ProjectWithRuntime;
+    pub use crate::workspace::class_ids::{
+        ClassIdChange, change_class_id, free_class_ids, next_class_id,
+    };
     pub use crate::workspace::extensions::image_entry_ext::ImageEntryExt;
     pub use crate::workspace::extensions::object_ext::ObjectExt;
+    pub use crate::workspace::extensions::project_ext::ConfigValueSource;
     pub use crate::workspace::extensions::project_ext::ProjectExt;
     pub use crate::workspace::extensions::project_ext::SaveProjectActions;
     pub use crate::workspace::extensions::project_ext::SelectNewProjectRootAction;
@@ -106,7 +143,7 @@ pub mod bioimageio {
 
 pub mod templates {
     pub use crate::api::TemplateFolders;
-    pub use crate::workspace::templates::load_pipeline_templates;
+    pub use crate::workspace::templates::load_component_templates;
     pub use crate::workspace::templates::load_project_template_from_file;
     pub use crate::workspace::templates::load_project_templates;
 }
@@ -132,6 +169,7 @@ pub mod backends {
     pub use crate::api::SystemInfo;
     pub mod local {
         pub use crate::backend::LocalBackend;
+        pub use crate::backend::local::system::cpu_ram_diagnostics;
     }
     pub mod remote {
         pub use crate::backend::RemoteBackend;

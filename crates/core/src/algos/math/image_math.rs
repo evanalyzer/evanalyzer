@@ -119,9 +119,15 @@ impl ImageAlgorithm for ImageMath {
 
         let address = match self.second_image_address {
             ImageAddress::Scratchpad => CacheAddress::Scratchpad,
-            ImageAddress::Memory(memory_id) => CacheAddress::Memory(memory_id),
+            ImageAddress::Memory(memory_id) => CacheAddress::memory(memory_id, ctx.scope)?,
             ImageAddress::Channel(channel_idx) => {
                 CacheAddress::Channel((channel_idx, ctx.image_meta.image_tile_info.clone()))
+            }
+            ImageAddress::None => {
+                return Err(InternalErrors::InvalidArgument(
+                    "Image Math: \"none\" isn't an image to read - pick a channel or memory slot"
+                        .into(),
+                ));
             }
         };
 

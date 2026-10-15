@@ -32,8 +32,9 @@
 use crate::ImageTile;
 use crate::algos::{ExecutionScope, ImageAlgorithm};
 use crate::object::{Intensity, Object, ObjectInit};
+use crate::pipeline::scope::Scope;
 use crate::pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext};
-use crate::spatial_grid::BboxGrid;
+use crate::utils::spatial_grid::BboxGrid;
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass, ObjectId};
 use indexmap::IndexMap;
@@ -183,7 +184,7 @@ impl ImageAlgorithm for TileMerge {
 
                 let mut object_class = std::collections::HashSet::new();
                 for o in &object_refs {
-                    object_class.extend(o.object_class.iter().copied());
+                    object_class.extend(o.object_classes().iter().copied());
                 }
 
                 let first = object_refs[0];
@@ -191,6 +192,8 @@ impl ImageAlgorithm for TileMerge {
                     id: ObjectId::next(),
                     segmentation_class: first.segmentation_class,
                     object_class,
+                    // Fragments are grouped by scope, so they all share it.
+                    scope: first.scope(),
                     area: geometry.area,
                     bbox: geometry.bbox,
                     mask_data: geometry.mask_data,
@@ -253,32 +256,36 @@ pub(crate) fn touches_tile_edge(bbox: [u32; 4], tile: &ImageTile) -> bool {
 }
 
 /// Groups every object in `cache.object_cache` that touches its own
-/// `source_tile`'s edge (and isn't in `classes_to_not_merge`) by its full
-/// class set (sorted/deduped) plus plane - the merge-candidate pool.
+/// `source_tile`'s edge (and isn't in `classes_to_not_merge`) by its scope,
+/// full class set (sorted/deduped) and plane - the merge-candidate pool.
+/// The scope keeps two component instances' fragments of the same local class
+/// apart.
 /// Objects fully interior to their tile can never have a real cross-tile
 /// neighbor, so they're never even candidates.
 fn group_candidates(
     cache: &GlobalPipelineCache,
     classes_to_not_merge: &[ObjectClass],
-) -> IndexMap<(Vec<ObjectClass>, crate::ImagePlane), Vec<ObjectId>> {
-    let mut groups: IndexMap<(Vec<ObjectClass>, crate::ImagePlane), Vec<ObjectId>> =
+) -> IndexMap<(Scope, Vec<ObjectClass>, crate::ImagePlane), Vec<ObjectId>> {
+    let mut groups: IndexMap<(Scope, Vec<ObjectClass>, crate::ImagePlane), Vec<ObjectId>> =
         IndexMap::new();
     for (id, object) in cache.object_cache.iter() {
         if !touches_tile_edge(object.bbox, &object.source_tile) {
             continue;
         }
-        let denied = object
-            .object_class
-            .iter()
-            .any(|c| classes_to_not_merge.contains(c));
+        // `classes_to_not_merge` are project classes: only global objects.
+        let denied = object.scope() == Scope::Global
+            && object
+                .object_classes()
+                .iter()
+                .any(|c| classes_to_not_merge.contains(c));
         if denied {
             continue;
         }
-        let mut classes: Vec<_> = object.object_class.iter().copied().collect();
+        let mut classes: Vec<_> = object.object_classes().iter().copied().collect();
         classes.sort();
         classes.dedup();
         groups
-            .entry((classes, object.plane))
+            .entry((object.scope(), classes, object.plane))
             .or_default()
             .push(id.clone());
     }
@@ -523,7 +530,7 @@ mod tests {
             source_tile,
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 
@@ -566,7 +573,7 @@ mod tests {
         let object = rect_object(
             1,
             [0, 0, 9, 9],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 10, 10),
             false,
@@ -581,6 +588,48 @@ mod tests {
         assert_eq!(unchanged.area, 100);
     }
 
+    /// Two instances of one component, both with a fragment pair of
+    /// their local class 1 at the same spot on the same seam: each instance's
+    /// pair merges - never across instances, which would be one object in two
+    /// scopes.
+    #[test]
+    fn fragments_of_two_component_instances_on_one_seam_merge_per_instance() {
+        use crate::pipeline::scope::ScopeId;
+        let seed = ObjectClass::Local(1);
+        let fragment = |id: u128, bbox: [u32; 4], source: ImageTile, scope: Scope| {
+            let mut object = rect_object(
+                id,
+                bbox,
+                ObjectClass::Global(1),
+                ImagePlane::default(),
+                source,
+                false,
+            );
+            object.clear_object_classes();
+            object.add_object_class(seed, scope).unwrap();
+            object
+        };
+        let (first, second) = (Scope::Scoped(ScopeId(1)), Scope::Scoped(ScopeId(2)));
+        let mut cache = cache_with(vec![
+            fragment(1, [0, 0, 9, 19], tile(0, 0, 10, 20), first),
+            fragment(2, [10, 0, 19, 19], tile(10, 0, 10, 20), first),
+            fragment(3, [0, 0, 9, 19], tile(0, 0, 10, 20), second),
+            fragment(4, [10, 0, 19, 19], tile(10, 0, 10, 20), second),
+        ]);
+
+        run(&mut cache, tile_merge(Connectivity::EightConnected));
+
+        let mut merged: Vec<&Object> = cache.object_cache.values().collect();
+        merged.sort_by_key(|o| o.scope());
+        assert_eq!(merged.len(), 2, "one object per instance");
+        for (object, scope) in merged.iter().zip([first, second]) {
+            assert_eq!(object.scope(), scope);
+            assert!(object.is_of(&seed, scope));
+            assert_eq!(object.bbox, [0, 0, 19, 19]);
+            assert_eq!(object.area, 400);
+        }
+    }
+
     /// Two fragments from horizontally-adjacent tiles, sharing a full-height
     /// seam (A ends at x=9, B starts at x=10) - the common case: an organ cut
     /// straight down the middle by a tile boundary.
@@ -589,7 +638,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 9, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 10, 20),
             false,
@@ -597,7 +646,7 @@ mod tests {
         let b = rect_object(
             2,
             [10, 0, 19, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(10, 0, 10, 20),
             false,
@@ -635,7 +684,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 9, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             same_tile.clone(),
             false,
@@ -643,7 +692,7 @@ mod tests {
         let b = rect_object(
             2,
             [10, 0, 19, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             same_tile,
             false,
@@ -666,7 +715,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 4, 4],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 5, 5),
             false,
@@ -674,7 +723,7 @@ mod tests {
         let b = rect_object(
             2,
             [5, 5, 9, 9],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(5, 5, 5, 5),
             false,
@@ -694,7 +743,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 4, 4],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 5, 5),
             false,
@@ -702,7 +751,7 @@ mod tests {
         let b = rect_object(
             2,
             [5, 5, 9, 9],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(5, 5, 5, 5),
             false,
@@ -726,7 +775,7 @@ mod tests {
     #[test]
     fn four_tiles_meeting_at_one_corner_all_merge_into_one_object() {
         // Tiles: TL=[0,0]-[4,4], TR=[5,0]-[9,4], BL=[0,5]-[4,9], BR=[5,5]-[9,9].
-        let class = ObjectClass::Valid(1);
+        let class = ObjectClass::Global(1);
         let plane = ImagePlane::default();
         let tl = rect_object(1, [0, 0, 4, 4], class, plane, tile(0, 0, 5, 5), false);
         let tr = rect_object(2, [5, 0, 9, 4], class, plane, tile(5, 0, 5, 5), false);
@@ -752,7 +801,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 4, 4],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 5, 5),
             false,
@@ -760,7 +809,7 @@ mod tests {
         let b = rect_object(
             2,
             [1000, 1000, 1004, 1004],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(1000, 1000, 5, 5),
             false,
@@ -780,14 +829,14 @@ mod tests {
         let object = rect_object(
             1,
             [0, 0, 4, 4],
-            ObjectClass::Valid(99),
+            ObjectClass::Global(99),
             ImagePlane::default(),
             tile(0, 0, 5, 5),
             false,
         );
         let mut cache = cache_with(vec![object]);
         let mut denylisted = tile_merge(Connectivity::EightConnected);
-        denylisted.classes_to_not_merge = vec![ObjectClass::Valid(99)];
+        denylisted.classes_to_not_merge = vec![ObjectClass::Global(99)];
 
         run(&mut cache, denylisted);
 
@@ -805,7 +854,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 4, 9],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(0, 0, 5, 10),
             false,
@@ -813,14 +862,14 @@ mod tests {
         let b = rect_object(
             2,
             [5, 0, 9, 9],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane::default(),
             tile(5, 0, 5, 10),
             false,
         );
         let mut cache = cache_with(vec![a, b]);
         let mut denylisted = tile_merge(Connectivity::EightConnected);
-        denylisted.classes_to_not_merge = vec![ObjectClass::Valid(2)]; // unrelated class
+        denylisted.classes_to_not_merge = vec![ObjectClass::Global(2)]; // unrelated class
 
         run(&mut cache, denylisted);
 
@@ -839,7 +888,7 @@ mod tests {
         let a = rect_object(
             1,
             [0, 0, 9, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane { z: 0, c: 0, t: 0 },
             tile(0, 0, 10, 20),
             false,
@@ -847,7 +896,7 @@ mod tests {
         let b = rect_object(
             2,
             [10, 0, 19, 19],
-            ObjectClass::Valid(1),
+            ObjectClass::Global(1),
             ImagePlane { z: 0, c: 1, t: 0 },
             tile(10, 0, 10, 20),
             false,
@@ -867,7 +916,7 @@ mod tests {
             objects.push(rect_object(
                 i + 1,
                 [x0, 0, x0 + 4, 4],
-                ObjectClass::Valid(1),
+                ObjectClass::Global(1),
                 ImagePlane::default(),
                 tile(x0 as usize, 0, 5, 5),
                 false,

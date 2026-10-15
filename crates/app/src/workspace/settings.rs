@@ -28,6 +28,102 @@ pub struct AppSettings {
 
     #[serde(default)]
     pub author: Option<UserInformation>,
+
+    /// How much memory the image viewport may spend on smoother pan/zoom.
+    /// About this computer's RAM, so the GUI keeps it in this computer's
+    /// settings even when connected to a server.
+    #[serde(default)]
+    pub viewport: ViewportMemorySettings,
+}
+
+/// Memory/smoothness trade-offs of the image viewport - see
+/// [`AppSettings::viewport`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ViewportMemorySettings {
+    /// Keep earlier high-resolution renders around (up to
+    /// [`Self::tile_history_budget_mb`]) so panning back or zooming shows
+    /// them instead of the blurry whole-image overview. Off: only the
+    /// current render and the overview are kept.
+    pub tile_history_enabled: bool,
+
+    /// RAM the kept renders may use together, in MB.
+    pub tile_history_budget_mb: u32,
+
+    /// How far, in screen pixels, the object overlay is drawn past each
+    /// viewport edge, so panning doesn't uncover an empty border right
+    /// away. 0 keeps the overlay exactly viewport-sized (least RAM).
+    pub object_overlay_margin_px: u32,
+
+    /// Size both caches from this computer's RAM (see
+    /// [`ViewportMemorySettings::auto_cache_mb`]) instead of
+    /// [`Self::tile_cache_mb`]/[`Self::overview_cache_mb`].
+    pub cache_sizes_auto: bool,
+
+    /// Most RAM, in MB, the image tiles read for the viewport may keep, so
+    /// panning back or switching back doesn't read them from disk again.
+    pub tile_cache_mb: u32,
+
+    /// Most RAM, in MB, the whole-image overviews may keep (one per image
+    /// and channel combination recently shown).
+    pub overview_cache_mb: u32,
+
+    /// Empty both caches when an analysis starts on this computer, so it
+    /// gets that RAM; they fill up again as the viewport is used.
+    pub free_caches_on_analysis: bool,
+}
+
+impl ViewportMemorySettings {
+    pub const DEFAULT_TILE_HISTORY_BUDGET_MB: u32 = 512;
+    pub const DEFAULT_OBJECT_OVERLAY_MARGIN_PX: u32 = 256;
+    pub const DEFAULT_TILE_CACHE_MB: u32 = 1024;
+    pub const DEFAULT_OVERVIEW_CACHE_MB: u32 = 256;
+    /// Below this a cache can't hold even one typical tile/overview.
+    pub const MIN_CACHE_MB: u32 = 64;
+    /// Share of the RAM the automatic tile cache takes.
+    const AUTO_TILE_CACHE_RAM_PERCENT: u64 = 10;
+    const AUTO_TILE_CACHE_MIN_MB: u32 = 128;
+    const AUTO_OVERVIEW_CACHE_DIVISOR: u32 = 4;
+
+    /// Cache sizes (tile, overview) in MB for a computer with
+    /// `total_ram_bytes`: 10 % of the RAM for tiles, between 128 MB and the
+    /// default 1 GB, and a quarter of that for overviews, between 64 MB and
+    /// the default 256 MB - so from 16 GB RAM up it's the defaults, and a
+    /// small machine keeps most of its RAM.
+    pub fn auto_cache_mb(total_ram_bytes: u64) -> (u32, u32) {
+        let total_mb = total_ram_bytes / (1024 * 1024);
+        let tile = (total_mb * Self::AUTO_TILE_CACHE_RAM_PERCENT / 100).clamp(
+            Self::AUTO_TILE_CACHE_MIN_MB as u64,
+            Self::DEFAULT_TILE_CACHE_MB as u64,
+        ) as u32;
+        let overview = (tile / Self::AUTO_OVERVIEW_CACHE_DIVISOR)
+            .clamp(Self::MIN_CACHE_MB, Self::DEFAULT_OVERVIEW_CACHE_MB);
+        (tile, overview)
+    }
+
+    /// The cache sizes (tile, overview) in MB in effect on a computer with
+    /// `total_ram_bytes`.
+    pub fn effective_cache_mb(&self, total_ram_bytes: u64) -> (u32, u32) {
+        if self.cache_sizes_auto {
+            Self::auto_cache_mb(total_ram_bytes)
+        } else {
+            (self.tile_cache_mb, self.overview_cache_mb)
+        }
+    }
+}
+
+impl Default for ViewportMemorySettings {
+    fn default() -> Self {
+        Self {
+            tile_history_enabled: false,
+            tile_history_budget_mb: Self::DEFAULT_TILE_HISTORY_BUDGET_MB,
+            object_overlay_margin_px: Self::DEFAULT_OBJECT_OVERLAY_MARGIN_PX,
+            cache_sizes_auto: true,
+            tile_cache_mb: Self::DEFAULT_TILE_CACHE_MB,
+            overview_cache_mb: Self::DEFAULT_OVERVIEW_CACHE_MB,
+            free_caches_on_analysis: true,
+        }
+    }
 }
 
 /// Persisted, per-user application preferences (as opposed to project
@@ -239,6 +335,57 @@ mod tests {
         let loaded = load_app_settings_from(&path);
 
         assert!(loaded.dark_mode);
+    }
+
+    #[test]
+    fn viewport_memory_settings_default_to_one_overview_and_fill_in_missing_fields() {
+        let settings: AppSettings = serde_json::from_str(r#"{"darkMode":true}"#).unwrap();
+        assert_eq!(settings.viewport, ViewportMemorySettings::default());
+        assert!(!settings.viewport.tile_history_enabled);
+
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"viewport":{"tileHistoryEnabled":true}}"#).unwrap();
+        assert!(settings.viewport.tile_history_enabled);
+        assert_eq!(
+            settings.viewport.tile_history_budget_mb,
+            ViewportMemorySettings::DEFAULT_TILE_HISTORY_BUDGET_MB
+        );
+        assert_eq!(
+            settings.viewport.object_overlay_margin_px,
+            ViewportMemorySettings::DEFAULT_OBJECT_OVERLAY_MARGIN_PX
+        );
+        // The cache limits were fixed before they became settings: older
+        // files get exactly those values.
+        assert_eq!(settings.viewport.tile_cache_mb, 1024);
+        assert_eq!(settings.viewport.overview_cache_mb, 256);
+        assert!(settings.viewport.free_caches_on_analysis);
+    }
+
+    #[test]
+    fn automatic_cache_sizes_follow_the_ram_within_their_limits() {
+        const GB: u64 = 1024 * 1024 * 1024;
+        let auto = ViewportMemorySettings::auto_cache_mb;
+        assert_eq!(auto(2 * GB), (204, 64));
+        assert_eq!(auto(4 * GB), (409, 102));
+        assert_eq!(auto(8 * GB), (819, 204));
+        // From about 10 GB up: the fixed defaults.
+        assert_eq!(auto(16 * GB), (1024, 256));
+        assert_eq!(auto(128 * GB), (1024, 256));
+        // A tiny or unreadable RAM size still gives usable caches.
+        assert_eq!(auto(0), (128, 64));
+    }
+
+    #[test]
+    fn manual_cache_sizes_apply_only_with_automatic_sizing_off() {
+        let mut settings = ViewportMemorySettings {
+            tile_cache_mb: 300,
+            overview_cache_mb: 70,
+            ..Default::default()
+        };
+        assert!(settings.cache_sizes_auto, "automatic by default");
+        assert_eq!(settings.effective_cache_mb(4 << 30), (409, 102));
+        settings.cache_sizes_auto = false;
+        assert_eq!(settings.effective_cache_mb(4 << 30), (300, 70));
     }
 
     #[test]

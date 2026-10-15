@@ -474,9 +474,10 @@ impl From<&CommandDoc> for ScriptCommandDoc {
     }
 }
 
-/// Every command a script step can run: all but the script itself and the
+/// Every command a script step can run: all but the script itself, the
 /// Object category, whose commands work on the whole image's objects (core
-/// tests that this category is exactly those commands).
+/// tests that this category is exactly those commands), and dataset steps,
+/// which run once after all images.
 fn command_docs() -> Vec<CommandDoc> {
     let meta = all_command_meta();
     let mut docs: Vec<CommandDoc> = PipelineCommand::KEYS
@@ -484,7 +485,10 @@ fn command_docs() -> Vec<CommandDoc> {
         .filter(|key| **key != "script")
         .filter_map(|key| {
             let cmd = PipelineCommand::default_for_key(key)?;
-            if matches!(cmd.category(), CommandCategory::Object) {
+            if matches!(
+                cmd.category(),
+                CommandCategory::Object | CommandCategory::Dataset
+            ) {
                 return None;
             }
             let summary = meta

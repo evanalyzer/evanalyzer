@@ -161,6 +161,36 @@ impl UiState {
         }
     }
 
+    /// The viewport's memory settings - always this computer's, since they
+    /// are about this computer's RAM.
+    pub fn viewport_memory_settings(&self) -> evanalyzer_app::global::ViewportMemorySettings {
+        self.local_backend
+            .load_app_settings()
+            .map(|settings| settings.viewport)
+            .unwrap_or_default()
+    }
+
+    /// Saves the viewport's memory settings on this computer.
+    pub fn save_viewport_memory_settings(
+        &self,
+        viewport: evanalyzer_app::global::ViewportMemorySettings,
+    ) {
+        // Locally the cached preferences are saved to this same file by
+        // `update_app_settings` - keep them current so that doesn't write
+        // an older value back.
+        self.app_settings.lock().unwrap().viewport = viewport.clone();
+        let result = self
+            .local_backend
+            .load_app_settings()
+            .and_then(|mut settings| {
+                settings.viewport = viewport;
+                self.local_backend.save_app_settings(&settings)
+            });
+        if let Err(e) = result {
+            log::warn!("Could not save the viewport memory settings: {e}");
+        }
+    }
+
     /// The user's remembered preferences (see `app_settings`).
     pub fn load_app_settings(&self) -> evanalyzer_app::global::AppSettings {
         self.app_settings.lock().unwrap().clone()
@@ -980,5 +1010,64 @@ mod ui_state_tests {
         // The single checkpoint must be the state from *before* either edit.
         ui_state.undo();
         assert_eq!(name(&ui_state), "");
+    }
+
+    // -- settings dialog ----------------------------------------------------
+
+    /// The settings list scrolls far enough to reach the last setting of the
+    /// longest section - in a small window too. (Wrapped descriptions used
+    /// to be measured too short, so the scroll range ended early.)
+    #[test]
+    fn settings_dialog_scrolls_to_its_last_setting() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::LogicalPosition;
+        use slint::platform::{PointerEventButton, WindowEvent};
+
+        for height in [720.0, 500.0] {
+            let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+            let window = ui.window();
+            window.set_size(slint::LogicalSize::new(1280.0, height));
+            ui.global::<GlobalAppState>()
+                .set_active_dialog(DialogType::ProjectSettings);
+            let rect = |label: &str| {
+                let e = ElementHandle::find_by_accessible_label(&ui, label)
+                    .next()
+                    .unwrap_or_else(|| panic!("{label:?} not found"));
+                (e.absolute_position(), e.size())
+            };
+
+            let (nav, size) = rect("Viewport");
+            let at = LogicalPosition::new(nav.x + size.width / 2.0, nav.y + size.height / 2.0);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position: at,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position: at,
+                button: PointerEventButton::Left,
+            });
+
+            let scroll_view = ElementHandle::find_by_element_type_name(&ui, "ScrollView")
+                .filter(|e| e.absolute_position().x > at.x)
+                .max_by(|a, b| a.size().height.total_cmp(&b.size().height))
+                .expect("the settings list");
+            let (top, view) = (scroll_view.absolute_position(), scroll_view.size());
+            let inside = LogicalPosition::new(top.x + view.width / 2.0, top.y + view.height / 2.0);
+            for _ in 0..20 {
+                window.dispatch_event(WindowEvent::PointerScrolled {
+                    position: inside,
+                    delta_x: 0.0,
+                    delta_y: -300.0,
+                });
+            }
+
+            let (button, button_size) = rect("Reset to defaults");
+            assert!(
+                button.y + button_size.height <= top.y + view.height,
+                "window height {height}: the last setting ends at {}, the list at {}",
+                button.y + button_size.height,
+                top.y + view.height
+            );
+        }
     }
 }

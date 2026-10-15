@@ -107,13 +107,13 @@ impl PipelineWorker {
                         zoom: vp.zoom,
                     }
                 };
-                let breakpoint = task
-                    .breakpoint
-                    .map(|(pipeline_id, pipeline_step_id, mode)| BreakpointSettings {
-                        pipeline_id,
-                        pipeline_step_id,
-                        mode,
-                    });
+                let breakpoint =
+                    task.breakpoint
+                        .map(|(pipeline_id, step_id, mode)| BreakpointSettings {
+                            pipeline_id,
+                            step_id,
+                            mode,
+                        });
                 match self.app_state.backend().start_preview(PreviewRequest {
                     settings: task.project_settings,
                     project_path: task.project_path,
@@ -155,6 +155,7 @@ impl PipelineWorker {
                         project_path: task.project_path,
                         job_name: task.job_name,
                         threads: None,
+                        base_results: task.base_results,
                     }),
                 };
                 match started {
@@ -534,7 +535,13 @@ mod tests {
         let ui_state =
             crate::editor::test_support::ui_state_with_windows_on(&ui, &results_ui, project, owner);
         let w = ui.as_weak();
-        let viewport = Arc::new(ViewportController::new(w.clone(), ui_state.clone()));
+        let viewport = Arc::new(ViewportController::new(
+            w.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let objects = Arc::new(ObjectListController::new(
             w.clone(),
             ui_state.clone(),
@@ -619,6 +626,7 @@ mod tests {
                 breakpoint: None,
                 job_name: Some("worker_test".into()),
                 attach: None,
+                base_results: None,
             }
         }
         fn running(&self) -> PipelineRunningState<'_> {
@@ -687,6 +695,7 @@ mod tests {
                 project_path: task.project_path.clone(),
                 job_name: Some("elsewhere".into()),
                 threads: Some(1),
+                base_results: None,
             })
             .unwrap();
         let id = job.id().unwrap().to_string();

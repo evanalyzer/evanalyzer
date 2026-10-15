@@ -1,3 +1,4 @@
+use crate::pipeline::scope::Scope;
 use crate::{
     ImageTile, ManagedImage,
     algos::ImageAlgorithm,
@@ -7,7 +8,7 @@ use crate::{
         pipeline_context::PipelineContext,
     },
 };
-use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, PipelineId};
+use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, MemoryId, PipelineId, StepId};
 use kornia_image::ImageSize;
 use log::info;
 use std::sync::Arc;
@@ -58,16 +59,12 @@ pub struct Pipeline {
     pub id: PipelineId,
     pub dependencies: Vec<PipelineId>,
     pub settings: CorePipelineSettings,
-    /// `ExecutionScope::Tile` commands, each paired with its original
-    /// as-authored step index (see `add_command`) so a breakpoint targeting
-    /// a specific step still resolves correctly even though `Tile` and
-    /// `WholeImage` commands are split into two separately-run lists.
-    pub commands: Vec<(usize, Box<dyn ImageAlgorithm>)>,
-    /// Next as-authored step index to assign in `add_command`. Counts every
-    /// command added regardless of which scope it lands in, so the index
-    /// reflects the pipeline's authored order (what a breakpoint targets),
-    /// not either scope's own position.
-    next_step_index: usize,
+    /// The commands, each paired with the id of the project step it came
+    /// from (see `add_step`) - what a breakpoint targets, so it resolves
+    /// correctly although `Tile` and `WholeImage` commands are split into
+    /// two separately-run lists - and with the scope it runs in (a command
+    /// component instance's, or `Global`).
+    pub commands: Vec<(StepId, Scope, Box<dyn ImageAlgorithm>)>,
 }
 
 /// Pipeline execution pipeline implementation
@@ -90,17 +87,19 @@ impl Pipeline {
             dependencies: Vec::new(),
             settings,
             commands: Vec::new(),
-            next_step_index: 0,
         }
     }
 
-    /// Add a new command to the end of the pipeline, routing it to the
-    /// `Tile` or `WholeImage` list per its `execution_scope()` while
-    /// preserving its as-authored step index (see `next_step_index`).
+    /// Adds the command of project step `id`, running in `scope`, to the
+    /// end of the pipeline.
+    pub fn add_step(&mut self, id: StepId, scope: Scope, command: Box<dyn ImageAlgorithm>) {
+        self.commands.push((id, scope, command));
+    }
+
+    /// Adds a command that isn't a project step (e.g. `TileMerge`), so no
+    /// breakpoint can target it. It runs in the global scope.
     pub fn add_command(&mut self, command: Box<dyn ImageAlgorithm>) {
-        let step_index = self.next_step_index;
-        self.next_step_index += 1;
-        self.commands.push((step_index, command));
+        self.add_step(StepId::UNASSIGNED, Scope::Global, command);
     }
 
     // Add dependency
@@ -120,11 +119,17 @@ impl Pipeline {
                 self.id
             ),
             ImageAddress::Memory(slot) => format!(
-                "pipeline {} starts from memory slot {slot:?}, which no earlier pipeline \
-                 stored - add an Image Cache step that stores it to a pipeline running before",
-                self.id
+                "pipeline {} starts from shared memory slot {}, which no earlier pipeline \
+                 stored - add an Image Cache step storing to that shared slot to a pipeline \
+                 above it",
+                self.id,
+                match slot {
+                    MemoryId::PipelineContext(n)
+                    | MemoryId::ProjectCache(n)
+                    | MemoryId::ComponentContext(n) => n,
+                }
             ),
-            ImageAddress::Scratchpad => {
+            ImageAddress::Scratchpad | ImageAddress::None => {
                 format!("pipeline {}: its start image is not available", self.id)
             }
         }
@@ -136,9 +141,8 @@ impl Pipeline {
     /// full object set - `ExecutionScope::WholeImage` commands never run
     /// here, see `run_whole_image`.
     ///
-    /// `breakpoint_step` identifies a step's *as-authored* index (see
-    /// `add_command`) at which to act; a step index belonging to a
-    /// `WholeImage` command never matches here. `snapshot_mode`:
+    /// `breakpoint_step` is the id of the step (see `add_step`) at which to
+    /// act; the id of a `WholeImage` command never matches here. `snapshot_mode`:
     ///   - `false` (Stop) — stop execution at that step and return early.
     ///   - `true`  (Snapshot) — capture the buffers at that step, then
     ///     continue to completion; the capture is returned in
@@ -148,7 +152,7 @@ impl Pipeline {
         output_path: PathBuf,
         tile: Option<ImageTile>,
         mut cache: GlobalPipelineCache,
-        breakpoint_step: Option<i32>,
+        breakpoint_step: Option<StepId>,
         snapshot_mode: bool,
     ) -> Result<PipelineResult, InternalErrors> {
         let tile = match tile {
@@ -164,34 +168,44 @@ impl Pipeline {
             },
         };
 
+        let image_meta = PipelineImageMeta {
+            image_tile_info: tile,
+            full_image_width: cache.image_meta.full_image_width,
+            is_rgb: cache.image_meta.is_rgb,
+            nr_of_bits: cache.image_meta.nr_of_bits,
+            pixel_sizes: cache.image_meta.pixel_sizes.clone(),
+        };
         let cache_idx: CacheAddress = match self.settings.start_image {
             ImageAddress::Scratchpad => CacheAddress::Scratchpad,
-            ImageAddress::Memory(memory_id) => CacheAddress::Memory(memory_id),
+            // A pipeline's own slots are empty when it starts: a start from a
+            // memory slot reads the shared one an earlier pipeline stored.
+            // (Projects saved before chose `PipelineContext` here.)
+            ImageAddress::Memory(
+                MemoryId::PipelineContext(slot) | MemoryId::ProjectCache(slot),
+            ) => CacheAddress::Memory(MemoryId::ProjectCache(slot)),
+            // A pipeline's start isn't inside a component.
+            ImageAddress::Memory(memory_id) => CacheAddress::memory(memory_id, Scope::Global)?,
             ImageAddress::Channel(channel_idx) => CacheAddress::Channel((channel_idx, tile)),
+            // No start image: the first step loads one (checked when the
+            // job is built).
+            ImageAddress::None => CacheAddress::Scratchpad,
         };
-
-        let Some(initial_image) = cache.get_image_from_cache(&cache_idx, tile) else {
-            return Err(InternalErrors::CacheMiss(
-                self.missing_start_image_message(),
-            ));
+        let mut ctx = if self.settings.start_image == ImageAddress::None {
+            PipelineContext::without_image(output_path, image_meta)?
+        } else {
+            let Some(initial_image) = cache.get_image_from_cache(&cache_idx, tile) else {
+                return Err(InternalErrors::CacheMiss(
+                    self.missing_start_image_message(),
+                ));
+            };
+            PipelineContext::new_from_image(output_path, image_meta, initial_image)?
         };
-
-        let mut ctx = PipelineContext::new_from_image(
-            output_path,
-            PipelineImageMeta {
-                image_tile_info: tile,
-                full_image_width: cache.image_meta.full_image_width,
-                is_rgb: cache.image_meta.is_rgb,
-                nr_of_bits: cache.image_meta.nr_of_bits,
-                pixel_sizes: cache.image_meta.pixel_sizes.clone(),
-            },
-            initial_image,
-        )?;
         let start = Instant::now();
         let mut breakpoint_capture: Option<BreakpointCapture> = None;
 
-        for (step_index, command) in &self.commands {
-            let step_index = *step_index;
+        for (step_id, scope, command) in &self.commands {
+            let step_id = *step_id;
+            ctx.scope = *scope;
             let step_start = Instant::now();
             command.run(&mut ctx, &mut cache)?;
             let duration = step_start.elapsed();
@@ -200,11 +214,10 @@ impl Pipeline {
             // Only capture at the exact breakpoint step - `breakpoint_step`
             // is `None` whenever no breakpoint is set, so this never runs
             // (and never clones segmentation/instance buffers) for a normal
-            // run. Comparing against the command's as-authored `step_index`
-            // (not its position in `commands`) is what lets a breakpoint
-            // resolve correctly regardless of which scope's list it's run
-            // through.
-            if breakpoint_step == Some(step_index as i32) {
+            // run. Comparing against the command's step id (not its
+            // position in `commands`) is what lets a breakpoint resolve
+            // correctly regardless of which scope's list it's run through.
+            if step_id != StepId::UNASSIGNED && breakpoint_step == Some(step_id) {
                 let capture = BreakpointCapture {
                     image: ctx.image.clone(),
                     segmentation: ctx.segmentation_map.as_ref().map(|s| {
@@ -230,7 +243,7 @@ impl Pipeline {
                     cache.clear_pipeline_context();
                     info!(
                         "Breakpoint (stop) at step {} of pipeline {} in {:?}",
-                        step_index,
+                        step_id,
                         self.id,
                         start.elapsed()
                     );
@@ -262,10 +275,11 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algos::ExecutionScope;
     use crate::image::Point2d;
     use crate::{
         ManagedImage, Object,
-        algos::{ExecutionScope, ExtractObjects, Voronoi},
+        algos::{ExtractObjects, Voronoi},
         pipeline::pipeline_cache::GlobalImageMeta,
     };
     use evanalyzer_cfg::core_types::{CitationMetadata, ImageAddress, ObjectClass, SizeUnits};
@@ -394,6 +408,7 @@ mod tests {
             stage1.add_command(Box::new(FakeSegmenter { rect: object_rect }));
             stage1.add_command(Box::new(ExtractObjects {
                 max_objects_before_fail: 100_000,
+                class_mapping: vec![],
             }));
             let result = stage1
                 .run_commands(
@@ -431,11 +446,11 @@ mod tests {
             },
         );
         stage2.add_command(Box::new(Voronoi {
-            centers: ObjectClass::Valid(1),
+            centers: ObjectClass::Global(1),
             center_filter_classes: vec![],
             mask: ObjectClass::Unset,
             mask_filter_classes: vec![],
-            output_class: ObjectClass::Valid(99),
+            output_class: ObjectClass::Global(99),
             unit: SizeUnits::Pixels,
             max_radius: 0.0,
             exclude_areas_at_the_edges: false,
@@ -475,7 +490,7 @@ mod tests {
         let mut regions: Vec<&Object> = cache
             .object_cache
             .values()
-            .filter(|r| r.has_object_class(&ObjectClass::Valid(99)))
+            .filter(|r| r.is_of(&ObjectClass::Global(99), Scope::Global))
             .collect();
         regions.sort_by_key(|r| r.bbox[0]);
         assert_eq!(

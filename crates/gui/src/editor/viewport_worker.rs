@@ -2,8 +2,9 @@ use crate::{
     HistogramData, UiState,
     editor::{
         histogram_controller::HistogramController,
+        view_channel::{SampleSlice, Samples, ViewChannel},
         viewport_cache::{ReadContext, ViewportCache, to_z_projection},
-        viewport_controller::{DrawingTaskContainer, ViewportController},
+        viewport_controller::{DrawingTaskContainer, ImageRect, ViewportController},
         viewport_task::{DrawingTask, TaskDispatch},
     },
 };
@@ -28,7 +29,7 @@ pub struct ViewportWorker {
 }
 
 pub(crate) struct ChannelCtx<'a> {
-    pub(crate) image_data: &'a [f32],
+    pub(crate) image_data: SampleSlice<'a>,
     pub(crate) histogram: HistogramSettings,
     pub(crate) color: [f32; 3],
     pub(crate) r_factor: f32,
@@ -106,6 +107,10 @@ impl ViewportWorker {
             self.viewport_controller.sync_objects_to_slint_viewport();
             return;
         }
+
+        // Taken before any display settings are read: a change landing
+        // mid-render then leaves this render tagged as outdated.
+        let generation = self.viewport_controller.content_generation();
 
         // ----------------------------------------------------------------
         // STEP 1: Extract all needed data from project - drop lock immediately
@@ -230,7 +235,7 @@ impl ViewportWorker {
                         full_image_w: bp.tile_offset_x + bp.tile_width,
                         full_image_h: bp.tile_offset_y + bp.tile_height,
                     };
-                    Ok((Arc::new(vec![channel]), prepared))
+                    Ok((Arc::new(vec![ViewChannel::wrap(&channel)]), prepared))
                 }
                 None => Err(InternalErrors::ImageReadError(
                     "No breakpoint image captured yet".into(),
@@ -270,9 +275,17 @@ impl ViewportWorker {
                 }
             }
 
-            // Resize buffer from pool if needed
+            // Resize buffer from pool if needed. A high-res buffer the tile
+            // history may still hold is never written again (that would
+            // copy it first) - a fresh one is taken instead.
             b.pool_idx = (b.pool_idx + 1) % b.buffer_pool.len();
-            if b.buffer_pool[b.pool_idx].width() != prepared.image_w as u32
+            let tile_history_on = !is_low_res
+                && self
+                    .viewport_controller
+                    .memory_settings()
+                    .tile_history_enabled;
+            if tile_history_on
+                || b.buffer_pool[b.pool_idx].width() != prepared.image_w as u32
                 || b.buffer_pool[b.pool_idx].height() != prepared.image_h as u32
             {
                 b.buffer_pool[b.pool_idx] =
@@ -294,10 +307,11 @@ impl ViewportWorker {
             let mut is_rgb = false;
 
             let all_hists: Vec<Vec<f32>> = if is_label_render {
-                if let Some(channel) = render_src.first() {
-                    if let ImageContainer::U32(img) = &*channel.image {
-                        render_labels_to_rgb8(img.data.as_slice(), master_slice);
-                    }
+                if let Some(channel) = render_src.first()
+                    && let Samples::Image(image) = &channel.samples
+                    && let ImageContainer::U32(img) = &**image
+                {
+                    render_labels_to_rgb8(img.data.as_slice(), master_slice);
                 }
                 Vec::new()
             } else {
@@ -313,7 +327,7 @@ impl ViewportWorker {
                                 || (task.auto_adjust_selected && idx == selected_channel)
                             {
                                 let (min, max, min_range, max_range) =
-                                    apply_auto_adjust(&channel.image, channel.is_rgb);
+                                    auto_adjust_range(channel.slice(), channel.is_rgb);
                                 debug!(
                                     "Auto-adjusting channel {} min={} max={} range=({},{})",
                                     idx, min, max, min_range, max_range
@@ -348,17 +362,10 @@ impl ViewportWorker {
                 for channel in render_src.iter() {
                     let idx = channel.c_stack;
                     if let Some(Some(histogram)) = hist_settings_fresh.get(&idx) {
-                        let data_slice = match &*channel.image {
-                            ImageContainer::F32Gray(img) => {
-                                is_rgb = false;
-                                Some(img.as_slice())
-                            }
-                            ImageContainer::F32Rgb(img) => {
-                                is_rgb = true;
-                                Some(img.as_slice())
-                            }
-                            _ => None,
-                        };
+                        // One value per pixel; interleaved RGB and label
+                        // maps have no intensity window to render with.
+                        let data_slice = channel.slice();
+                        is_rgb = channel.is_rgb;
 
                         if let Some(slice) = data_slice {
                             let inv_range = 1.0 / (histogram.max - histogram.min).max(0.001);
@@ -433,7 +440,8 @@ impl ViewportWorker {
                 let vp_w = prepared.viewport_width.max(1.0) as usize;
                 let vp_h = prepared.viewport_height.max(1.0) as usize;
                 b.screen_pool_idx = (b.screen_pool_idx + 1) % b.screen_buffer_pool.len();
-                if b.screen_buffer_pool[b.screen_pool_idx].width() as usize != vp_w
+                if tile_history_on
+                    || b.screen_buffer_pool[b.screen_pool_idx].width() as usize != vp_w
                     || b.screen_buffer_pool[b.screen_pool_idx].height() as usize != vp_h
                 {
                     b.screen_buffer_pool[b.screen_pool_idx] =
@@ -555,10 +563,17 @@ impl ViewportWorker {
             self.viewport_controller.sync_viewport_state_to_slint(
                 pb,
                 svg_hists_to_send,
-                info.draw_x,
-                info.draw_y,
-                info.zoomed_w,
-                info.zoomed_h,
+                ImageRect::from_screen(
+                    info.draw_x,
+                    info.draw_y,
+                    info.zoomed_w,
+                    info.zoomed_h,
+                    info.zoom,
+                    info.offset_x,
+                    info.offset_y,
+                ),
+                info.zoom,
+                generation,
                 is_low_res,
             );
 
@@ -571,7 +586,17 @@ impl ViewportWorker {
             }
 
             if is_low_res {
-                self.viewport_controller.sync_high_res_ready_to_slint(false);
+                // Only new content hides the current high-res render (it
+                // shows the previous image); after anything else it still
+                // lines up with the overview and stays.
+                if task.is_new_image || task.is_new_series {
+                    self.viewport_controller.sync_high_res_ready_to_slint(false);
+                }
+                *self
+                    .viewport_controller
+                    .full_image_size
+                    .lock()
+                    .expect("Poisoned") = (info.full_image_w as i64, info.full_image_h as i64);
                 self.viewport_controller.sync_navigator_to_slint(
                     info.full_image_w as i64,
                     info.full_image_h as i64,
@@ -641,7 +666,7 @@ impl RenderBuffers {
 /// project knows the channel not. RGB images keep their fixed colours -
 /// except in grayscale mode, where every channel is white.
 fn channel_display_color(
-    channel: &ImageChannel,
+    channel: &ViewChannel,
     project_color: Option<[f32; 3]>,
     grayscale: bool,
 ) -> [f32; 3] {
@@ -673,6 +698,79 @@ fn wait_for_task(pair: &Arc<DrawingTaskContainer>) -> DrawingTask {
     task_slot.take().unwrap()
 }
 
+/// The pixel loop of [`prepare_image_channels_for_slint`]: blends the
+/// visible channels into `dest_pixels` and counts their histograms.
+/// `value(k, i)` is visible channel `k`'s value at pixel `i` - generic, so
+/// each sample type gets a loop of its own without a per-pixel type check.
+fn render_pixels<F>(
+    channels: &[ChannelCtx],
+    visible_indices: &[usize],
+    dest_pixels: &mut [Rgb8Pixel],
+    num_bins: usize,
+    create_histogram: bool,
+    value: F,
+) -> Vec<Vec<u32>>
+where
+    F: Fn(usize, usize) -> f32 + Sync,
+{
+    use rayon::prelude::*;
+
+    let chunk_size = 1024 * 4;
+    let n_channels = channels.len();
+
+    dest_pixels
+        .par_chunks_mut(chunk_size)
+        .enumerate()
+        .map(|(chunk_idx, chunk)| {
+            let mut local_hists = vec![vec![0u32; num_bins]; n_channels];
+            let start_idx = chunk_idx * chunk_size;
+
+            for (p_idx, pixel) in chunk.iter_mut().enumerate() {
+                let global_idx = start_idx + p_idx;
+
+                let mut r_acc = 0.0f32;
+                let mut g_acc = 0.0f32;
+                let mut b_acc = 0.0f32;
+
+                for (k, &c_idx) in visible_indices.iter().enumerate() {
+                    let ctx = &channels[c_idx];
+                    let p = value(k, global_idx);
+
+                    if create_histogram
+                        && p >= ctx.histogram.min_limit
+                        && p <= ctx.histogram.max_limit
+                    {
+                        let bin_idx = ((p - ctx.histogram.min_limit) * ctx.h_mult) as usize;
+                        if bin_idx < num_bins {
+                            local_hists[c_idx][bin_idx] += 1;
+                        }
+                    }
+
+                    let val = (p + ctx.offset).max(0.0);
+                    r_acc += val * ctx.r_factor;
+                    g_acc += val * ctx.g_factor;
+                    b_acc += val * ctx.b_factor;
+                }
+
+                pixel.r = r_acc.min(255.0) as u8;
+                pixel.g = g_acc.min(255.0) as u8;
+                pixel.b = b_acc.min(255.0) as u8;
+            }
+            local_hists
+        })
+        .reduce(
+            || vec![vec![0u32; num_bins]; n_channels],
+            |mut a, b| {
+                for (ah, bh) in a.iter_mut().zip(b.iter()) {
+                    for (av, bv) in ah.iter_mut().zip(bh.iter()) {
+                        *av += bv;
+                    }
+                }
+                a
+            },
+        )
+}
+
 /// Applies auto-adjustment to an image using partial sorting (O(N) average).
 ///
 /// Samples every 10th pixel and finds the 0.5th and 99.5th percentile values
@@ -680,7 +778,12 @@ fn wait_for_task(pair: &Arc<DrawingTaskContainer>) -> DrawingTask {
 ///
 /// # Returns
 /// `(min, max, min_limit, max_limit)` - display range and histogram limits.
-pub fn apply_auto_adjust(img: &ImageContainer, is_rgb: bool) -> (f32, f32, f32, f32) {
+/// `samples`: a viewport channel's values, `None` when it isn't one value
+/// per pixel - the full range is used then.
+pub(crate) fn auto_adjust_range(
+    samples: Option<SampleSlice<'_>>,
+    is_rgb: bool,
+) -> (f32, f32, f32, f32) {
     if is_rgb {
         return (0.0, 1.0, 0.0, 1.0);
     }
@@ -688,10 +791,12 @@ pub fn apply_auto_adjust(img: &ImageContainer, is_rgb: bool) -> (f32, f32, f32, 
     let mut min = 0.0;
     let mut max = 1.0;
 
-    if let ImageContainer::F32Gray(image) = img {
-        let pixels = image.as_slice();
-        if !pixels.is_empty() {
-            let mut sample: Vec<f32> = pixels.iter().step_by(10).cloned().collect();
+    if let Some(pixels) = samples {
+        if pixels.len() > 0 {
+            let mut sample: Vec<f32> = (0..pixels.len())
+                .step_by(10)
+                .map(|i| pixels.get(i))
+                .collect();
             let len = sample.len();
 
             let low_idx = (len as f32 * 0.005) as usize;
@@ -776,8 +881,6 @@ pub(crate) fn prepare_image_channels_for_slint(
     visible_channels: &Vec<i32>,
     _is_rgb: bool,
 ) -> Vec<Vec<f32>> {
-    use rayon::prelude::*;
-
     let expected_len = dest_pixels.len();
     // Resolved once, outside the pixel loop: which `channels` entries are
     // actually visible. `visible_channels.contains(...)` used to be called
@@ -806,60 +909,50 @@ pub(crate) fn prepare_image_channels_for_slint(
         }
     }
 
-    let chunk_size = 1024 * 4;
     let n_channels = channels.len();
 
-    let raw_hists: Vec<Vec<u32>> = dest_pixels
-        .par_chunks_mut(chunk_size)
-        .enumerate()
-        .map(|(chunk_idx, chunk)| {
-            let mut local_hists = vec![vec![0u32; num_bins]; n_channels];
-            let start_idx = chunk_idx * chunk_size;
-
-            for (p_idx, pixel) in chunk.iter_mut().enumerate() {
-                let global_idx = start_idx + p_idx;
-
-                let mut r_acc = 0.0f32;
-                let mut g_acc = 0.0f32;
-                let mut b_acc = 0.0f32;
-
-                for &c_idx in &visible_indices {
-                    let ctx = &channels[c_idx];
-                    let p = ctx.image_data[global_idx];
-
-                    if create_histogram
-                        && p >= ctx.histogram.min_limit
-                        && p <= ctx.histogram.max_limit
-                    {
-                        let bin_idx = ((p - ctx.histogram.min_limit) * ctx.h_mult) as usize;
-                        if bin_idx < num_bins {
-                            local_hists[c_idx][bin_idx] += 1;
-                        }
-                    }
-
-                    let val = (p + ctx.offset).max(0.0);
-                    r_acc += val * ctx.r_factor;
-                    g_acc += val * ctx.g_factor;
-                    b_acc += val * ctx.b_factor;
-                }
-
-                pixel.r = r_acc.min(255.0) as u8;
-                pixel.g = g_acc.min(255.0) as u8;
-                pixel.b = b_acc.min(255.0) as u8;
-            }
-            local_hists
-        })
-        .reduce(
-            || vec![vec![0u32; num_bins]; n_channels],
-            |mut a, b| {
-                for (ah, bh) in a.iter_mut().zip(b.iter()) {
-                    for (av, bv) in ah.iter_mut().zip(bh.iter()) {
-                        *av += bv;
-                    }
-                }
-                a
-            },
-        );
+    // The sample type is resolved once per frame, not per pixel: when all
+    // visible channels share one (the usual case), the loop below is
+    // compiled for exactly that type.
+    macro_rules! typed {
+        ($variant:ident) => {
+            visible_indices
+                .iter()
+                .map(|&i| match channels[i].image_data {
+                    SampleSlice::$variant(d, inv) => Some((d, inv)),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()
+        };
+    }
+    let raw_hists = if let Some(data) = typed!(U8) {
+        render_pixels(
+            channels,
+            &visible_indices,
+            dest_pixels,
+            num_bins,
+            create_histogram,
+            |k, i| data[k].0[i] as f32 * data[k].1,
+        )
+    } else if let Some(data) = typed!(U16) {
+        render_pixels(
+            channels,
+            &visible_indices,
+            dest_pixels,
+            num_bins,
+            create_histogram,
+            |k, i| data[k].0[i] as f32 * data[k].1,
+        )
+    } else {
+        render_pixels(
+            channels,
+            &visible_indices,
+            dest_pixels,
+            num_bins,
+            create_histogram,
+            |k, i| channels[visible_indices[k]].image_data.get(i),
+        )
+    };
 
     if !create_histogram {
         return vec![];
@@ -931,10 +1024,13 @@ pub(crate) fn histogram_to_svg_fast(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helper::size_formater::BYTES_PER_MB;
+    use evanalyzer_app::global::ViewportMemorySettings;
     use evanalyzer_app::images::ManagedImage;
     use evanalyzer_app::images::Point2d;
     use evanalyzer_cfg::core_types::ImagePlane;
     use kornia_image::{Image, ImageSize};
+    use slint::Model;
 
     // -- hsv_to_rgb8 ------------------------------------------------------------
 
@@ -1004,6 +1100,14 @@ mod tests {
     }
 
     // -- apply_auto_adjust --------------------------------------------------------
+
+    fn apply_auto_adjust(img: &ImageContainer, is_rgb: bool) -> (f32, f32, f32, f32) {
+        let samples = match img {
+            ImageContainer::F32Gray(image) => Some(SampleSlice::F32(image.as_slice())),
+            _ => None,
+        };
+        auto_adjust_range(samples, is_rgb)
+    }
 
     fn gray_container(pixels: Vec<f32>) -> ImageContainer {
         let len = pixels.len();
@@ -1090,7 +1194,7 @@ mod tests {
 
     fn ctx_for(data: &[f32]) -> ChannelCtx<'_> {
         ChannelCtx {
-            image_data: data,
+            image_data: SampleSlice::F32(data),
             histogram: HistogramSettings {
                 min: 0.0,
                 max: 1.0,
@@ -1118,6 +1222,24 @@ mod tests {
         assert_eq!(dest[0], Rgb8Pixel { r: 0, g: 0, b: 0 });
         // (0.9 + offset(0.0)) * r_factor(255.0) = 229.5 -> truncated to 229
         assert_eq!(dest[1], Rgb8Pixel { r: 229, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn compact_and_float_samples_render_identical_pixels_and_histograms() {
+        let inv = 1.0 / 255.0f32;
+        let raw: Vec<u8> = (0..=255).collect();
+        let floats: Vec<f32> = raw.iter().map(|&q| q as f32 * inv).collect();
+
+        let render = |ctx: ChannelCtx| {
+            let mut dest = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; raw.len()];
+            let hists =
+                prepare_image_channels_for_slint(&[ctx], &mut dest, 16, true, &vec![0], false);
+            (dest, hists)
+        };
+        let mut compact = ctx_for(&floats);
+        compact.image_data = SampleSlice::U8(&raw, inv);
+
+        assert_eq!(render(compact), render(ctx_for(&floats)));
     }
 
     #[test]
@@ -1207,7 +1329,12 @@ mod tests {
     fn render_fixture(project: evanalyzer_app::project::ProjectWithRuntime) -> Render {
         let (ui, results_ui) = test_ui_windows();
         let app_state = ui_state_with_windows(&ui, &results_ui, project);
-        let viewport = Arc::new(ViewportController::new(ui.as_weak(), app_state.clone()));
+        let cache = Arc::new(ViewportCache::new(app_state.clone()));
+        let viewport = Arc::new(ViewportController::new(
+            ui.as_weak(),
+            app_state.clone(),
+            cache.clone(),
+        ));
         {
             let mut vp = viewport.viewport_state.write().unwrap();
             vp.viewport_width = 400.0;
@@ -1219,7 +1346,6 @@ mod tests {
             app_state.clone(),
             viewport.clone(),
         ));
-        let cache = Arc::new(ViewportCache::new(app_state.clone()));
         let worker = Arc::new(ViewportWorker::new(
             app_state.clone(),
             viewport,
@@ -1261,7 +1387,7 @@ mod tests {
         let image = r.ui.get_display_image();
         assert!(image.size().width > 0 && image.size().height > 0);
         assert!(r.view().get_high_res_ready());
-        assert!(r.view().get_tile_width() > 0.0);
+        assert!(r.view().get_hr_img_w() > 0.0);
         // Auto-adjust stored a histogram window for the image's channels.
         let histograms = r.app_state.get_project().get_image_channel_histograms();
         assert!(histograms.values().any(|h| h.is_some()), "{histograms:?}");
@@ -1276,9 +1402,248 @@ mod tests {
         r.draw(TaskDispatch::HighRes, new_image_task());
         r.draw(TaskDispatch::LowRes, new_image_task());
         assert!(r.ui.get_ghost_image().size().width > 0);
-        assert!(r.view().get_tile_width_ghost() > 0.0);
+        assert!(r.view().get_ghost_img_w() > 0.0);
         // A low-res frame never takes back an already posted high-res one.
         assert!(r.view().get_high_res_ready());
+    }
+
+    /// Full-resolution size of the image as read from the file (the
+    /// fixture project's metadata doesn't match the file) - known once an
+    /// overview was drawn.
+    fn full_image_size(r: &mut Render) -> (f32, f32) {
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        let (w, h) = *r.worker.viewport_controller.full_image_size.lock().unwrap();
+        assert!(w > 0 && h > 0);
+        (w as f32, h as f32)
+    }
+
+    fn set_view(r: &Render, zoom: f32, offset_x: f32, offset_y: f32) {
+        let mut vp = r.worker.viewport_controller.viewport_state.write().unwrap();
+        vp.zoom = zoom;
+        vp.offset_x = offset_x;
+        vp.offset_y = offset_y;
+    }
+
+    #[test]
+    fn the_overview_covers_the_whole_image_in_image_pixels_wherever_the_view_is() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let (full_w, full_h) = full_image_size(&mut r);
+
+        // Panned far and zoomed in: the overview still lies at the image
+        // origin, image-sized - the viewport places it with the live
+        // transform, so a pan needs no new overview.
+        set_view(&r, 3.0, -5000.0, -4000.0);
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+
+        let v = r.view();
+        assert!(v.get_ghost_img_x().abs() < 0.01, "{}", v.get_ghost_img_x());
+        assert!(v.get_ghost_img_y().abs() < 0.01, "{}", v.get_ghost_img_y());
+        assert!(
+            (v.get_ghost_img_w() - full_w).abs() < 0.5,
+            "{} vs {full_w}",
+            v.get_ghost_img_w()
+        );
+        assert!(
+            (v.get_ghost_img_h() - full_h).abs() < 0.5,
+            "{} vs {full_h}",
+            v.get_ghost_img_h()
+        );
+    }
+
+    #[test]
+    fn the_high_res_rect_is_where_the_render_lies_in_the_image() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let (full_w, full_h) = full_image_size(&mut r);
+
+        let v = r.view();
+        // Fitted to the screen, the whole image is one tile.
+        assert!(v.get_hr_img_x().abs() < 0.01);
+        assert!(v.get_hr_img_y().abs() < 0.01);
+        assert!(
+            (v.get_hr_img_w() - full_w).abs() < 0.5,
+            "{} vs {full_w}",
+            v.get_hr_img_w()
+        );
+        assert!(
+            (v.get_hr_img_h() - full_h).abs() < 0.5,
+            "{} vs {full_h}",
+            v.get_hr_img_h()
+        );
+        assert!(v.get_hr_zoom() > 0.0);
+    }
+
+    #[test]
+    fn a_low_res_frame_of_new_content_hides_the_previous_high_res_render() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        assert!(r.view().get_high_res_ready());
+
+        // A new image: its overview arrives before its sharp render.
+        r.worker.viewport_controller.trigger_new_image_redraw();
+        r.draw(TaskDispatch::LowRes, new_image_task());
+        assert!(!r.view().get_high_res_ready());
+
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        assert!(r.view().get_high_res_ready());
+
+        // Any other overview (a pan, a histogram change) leaves it shown.
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        assert!(r.view().get_high_res_ready());
+    }
+
+    /// Renders the fixture at its fitted zoom, then 4x zoomed in, then at
+    /// the fitted zoom again - returns the fitted zoom.
+    fn zoom_in_and_out(r: &mut Render) -> f32 {
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let fitted = r
+            .worker
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap()
+            .zoom;
+        set_view(r, fitted * 4.0, 0.0, 0.0);
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        set_view(r, fitted, 0.0, 0.0);
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        fitted
+    }
+
+    fn enable_tile_history(r: &Render) {
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings {
+                tile_history_enabled: true,
+                ..Default::default()
+            });
+        drain_ui_queue();
+    }
+
+    #[test]
+    fn without_the_tile_history_no_earlier_render_is_kept() {
+        let mut r = render_fixture(project_with_fixture_image());
+        zoom_in_and_out(&mut r);
+        assert_eq!(r.view().get_retained_tiles().row_count(), 0);
+    }
+
+    #[test]
+    fn the_tile_history_keeps_a_sharper_earlier_render_after_zooming_out() {
+        let mut r = render_fixture(project_with_fixture_image());
+        enable_tile_history(&r);
+        let fitted = zoom_in_and_out(&mut r);
+
+        let kept: Vec<_> = r.view().get_retained_tiles().iter().collect();
+        assert!(
+            kept.iter().any(|t| (t.zoom - fitted * 4.0).abs() < 1e-4),
+            "zooms kept: {:?}",
+            kept.iter().map(|t| t.zoom).collect::<Vec<_>>()
+        );
+        // The first, fitted render is hidden by the current one (same area,
+        // same sharpness) and not kept twice.
+        assert!(kept.iter().all(|t| (t.zoom - fitted).abs() > 1e-4));
+    }
+
+    #[test]
+    fn a_display_change_drops_the_tile_history() {
+        let mut r = render_fixture(project_with_fixture_image());
+        enable_tile_history(&r);
+        zoom_in_and_out(&mut r);
+        assert!(r.view().get_retained_tiles().row_count() > 0);
+
+        // E.g. a histogram change: the kept renders show the old look.
+        r.worker.viewport_controller.trigger_image_redraw();
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        assert_eq!(r.view().get_retained_tiles().row_count(), 0);
+    }
+
+    #[test]
+    fn turning_the_tile_history_off_frees_the_kept_renders() {
+        let mut r = render_fixture(project_with_fixture_image());
+        enable_tile_history(&r);
+        zoom_in_and_out(&mut r);
+        assert!(r.view().get_retained_tiles().row_count() > 0);
+
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings::default());
+        drain_ui_queue();
+        assert_eq!(r.view().get_retained_tiles().row_count(), 0);
+    }
+
+    #[test]
+    fn an_analysis_start_empties_the_caches_unless_the_settings_say_otherwise() {
+        let mut r = render_fixture(project_with_fixture_image());
+        enable_tile_history(&r);
+        zoom_in_and_out(&mut r);
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+        let cache = r.worker.viewport_cache.clone();
+        let (tiles, overviews) = cache.held_bytes();
+        assert!(tiles > 0 && overviews > 0);
+
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings {
+                tile_history_enabled: true,
+                free_caches_on_analysis: false,
+                ..Default::default()
+            });
+        r.worker
+            .viewport_controller
+            .release_preview_memory_for_analysis();
+        drain_ui_queue();
+        assert_eq!(cache.held_bytes(), (tiles, overviews), "switched off: kept");
+
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings {
+                tile_history_enabled: true,
+                ..Default::default()
+            });
+        r.worker
+            .viewport_controller
+            .release_preview_memory_for_analysis();
+        drain_ui_queue();
+        assert_eq!(cache.held_bytes(), (0, 0));
+        assert_eq!(r.view().get_retained_tiles().row_count(), 0);
+        // What is on screen stays.
+        assert!(r.ui.get_display_image().size().width > 0);
+        assert!(r.view().get_high_res_ready());
+    }
+
+    #[test]
+    fn the_object_overlay_reaches_the_margin_past_every_viewport_edge() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        let zoom = 2.0;
+        let (off_x, off_y) = (-30.0, 12.0);
+        set_view(&r, zoom, off_x, off_y);
+
+        for margin in [0u32, 64] {
+            r.worker
+                .viewport_controller
+                .set_memory_settings(ViewportMemorySettings {
+                    object_overlay_margin_px: margin,
+                    ..Default::default()
+                });
+            r.draw(TaskDispatch::Objects, DrawingTask::default());
+
+            let size = r.ui.get_object_image().size();
+            assert_eq!(
+                (size.width, size.height),
+                (400 + 2 * margin, 300 + 2 * margin),
+                "margin {margin}"
+            );
+            // Its top-left corner lies `margin` screen pixels before the
+            // viewport's, in image pixels.
+            let v = r.view();
+            let m = margin as f32;
+            assert!((v.get_obj_img_x() - (-m - off_x) / zoom).abs() < 1e-3);
+            assert!((v.get_obj_img_y() - (-m - off_y) / zoom).abs() < 1e-3);
+            assert!((v.get_obj_img_w() - size.width as f32 / zoom).abs() < 1e-3);
+            assert!(v.get_object_ready());
+        }
     }
 
     #[test]
@@ -1381,23 +1746,39 @@ mod tests {
         let reader_red = [1.0, 0.0, 0.0];
         let green = [0.0, 1.0, 0.0];
         assert_eq!(
-            channel_display_color(&image_channel(false, reader_red), Some(green), false),
+            channel_display_color(
+                &ViewChannel::wrap(&image_channel(false, reader_red)),
+                Some(green),
+                false
+            ),
             green,
             "the project's colour wins"
         );
         assert_eq!(
-            channel_display_color(&image_channel(false, reader_red), None, false),
+            channel_display_color(
+                &ViewChannel::wrap(&image_channel(false, reader_red)),
+                None,
+                false
+            ),
             reader_red,
             "a channel the project doesn't know: the reader's colour"
         );
         assert_eq!(
-            channel_display_color(&image_channel(true, reader_red), Some(green), false),
+            channel_display_color(
+                &ViewChannel::wrap(&image_channel(true, reader_red)),
+                Some(green),
+                false
+            ),
             reader_red,
             "RGB images keep their colours"
         );
         for is_rgb in [false, true] {
             assert_eq!(
-                channel_display_color(&image_channel(is_rgb, reader_red), None, true),
+                channel_display_color(
+                    &ViewChannel::wrap(&image_channel(is_rgb, reader_red)),
+                    None,
+                    true
+                ),
                 [1.0, 1.0, 1.0],
                 "grayscale mode: white, RGB images too"
             );
@@ -1418,6 +1799,230 @@ mod tests {
         assert!(
             lit.iter().all(|p| p.r == 0 && p.b == 0),
             "drawn in green only"
+        );
+    }
+
+    // -- benchmark (ignored: needs a whole slide image) ---------------------
+
+    /// Current and peak resident memory of this process, in MB (Linux).
+    fn rss_mb() -> (f64, f64) {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        let field = |name: &str| {
+            status
+                .lines()
+                .find(|l| l.starts_with(name))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<f64>().ok())
+                .map_or(0.0, |kb| kb / 1024.0)
+        };
+        (field("VmRSS:"), field("VmHWM:"))
+    }
+
+    /// Resets the peak resident memory (`VmHWM`) to the current one (Linux).
+    fn reset_peak_rss() {
+        let _ = std::fs::write("/proc/self/clear_refs", "5");
+    }
+
+    fn env_u32(name: &str, default: u32) -> u32 {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    /// Viewport benchmark on a real or generated whole slide image (see
+    /// `examples/make_test_slide.rs`): a 1920x1080 viewport opens the image,
+    /// zooms in, pans away and back - each step is one settled re-render
+    /// (what the 150 ms debounce triggers). Prints time, cache size, and the
+    /// process's current and peak RAM per step.
+    ///
+    /// EVANALYZER_BENCH_SLIDE=<slide.tif> [BENCH_TILE_CACHE_MB=1024]
+    /// [BENCH_OVERVIEW_CACHE_MB=256] [BENCH_TRIM=1] [BENCH_PAN_STEPS=8]
+    /// [BENCH_VIEWPORT=1920x1080] [BENCH_SERIES=0]
+    /// RAYON_NUM_THREADS=2
+    /// LD_LIBRARY_PATH=$PWD/libs/libtorch/lib cargo test --release
+    /// -p evanalyzer_gui bench_viewport -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_viewport_whole_slide() {
+        let Ok(slide) = std::env::var("EVANALYZER_BENCH_SLIDE") else {
+            eprintln!("EVANALYZER_BENCH_SLIDE not set - skipped");
+            return;
+        };
+        // Explicit sizes, or this computer's automatic ones.
+        let manual = std::env::var("BENCH_TILE_CACHE_MB").is_ok();
+        let tile_mb = env_u32("BENCH_TILE_CACHE_MB", 1024);
+        let overview_mb = env_u32("BENCH_OVERVIEW_CACHE_MB", 256);
+        // BENCH_VIEWPORT=WxH, default a 1080p screen.
+        let (vp_w, vp_h) = std::env::var("BENCH_VIEWPORT")
+            .ok()
+            .and_then(|v| {
+                let (w, h) = v.split_once('x')?;
+                Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))
+            })
+            .unwrap_or((1920.0, 1080.0));
+
+        let (rss_start, _) = rss_mb();
+        let mut r = render_fixture(crate::editor::test_support::project_with_image_file(
+            slide.clone().into(),
+        ));
+        // The file's structure, and BENCH_SERIES to pick the series viewed.
+        if let Ok(source) = r.app_state.get_image_source(&slide.clone().into()) {
+            for (idx, series) in &source.meta().series {
+                println!(
+                    "series {idx}: c={} z={} t={}, levels: {}",
+                    series.nr_c_stacks,
+                    series.nr_z_stacks,
+                    series.nr_t_stacks,
+                    series
+                        .resolutions
+                        .iter()
+                        .map(|(l, p)| format!(
+                            "{l}:{}x{} {}bit tile {}x{}",
+                            p.width, p.height, p.nr_bits, p.tile_width, p.tile_height
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+        if let Ok(series) = std::env::var("BENCH_SERIES") {
+            let series: i32 = series.parse().expect("BENCH_SERIES is a number");
+            r.app_state.get_project_write().set_active_series(&series);
+        }
+        r.worker
+            .viewport_controller
+            .set_memory_settings(ViewportMemorySettings {
+                cache_sizes_auto: !manual,
+                tile_cache_mb: tile_mb,
+                overview_cache_mb: overview_mb,
+                ..Default::default()
+            });
+        drain_ui_queue();
+        let (tile_mb, overview_mb) = crate::editor::viewport_cache::effective_cache_mb(
+            &r.worker.viewport_controller.memory_settings(),
+        );
+        {
+            let mut vp = r.worker.viewport_controller.viewport_state.write().unwrap();
+            vp.viewport_width = vp_w;
+            vp.viewport_height = vp_h;
+        }
+
+        println!(
+            "\nslide {slide}\ncaches {tile_mb} / {overview_mb} MB, {} threads, viewport {vp_w}x{vp_h}",
+            rayon::current_num_threads()
+        );
+        println!(
+            "{:<28} {:>9} {:>11} {:>14} {:>9} {:>9} {:>7}",
+            "step", "ms", "tile px", "cache MB", "RSS MB", "peak MB", "drawn"
+        );
+        let mut total = std::time::Duration::ZERO;
+        let mut step = |r: &mut Render, name: &str, scope: &[TaskDispatch], task: DrawingTask| {
+            reset_peak_rss();
+            let start = Instant::now();
+            for s in scope {
+                r.draw(*s, task.clone());
+            }
+            let took = start.elapsed();
+            total += took;
+            // BENCH_TRIM=1: hand freed memory back first, so RSS shows what
+            // is actually in use rather than what glibc keeps for reuse.
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            if std::env::var("BENCH_TRIM").is_ok() {
+                // SAFETY: only releases free allocator memory.
+                unsafe {
+                    libc::malloc_trim(0);
+                }
+            }
+            let size = r.ui.get_display_image().size();
+            let (tiles, overviews) = r.worker.viewport_cache.held_bytes();
+            let (rss, peak) = rss_mb();
+            // Sanity check: share of non-black pixels in the sharp render.
+            let drawn = r.ui.get_display_image().to_rgb8().map_or(0.0, |b| {
+                let px = b.as_slice();
+                px.iter().filter(|p| p.r | p.g | p.b != 0).count() as f64 / px.len().max(1) as f64
+            });
+            println!(
+                "{:<28} {:>9.1} {:>11} {:>14} {:>9.0} {:>9.0} {:>6.0}%",
+                name,
+                took.as_secs_f64() * 1000.0,
+                format!("{}x{}", size.width, size.height),
+                format!(
+                    "{:.0}+{:.0}",
+                    tiles as f64 / BYTES_PER_MB as f64,
+                    overviews as f64 / BYTES_PER_MB as f64
+                ),
+                rss - rss_start,
+                peak - rss_start,
+                drawn * 100.0
+            );
+        };
+
+        // Open: fitted overview and sharp render.
+        step(
+            &mut r,
+            "open (fit to screen)",
+            &[TaskDispatch::LowRes, TaskDispatch::HighRes],
+            new_image_task(),
+        );
+        let (channels, ctx) = r.worker.viewport_cache.get_image_references();
+        println!(
+            "channels: {:?}, bit depth {}",
+            channels
+                .iter()
+                .map(|(c, img)| format!("{c}:{img:?}"))
+                .collect::<Vec<_>>(),
+            ctx.bit_depth
+        );
+        let (full_w, full_h) = *r.worker.viewport_controller.full_image_size.lock().unwrap();
+        let (cx, cy) = (full_w as f32 / 2.0, full_h as f32 / 2.0);
+        let center = |r: &Render, zoom: f32, cx: f32, cy: f32| {
+            set_view(r, zoom, vp_w / 2.0 - cx * zoom, vp_h / 2.0 - cy * zoom)
+        };
+
+        for zoom in [0.05f32, 0.25, 1.0] {
+            center(&r, zoom, cx, cy);
+            step(
+                &mut r,
+                &format!("zoom {zoom}"),
+                &[TaskDispatch::HighRes],
+                DrawingTask::default(),
+            );
+        }
+
+        // Pan right in screen-sized steps at 100%, then back over the same
+        // places (cache hits if they were kept).
+        let pan = 700.0;
+        let steps = env_u32("BENCH_PAN_STEPS", 8) as usize;
+        // Along the image's longer side, so the tour stays on the image.
+        let (dx, dy) = if full_w >= full_h {
+            (pan, 0.0)
+        } else {
+            (0.0, pan)
+        };
+        for i in 1..=steps {
+            center(&r, 1.0, cx + i as f32 * dx, cy + i as f32 * dy);
+            step(
+                &mut r,
+                &format!("pan right {i}"),
+                &[TaskDispatch::HighRes],
+                DrawingTask::default(),
+            );
+        }
+        for i in (0..steps).rev() {
+            center(&r, 1.0, cx + i as f32 * dx, cy + i as f32 * dy);
+            step(
+                &mut r,
+                &format!("pan back {i}"),
+                &[TaskDispatch::HighRes],
+                DrawingTask::default(),
+            );
+        }
+        let (_, peak) = rss_mb();
+        println!(
+            "total {:.0} ms; process peak since start {:.0} MB",
+            total.as_secs_f64() * 1000.0,
+            peak - rss_start
         );
     }
 }

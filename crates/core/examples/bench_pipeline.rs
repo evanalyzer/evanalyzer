@@ -3,13 +3,23 @@
 // objects, run through the real job generator + JobExecutor.
 //
 // Usage: cargo run --release -p evanalyzer_core --features ai --example bench_pipeline -- \
-//     <workdir> [--images N] [--size PX] [--threads N] [--spots N]
+//     <workdir> [--images N] [--size PX] [--threads N] [--spots N] [--classify N]
+//
+// `--classify N` adds N Classify Objects steps (class filtering by size).
+// `--source 1` starts from the scratchpad, `--source 2` from no image, both
+// with a Load Image Channel step first (0: the channel itself, the default).
+// `--shared 1`: pipeline 1 stores channel 0 in shared memory slot 1, the
+// detection pipeline starts from that slot (an image passed between pipelines).
+// `--component 1` adds a component instance that turns the larger objects
+// into local (internal) objects - they don't reach the results.
 
 use evanalyzer_cfg::core_types::{ImageAddress, SegmentationClass};
+use evanalyzer_cfg::core_types::{ObjectClass, SizeUnits};
 use evanalyzer_cfg::settings::images_settings::ImageEntry;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::{
-    ExtractObjectsSettings, GaussianBlurSettings, ThresholdEntrySettings, ThresholdSettings,
+    ClassifyObjectsSettings, ExtractObjectsSettings, GaussianBlurSettings,
+    ObjectClassifyObjectsClassifyMatchHandlingSettings, ThresholdEntrySettings, ThresholdSettings,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -62,6 +72,10 @@ fn main() {
     let threads = arg("--threads", 0);
     let spots = arg("--spots", 20000) as u32;
     let blurs = arg("--blurs", 1);
+    let classify = arg("--classify", 0);
+    let component = arg("--component", 0);
+    let source = arg("--source", 0);
+    let shared = arg("--shared", 0);
     let images_dir = workdir.join(format!("images_{size}_{spots}"));
     std::fs::create_dir_all(&images_dir).unwrap();
 
@@ -83,44 +97,104 @@ fn main() {
     }
     project.classification.classes_mut().push(
         evanalyzer_cfg::settings::classification_settings::Class {
-            id: evanalyzer_cfg::core_types::ObjectClass::Valid(1),
+            id: 1,
             color: 0xFF0000,
             name: "Spots".into(),
             notes: String::new(),
         },
     );
     let step = |command| PipelineStepSettings {
+        id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
         enabled: true,
-        command,
+        content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command),
     };
     project.pipelines.push(PipelineSettings {
         id: evanalyzer_cfg::core_types::PipelineId(1),
         name: "bench".into(),
         description: None,
-        image_source: ImageAddress::Channel(0),
+        image_source: match source {
+            _ if shared > 0 => {
+                ImageAddress::Memory(evanalyzer_cfg::core_types::MemoryId::ProjectCache(1))
+            }
+            1 => ImageAddress::Scratchpad,
+            2 => ImageAddress::None,
+            _ => ImageAddress::Channel(0),
+        },
         enabled: true,
-        steps: (0..blurs)
-            .map(|_| {
+        steps: (source > 0)
+            .then(|| {
+                step(PipelineCommand::LoadChannel(
+                    evanalyzer_cfg::settings::pipeline_command_settings::LoadChannelSettings {
+                        channel: evanalyzer_cfg::core_types::ImageChannelIdx(0),
+                    },
+                ))
+            })
+            .into_iter()
+            .chain((0..blurs).map(|_| {
                 step(PipelineCommand::GaussianBlur(GaussianBlurSettings {
                     kernel_size: 5,
                     sigma: 1.0,
                 }))
-            })
+            }))
             .chain([
                 step(PipelineCommand::Threshold(ThresholdSettings {
                     thresholds: vec![ThresholdEntrySettings {
                         min_threshold: 1500.0,
-                        object_class_id: SegmentationClass(1),
+                        segmentation_class: SegmentationClass(1),
                         ..Default::default()
                     }],
                 })),
                 step(PipelineCommand::ConnectedComponents(Default::default())),
                 step(PipelineCommand::ExtractObjects(ExtractObjectsSettings {
                     max_objects_before_fail: 100000,
+                    ..Default::default()
                 })),
             ])
+            .chain((0..classify).map(|i| {
+                step(PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                    input_classes: vec![ObjectClass::Global(1)],
+                    match_handling:
+                        ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch,
+                    output_class: ObjectClass::Global(2 + i as u32),
+                    size_unit: SizeUnits::Pixels,
+                    min_area: 100.0,
+                    ..Default::default()
+                }))
+            }))
+            .chain((component > 0).then(|| PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                enabled: true,
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Component(
+                    evanalyzer_cfg::settings::components::ComponentInstance {
+                        key: "INTERNAL".into(),
+                        values: Default::default(),
+                    },
+                ),
+            }))
             .collect(),
     });
+    if component > 0 {
+        project.components.push(internal_objects_component());
+    }
+    if shared > 0 {
+        // The storing pipeline runs first.
+        project.pipelines.insert(
+            0,
+            PipelineSettings {
+                id: evanalyzer_cfg::core_types::PipelineId(2),
+                name: "store".into(),
+                description: None,
+                image_source: ImageAddress::Channel(0),
+                enabled: true,
+                steps: vec![step(PipelineCommand::ImageCache(
+                    evanalyzer_cfg::settings::pipeline_command_settings::ImageCacheSettings {
+                        mode: evanalyzer_cfg::settings::pipeline_command_settings::MathImageCacheImageCacheModeSettings::Store,
+                        address: ImageAddress::Memory(evanalyzer_cfg::core_types::MemoryId::ProjectCache(1)),
+                    },
+                ))],
+            },
+        );
+    }
 
     let job = evanalyzer_core::generate_analyze_job_from_project_settings(
         project,
@@ -159,4 +233,54 @@ fn main() {
         images as f64 / elapsed,
         mpx / elapsed
     );
+}
+
+/// A component that reclassifies the larger objects into a local class and
+/// classifies those once more - internal objects only.
+fn internal_objects_component() -> evanalyzer_cfg::settings::components::ComponentDefinition {
+    let classify = |id: u32, input: ObjectClass, handling, output: ObjectClass, min_area: f32| {
+        PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(id),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                    input_classes: vec![input],
+                    match_handling: handling,
+                    output_class: output,
+                    size_unit: SizeUnits::Pixels,
+                    min_area,
+                    ..Default::default()
+                }),
+            ),
+        }
+    };
+    let local_class = |id: u32| evanalyzer_cfg::settings::classification_settings::Class {
+        id,
+        color: 0,
+        name: format!("Local {id}"),
+        notes: String::new(),
+    };
+    evanalyzer_cfg::settings::components::ComponentDefinition {
+        key: "INTERNAL".into(),
+        meta: Default::default(),
+        classes: vec![local_class(1), local_class(2)],
+        steps: vec![
+            classify(
+                1,
+                ObjectClass::Global(1),
+                ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch,
+                ObjectClass::Local(1),
+                100.0,
+            ),
+            classify(
+                2,
+                ObjectClass::Local(1),
+                ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch,
+                ObjectClass::Local(2),
+                150.0,
+            ),
+        ],
+        parameters: vec![],
+        origin: None,
+    }
 }

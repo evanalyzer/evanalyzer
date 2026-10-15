@@ -16,6 +16,7 @@
 use crate::core_types::InternalErrors;
 use crate::migration::migration_v1_to_v2::migrate_from_v1_to_v2;
 use crate::migration::migration_v2_to_v3::migrate_from_v2_to_v3;
+use crate::migration::migration_v3_to_v4::migrate_from_v3_to_v4;
 use crate::settings::ai_learning_settings::AiLearningSettings;
 use crate::settings::project_settings::ProjectSettings;
 use crate::{CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION, CURRENT_PROJECT_SCHEMA_VERSION};
@@ -31,6 +32,7 @@ const PROJECT_MIGRATIONS: &[MigrationStep] = &[
     |_raw| {}, // 0 -> 1: nothing to do yet
     migrate_from_v1_to_v2,
     migrate_from_v2_to_v3,
+    migrate_from_v3_to_v4,
 ];
 
 /// Loads a [`ProjectSettings`] from its raw on-disk JSON, migrating it
@@ -49,6 +51,8 @@ pub fn load_project_settings(raw: Value) -> Result<ProjectSettings, InternalErro
 const AI_LEARNING_SETTINGS_MIGRATIONS: &[MigrationStep] = &[
     |_raw| {}, // 0 -> 1: nothing to do yet
     |_raw| {}, // 1 -> 2: nothing to do yet
+    |_raw| {}, // 2 -> 3: nothing to do yet
+    |_raw| {}, // 3 -> 4: nothing to do yet
 ];
 
 /// Loads an [`AiLearningSettings`] from its raw on-disk JSON (a standalone
@@ -134,6 +138,67 @@ mod tests {
 
         let settings = load_project_settings(raw).expect("current version must load");
         assert_eq!(settings.schema_version, CURRENT_PROJECT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn a_v3_project_gets_plain_class_ids() {
+        let mut raw = serde_json::to_value(ProjectSettings::default()).unwrap();
+        raw["schemaVersion"] = serde_json::json!(3);
+        raw["classification"]["classes"][0]["id"] = serde_json::json!({ "GLOBAL": 0 });
+        raw["classification"]["classes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({ "id": { "VALID": 2 }, "color": "#FF0000", "name": "Cell", "notes": "" }));
+
+        let settings = load_project_settings(raw).expect("a v3 project must load");
+        let ids: Vec<u32> = settings
+            .classification
+            .classes()
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, [0, 2]);
+    }
+
+    #[test]
+    fn a_v3_projects_object_class_id_becomes_segmentation_class() {
+        use crate::core_types::{ImageAddress, PipelineId, SegmentationClass, StepId};
+        use crate::settings::pipeline_command::PipelineCommand;
+        use crate::settings::pipeline_command_settings::CellposeSettings;
+        use crate::settings::pipeline_settings::{
+            PipelineSettings, PipelineStepSettings, StepContent,
+        };
+        let mut project = ProjectSettings::default();
+        project.pipelines.push(PipelineSettings {
+            id: PipelineId(1),
+            name: "P".into(),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![PipelineStepSettings {
+                id: StepId(1),
+                enabled: true,
+                content: StepContent::Command(PipelineCommand::Cellpose(CellposeSettings {
+                    segmentation_class: SegmentationClass(4),
+                    ..Default::default()
+                })),
+            }],
+        });
+        let mut raw = serde_json::to_value(&project).unwrap();
+        raw["schemaVersion"] = serde_json::json!(3);
+        // As version 3 wrote it.
+        let command = raw["pipelines"][0]["steps"][0]["command"]
+            .as_object_mut()
+            .unwrap();
+        let class = command.remove("segmentationClass").unwrap();
+        command.insert("objectClassId".into(), class);
+
+        let settings = load_project_settings(raw).expect("a v3 project must load");
+        let Some(PipelineCommand::Cellpose(cellpose)) = settings.pipelines[0].steps[0].command()
+        else {
+            panic!("cellpose");
+        };
+        assert_eq!(cellpose.segmentation_class, SegmentationClass(4));
     }
 
     // Version-1-to-2 migration logic (camelCase "type" tags, bare-string

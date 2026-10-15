@@ -25,7 +25,7 @@ use evanalyzer_app::backends::Backend;
 use evanalyzer_app::fs::DirEntry;
 use evanalyzer_app::fs::PlaceKind;
 use evanalyzer_cfg::{
-    EVANALYZER_TRAINED_AI_MODELS, LEGACY_PROJECT_FILE_EXTENSION, PIPELINE_EXTENSIONS,
+    COMPONENT_TEMPLATE_EXTENSION, EVANALYZER_TRAINED_AI_MODELS, LEGACY_PROJECT_FILE_EXTENSION,
     PROJECT_FILE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS, RESULTS_FILE_EXTENSION,
 };
 use log::warn;
@@ -725,7 +725,7 @@ fn entry_kind(entry: &DirEntry, image_formats: &[String]) -> i32 {
     } else if [
         PROJECT_FILE_EXTENSIONS,
         PROJECT_FILE_TEMPLATE_EXTENSIONS,
-        PIPELINE_EXTENSIONS,
+        COMPONENT_TEMPLATE_EXTENSION,
         LEGACY_PROJECT_FILE_EXTENSION,
     ]
     .iter()

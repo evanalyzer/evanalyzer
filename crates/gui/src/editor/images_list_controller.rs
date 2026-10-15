@@ -629,6 +629,9 @@ mod tests {
         let viewport_controller = Arc::new(ViewportController::new(
             slint::Weak::default(),
             ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
         ));
         let object_list_controller = Arc::new(ObjectListController::new(
             slint::Weak::default(),
@@ -738,7 +741,13 @@ mod tests {
 
     fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> ImagesListController {
         let ui_state = test_ui_state();
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
             ui_state.clone(),
@@ -827,7 +836,7 @@ mod tests {
         let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
         let classified = || {
             let mut object = ObjectMetricSettings::default();
-            object.object_class.insert(ObjectClass::Valid(1));
+            object.object_class.insert(ObjectClass::Global(1));
             object
         };
         {
@@ -835,7 +844,7 @@ mod tests {
             project.images.root = Some(PathBuf::from("/data/images"));
             project.classification.classes_mut().push(
                 evanalyzer_cfg::settings::classification_settings::Class {
-                    id: ObjectClass::Valid(1),
+                    id: 1,
                     name: "Nuclei".into(),
                     ..Default::default()
                 },

@@ -279,11 +279,8 @@ impl ResultsGenerator {
             Some(wanted) => {
                 let ids: Vec<u32> = wanted
                     .iter()
-                    .filter_map(|id| classes.iter().find(|class| &class.id == id))
-                    .filter_map(|class| match class.id {
-                        ObjectClass::Valid(n) => Some(n),
-                        ObjectClass::Unset => None,
-                    })
+                    .filter_map(|id| classes.iter().find(|class| &class.global() == id))
+                    .map(|class| class.id)
                     .collect();
                 if ids.is_empty() {
                     return Ok(empty_result(column_names.clone()));
@@ -491,8 +488,8 @@ impl ResultsGenerator {
             wanted
                 .iter()
                 .filter_map(|id| match id {
-                    ObjectClass::Valid(n) => Some(*n),
-                    ObjectClass::Unset => None,
+                    ObjectClass::Global(n) => Some(*n),
+                    ObjectClass::Unset | ObjectClass::Local(_) => None,
                 })
                 .collect()
         });
@@ -511,7 +508,7 @@ impl ResultsGenerator {
         // 0 row per image (still shown when explicitly selected).
         let mut row_classes = class_blocks(selected_ids.as_deref(), &classes);
         if selected_ids.is_none() {
-            row_classes.retain(|id| ObjectClass::Valid(*id) != ObjectClass::BACKGROUND);
+            row_classes.retain(|id| ObjectClass::Global(*id) != ObjectClass::BACKGROUND);
         }
         let measured = self.measured_on_plane_sql("images", &filter.plane)?;
         if filter.transpond_table {
@@ -632,11 +629,11 @@ impl ResultsGenerator {
                 // Lets the GUI navigate straight to the source image, same
                 // as any other image-bearing search key in this file.
                 let search_key = Some((image_name.clone(), image_rel_path));
-                let object_class = ObjectClass::Valid(class_id);
+                let object_class = ObjectClass::Global(class_id);
                 let label = class_display_label(object_class, &classes);
                 let color = classes
                     .iter()
-                    .find(|class| class.id == object_class)
+                    .find(|class| class.global() == object_class)
                     .map(|class| class.color)
                     .unwrap_or(0);
                 let mut cells = vec![
@@ -704,7 +701,7 @@ impl ResultsGenerator {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let mut column_names = vec!["image".to_string()];
         for class_id in blocks {
-            let class_label = class_display_label(ObjectClass::Valid(*class_id), classes);
+            let class_label = class_display_label(ObjectClass::Global(*class_id), classes);
             for (column, aggregation) in stats {
                 let (agg_fn, _) = aggregate_sql(column, aggregation)?;
                 column_names.push(format!(
@@ -888,7 +885,7 @@ impl ResultsGenerator {
             .collect();
         let mut column_names = vec!["image".to_string()];
         for class_id in blocks {
-            let class_label = class_display_label(ObjectClass::Valid(*class_id), classes);
+            let class_label = class_display_label(ObjectClass::Global(*class_id), classes);
             for column in &block_columns {
                 column_names.push(format!("{} ({class_label})", column.display_label(classes)));
             }
@@ -1199,7 +1196,7 @@ impl ResultsGenerator {
             format!("z_stack = {}", plane.z_stack),
             format!("t_stack = {}", plane.t_stack),
         ];
-        if let ObjectClass::Valid(id) = object_class {
+        if let ObjectClass::Global(id) = object_class {
             conditions.push(class_filter_sql("object_class_id", &[id]));
         }
         let object_where = conditions.join(" AND ");
@@ -1265,7 +1262,7 @@ impl ResultsGenerator {
                 format!("o.z_stack = {}", filter.plane.z_stack),
                 format!("o.t_stack = {}", filter.plane.t_stack),
             ];
-            if let ObjectClass::Valid(id) = filter.object_class {
+            if let ObjectClass::Global(id) = filter.object_class {
                 object_conditions.push(class_filter_sql("o.object_class_id", &[id]));
             }
             let object_where = object_conditions.join(" AND ");
@@ -1406,7 +1403,7 @@ impl ResultsGenerator {
                     format!("o.z_stack = {}", filter.plane.z_stack),
                     format!("o.t_stack = {}", filter.plane.t_stack),
                 ];
-                if let ObjectClass::Valid(id) = object_class {
+                if let ObjectClass::Global(id) = object_class {
                     object_conditions.push(class_filter_sql("o.object_class_id", &[*id]));
                 }
                 let object_where = object_conditions.join(" AND ");
@@ -1531,7 +1528,7 @@ impl ResultsGenerator {
             format!("z_stack = {}", filter.plane.z_stack),
             format!("t_stack = {}", filter.plane.t_stack),
         ];
-        if let ObjectClass::Valid(id) = filter.object_class {
+        if let ObjectClass::Global(id) = filter.object_class {
             object_conditions.push(class_filter_sql("object_class_id", &[id]));
         }
         let object_where = object_conditions.join(" AND ");
@@ -1640,7 +1637,7 @@ impl ResultsGenerator {
             format!("z_stack = {}", filter.plane.z_stack),
             format!("t_stack = {}", filter.plane.t_stack),
         ];
-        if let ObjectClass::Valid(id) = filter.object_class {
+        if let ObjectClass::Global(id) = filter.object_class {
             object_conditions.push(class_filter_sql("object_class_id", &[id]));
         }
         let object_where = object_conditions.join(" AND ");
@@ -1778,7 +1775,7 @@ impl ResultsGenerator {
                 format!("z_stack = {}", filter.plane.z_stack),
                 format!("t_stack = {}", filter.plane.t_stack),
             ];
-            if let ObjectClass::Valid(id) = object_class {
+            if let ObjectClass::Global(id) = object_class {
                 object_conditions.push(class_filter_sql("object_class_id", &[*id]));
             }
             let object_where = object_conditions.join(" AND ");
@@ -1930,7 +1927,7 @@ impl ResultsGenerator {
             format!("t_stack = {}", filter.plane.t_stack),
             format!("image_rel_path = '{image_rel_path}'"),
         ];
-        if let ObjectClass::Valid(id) = filter.object_class {
+        if let ObjectClass::Global(id) = filter.object_class {
             conditions.push(class_filter_sql("object_class_id", &[id]));
         }
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
@@ -2185,7 +2182,7 @@ impl ResultsGenerator {
                 let class_id: u32 = row.get(0)?;
                 let color: Option<u32> = row.get(2)?;
                 Ok(Class {
-                    id: ObjectClass::Valid(class_id),
+                    id: class_id,
                     name: row.get(1)?,
                     color: color.unwrap_or(0),
                     notes: String::new(),
@@ -2239,7 +2236,7 @@ impl ResultsGenerator {
         let mut classes: Vec<ObjectClass> = keys
             .into_iter()
             .filter_map(|key| u32::try_from(key).ok())
-            .map(ObjectClass::Valid)
+            .map(ObjectClass::Global)
             .collect();
         classes.sort();
         classes.dedup();
@@ -2257,6 +2254,7 @@ impl ResultsGenerator {
         };
         let mut ret = vec![
             entry(Column::ObjectId, "General"),
+            entry(Column::TrackId, "General"),
             entry(Column::ImageName, "General"),
             entry(Column::ObjectClass, "General"),
             entry(Column::Count, "General"),
@@ -2366,6 +2364,8 @@ struct ObjectRow {
     circularity: f64,
     solidity: f64,
     eccentricity: f64,
+    /// The object's track, `None` if it isn't part of one (stored as 0).
+    track_id: Option<u64>,
     /// Colocalization partners: (partner class key, partner object ids) -
     /// see `coloc_partner_ids` in evanalyzer_core's duckdb.rs.
     coloc: Vec<(i32, Vec<String>)>,
@@ -2401,6 +2401,7 @@ struct ObjectColumnNeeds {
     circularity: bool,
     solidity: bool,
     eccentricity: bool,
+    track_id: bool,
     coloc: bool,
     intensities: bool,
 }
@@ -2417,6 +2418,7 @@ impl ObjectColumnNeeds {
             circularity: columns.contains(&Column::Circularity),
             solidity: columns.contains(&Column::Solidity),
             eccentricity: columns.contains(&Column::Eccentricity),
+            track_id: columns.contains(&Column::TrackId),
             coloc: columns.iter().any(|c| matches!(c, Column::ColocCount(_))),
             intensities: columns.iter().any(|c| {
                 matches!(
@@ -2491,6 +2493,12 @@ fn object_select_clause(need: ObjectColumnNeeds) -> String {
     } else {
         "0.0::DOUBLE"
     };
+    // 0 is "not tracked" (`TrackId`'s default; real tracks start at 1).
+    let select_track_id = if need.track_id {
+        "NULLIF(o.track_id, 0)"
+    } else {
+        "NULL::UBIGINT"
+    };
     let select_coloc = if need.coloc {
         "map_keys(o.coloc_partner_ids), CAST(map_values(o.coloc_partner_ids) AS VARCHAR[][])"
     } else {
@@ -2508,7 +2516,7 @@ fn object_select_clause(need: ObjectColumnNeeds) -> String {
                 {select_circularity}, {select_solidity}, {select_eccentricity},\n\
                 {select_coloc}, {select_intensities},\n\
                 o.image_rel_path, o.bbox_xmin_px, o.bbox_ymin_px, o.bbox_xmax_px, o.bbox_ymax_px,\n\
-                COALESCE(i.disabled, false)"
+                COALESCE(i.disabled, false), {select_track_id}"
     )
 }
 
@@ -2548,6 +2556,7 @@ fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
         bbox_xmax_px: row.get(20)?,
         bbox_ymax_px: row.get(21)?,
         disabled: row.get(22)?,
+        track_id: row.get(23)?,
     })
 }
 
@@ -2601,12 +2610,12 @@ fn is_resolvable_metric(column: &Column) -> bool {
 /// `"class {n}"` if `n` isn't (or no longer is) a recognized id.
 pub(crate) fn class_display_label(class: ObjectClass, classes: &[Class]) -> String {
     match class {
-        ObjectClass::Valid(n) => classes
+        ObjectClass::Global(n) => classes
             .iter()
-            .find(|c| c.id == ObjectClass::Valid(n))
+            .find(|c| c.id == n)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| format!("class {n}")),
-        ObjectClass::Unset => "unset".to_string(),
+        ObjectClass::Unset | ObjectClass::Local(_) => "unset".to_string(),
     }
 }
 
@@ -2615,13 +2624,7 @@ pub(crate) fn class_display_label(class: ObjectClass, classes: &[Class]) -> Stri
 fn class_blocks(selected: Option<&[u32]>, classes: &[Class]) -> Vec<u32> {
     let mut ids: Vec<u32> = match selected {
         Some(ids) => ids.to_vec(),
-        None => classes
-            .iter()
-            .filter_map(|class| match class.id {
-                ObjectClass::Valid(n) => Some(n),
-                ObjectClass::Unset => None,
-            })
-            .collect(),
+        None => classes.iter().map(|class| class.id).collect(),
     };
     ids.sort_unstable();
     ids.dedup();
@@ -2825,6 +2828,12 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::String(object.object_id.clone()),
             ..no_bg
         },
+        Column::TrackId => Cell {
+            value: object
+                .track_id
+                .map_or(CellValue::Empty, |id| CellValue::String(id.to_string())),
+            ..no_bg
+        },
         Column::ImageName => Cell {
             value: CellValue::String(object.image_name.clone()),
             ..no_bg
@@ -2913,8 +2922,8 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
 /// partners without a class (see evanalyzer_core's duckdb.rs).
 fn coloc_class_key(class: ObjectClass) -> i32 {
     match class {
-        ObjectClass::Valid(n) => n as i32,
-        ObjectClass::Unset => -1,
+        ObjectClass::Global(n) => n as i32,
+        ObjectClass::Unset | ObjectClass::Local(_) => -1,
     }
 }
 
@@ -2983,7 +2992,11 @@ pub(super) fn column_aggregate_expr(column: &Column) -> Result<String, InternalE
         // arm here does, since it counts rows rather than reading a column
         // off them. Kept here (rather than left unreachable) only so this
         // match stays exhaustive.
-        Column::Count | Column::ObjectId | Column::ImageName | Column::ObjectClass => {
+        Column::Count
+        | Column::ObjectId
+        | Column::TrackId
+        | Column::ImageName
+        | Column::ObjectClass => {
             // No classes list handy here (this is a plain error-message
             // helper, not a `ResultsGenerator` method) — `as_key` already
             // falls back to the raw numeric id for `ColocCount` when it
@@ -3897,6 +3910,48 @@ mod tests {
         assert_eq!(result.row_locations.len(), 2);
     }
 
+    #[test]
+    fn get_object_list_shows_each_objects_track_and_nothing_when_untracked() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100).in_track(7),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 200),
+        ]);
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::TrackId, Column::AreaSizePx],
+                with_coloc_details: false,
+                page: no_page(),
+                transpond_table: false,
+            })
+            .unwrap();
+
+        assert_eq!(result.column_names[0], "Track ID");
+        let mut tracks: Vec<String> = result
+            .rows
+            .iter()
+            .map(|row| match &row[0].value {
+                CellValue::String(id) => id.clone(),
+                CellValue::Empty => "-".into(),
+                _ => panic!("expected a text or empty cell"),
+            })
+            .collect();
+        tracks.sort();
+        assert_eq!(tracks, ["-", "7"]);
+    }
+
+    #[test]
+    fn the_track_id_column_round_trips_and_is_never_aggregated() {
+        let generator = open(&[]);
+        let columns = generator.get_available_columns().unwrap();
+        assert!(columns.iter().any(|c| c.key == Column::TrackId));
+        let key = Column::TrackId.as_key(&[]);
+        assert_eq!(Column::from_key(&key, &[]), Some(Column::TrackId));
+        assert!(!Column::TrackId.is_aggregable());
+    }
+
     /// Every cell in a row belongs to the same source object, so every one
     /// of them - not just an image-name/path column - must carry that
     /// object's own image's disabled flag, letting the GUI strike the whole
@@ -3972,7 +4027,7 @@ mod tests {
             .get_object_list(&ListFilter {
                 plane: plane(),
                 images: None,
-                object_classes: Some(vec![ObjectClass::Valid(2)]),
+                object_classes: Some(vec![ObjectClass::Global(2)]),
                 columns: vec![Column::ObjectClass],
                 with_coloc_details: false,
                 page: no_page(),
@@ -4174,6 +4229,7 @@ mod tests {
     fn column_is_aggregable_matches_what_the_aggregating_queries_accept() {
         let every_column = [
             Column::ObjectId,
+            Column::TrackId,
             Column::ImageName,
             Column::ObjectClass,
             Column::Count,
@@ -4184,7 +4240,7 @@ mod tests {
             Column::Circularity,
             Column::Solidity,
             Column::Eccentricity,
-            Column::ColocCount(ObjectClass::Valid(1)),
+            Column::ColocCount(ObjectClass::Global(1)),
             Column::IntensityAvg(0),
             Column::IntensitySum(1),
             Column::IntensityMin(2),
@@ -4324,7 +4380,7 @@ mod tests {
         );
         assert_eq!(next.row_names, ["img3.tif"]);
 
-        let only_a = grouped_transposed(&generator, Some(vec![ObjectClass::Valid(1)]), no_page());
+        let only_a = grouped_transposed(&generator, Some(vec![ObjectClass::Global(1)]), no_page());
         assert_eq!(only_a.column_names.len(), 1 + 2, "image + one class block");
         // img2 has no ClassA objects, but was analysed: it keeps its row,
         // with a ClassA count of 0 and no average area.
@@ -4437,7 +4493,7 @@ mod tests {
             ObjectSpec::new("img1.tif", "ClassB", 2, 21),
             ObjectSpec::new("img1.tif", "ClassB", 2, 22),
         ]);
-        let result = list_transposed(&generator, Some(vec![ObjectClass::Valid(2)]), no_page());
+        let result = list_transposed(&generator, Some(vec![ObjectClass::Global(2)]), no_page());
         assert_eq!(result.column_names, ["image", "Area [px] (ClassB)"]);
         assert_eq!(result.rows.len(), 2);
     }
@@ -4911,12 +4967,12 @@ mod tests {
     #[test]
     fn column_as_key_and_from_key_round_trip_for_coloc_count() {
         let classes = vec![Class {
-            id: ObjectClass::Valid(1),
+            id: 1,
             name: "ClassA".to_string(),
             color: 0,
             notes: String::new(),
         }];
-        let column = Column::ColocCount(ObjectClass::Valid(1));
+        let column = Column::ColocCount(ObjectClass::Global(1));
         let key = column.as_key(&classes);
         assert_eq!(key, "n_colocalized_class_ClassA");
         assert_eq!(Column::from_key(&key, &classes), Some(column));
@@ -4951,7 +5007,7 @@ mod tests {
     fn class_display_label_falls_back_to_a_generic_name_for_an_unknown_class_id() {
         let classes: Vec<Class> = vec![];
         assert_eq!(
-            class_display_label(ObjectClass::Valid(7), &classes),
+            class_display_label(ObjectClass::Global(7), &classes),
             "class 7"
         );
         assert_eq!(class_display_label(ObjectClass::Unset, &classes), "unset");
@@ -4960,13 +5016,13 @@ mod tests {
     #[test]
     fn class_display_label_uses_the_registered_class_name_when_known() {
         let classes = vec![Class {
-            id: ObjectClass::Valid(1),
+            id: 1,
             name: "Nuclei".to_string(),
             color: 0,
             notes: String::new(),
         }];
         assert_eq!(
-            class_display_label(ObjectClass::Valid(1), &classes),
+            class_display_label(ObjectClass::Global(1), &classes),
             "Nuclei"
         );
     }
@@ -5011,7 +5067,7 @@ mod tests {
                 images: None,
                 object_classes: None,
                 columns: vec![
-                    Column::ColocCount(ObjectClass::Valid(2)),
+                    Column::ColocCount(ObjectClass::Global(2)),
                     Column::AreaSizePx,
                 ],
                 with_coloc_details: true,
@@ -5156,7 +5212,7 @@ mod tests {
             ObjectSpec::new("A1_02.tif", "ClassB", 2, 1000),
         ]);
         let mut filter = plate_filter(Column::AreaSizePx);
-        filter.object_class = ObjectClass::Valid(1);
+        filter.object_class = ObjectClass::Global(1);
         let list = generator.get_group_by_plate(&filter, &View::List).unwrap();
         assert_eq!(list.row_names, vec!["A1".to_string()]);
         assert_eq!(
@@ -5896,7 +5952,7 @@ mod tests {
     fn column_display_label_coloc_count_falls_back_to_a_numeric_class_label() {
         let classes: Vec<Class> = vec![];
         assert_eq!(
-            Column::ColocCount(ObjectClass::Valid(7)).display_label(&classes),
+            Column::ColocCount(ObjectClass::Global(7)).display_label(&classes),
             "Coloc with class 7"
         );
         assert_eq!(
@@ -5954,7 +6010,7 @@ mod tests {
             .get_grouped_by_image(&GroupedByImageFilter {
                 plane: plane(),
                 images: None,
-                object_classes: Some(vec![ObjectClass::Valid(1)]),
+                object_classes: Some(vec![ObjectClass::Global(1)]),
                 columns: vec![Column::AreaSizePx],
                 aggregation: vec![Aggregation::Avg],
                 page: no_page(),
@@ -6060,7 +6116,7 @@ mod tests {
                 images: None,
                 object_classes: None,
                 columns: vec![
-                    Column::ColocCount(ObjectClass::Valid(2)),
+                    Column::ColocCount(ObjectClass::Global(2)),
                     Column::AreaSizePx,
                 ],
                 with_coloc_details: true,
@@ -6096,8 +6152,8 @@ mod tests {
                 object_classes: None,
                 columns: vec![
                     Column::AreaSizePx,
-                    Column::ColocCount(ObjectClass::Valid(2)),
-                    Column::ColocCount(ObjectClass::Valid(3)),
+                    Column::ColocCount(ObjectClass::Global(2)),
+                    Column::ColocCount(ObjectClass::Global(3)),
                 ],
                 with_coloc_details: true,
                 page: no_page(),
@@ -6839,7 +6895,7 @@ mod tests {
             )
             .unwrap();
         let count_of = |id| PlateFilter {
-            object_class: ObjectClass::Valid(id),
+            object_class: ObjectClass::Global(id),
             ..plate_filter(Column::Count)
         };
 
@@ -6895,7 +6951,7 @@ mod tests {
             &generator,
             &PlateFilter {
                 aggregation: Aggregation::Sum,
-                ..plate_filter(Column::ColocCount(ObjectClass::Valid(2)))
+                ..plate_filter(Column::ColocCount(ObjectClass::Global(2)))
             },
             "A1",
         );

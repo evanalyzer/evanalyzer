@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Column {
     ObjectId,
+    TrackId,
     ImageName,
     ObjectClass,
     Count,
@@ -31,12 +32,13 @@ impl Column {
     ///
     /// `classes` (typically `ResultsGenerator::get_object_classes()`, cached
     /// there so this is cheap to call repeatedly) resolves
-    /// `ColocCount(ObjectClass::Valid(id))`'s class name for the key — falls
+    /// `ColocCount(ObjectClass::Global(id))`'s class name for the key — falls
     /// back to the raw numeric id if `classes` doesn't (yet, or any longer)
     /// recognize that id, e.g. stale GUI state after switching databases.
     pub fn as_key(&self, classes: &[Class]) -> String {
         match self {
             Column::ObjectId => "object_id".to_string(),
+            Column::TrackId => "track_id".to_string(),
             Column::ImageName => "image_name".to_string(),
             Column::ObjectClass => "object_class_name".to_string(),
             Column::Count => "count".to_string(),
@@ -47,15 +49,17 @@ impl Column {
             Column::Circularity => "circularity".to_string(),
             Column::Solidity => "solidity".to_string(),
             Column::Eccentricity => "eccentricity".to_string(),
-            Column::ColocCount(ObjectClass::Valid(class_id)) => {
+            Column::ColocCount(ObjectClass::Global(class_id)) => {
                 let name = classes
                     .iter()
-                    .find(|class| class.id == ObjectClass::Valid(*class_id))
+                    .find(|class| class.id == *class_id)
                     .map(|class| class.name.clone())
                     .unwrap_or_else(|| class_id.to_string());
                 format!("n_colocalized_class_{name}")
             }
-            Column::ColocCount(ObjectClass::Unset) => "n_colocalized_unset".to_string(),
+            Column::ColocCount(ObjectClass::Unset | ObjectClass::Local(_)) => {
+                "n_colocalized_unset".to_string()
+            }
             Column::IntensityAvg(channel) => format!("intensity_mean_gray_ch{channel}"),
             Column::IntensitySum(channel) => format!("intensity_sum_gray_ch{channel}"),
             Column::IntensityMin(channel) => format!("intensity_min_gray_ch{channel}"),
@@ -76,6 +80,7 @@ impl Column {
     pub fn display_label(&self, classes: &[Class]) -> String {
         match self {
             Column::ObjectId => "Object ID".to_string(),
+            Column::TrackId => "Track ID".to_string(),
             Column::ImageName => "Image".to_string(),
             Column::ObjectClass => "Class".to_string(),
             Column::Count => "Count".to_string(),
@@ -88,11 +93,11 @@ impl Column {
             Column::Eccentricity => "Eccentricity".to_string(),
             Column::ColocCount(class_id) => classes
                 .iter()
-                .find(|class| class.id == *class_id)
+                .find(|class| class.global() == *class_id)
                 .map(|class| format!("Coloc with {}", class.name))
                 .unwrap_or_else(|| match class_id {
-                    ObjectClass::Valid(n) => format!("Coloc with class {n}"),
-                    ObjectClass::Unset => "Coloc with unset".to_string(),
+                    ObjectClass::Global(n) => format!("Coloc with class {n}"),
+                    ObjectClass::Unset | ObjectClass::Local(_) => "Coloc with unset".to_string(),
                 }),
             Column::IntensityAvg(channel) => format!("Avg Intensity (Ch {channel})"),
             Column::IntensitySum(channel) => format!("Sum Intensity (Ch {channel})"),
@@ -103,14 +108,14 @@ impl Column {
 
     /// Whether this column can be aggregated over a group of objects (per
     /// image, well, plate or heatmap tile): everything but an object's
-    /// identity (id, image, class). The one list the GUI's Images mode and
+    /// identity (id, track, image, class). The one list the GUI's Images mode and
     /// the export's grouped/grid documents filter their columns with -
     /// must match what `column_aggregate_expr` (results_generator.rs)
     /// accepts, plus `Count` (aggregated as `COUNT(*)`).
     pub fn is_aggregable(&self) -> bool {
         !matches!(
             self,
-            Column::ObjectId | Column::ImageName | Column::ObjectClass
+            Column::ObjectId | Column::TrackId | Column::ImageName | Column::ObjectClass
         )
     }
 
@@ -119,7 +124,7 @@ impl Column {
     /// `None` if `name` isn't (or no longer is) a registered class.
     pub fn from_key(key: &str, classes: &[Class]) -> Option<Self> {
         if let Some(name) = key.strip_prefix("n_colocalized_class_") {
-            let class_id = classes.iter().find(|class| class.name == name)?.id;
+            let class_id = classes.iter().find(|class| class.name == name)?.global();
             return Some(Column::ColocCount(class_id));
         }
         if key == "n_colocalized_unset" {
@@ -139,6 +144,7 @@ impl Column {
         }
         Some(match key {
             "object_id" => Column::ObjectId,
+            "track_id" => Column::TrackId,
             "image_name" => Column::ImageName,
             "object_class_name" => Column::ObjectClass,
             "count" => Column::Count,

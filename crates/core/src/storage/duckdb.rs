@@ -1,6 +1,7 @@
 use crate::object::{Intensity, Object};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
-use crate::storage::PipelineResultExporter;
+use crate::storage::stored_object::{ObjectFilter, StoredObject};
+use crate::storage::{DatasetStore, PipelineResultExporter};
 use duckdb::arrow::array::{
     ArrayBuilder, ArrayRef, BooleanBuilder, Float64Builder, Int32Builder, ListBuilder, MapBuilder,
     StringBuilder, UInt8Builder, UInt32Builder, UInt64Builder,
@@ -134,7 +135,7 @@ impl DuckDbExporter {
                 .appender("classes")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
             for (class, (name, color)) in &class_names {
-                if let ObjectClass::Valid(n) = class {
+                if let ObjectClass::Global(n) = class {
                     app.append_row(params![*n, name, color])
                         .map_err(|e| InternalErrors::Io(e.to_string()))?;
                 }
@@ -206,10 +207,49 @@ impl DuckDbExporter {
     }
 
     // Plain display name for `object_class_name`
+    /// The results database of an earlier analysis, to read and add to -
+    /// unlike [`Self::new`], it must exist and no new run is recorded.
+    pub fn open_existing(path: &Path) -> Result<Self, InternalErrors> {
+        if !path.is_file() {
+            return Err(InternalErrors::Io(format!(
+                "No results database at {}",
+                path.display()
+            )));
+        }
+        Ok(Self {
+            conn: Mutex::new(shared_connection(path)?),
+            class_names: HashMap::new(),
+        })
+    }
+
+    /// [`Self::open_existing`] for a new run on the database's objects (a
+    /// copy of an earlier analysis's): its run is recorded as running again,
+    /// with this run's project details.
+    pub fn continue_run(path: &Path, project_meta: &MetaData) -> Result<Self, InternalErrors> {
+        let exporter = Self::open_existing(path)?;
+        exporter
+            .lock_conn()
+            .execute(
+                "UPDATE run SET status = 'running', message = NULL, finished_at = NULL,
+                     started_at = current_timestamp, title = ?, short_description = ?,
+                     description = ?, app_version = ?",
+                params![
+                    project_meta.name,
+                    project_meta.short_description,
+                    project_meta.description,
+                    project_meta.app_version,
+                ],
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        Ok(exporter)
+    }
+
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),
-            ObjectClass::Valid(n) => match self.class_names.get(class) {
+            // Never stored: a component's scope ends before its objects are written.
+            ObjectClass::Local(n) => format!("local_{n}"),
+            ObjectClass::Global(n) => match self.class_names.get(class) {
                 Some((name, _color)) => name.clone(),
                 None => format!("class_{}", n),
             },
@@ -383,8 +423,8 @@ impl ObjectColumns {
     ) -> Result<(), InternalErrors> {
         for (class, ids) in colocalized_with {
             self.coloc_partner_ids.keys().append_value(match class {
-                ObjectClass::Valid(n) => *n as i32,
-                ObjectClass::Unset => COLOC_UNSET_CLASS_KEY,
+                ObjectClass::Global(n) => *n as i32,
+                ObjectClass::Unset | ObjectClass::Local(_) => COLOC_UNSET_CLASS_KEY,
             });
             let partners = self.coloc_partner_ids.values();
             for id in ids {
@@ -716,7 +756,7 @@ impl DuckDbExporter {
             };
 
             let object_class_names: Vec<String> = object
-                .object_class
+                .object_classes()
                 .iter()
                 .filter(|c| **c != ObjectClass::Unset)
                 .map(|c| self.class_label(c))
@@ -744,8 +784,8 @@ impl DuckDbExporter {
                 .append_value(object.segmentation_class.0 as i32);
             c.object_class_name
                 .append_value(json_string_array(&object_class_names));
-            for class in &object.object_class {
-                if let ObjectClass::Valid(n) = class {
+            for class in object.object_classes() {
+                if let ObjectClass::Global(n) = class {
                     c.object_class_id.values().append_value(*n as i32);
                 }
             }
@@ -800,6 +840,10 @@ impl DuckDbExporter {
 }
 
 impl PipelineResultExporter for DuckDbExporter {
+    fn dataset_store(&self) -> Option<&dyn DatasetStore> {
+        Some(self)
+    }
+
     fn finish_run(&self, outcome: &Result<(), InternalErrors>) -> Result<(), InternalErrors> {
         let (status, message) = match outcome {
             Ok(()) => ("finished", None),
@@ -904,6 +948,133 @@ impl PipelineResultExporter for DuckDbExporter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// DatasetStore impl
+// ---------------------------------------------------------------------------
+
+impl DatasetStore for DuckDbExporter {
+    fn get_objects(&self, filter: &ObjectFilter) -> Result<Vec<StoredObject>, InternalErrors> {
+        let class_id = match filter.object_class {
+            Some(ObjectClass::Global(n)) => Some(n as i32),
+            Some(ObjectClass::Unset | ObjectClass::Local(_)) => return Ok(Vec::new()),
+            None => None,
+        };
+        let io = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let conn = self.lock_conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT object_id::VARCHAR, image_rel_path, t_stack, z_stack,
+                        centroid_x_px, centroid_y_px,
+                        bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+                        area_px, object_class_id, intensity_mean_normalized,
+                        NULLIF(pixel_size_x_nm, 0), NULLIF(track_id, 0)
+                 FROM objects
+                 WHERE (?1 IS NULL OR image_rel_path = ?1)
+                   AND (?2 IS NULL OR t_stack = ?2)
+                   AND (?3 IS NULL OR list_contains(object_class_id, ?3))
+                 ORDER BY image_rel_path, t_stack, object_id",
+            )
+            .map_err(io)?;
+        let rows = stmt
+            .query_map(
+                params![filter.image_rel_path, filter.t_stack, class_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        StoredObject {
+                            id: ObjectId(0),
+                            image_rel_path: row.get(1)?,
+                            t_stack: row.get::<_, Option<i32>>(2)?.unwrap_or(0),
+                            z_stack: row.get::<_, Option<i32>>(3)?.unwrap_or(0),
+                            centroid_px: (row.get(4)?, row.get(5)?),
+                            pixel_size_nm: row.get(13)?,
+                            track_id: row.get(14)?,
+                            bbox_px: [row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?],
+                            area_px: row.get(10)?,
+                            object_classes: list_values(row.get(11)?)
+                                .filter_map(|v| match v {
+                                    Value::Int(n) if n >= 0 => Some(ObjectClass::Global(n as u32)),
+                                    _ => None,
+                                })
+                                .collect(),
+                            intensity_mean: list_values(row.get(12)?)
+                                .map(|v| match v {
+                                    Value::Double(x) => Some(x),
+                                    _ => None,
+                                })
+                                .collect(),
+                        },
+                    ))
+                },
+            )
+            .map_err(io)?;
+        rows.map(|row| {
+            let (id, mut row) = row.map_err(io)?;
+            row.id = parse_object_id(&id)?;
+            Ok(row)
+        })
+        .collect()
+    }
+
+    fn max_track_id_except(&self, class: ObjectClass) -> Result<u64, InternalErrors> {
+        let class_id = match class {
+            ObjectClass::Global(n) => n as i32,
+            ObjectClass::Unset | ObjectClass::Local(_) => -1, // never stored: excludes nothing
+        };
+        self.lock_conn()
+            .query_row(
+                "SELECT COALESCE(MAX(track_id), 0) FROM objects
+                 WHERE NOT list_contains(object_class_id, ?)",
+                params![class_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))
+    }
+
+    fn set_track_ids(&self, tracks: &[(ObjectId, u64)]) -> Result<(), InternalErrors> {
+        let io = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let conn = self.lock_conn();
+        // All or nothing; `unchecked_transaction` is safe as in `export`.
+        let tx = conn.unchecked_transaction().map_err(io)?;
+        // One join instead of an UPDATE per object (there can be millions).
+        tx.execute_batch(
+            "CREATE OR REPLACE TEMP TABLE new_track_ids (object_id VARCHAR, track_id UBIGINT)",
+        )
+        .map_err(io)?;
+        {
+            let mut appender = tx.appender("new_track_ids").map_err(io)?;
+            for (id, track) in tracks {
+                appender
+                    .append_row(params![id.to_string(), track])
+                    .map_err(io)?;
+            }
+        }
+        tx.execute_batch(
+            "UPDATE objects SET track_id = n.track_id FROM new_track_ids n
+                 WHERE objects.object_id = CAST(n.object_id AS UUID);
+             DROP TABLE new_track_ids;",
+        )
+        .map_err(io)?;
+        tx.commit().map_err(io)
+    }
+}
+
+/// The items of a DuckDB list value (none for NULL).
+fn list_values(value: Value) -> impl Iterator<Item = Value> {
+    match value {
+        Value::List(items) | Value::Array(items) => items,
+        _ => Vec::new(),
+    }
+    .into_iter()
+}
+
+/// An [`ObjectId`] from its UUID text, as `object_id` stores it.
+fn parse_object_id(uuid: &str) -> Result<ObjectId, InternalErrors> {
+    u128::from_str_radix(&uuid.replace('-', ""), 16)
+        .map(ObjectId)
+        .map_err(|e| InternalErrors::Io(format!("invalid object id {uuid:?}: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -916,7 +1087,7 @@ mod tests {
             id: ObjectId(id),
             object_class: classes
                 .iter()
-                .map(|c| ObjectClass::Valid(*c))
+                .map(|c| ObjectClass::Global(*c))
                 .collect::<HashSet<_>>(),
             bbox: [0, 0, 1, 1],
             mask_data: BitVec::<u64, Lsb0>::repeat(true, 4),
@@ -960,6 +1131,7 @@ mod tests {
                     description: "Long description".into(),
                     authors: vec![],
                     creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                    version: None,
                     category: "Test category".into(),
                     tags: vec![],
                     app_version: "v1.0.0".into(),
@@ -992,6 +1164,7 @@ mod tests {
                 description: "Long description".into(),
                 authors: vec![],
                 creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                version: None,
                 category: "Test category".into(),
                 tags: vec![],
                 app_version: "v1.0.0".into(),
@@ -1070,6 +1243,7 @@ mod tests {
                 description: "Long description".into(),
                 authors: vec![],
                 creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                version: None,
                 category: "Test category".into(),
                 tags: vec![],
                 app_version: "v1.0.0".into(),
@@ -1105,6 +1279,7 @@ mod tests {
                 description: "Long description".into(),
                 authors: vec![],
                 creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                version: None,
                 category: "Test category".into(),
                 tags: vec![],
                 app_version: "v1.0.0".into(),
@@ -1140,6 +1315,7 @@ mod tests {
                 description: "Long description".into(),
                 authors: vec![],
                 creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                version: None,
                 category: "Test category".into(),
                 tags: vec![],
                 app_version: "v1.0.0".into(),
@@ -1174,6 +1350,7 @@ mod tests {
                 description: "Long description".into(),
                 authors: vec![],
                 creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                version: None,
                 category: "Test category".into(),
                 tags: vec![],
                 app_version: "v1.0.0".into(),
@@ -1199,7 +1376,7 @@ mod tests {
         }
         object
             .colocalized_with
-            .insert(ObjectClass::Valid(7), vec![ObjectId(2), ObjectId(3)]);
+            .insert(ObjectClass::Global(7), vec![ObjectId(2), ObjectId(3)]);
         cache.object_cache.insert(ObjectId(1), object);
         cache
             .object_cache
@@ -1236,5 +1413,117 @@ mod tests {
             )
             .unwrap();
         assert_eq!(without, ("[]".to_string(), "{}".to_string()));
+    }
+
+    // ---- reading objects back for dataset steps ----
+
+    fn test_exporter(path: &Path) -> DuckDbExporter {
+        DuckDbExporter::new(
+            path,
+            HashMap::new(),
+            &MetaData {
+                name: "Experiment name".into(),
+                short_description: "Short description".into(),
+                description: "Long description".into(),
+                authors: vec![],
+                creation_time: chrono::DateTime::from_timestamp_nanos(1791318919124935845),
+                version: None,
+                category: "Test category".into(),
+                tags: vec![],
+                app_version: "v1.0.0".into(),
+            },
+        )
+        .unwrap()
+    }
+
+    /// An object of class `class` in frame `t`, its id's high bits set so
+    /// the UUID round trip is checked over all 128 bits.
+    fn frame_object(id: u128, class: u32, t: i32) -> Object {
+        let mut object = object_in_classes(u128::MAX - id, &[class]);
+        object.plane = crate::ImagePlane { z: 2, c: 0, t };
+        object.bbox = [10, 20, 14, 30];
+        object.intensities.insert(
+            1,
+            Intensity {
+                sum_intensity: 2.0,
+                min_intensity: 0.25,
+                max_intensity: 0.75,
+                avg_intensity: 0.5,
+                pixel_values: Vec::new(),
+            },
+        );
+        object
+    }
+
+    #[test]
+    fn dataset_steps_read_the_exported_objects_back_filtered() {
+        let dir = tempfile::tempdir().unwrap();
+        let exporter = test_exporter(&dir.path().join("results.evadb"));
+        for (image, objects) in [
+            ("b.tif", vec![frame_object(3, 1, 1), frame_object(4, 2, 0)]),
+            ("a.tif", vec![frame_object(1, 1, 1), frame_object(2, 1, 0)]),
+        ] {
+            let mut cache = GlobalPipelineCache::default();
+            cache.image_rel_path = PathBuf::from(image);
+            cache.image_meta.nr_of_bits = 8;
+            for object in objects {
+                cache.object_cache.insert(object.id.clone(), object);
+            }
+            exporter.export(&cache).unwrap();
+        }
+        let store = exporter
+            .dataset_store()
+            .expect("DuckDB results can be read back");
+        let ids = |filter: ObjectFilter| -> Vec<(String, i32, u128)> {
+            store
+                .get_objects(&filter)
+                .unwrap()
+                .into_iter()
+                .map(|row| (row.image_rel_path, row.t_stack, u128::MAX - row.id.0))
+                .collect()
+        };
+
+        assert_eq!(
+            ids(ObjectFilter::default()),
+            [
+                ("a.tif", 0, 2),
+                ("a.tif", 1, 1),
+                ("b.tif", 0, 4),
+                ("b.tif", 1, 3)
+            ]
+            .map(|(image, t, id)| (image.to_string(), t, id)),
+            "ordered by image, then frame"
+        );
+        let in_b = ObjectFilter {
+            image_rel_path: Some("b.tif".into()),
+            ..Default::default()
+        };
+        assert_eq!(ids(in_b).len(), 2);
+        let frame_1_class_1 = ObjectFilter {
+            t_stack: Some(1),
+            object_class: Some(ObjectClass::Global(1)),
+            ..Default::default()
+        };
+        assert_eq!(
+            ids(frame_1_class_1),
+            [("a.tif".to_string(), 1, 1), ("b.tif".to_string(), 1, 3)]
+        );
+        let unset = ObjectFilter {
+            object_class: Some(ObjectClass::Unset),
+            ..Default::default()
+        };
+        assert!(ids(unset).is_empty());
+
+        let row = &store.get_objects(&ObjectFilter::default()).unwrap()[0];
+        assert_eq!(row.z_stack, 2);
+        assert_eq!(row.centroid_px, (12.0, 25.0), "centre of the bounding box");
+        assert_eq!(row.bbox_px, [10, 20, 14, 30]);
+        assert_eq!(row.area_px, 4);
+        assert_eq!(row.object_classes, [ObjectClass::Global(1)]);
+        assert_eq!(
+            row.intensity_mean,
+            [None, Some(0.5)],
+            "channel 0 not measured"
+        );
     }
 }

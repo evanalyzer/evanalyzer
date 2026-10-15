@@ -29,7 +29,7 @@ use crate::settings::images_settings::{
 use crate::settings::meta_data::MetaData;
 use crate::settings::pipeline_command::PipelineCommand;
 use crate::settings::pipeline_command_settings::*;
-use crate::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+use crate::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings, StepContent};
 use crate::settings::plate_settings::{GroupingMode, PlateSettings, PlateSize, WellLayout};
 use crate::settings::project_settings::ProjectSettings;
 
@@ -86,6 +86,7 @@ fn convert_project(old: &LegacyAnalyzeSettings, warnings: &mut Vec<String>) -> P
         images,
         pipelines: convert_pipelines(old, warnings),
         tile_merge: crate::settings::project_settings::TileMergeSettings::default(),
+        components: vec![],
     }
 }
 
@@ -133,6 +134,7 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         description,
         authors,
         creation_time,
+        version: None,
         category: String::new(),
         tags: Vec::new(),
         // Stamped for real by `save_project_as` once the imported project is
@@ -166,7 +168,7 @@ fn resolve_class(
         "$" => pipeline_default,
         "" | "None" | "Undefined" => ObjectClass::Unset,
         other => match parse_numeric_class_id(other) {
-            Some(n) => ObjectClass::Valid(n),
+            Some(n) => ObjectClass::Global(n),
             None => {
                 warnings.push(format!(
                     "{context}: {field} uses unsupported legacy class id '{other}' (temp/model class) - left unset"
@@ -185,22 +187,44 @@ fn convert_classification(
     old: &LegacyClassification,
     warnings: &mut Vec<String>,
 ) -> ClassificationSettings {
+    let ids: Vec<Option<u32>> = old
+        .classes
+        .iter()
+        .map(|c| {
+            resolve_class(
+                &c.class_id,
+                ObjectClass::Unset,
+                "classification",
+                "classId",
+                warnings,
+            )
+            .to_u32()
+        })
+        .collect();
+    // A class without a usable number gets the next free one - a project
+    // class always has one.
+    let mut next_free = ids.iter().flatten().max().map_or(1, |max| max + 1).max(1);
     let classes = old
         .classes
         .iter()
-        .map(|c| convert_class(c, warnings))
+        .zip(ids)
+        .map(|(c, id)| {
+            let id = id.unwrap_or_else(|| {
+                let id = next_free;
+                next_free += 1;
+                warnings.push(format!(
+                    "classification: class '{}' has no class id ('{}') - given id {id}",
+                    c.name, c.class_id
+                ));
+                id
+            });
+            convert_class(c, id)
+        })
         .collect();
     ClassificationSettings::new_from_existing(classes)
 }
 
-fn convert_class(old: &LegacyClass, warnings: &mut Vec<String>) -> Class {
-    let id = resolve_class(
-        &old.class_id,
-        ObjectClass::Unset,
-        "classification",
-        "classId",
-        warnings,
-    );
+fn convert_class(old: &LegacyClass, id: u32) -> Class {
     let color = parse_hex_color(&old.color).unwrap_or(0x9933FF);
     Class {
         id,
@@ -382,7 +406,11 @@ fn convert_pipeline(id: u32, old: &LegacyPipeline, warnings: &mut Vec<String>) -
 
         let enabled = !step.disabled;
         for command in convert_step(step, pipeline_default_class, &context, warnings) {
-            steps.push(PipelineStepSettings { enabled, command });
+            steps.push(PipelineStepSettings {
+                id: crate::types::ids::StepId::UNASSIGNED,
+                enabled,
+                content: StepContent::Command(command),
+            });
         }
 
         if is_segmentation {
@@ -405,12 +433,18 @@ fn convert_pipeline(id: u32, old: &LegacyPipeline, warnings: &mut Vec<String>) -
 
 fn push_segmentation_followup(steps: &mut Vec<PipelineStepSettings>) {
     steps.push(PipelineStepSettings {
+        id: crate::types::ids::StepId::UNASSIGNED,
         enabled: true,
-        command: PipelineCommand::ConnectedComponents(ConnectedComponentsSettings { min_size: 0 }),
+        content: StepContent::Command(PipelineCommand::ConnectedComponents(
+            ConnectedComponentsSettings { min_size: 0 },
+        )),
     });
     steps.push(PipelineStepSettings {
+        id: crate::types::ids::StepId::UNASSIGNED,
         enabled: true,
-        command: PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
+        content: StepContent::Command(PipelineCommand::ExtractObjects(
+            ExtractObjectsSettings::default(),
+        )),
     });
 }
 
@@ -833,7 +867,7 @@ fn convert_threshold(
                 min_threshold: t.threshold_min,
                 max_threshold: t.threshold_max,
                 unit: crate::core_types::PixelUnits::Bit,
-                object_class_id: SegmentationClass(t.pixel_class_id.max(0) as u32),
+                segmentation_class: SegmentationClass(t.pixel_class_id.max(0) as u32),
                 value_source: SegmentationThresholdThresholdValueSourceSettings::ActualImage,
             }
         })
@@ -1061,6 +1095,7 @@ fn convert_save_image(s: &LegacyImageSaverSettings) -> PipelineCommand {
     PipelineCommand::SaveImage(SaveImageSettings {
         name,
         source: MathSaveImageImageSourceSettings::Image,
+        ..Default::default()
     })
 }
 
@@ -1128,10 +1163,19 @@ mod tests {
         // classes()[0] is always the auto-prepended Background class - see
         // `ClassificationSettings::new_from_existing`.
         assert_eq!(p.classification.classes().len(), 3);
-        assert_eq!(p.classification.classes()[0].id, ObjectClass::BACKGROUND);
-        assert_eq!(p.classification.classes()[1].id, ObjectClass::Valid(1));
+        assert_eq!(
+            p.classification.classes()[0].global(),
+            ObjectClass::BACKGROUND
+        );
+        assert_eq!(p.classification.classes()[1].id, 1);
         assert_eq!(p.classification.classes()[1].color, 0x3399FF);
-        assert_eq!(p.classification.classes()[2].id, ObjectClass::Unset);
+        // "None" isn't a class id: the class gets the next free one.
+        assert_eq!(p.classification.classes()[2].id, 2);
+        assert!(
+            outcome.warnings.iter().any(|w| w.contains("given id 2")),
+            "{:?}",
+            outcome.warnings
+        );
 
         assert_eq!(p.plate.grouping_mode, GroupingMode::Folder);
         assert_eq!(p.plate.well_layout, WellLayout::Fixed { rows: 2, cols: 2 });
@@ -1161,7 +1205,7 @@ mod tests {
 
         let names: Vec<&str> = steps
             .iter()
-            .map(|s| match &s.command {
+            .map(|s| match s.command().unwrap() {
                 PipelineCommand::RollingBall(_) => "RollingBall",
                 PipelineCommand::Blur(_) => "Blur",
                 PipelineCommand::Threshold(_) => "Threshold",
@@ -1195,14 +1239,14 @@ mod tests {
         let classify = outcome.project.pipelines[0]
             .steps
             .iter()
-            .find_map(|s| match &s.command {
+            .find_map(|s| match s.command().unwrap() {
                 PipelineCommand::ClassifyObjects(c) => Some(c),
                 _ => None,
             })
             .expect("a ClassifyObjects step");
 
         assert_eq!(classify.min_area, 50.0);
-        assert_eq!(classify.output_class, ObjectClass::Valid(1));
+        assert_eq!(classify.output_class, ObjectClass::Global(1));
         assert_eq!(classify.origin_segmentation, vec![SegmentationClass(1)]);
     }
 
@@ -1225,7 +1269,7 @@ mod tests {
         let save = outcome.project.pipelines[0]
             .steps
             .iter()
-            .find_map(|s| match &s.command {
+            .find_map(|s| match s.command().unwrap() {
                 PipelineCommand::SaveImage(c) => Some(c),
                 _ => None,
             })
@@ -1251,13 +1295,13 @@ mod tests {
         let transform = outcome.project.pipelines[0]
             .steps
             .iter()
-            .find_map(|s| match &s.command {
+            .find_map(|s| match s.command().unwrap() {
                 PipelineCommand::TransformObjects(c) => Some(c),
                 _ => None,
             })
             .expect("a TransformObjects step");
-        assert_eq!(transform.input_class, ObjectClass::Valid(7));
-        assert_eq!(transform.output_class, ObjectClass::Valid(7));
+        assert_eq!(transform.input_class, ObjectClass::Global(7));
+        assert_eq!(transform.output_class, ObjectClass::Global(7));
     }
 
     #[test]
@@ -1282,7 +1326,7 @@ mod tests {
     }
 
     fn only_command(outcome: &LegacyImportOutcome) -> &PipelineCommand {
-        &outcome.project.pipelines[0].steps[0].command
+        outcome.project.pipelines[0].steps[0].command().unwrap()
     }
 
     #[test]
@@ -1405,7 +1449,7 @@ mod tests {
         let steps = &outcome.project.pipelines[0].steps;
         assert_eq!(steps.len(), 2);
         for step in steps {
-            match &step.command {
+            match step.command().unwrap() {
                 PipelineCommand::ClassifyObjects(c) => {
                     assert_eq!(c.origin_segmentation, vec![SegmentationClass(3)]);
                 }
@@ -1430,8 +1474,8 @@ mod tests {
     #[test]
     fn resolve_class_substitutes_the_pipeline_default_for_the_dollar_placeholder() {
         let mut warnings = Vec::new();
-        let resolved = resolve_class("$", ObjectClass::Valid(5), "ctx", "field", &mut warnings);
-        assert_eq!(resolved, ObjectClass::Valid(5));
+        let resolved = resolve_class("$", ObjectClass::Global(5), "ctx", "field", &mut warnings);
+        assert_eq!(resolved, ObjectClass::Global(5));
         assert!(warnings.is_empty());
     }
 
@@ -1440,7 +1484,7 @@ mod tests {
         let mut warnings = Vec::new();
         for s in ["", "None", "Undefined"] {
             assert_eq!(
-                resolve_class(s, ObjectClass::Valid(5), "ctx", "field", &mut warnings),
+                resolve_class(s, ObjectClass::Global(5), "ctx", "field", &mut warnings),
                 ObjectClass::Unset
             );
         }
@@ -1451,8 +1495,8 @@ mod tests {
     fn resolve_class_parses_a_plain_number_directly() {
         let mut warnings = Vec::new();
         assert_eq!(
-            resolve_class("12", ObjectClass::Valid(5), "ctx", "field", &mut warnings),
-            ObjectClass::Valid(12)
+            resolve_class("12", ObjectClass::Global(5), "ctx", "field", &mut warnings),
+            ObjectClass::Global(12)
         );
         assert!(warnings.is_empty());
     }
@@ -1462,7 +1506,7 @@ mod tests {
         let mut warnings = Vec::new();
         let resolved = resolve_class(
             "M01",
-            ObjectClass::Valid(5),
+            ObjectClass::Global(5),
             "my-context",
             "my-field",
             &mut warnings,
@@ -2075,11 +2119,11 @@ mod tests {
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
             PipelineCommand::Voronoi(s) => {
-                assert_eq!(s.centers, ObjectClass::Valid(1));
-                assert_eq!(s.center_filter_classes, vec![ObjectClass::Valid(2)]);
-                assert_eq!(s.mask, ObjectClass::Valid(4));
-                assert_eq!(s.mask_filter_classes, vec![ObjectClass::Valid(5)]);
-                assert_eq!(s.output_class, ObjectClass::Valid(3));
+                assert_eq!(s.centers, ObjectClass::Global(1));
+                assert_eq!(s.center_filter_classes, vec![ObjectClass::Global(2)]);
+                assert_eq!(s.mask, ObjectClass::Global(4));
+                assert_eq!(s.mask_filter_classes, vec![ObjectClass::Global(5)]);
+                assert_eq!(s.output_class, ObjectClass::Global(3));
                 assert_eq!(s.max_radius, 12.5);
                 assert!(s.exclude_areas_with_no_center);
                 assert!(!s.exclude_areas_at_the_edges);
@@ -2158,11 +2202,11 @@ mod tests {
         let steps = &outcome.project.pipelines[0].steps;
         assert_eq!(steps.len(), 2);
         assert!(matches!(
-            steps[0].command,
+            steps[0].command().unwrap().clone(),
             PipelineCommand::ConnectedComponents(_)
         ));
         assert!(matches!(
-            steps[1].command,
+            steps[1].command().unwrap().clone(),
             PipelineCommand::ExtractObjects(_)
         ));
     }
@@ -2176,7 +2220,7 @@ mod tests {
             ] } }"#,
         );
         let outcome = import_legacy_project(&json).unwrap();
-        match &outcome.project.pipelines[0].steps[0].command {
+        match outcome.project.pipelines[0].steps[0].command().unwrap() {
             PipelineCommand::Threshold(s) => {
                 assert!(
                     s.thresholds
@@ -2209,7 +2253,7 @@ mod tests {
     fn watershed_tolerance_is_clamped_to_a_minimum_of_0_1() {
         let json = pipeline_with_step(r#"{ "$watershed": { "maximumFinderTolerance": 0.0 } }"#);
         let outcome = import_legacy_project(&json).unwrap();
-        match &outcome.project.pipelines[0].steps[0].command {
+        match outcome.project.pipelines[0].steps[0].command().unwrap() {
             PipelineCommand::Watershed(s) => assert_eq!(s.maximum_finder_tolerance, 0.1),
             other => panic!("expected Watershed, got {other:?}"),
         }
@@ -2219,7 +2263,7 @@ mod tests {
     fn watershed_tolerance_above_the_minimum_is_kept_as_is() {
         let json = pipeline_with_step(r#"{ "$watershed": { "maximumFinderTolerance": 5.0 } }"#);
         let outcome = import_legacy_project(&json).unwrap();
-        match &outcome.project.pipelines[0].steps[0].command {
+        match outcome.project.pipelines[0].steps[0].command().unwrap() {
             PipelineCommand::Watershed(s) => assert_eq!(s.maximum_finder_tolerance, 5.0),
             other => panic!("expected Watershed, got {other:?}"),
         }

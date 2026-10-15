@@ -242,6 +242,7 @@ fn request(dir: &Path) -> AnalysisRequest {
         project_path: dir.to_path_buf(),
         job_name: Some("plate-3".into()),
         threads: Some(1),
+        base_results: None,
     }
 }
 
@@ -406,6 +407,7 @@ fn a_real_analysis_is_tracked_too() {
             project_path: dir.path().to_path_buf(),
             job_name: Some("real".into()),
             threads: Some(1),
+            base_results: None,
         })
         .unwrap();
     let id = job.id().unwrap().to_string();
@@ -508,7 +510,7 @@ fn a_training_whose_client_disconnected_saves_its_model_itself() {
     for (i, class) in [1, 2].into_iter().enumerate() {
         series.objects.push(ObjectMetricSettings {
             area: 10 + 1000 * i,
-            object_class: [ObjectClass::Valid(class)].into(),
+            object_class: [ObjectClass::Global(class)].into(),
             ..Default::default()
         });
     }
@@ -517,7 +519,7 @@ fn a_training_whose_client_disconnected_saves_its_model_itself() {
     let mut project = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
     project.images.list.insert(PathBuf::from("img.tif"), entry);
     let label = |class, name: &str| ObjectClassLabel {
-        class: ObjectClass::Valid(class),
+        class: ObjectClass::Global(class),
         name: name.into(),
     };
     let settings = AiLearningSettings {

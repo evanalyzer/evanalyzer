@@ -47,7 +47,7 @@ pub fn resolve_object_classes(
         .map(|name| {
             all.iter()
                 .find(|class| &class.name == name)
-                .map(|class| class.id)
+                .map(|class| class.global())
                 .ok_or_else(|| InternalErrors::InvalidArgument(format!("Unknown class '{name}'")))
         })
         .collect()
