@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn saving_a_command_component_to_the_library_writes_an_evacomp_file() {
+    fn saving_a_component_to_the_library_writes_an_evacomp_file() {
         use evanalyzer_cfg::settings::components::ComponentDefinition;
         let (ui, ui_state, controller) = controller();
         ui_state

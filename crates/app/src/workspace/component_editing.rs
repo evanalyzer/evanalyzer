@@ -1552,7 +1552,7 @@ mod tests {
     }
 
     #[test]
-    fn expanding_puts_the_steps_back_with_the_groups_classes_as_project_classes() {
+    fn expanding_puts_the_steps_back_with_the_components_classes_as_project_classes() {
         let mut project = with_component();
         expand_component(&mut project, PipelineId(1), 2).unwrap();
 
@@ -1581,7 +1581,7 @@ mod tests {
     }
 
     #[test]
-    fn expanding_turns_group_memory_slots_into_pipeline_slots() {
+    fn expanding_turns_component_memory_slots_into_pipeline_slots() {
         use evanalyzer_cfg::core_types::MemoryId;
         use evanalyzer_cfg::settings::pipeline_command_settings::{
             ImageCacheSettings, MathImageCacheImageCacheModeSettings,

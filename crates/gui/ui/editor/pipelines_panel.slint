@@ -2714,7 +2714,7 @@ component StepRow inherits Rectangle {
                                 }
 
                                 Text {
-                                    text: "Create component…";
+                                    text: "Bundle";
                                     font-size: 11px;
                                     color: Theme.text-dim;
                                     vertical-alignment: center;
@@ -2777,7 +2777,6 @@ component StepRow inherits Rectangle {
                         vertical-stretch: 1;
                     }
                 }
-
             }
         }
     }
@@ -2988,7 +2987,7 @@ export global PipelinesPanelState {
         // Opens the settings dialog for a step (step-id).
         callback open-step-settings(string);
 
-    callback run-all();
+        callback run-all();
         callback dry-run();
         callback auto-preview(bool);
         // Saves the pipeline's steps to the library as one component.
@@ -3899,7 +3898,6 @@ export component PipelinesPanel inherits Rectangle {
                                 PipelinesPanelState.save-as-component();
                             }
                         }
-
                     }
                 }
             }
@@ -3911,54 +3909,54 @@ export component PipelinesPanel inherits Rectangle {
 
 // One section of the settings dialog's list on the left.
 component SectionNavItem inherits Rectangle {
-    in property <string> text;
+        in property <string> text;
     // Shown after the name, e.g. "2 changed".
     in property <string> note;
-    in property <bool> active;
-    callback clicked;
+        in property <bool> active;
+        callback clicked;
 
-    height: 30px;
-    border-radius: 6px;
-    background: root.active ? Theme.accent-dim : (ta.has-hover ? Theme.hover : transparent);
+        height: 30px;
+        border-radius: 6px;
+        background: root.active ? Theme.accent-dim : (ta.has-hover ? Theme.hover : transparent);
 
-    Rectangle {
-        x: 0;
-        y: 7px;
-        width: 3px;
-        height: parent.height - 14px;
-        border-radius: 1.5px;
-        background: root.active ? Theme.accent : transparent;
-    }
-
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 8px;
-        spacing: 6px;
-
-        Text {
-            text: root.text;
-            vertical-alignment: center;
-            font-size: 12px;
-            font-weight: root.active ? 600 : 400;
-            color: root.active ? Theme.text : Theme.text-dim;
-            overflow: elide;
+        Rectangle {
+            x: 0;
+            y: 7px;
+            width: 3px;
+            height: parent.height - 14px;
+            border-radius: 1.5px;
+            background: root.active ? Theme.accent : transparent;
         }
 
-        if root.note != "": Text {
-            text: root.note;
-            vertical-alignment: center;
-            font-size: 10px;
-            color: Theme.warn;
-        }
-    }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 8px;
+            spacing: 6px;
 
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
+            Text {
+                text: root.text;
+                vertical-alignment: center;
+                font-size: 12px;
+                font-weight: root.active ? 600 : 400;
+                color: root.active ? Theme.text : Theme.text-dim;
+                overflow: elide;
+            }
+
+            if root.note != "": Text {
+                text: root.note;
+                vertical-alignment: center;
+                font-size: 10px;
+                color: Theme.warn;
+            }
+        }
+
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.clicked();
+            }
         }
     }
-}
 
 // A step's settings in a larger dialog (⤢ on the step card), like the
 // project settings: the step's sections - the sections of its settings,
@@ -3968,255 +3966,256 @@ component SectionNavItem inherits Rectangle {
 // callbacks as on the card. (Opening it shows the step's advanced settings,
 // so they are there to pick and to search.)
 export component StepSettingsDialog inherits Rectangle {
-    callback close();
+        callback close();
 
-    // The list is rebuilt after each change - what's chosen lives out here
+        // The list is rebuilt after each change - what's chosen lives out here
     // so it stays.
     // Index into the step's `sections`; `sections.length` is Advanced.
     property <int> current: 0;
-    property <string> query;
-    property <bool> searching: root.query.replace-all(" ", "") != "";
+        property <string> query;
+        property <bool> searching: root.query.replace-all(" ", "") != "";
 
-    // Whether setting `p` is found by the search text (ignoring case).
+        // Whether setting `p` is found by the search text (ignoring case).
     pure function matches(p: CommandParameter) -> bool {
-        root.found("\{p.display-name} \{p.name} \{p.description} \{p.section}")
-    }
-
-    pure function found(words: string) -> bool {
-        words.to-lowercase().replace-all(root.query.to-lowercase(), "") != words.to-lowercase()
-    }
-
-    // Whether setting `p` of the basic (not advanced) ones is shown.
-    pure function shows(p: CommandParameter, sections: [string]) -> bool {
-        root.searching ? root.matches(p) : (root.current < sections.length && p.section == sections[root.current])
-    }
-
-    background: Theme.modal-overlay;
-
-    TouchArea {
-        clicked => {
-            root.close();
+            root.found("\{p.display-name} \{p.name} \{p.description} \{p.section}")
         }
-    }
 
-    for cmd in PipelinesPanelState.active-commands: Rectangle {
-        width: 100%;
-        height: 100%;
-        if cmd.step-id == PipelinesPanelState.settings-step-id: Rectangle {
-            property <bool> on-advanced: !root.searching && root.current >= cmd.sections.length;
+        pure function found(words: string) -> bool {
+            words.to-lowercase().replace-all(root.query.to-lowercase(), "") != words.to-lowercase()
+        }
 
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: min(920px, parent.width - 48px);
-            height: min(660px, parent.height - 48px);
-            background: Theme.panel;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: Theme.border;
-            drop-shadow-blur: 40px;
-            drop-shadow-color: Theme.shadow;
-            drop-shadow-offset-y: 12px;
-            clip: true;
+        // Whether setting `p` of the basic (not advanced) ones is shown.
+    pure function shows(p: CommandParameter, sections: [string]) -> bool {
+            root.searching ? root.matches(p) : (root.current < sections.length && p.section == sections[root.current])
+        }
 
-            TouchArea { }
+        background: Theme.modal-overlay;
 
-            HorizontalLayout {
+        TouchArea {
+            clicked => {
+                root.close();
+            }
+        }
+
+        for cmd in PipelinesPanelState.active-commands: Rectangle {
+            width: 100%;
+            height: 100%;
+            if cmd.step-id == PipelinesPanelState.settings-step-id: Rectangle {
+                property <bool> on-advanced: !root.searching && root.current >= cmd.sections.length;
+
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: min(920px, parent.width - 48px);
+                height: min(660px, parent.height - 48px);
+                background: Theme.panel;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: Theme.border;
+                drop-shadow-blur: 40px;
+                drop-shadow-color: Theme.shadow;
+                drop-shadow-offset-y: 12px;
+                clip: true;
+
+                TouchArea { }
+
+                HorizontalLayout {
                 // -- Left: name, search, sections --
                 Rectangle {
-                    width: 230px;
-                    background: Theme.bg;
-                    VerticalLayout {
-                        padding: 16px;
-                        spacing: 4px;
-                        alignment: start;
-
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Rectangle {
-                                width: 4px;
-                                border-radius: 2px;
-                                background: Cat.color(cmd.category);
-                            }
-
-                            Text {
-                                text: cmd.name;
-                                font-size: 18px;
-                                font-weight: 700;
-                                color: Theme.text;
-                                overflow: elide;
-                            }
-                        }
-
-                        Rectangle {
-                            height: 10px;
-                        }
-
-                        LineEdit {
-                            text: root.query;
-                            placeholder-text: "Search settings";
-                            edited(t) => {
-                                root.query = t;
-                            }
-                        }
-
-                        Rectangle {
-                            height: 10px;
-                        }
-
-                        for section[si] in cmd.sections: SectionNavItem {
-                            text: section == "" ? "General" : section;
-                            active: !root.searching && root.current == si;
-                            clicked => {
-                                root.query = "";
-                                root.current = si;
-                            }
-                        }
-
-                        if cmd.advanced-count > 0: SectionNavItem {
-                            text: "Advanced (\{cmd.advanced-count})";
-                            note: cmd.advanced-changed > 0 ? "\{cmd.advanced-changed} changed" : "";
-                            active: on-advanced;
-                            clicked => {
-                                root.query = "";
-                                root.current = cmd.sections.length;
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 1px;
-                    background: Theme.border-soft;
-                }
-
-                // -- Right: the chosen section's settings --
-                Rectangle {
-                    horizontal-stretch: 1;
-                    ScrollView {
+                        width: 230px;
+                        background: Theme.bg;
                         VerticalLayout {
-                            padding: 24px;
-                            padding-top: 20px;
-                            spacing: 6px;
+                            padding: 16px;
+                            spacing: 4px;
                             alignment: start;
 
                             HorizontalLayout {
-                                spacing: 10px;
+                                spacing: 8px;
+                                Rectangle {
+                                    width: 4px;
+                                    border-radius: 2px;
+                                    background: Cat.color(cmd.category);
+                                }
+
                                 Text {
-                                    horizontal-stretch: 1;
-                                    text: root.searching ? "Search results" : on-advanced ? "Advanced" : (cmd.sections[root.current] == "" ? "General" : cmd.sections[root.current]);
-                                    font-size: 16px;
+                                    text: cmd.name;
+                                    font-size: 18px;
                                     font-weight: 700;
                                     color: Theme.text;
-                                    vertical-alignment: center;
+                                    overflow: elide;
                                 }
+                            }
 
-                                GhostIconBtn {
-                                    icon: @image-url("../icons/regular-white/x.svg");
-                                    icon-sz: 12px;
-                                    clicked => {
-                                        root.close();
+                            Rectangle {
+                                height: 10px;
+                            }
+
+                            LineEdit {
+                                text: root.query;
+                                placeholder-text: "Search settings";
+                                edited(t) => {
+                                    root.query = t;
+                                }
+                            }
+
+                            Rectangle {
+                                height: 10px;
+                            }
+
+                            for section[si] in cmd.sections: SectionNavItem {
+                                text: section == "" ? "General" : section;
+                                active: !root.searching && root.current == si;
+                                clicked => {
+                                    root.query = "";
+                                    root.current = si;
+                                }
+                            }
+
+                            if cmd.advanced-count > 0: SectionNavItem {
+                                text: "Advanced (\{cmd.advanced-count})";
+                                note: cmd.advanced-changed > 0 ? "\{cmd.advanced-changed} changed" : "";
+                                active: on-advanced;
+                                clicked => {
+                                    root.query = "";
+                                    root.current = cmd.sections.length;
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border-soft;
+                    }
+
+                    // -- Right: the chosen section's settings --
+                Rectangle {
+                        horizontal-stretch: 1;
+                        ScrollView {
+                            VerticalLayout {
+                                padding: 24px;
+                                padding-top: 20px;
+                                spacing: 6px;
+                                alignment: start;
+
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: root.searching ? "Search results" : on-advanced ? "Advanced" : (cmd.sections[root.current] == "" ? "General" : cmd.sections[root.current]);
+                                        font-size: 16px;
+                                        font-weight: 700;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                    }
+
+                                    GhostIconBtn {
+                                        icon: @image-url("../icons/regular-white/x.svg");
+                                        icon-sz: 12px;
+                                        clicked => {
+                                            root.close();
+                                        }
                                     }
                                 }
-                            }
 
-                            Text {
-                                text: cmd.summary;
-                                font-size: 11px;
-                                font-family: Theme.font-mono;
-                                color: Theme.text-mute;
-                                overflow: elide;
-                            }
+                                Text {
+                                    text: cmd.summary;
+                                    font-size: 11px;
+                                    font-family: Theme.font-mono;
+                                    color: Theme.text-mute;
+                                    overflow: elide;
+                                }
 
-                            // What the command does - on its first page.
+                                // What the command does - on its first page.
                             if cmd.help != "" && !root.searching && root.current == 0: Text {
-                                text: cmd.help;
-                                font-size: 11px;
-                                color: Theme.text-dim;
-                                wrap: word-wrap;
-                                height: self.preferred-height;
-                            }
+                                    text: cmd.help;
+                                    font-size: 11px;
+                                    color: Theme.text-dim;
+                                    wrap: word-wrap;
+                                    height: self.preferred-height;
+                                }
 
-                            Rectangle {
-                                height: 8px;
-                            }
+                                Rectangle {
+                                    height: 8px;
+                                }
 
-                            // The rows draw the dividers between them; the
+                                // The rows draw the dividers between them; the
                             // card's top border is the first one's.
                             Rectangle {
-                                background: Theme.panel;
-                                border-radius: 8px;
-                                border-width: 1px;
-                                border-color: Theme.border-soft;
-                                clip: true;
+                                    background: Theme.panel;
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: Theme.border-soft;
+                                    clip: true;
 
-                                VerticalLayout {
-                                    padding-top: -1px;
+                                    VerticalLayout {
+                                        padding-top: -1px;
 
-                                    if !on-advanced: VerticalLayout {
-                                        for p in cmd.parameters: VerticalLayout {
-                                            if root.shows(p, cmd.sections): WideParamRow {
-                                                p: p;
-                                                changed(v) => {
-                                                    PipelinesPanelState.param-changed(cmd.id, p.name, v);
-                                                }
-                                                item-field-changed(item_idx, field_name, v) => {
-                                                    PipelinesPanelState.param-changed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}", v);
-                                                }
-                                                add-item => {
-                                                    PipelinesPanelState.add-group-item(cmd.id, p.name);
-                                                }
-                                                remove-item(idx) => {
-                                                    PipelinesPanelState.remove-group-item(cmd.id, p.name, idx);
-                                                }
-                                                show-model-info => {
-                                                    PipelinesPanelState.show-model-info(cmd.id);
-                                                }
-                                                toggle-exposed => {
-                                                    PipelinesPanelState.toggle-exposed(cmd.id, p.name);
-                                                }
-                                                toggle-item-exposed(item_idx, field_name) => {
-                                                    PipelinesPanelState.toggle-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
-                                                }
-                                                edit-exposed => {
-                                                    PipelinesPanelState.edit-exposed(cmd.id, p.name);
-                                                }
-                                                edit-item-exposed(item_idx, field_name) => {
-                                                    PipelinesPanelState.edit-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                        if !on-advanced: VerticalLayout {
+                                            for p in cmd.parameters: VerticalLayout {
+                                                if root.shows(p, cmd.sections): WideParamRow {
+                                                    p: p;
+                                                    changed(v) => {
+                                                        PipelinesPanelState.param-changed(cmd.id, p.name, v);
+                                                    }
+                                                    item-field-changed(item_idx, field_name, v) => {
+                                                        PipelinesPanelState.param-changed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}", v);
+                                                    }
+                                                    add-item => {
+                                                        PipelinesPanelState.add-group-item(cmd.id, p.name);
+                                                    }
+                                                    remove-item(idx) => {
+                                                        PipelinesPanelState.remove-group-item(cmd.id, p.name, idx);
+                                                    }
+                                                    show-model-info => {
+                                                        PipelinesPanelState.show-model-info(cmd.id);
+                                                    }
+                                                    toggle-exposed => {
+                                                        PipelinesPanelState.toggle-exposed(cmd.id, p.name);
+                                                    }
+                                                    toggle-item-exposed(item_idx, field_name) => {
+                                                        PipelinesPanelState.toggle-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                                    }
+                                                    edit-exposed => {
+                                                        PipelinesPanelState.edit-exposed(cmd.id, p.name);
+                                                    }
+                                                    edit-item-exposed(item_idx, field_name) => {
+                                                        PipelinesPanelState.edit-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
 
-                                    if on-advanced || root.searching: VerticalLayout {
-                                        for p in cmd.advanced-parameters: VerticalLayout {
-                                            if !root.searching || root.matches(p): WideParamRow {
-                                                p: p;
-                                                changed(v) => {
-                                                    PipelinesPanelState.param-changed(cmd.id, p.name, v);
-                                                }
-                                                item-field-changed(item_idx, field_name, v) => {
-                                                    PipelinesPanelState.param-changed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}", v);
-                                                }
-                                                add-item => {
-                                                    PipelinesPanelState.add-group-item(cmd.id, p.name);
-                                                }
-                                                remove-item(idx) => {
-                                                    PipelinesPanelState.remove-group-item(cmd.id, p.name, idx);
-                                                }
-                                                show-model-info => {
-                                                    PipelinesPanelState.show-model-info(cmd.id);
-                                                }
-                                                toggle-exposed => {
-                                                    PipelinesPanelState.toggle-exposed(cmd.id, p.name);
-                                                }
-                                                toggle-item-exposed(item_idx, field_name) => {
-                                                    PipelinesPanelState.toggle-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
-                                                }
-                                                edit-exposed => {
-                                                    PipelinesPanelState.edit-exposed(cmd.id, p.name);
-                                                }
-                                                edit-item-exposed(item_idx, field_name) => {
-                                                    PipelinesPanelState.edit-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                        if on-advanced || root.searching: VerticalLayout {
+                                            for p in cmd.advanced-parameters: VerticalLayout {
+                                                if !root.searching || root.matches(p): WideParamRow {
+                                                    p: p;
+                                                    changed(v) => {
+                                                        PipelinesPanelState.param-changed(cmd.id, p.name, v);
+                                                    }
+                                                    item-field-changed(item_idx, field_name, v) => {
+                                                        PipelinesPanelState.param-changed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}", v);
+                                                    }
+                                                    add-item => {
+                                                        PipelinesPanelState.add-group-item(cmd.id, p.name);
+                                                    }
+                                                    remove-item(idx) => {
+                                                        PipelinesPanelState.remove-group-item(cmd.id, p.name, idx);
+                                                    }
+                                                    show-model-info => {
+                                                        PipelinesPanelState.show-model-info(cmd.id);
+                                                    }
+                                                    toggle-exposed => {
+                                                        PipelinesPanelState.toggle-exposed(cmd.id, p.name);
+                                                    }
+                                                    toggle-item-exposed(item_idx, field_name) => {
+                                                        PipelinesPanelState.toggle-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                                    }
+                                                    edit-exposed => {
+                                                        PipelinesPanelState.edit-exposed(cmd.id, p.name);
+                                                    }
+                                                    edit-item-exposed(item_idx, field_name) => {
+                                                        PipelinesPanelState.edit-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                                    }
                                                 }
                                             }
                                         }
@@ -4225,9 +4224,7 @@ export component StepSettingsDialog inherits Rectangle {
                             }
                         }
                     }
-
                 }
             }
         }
     }
-}

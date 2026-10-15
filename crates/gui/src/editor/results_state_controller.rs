@@ -30,8 +30,8 @@ use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings, Well
 use evanalyzer_gui_slint::ResultsWindow;
 use log::{error, info, warn};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -216,12 +216,18 @@ pub struct ResultsStateController {
     // `false` on every `open_database` so a fresh database gets fresh
     // defaults the next time the dialog opens, but re-opening the dialog
     // against the *same* database leaves whatever the user already
-    // configured alone. The configuration itself needs no Rust-side mirror:
-    // every dialog control (checkboxes, text fields, the
-    // MultiSelectDropdowns' own `items`) is two-way bound straight to
+    // configured alone. Most of the configuration needs no Rust-side
+    // mirror: those dialog controls are two-way bound straight to
     // `ExportDialogState` in Slint, which retains it for the life of the
     // window — `on_export_start_clicked` reads it back from there directly.
+    // The IMAGES picker is the exception, see `export_image_selection`.
     export_populated: Mutex<bool>,
+    // The export dialog's IMAGES picker selection, by `rel_path`. Kept here
+    // rather than in its Slint `image-items` because the picker's search
+    // box narrows `image-items` down to the matching rows - reading the
+    // selection back from there would silently drop every checked image the
+    // current search hides.
+    export_image_selection: Mutex<HashSet<PathBuf>>,
     // Set to a fresh flag whenever an export starts, so `on_cancel_clicked`
     // can signal the background export thread to stop at its next
     // per-image/per-class checkpoint (see `results_exporter::start_export`'s
@@ -270,6 +276,7 @@ impl ResultsStateController {
             list_row_locations: Mutex::new(Vec::new()),
             image_list_controller,
             export_populated: Mutex::new(false),
+            export_image_selection: Mutex::new(HashSet::new()),
             export_cancel_flag: Mutex::new(None),
             db_worker: Arc::new(DbWorker::new()),
             rail_mode: Mutex::new(ResultsRailMode::List),
@@ -1241,19 +1248,29 @@ impl ResultsStateController {
                     });
                 });
 
+            // The IMAGES picker: every callback updates
+            // `export_image_selection` (the real selection) and re-pushes
+            // the rows matching the current search, see
+            // `push_export_image_items`.
             let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ExportDialogState>()
-                .on_image_item_selected(move |_key, _selected| {
+                .on_image_item_selected(move |key, selected| {
                     let Some(ui_ready) = ui_weak.upgrade() else {
                         warn!("Failed to upgrade UI handle in on_image_item_selected");
                         return;
                     };
-                    let state = ui_ready.global::<ExportDialogState>();
-                    let items = state.get_image_items();
-                    let selected = items.iter().filter(|item| item.selected).count();
-                    let total = manager.images.lock().expect("Poisened").len();
-                    state.set_image_summary(image_summary_text(selected, total));
+                    let rel_path = PathBuf::from(key.as_str());
+                    {
+                        let mut selection =
+                            manager.export_image_selection.lock().expect("Poisened");
+                        if selected {
+                            selection.insert(rel_path);
+                        } else {
+                            selection.remove(&rel_path);
+                        }
+                    }
+                    manager.push_export_image_summary(&ui_ready);
                 });
 
             let ui_weak = self.ui.clone();
@@ -1264,13 +1281,15 @@ impl ResultsStateController {
                         warn!("Failed to upgrade UI handle in on_image_select_all");
                         return;
                     };
-                    let images = manager.images.lock().expect("Poisened");
-                    let items = image_items(&images, true);
-                    let total = images.len();
-                    drop(images);
-                    let state = ui_ready.global::<ExportDialogState>();
-                    state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                    state.set_image_summary(image_summary_text(total, total));
+                    let all: HashSet<PathBuf> = manager
+                        .images
+                        .lock()
+                        .expect("Poisened")
+                        .iter()
+                        .map(|image| image.rel_path.clone())
+                        .collect();
+                    *manager.export_image_selection.lock().expect("Poisened") = all;
+                    manager.push_export_image_items(&ui_ready);
                 });
 
             let ui_weak = self.ui.clone();
@@ -1281,26 +1300,16 @@ impl ResultsStateController {
                         warn!("Failed to upgrade UI handle in on_image_select_none");
                         return;
                     };
-                    let images = manager.images.lock().expect("Poisened");
-                    let items = image_items(&images, false);
-                    let total = images.len();
-                    drop(images);
-                    let state = ui_ready.global::<ExportDialogState>();
-                    state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                    state.set_image_summary(image_summary_text(0, total));
+                    manager
+                        .export_image_selection
+                        .lock()
+                        .expect("Poisened")
+                        .clear();
+                    manager.push_export_image_items(&ui_ready);
                 });
 
-            // Search box in the export dialog's own IMAGES picker -
-            // narrows which rows show without touching selection, same as
-            // the main List view's `list_image_filter_changed`/
-            // `filtered_image_items` (see that one's own doc comment for
-            // why this can't just filter `items` in Slint directly). Reads
-            // the *current* selection straight off the dialog's own
-            // `image-items` (not `manager.list_filter`, which tracks the
-            // main List view's filter, a separate, independently-editable
-            // selection once the export dialog is open) so a filter+toggle
-            // combo doesn't clobber unrelated selections made before the
-            // filter narrowed the view.
+            // Search box in the export dialog's own IMAGES picker - only
+            // narrows which rows show, never the selection.
             let ui_weak = self.ui.clone();
             let manager = self.clone();
             ui.global::<ExportDialogState>()
@@ -1309,17 +1318,10 @@ impl ResultsStateController {
                         warn!("Failed to upgrade UI handle in on_image_filter_changed");
                         return;
                     };
-                    let state = ui_ready.global::<ExportDialogState>();
-                    let selected_paths: Vec<PathBuf> = state
-                        .get_image_items()
-                        .iter()
-                        .filter(|item| item.selected)
-                        .map(|item| PathBuf::from(item.key.to_string()))
-                        .collect();
-                    let images = manager.images.lock().expect("Poisened");
-                    let items = filtered_image_items(&images, &selected_paths, &query);
-                    drop(images);
-                    state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                    ui_ready
+                        .global::<ExportDialogState>()
+                        .set_image_filter_text(query);
+                    manager.push_export_image_items(&ui_ready);
                 });
 
             let manager = self.clone();
@@ -3034,12 +3036,9 @@ impl ResultsStateController {
         let items = image_items(&images, false);
         let total = images.len();
         drop(images);
-        // Sentinel: a real image's rel-path is never empty (schema
-        // guarantees `image_rel_path` is `NOT NULL`), so this can't match
-        // any real image — which is what "select none" needs, since an
-        // empty `image_rel_path` list means "no filter" (all images) in
-        // `update_list_view`, not "match nothing".
-        self.list_filter.lock().expect("Poisened").image_rel_path = vec![PathBuf::new()];
+        // No image selected means no image filter (all images), see
+        // `image_summary_text`.
+        self.list_filter.lock().expect("Poisened").image_rel_path = Vec::new();
         self.push_image_items(items, image_summary_text(0, total));
         self.refresh_list();
     }
@@ -3074,7 +3073,11 @@ impl ResultsStateController {
             .expect("Poisened")
             .image_rel_path
             .clone();
-        let items = filtered_image_items(&images, &selected_paths, query);
+        let items = filtered_image_items(
+            &images,
+            |path| selected_paths.iter().any(|p| p == path),
+            query,
+        );
         drop(images);
 
         let ui_weak = self.ui.clone();
@@ -3191,22 +3194,18 @@ impl ResultsStateController {
         let images = self.images.lock().expect("Poisened");
         let available_columns = self.available_columns.lock().expect("Poisened");
 
-        // `select_none_images`/`select_none_classes` store a sentinel (a
-        // single entry that can't match any real image/class) rather than
-        // a genuinely empty list, since empty means "no filter" (all) to
-        // `update_list_view` — exporting is naturally "all" whenever
-        // nothing meaningful was excluded, so the sentinel maps back to an
-        // empty `ResultExport` list here rather than trying to preserve a
-        // "selected literally nothing" state an export has no use for.
-        let image_rel_paths: Vec<String> = if list_filter.image_rel_path == [PathBuf::new()] {
-            Vec::new()
-        } else {
-            list_filter
-                .image_rel_path
-                .iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect()
-        };
+        // `select_none_classes` stores a sentinel (a single entry that
+        // can't match any real class) rather than a genuinely empty list,
+        // since empty means "no filter" (all) to `update_list_view` —
+        // exporting is naturally "all" whenever nothing meaningful was
+        // excluded, so the sentinel maps back to an empty `ResultExport`
+        // list here rather than trying to preserve a "selected literally
+        // nothing" state an export has no use for.
+        let image_rel_paths: Vec<String> = list_filter
+            .image_rel_path
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
         let object_classes: Vec<ObjectClass> = if list_filter.object_classes == [ObjectClass::Unset]
         {
             Vec::new()
@@ -3233,9 +3232,8 @@ impl ResultsStateController {
 
         // Seeds the export dialog's own image selection from whatever the
         // main List view's image filter currently has selected - except
-        // when that's "all" (`image_rel_paths` empty, the sentinel
-        // convention above) or "none" (the sentinel case, which maps to
-        // the same empty `image_rel_paths` here), or when it's such a
+        // when that's "all" (`image_rel_paths` empty, which is also what
+        // "none selected" means), or when it's such a
         // large individual selection (> 50) that pre-checking every one of
         // them would make the dialog's own picker unwieldy to review/
         // change - in either case, default to just the first image rather
@@ -3245,35 +3243,15 @@ impl ResultsStateController {
             && image_rel_paths.len() <= 50
             && image_rel_paths.len() < images.len();
 
-        let image_items_vec: Vec<MultiSelectItem> = images
-            .iter()
-            .enumerate()
-            .map(|(index, image)| {
-                let key = image.rel_path.to_str().unwrap_or_default();
-                let selected = if select_individually {
-                    image_rel_paths.iter().any(|p| p == key)
-                } else {
-                    index == 0
-                };
-                MultiSelectItem {
-                    key: key.into(),
-                    value: image.name.as_str().into(),
-                    color: Color::default(),
-                    group: "".into(),
-                    selected,
-                }
-            })
-            .collect();
-
-        let image_summary = list_summary(
-            if select_individually {
-                image_rel_paths.len()
-            } else {
-                1
-            },
-            images.len(),
-            "Images",
-        );
+        let image_selection: HashSet<PathBuf> = if select_individually {
+            image_rel_paths.iter().map(PathBuf::from).collect()
+        } else {
+            images
+                .first()
+                .map(|image| image.rel_path.clone())
+                .into_iter()
+                .collect()
+        };
 
         let class_items_vec: Vec<MultiSelectItem> = classes
             .iter()
@@ -3322,8 +3300,9 @@ impl ResultsStateController {
         state.set_t_start("0".into());
         state.set_t_end((t_stack_max + 1).to_string().into());
 
-        state.set_image_items(ModelRc::from(Rc::new(VecModel::from(image_items_vec))));
-        state.set_image_summary(image_summary);
+        *self.export_image_selection.lock().expect("Poisened") = image_selection;
+        state.set_image_filter_text("".into());
+        self.push_export_image_items(ui_ready);
         state.set_class_items(ModelRc::from(Rc::new(VecModel::from(class_items_vec))));
         state.set_class_summary(class_summary);
         state.set_column_items(ModelRc::from(Rc::new(VecModel::from(column_items_vec))));
@@ -3365,6 +3344,30 @@ impl ResultsStateController {
         state.set_progress_message("".into());
         state.set_progress_current(0);
         state.set_progress_total(0);
+    }
+
+    // Rebuilds the export dialog's IMAGES rows from `export_image_selection`,
+    // showing only the images matching the picker's search text, and
+    // refreshes its summary. Runs on the UI thread (called from Slint
+    // callbacks), so it pushes into `ExportDialogState` directly.
+    fn push_export_image_items(&self, ui_ready: &ResultsWindow) {
+        let state = ui_ready.global::<ExportDialogState>();
+        let query = state.get_image_filter_text();
+        let images = self.images.lock().expect("Poisened");
+        let selection = self.export_image_selection.lock().expect("Poisened");
+        let items = filtered_image_items(&images, |path| selection.contains(path), &query);
+        drop(selection);
+        drop(images);
+        state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
+        self.push_export_image_summary(ui_ready);
+    }
+
+    fn push_export_image_summary(&self, ui_ready: &ResultsWindow) {
+        let total = self.images.lock().expect("Poisened").len();
+        let selected = self.export_image_selection.lock().expect("Poisened").len();
+        ui_ready
+            .global::<ExportDialogState>()
+            .set_image_summary(image_summary_text(selected, total));
     }
 
     // Reads `ExportDialogState`'s current values back into a `ResultExport`
@@ -3411,10 +3414,16 @@ impl ResultsStateController {
                 .collect()
         };
 
-        let image_rel_paths: Vec<String> = selected_keys(state.get_image_items())
-            .into_iter()
-            .map(|key| key.to_string())
+        // From `export_image_selection`, not the picker's `image-items`,
+        // which only holds the rows the search box currently shows.
+        let image_rel_paths: Vec<String> = self
+            .export_image_selection
+            .lock()
+            .expect("Poisened")
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
             .collect();
+        // Empty means every image, as the picker's "All Images" says.
 
         let mut object_classes = Vec::new();
         for key in selected_keys(state.get_class_items()) {
@@ -3615,8 +3624,8 @@ fn list_summary(selected: usize, total: usize, noun: &str) -> slint::SharedStrin
 
 // The IMAGES dropdown's own summary: unlike columns/classes, an empty
 // selection here means "no image filter at all" (every image matches — see
-// `update_list_view`'s `image_rel_path.is_empty()` check and
-// `select_none_images`'s sentinel comment), not "match nothing". "0 of N
+// `update_list_view`'s `image_rel_path.is_empty()` check), not "match
+// nothing" - for the export dialog's picker too. "0 of N
 // Images" reads as the opposite of that, so it's shown as "All Images"
 // instead — including right after a database opens, since `set_images_in_slint`
 // starts with nothing selected.
@@ -4031,12 +4040,12 @@ fn image_items(images: &[ImageEntry], selected: bool) -> Vec<MultiSelectItem> {
 /// pushes never run under the headless test platform's `init_no_event_loop`).
 /// Keeps every image whose name contains `query` (case-insensitive, empty
 /// query keeps everything), each carrying its *real* current selection
-/// state from `selected_paths` - unlike `image_items`'s uniform bool, since
+/// state from `is_selected` - unlike `image_items`'s uniform bool, since
 /// narrowing the dropdown's visible rows must never look like it changed
 /// which images are actually selected.
 fn filtered_image_items(
     images: &[ImageEntry],
-    selected_paths: &[PathBuf],
+    is_selected: impl Fn(&Path) -> bool,
     query: &str,
 ) -> Vec<MultiSelectItem> {
     let query_lower = query.to_lowercase();
@@ -4048,7 +4057,7 @@ fn filtered_image_items(
             value: image.name.as_str().into(),
             color: Color::default(),
             group: "".into(),
-            selected: selected_paths.contains(&image.rel_path),
+            selected: is_selected(&image.rel_path),
         })
         .collect()
 }
@@ -4629,10 +4638,37 @@ mod tests {
         state.invoke_list_image_selected("A1_01.tif".into(), true);
         assert_eq!(controller.list_row_locations.lock().unwrap().len(), 1);
 
-        // "Select none" is a sentinel matching *nothing* (not "clear the
-        // filter to match everything") - see `select_none_images`.
+        // "Select none" clears the image filter: no image selected means
+        // all images.
         state.invoke_list_image_select_none();
-        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 0);
+        assert!(
+            controller
+                .list_filter
+                .lock()
+                .unwrap()
+                .image_rel_path
+                .is_empty()
+        );
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
+
+        // Ticking one image after "Select none" filters to exactly that
+        // one, and unticking it goes back to all.
+        state.invoke_list_image_selected("A1_01.tif".into(), true);
+        assert_eq!(
+            controller.list_filter.lock().unwrap().image_rel_path,
+            vec![PathBuf::from("A1_01.tif")]
+        );
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 1);
+        state.invoke_list_image_selected("A1_01.tif".into(), false);
+        assert!(
+            controller
+                .list_filter
+                .lock()
+                .unwrap()
+                .image_rel_path
+                .is_empty()
+        );
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
 
         state.invoke_list_image_select_all();
         assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
@@ -4700,7 +4736,7 @@ mod tests {
         controller.populate_export_defaults(&results_ui);
         assert_eq!(selected_keys(&export_state), vec!["A1_01.tif".to_string()]);
 
-        // Nothing selected (the select-none sentinel) -> same "just the
+        // Nothing selected (= all images) -> same "just the
         // first" default, rather than a picker with nothing checked at all.
         list_state.invoke_list_image_select_none();
         controller.populate_export_defaults(&results_ui);
@@ -4739,6 +4775,108 @@ mod tests {
         assert_eq!(export_state.get_image_items().row_count(), 3);
     }
 
+    // Clicks an export-dialog IMAGES row the way `MultiSelectDropdown`
+    // does: flips the row in place, then fires `image-item-selected`.
+    fn click_export_image(state: &ExportDialogState, key: &str, selected: bool) {
+        let items = state.get_image_items();
+        let row = (0..items.row_count())
+            .find(|&i| items.row_data(i).unwrap().key == key)
+            .unwrap_or_else(|| panic!("{key} is not shown in the picker"));
+        let mut item = items.row_data(row).unwrap();
+        item.selected = selected;
+        items.set_row_data(row, item);
+        state.invoke_image_item_selected(key.into(), selected);
+    }
+
+    fn exported_images(
+        controller: &ResultsStateController,
+        results_ui: &ResultsWindow,
+    ) -> Vec<String> {
+        let mut paths = controller
+            .read_export_settings(results_ui)
+            .expect("valid export settings")
+            .image_rel_paths;
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn export_dialog_keeps_images_selected_under_an_earlier_search() {
+        // Regression: the picker's selection used to be read back from its
+        // search-narrowed rows, so images checked under one search were
+        // dropped from the export (and the "N of M" count) by the next.
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        controller.populate_export_defaults(&results_ui);
+        let state = results_ui.global::<ExportDialogState>();
+        state.set_output_dir("out".into());
+        state.set_with_list_view(true);
+
+        state.invoke_image_select_none();
+        state.invoke_image_filter_changed("A1".into());
+        click_export_image(&state, "A1_01.tif", true);
+        click_export_image(&state, "A1_02.tif", true);
+        state.invoke_image_filter_changed("A2".into());
+        click_export_image(&state, "A2_01.tif", true);
+
+        let all = vec!["A1_01.tif", "A1_02.tif", "A2_01.tif"];
+        assert_eq!(state.get_image_summary(), image_summary_text(3, 3));
+        assert_eq!(exported_images(&controller, &results_ui), all);
+
+        // Clearing the search shows every checkmark again.
+        state.invoke_image_filter_changed("".into());
+        assert!(state.get_image_items().iter().all(|item| item.selected));
+        assert_eq!(exported_images(&controller, &results_ui), all);
+
+        // Unchecking a visible row leaves the hidden selections alone.
+        state.invoke_image_filter_changed("A2".into());
+        click_export_image(&state, "A2_01.tif", false);
+        assert_eq!(
+            exported_images(&controller, &results_ui),
+            vec!["A1_01.tif", "A1_02.tif"]
+        );
+        assert_eq!(state.get_image_summary(), image_summary_text(2, 3));
+    }
+
+    #[test]
+    fn export_dialog_select_all_and_none_keep_the_current_search() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        controller.populate_export_defaults(&results_ui);
+        let state = results_ui.global::<ExportDialogState>();
+        state.set_output_dir("out".into());
+
+        state.invoke_image_filter_changed("A1".into());
+        state.invoke_image_select_all();
+        let shown: Vec<String> = state
+            .get_image_items()
+            .iter()
+            .map(|item| item.key.to_string())
+            .collect();
+        assert_eq!(shown, vec!["A1_01.tif", "A1_02.tif"]);
+        assert_eq!(
+            exported_images(&controller, &results_ui),
+            vec!["A1_01.tif", "A1_02.tif", "A2_01.tif"]
+        );
+
+        state.invoke_image_select_none();
+        assert_eq!(state.get_image_items().row_count(), 2);
+        assert!(state.get_image_items().iter().all(|item| !item.selected));
+        assert_eq!(state.get_image_summary(), image_summary_text(0, 3));
+    }
+
+    #[test]
+    fn export_dialog_with_no_image_selected_exports_all_images() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        controller.populate_export_defaults(&results_ui);
+        let state = results_ui.global::<ExportDialogState>();
+        state.set_output_dir("out".into());
+        state.set_with_list_view(true);
+        state.invoke_image_select_none();
+
+        assert_eq!(state.get_image_summary(), "All Images");
+        // An empty list is the exporter's "every image".
+        assert!(exported_images(&controller, &results_ui).is_empty());
+    }
+
     #[test]
     fn filtered_image_items_matches_by_name_case_insensitively_and_keeps_real_selection() {
         let images = vec![
@@ -4759,8 +4897,9 @@ mod tests {
             },
         ];
         let selected_paths = vec![PathBuf::from("A1_01.tif")];
+        let is_selected = |path: &Path| selected_paths.iter().any(|p| p == path);
 
-        let matches = filtered_image_items(&images, &selected_paths, "a1");
+        let matches = filtered_image_items(&images, is_selected, "a1");
         let keys: Vec<String> = matches.iter().map(|item| item.key.to_string()).collect();
         assert_eq!(keys, vec!["A1_01.tif".to_string(), "A1_02.tif".to_string()]);
         // The already-selected image keeps showing as selected even though
@@ -4769,9 +4908,9 @@ mod tests {
         assert!(!matches[1].selected);
 
         // An empty query keeps every image.
-        assert_eq!(filtered_image_items(&images, &selected_paths, "").len(), 3);
+        assert_eq!(filtered_image_items(&images, is_selected, "").len(), 3);
         // A query matching nothing returns an empty (not panicking) list.
-        assert!(filtered_image_items(&images, &selected_paths, "zzz").is_empty());
+        assert!(filtered_image_items(&images, is_selected, "zzz").is_empty());
     }
 
     #[test]

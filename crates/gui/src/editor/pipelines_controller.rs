@@ -6338,7 +6338,7 @@ mod tests {
     }
 
     #[test]
-    fn a_command_component_step_shows_as_a_card_with_the_components_name() {
+    fn a_component_step_shows_as_a_card_with_the_components_name() {
         let component = PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
             enabled: true,

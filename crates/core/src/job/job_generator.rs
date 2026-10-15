@@ -1352,7 +1352,7 @@ mod tests {
     }
 
     #[test]
-    fn a_command_component_runs_as_its_commands() {
+    fn a_component_runs_as_its_commands() {
         let project_dir = tempfile::tempdir().unwrap();
         let image_root = tempfile::tempdir().unwrap();
         let mut project = project_with(
@@ -1732,7 +1732,7 @@ mod tests {
     /// extracts internally (`L1`) leave it reclassified into the project class
     /// the instance chose.
     #[test]
-    fn a_hand_written_command_component_loads_and_runs() {
+    fn a_hand_written_component_loads_and_runs() {
         use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};
         use evanalyzer_cfg::settings::pipeline_command_settings::{
             ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
