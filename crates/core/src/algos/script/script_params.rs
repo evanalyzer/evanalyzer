@@ -12,13 +12,31 @@
 //! default must be a plain value - a number, a decimal, `true`/`false` or a
 //! text - so the declarations can be read without running the script
 //! ([`declared_params`]).
+//!
+//! The script is the only declaration. The step stores just the values that
+//! differ from the defaults, by name (`ScriptSettings::values`); the editor
+//! shows one setting `values.<name>` per `param` ([`script_parameters`]),
+//! which group parameters bind to like any other setting.
 
-use crate::algos::script::script_executor::ScriptValue;
 use evanalyzer_cfg::core_types::{ImageChannelIdx, ObjectClass};
+use evanalyzer_cfg::settings::command_groups::ParamValue;
+use evanalyzer_cfg::settings::parameter_def::{ParamType, ParameterDef};
 use rhai::{
     Dynamic, Engine, EvalAltResult, ImmutableString, LexError, ParseError, ParseErrorType, Position,
 };
 use std::cell::RefCell;
+use std::collections::BTreeMap;
+
+/// A `param`'s value, typed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptValue {
+    Number(i64),
+    Decimal(f64),
+    Bool(bool),
+    Text(String),
+    Class(ObjectClass),
+    Channel(ImageChannelIdx),
+}
 
 /// A `param`'s type. Without `: type` it follows from the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +52,17 @@ pub enum ParamKind {
 }
 
 impl ParamKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Number => "number",
+            Self::Decimal => "decimal",
+            Self::Bool => "bool",
+            Self::Text => "text",
+            Self::Class => "class",
+            Self::Channel => "channel",
+        }
+    }
+
     fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "number" => Self::Number,
@@ -44,18 +73,6 @@ impl ParamKind {
             "channel" => Self::Channel,
             _ => return None,
         })
-    }
-
-    /// The kind of `value`.
-    pub fn of(value: &ScriptValue) -> Self {
-        match value {
-            ScriptValue::Number(_) => Self::Number,
-            ScriptValue::Decimal(_) => Self::Decimal,
-            ScriptValue::Bool(_) => Self::Bool,
-            ScriptValue::Text(_) => Self::Text,
-            ScriptValue::Class(_) => Self::Class,
-            ScriptValue::Channel(_) => Self::Channel,
-        }
     }
 }
 
@@ -104,6 +121,150 @@ pub fn declared_params(engine: &Engine, source: &str) -> Result<Vec<ParamDecl>, 
         }
     }
     Ok(decls)
+}
+
+/// A stored value as a value of `kind`.
+///
+/// # Errors
+/// It's no value of `kind` (e.g. a text for a number).
+pub fn from_param_value(kind: ParamKind, value: &ParamValue) -> Result<ScriptValue, String> {
+    let wrong = || Err(format!("the step's value {value:?} is no {}", kind.name()));
+    Ok(match (kind, value) {
+        (ParamKind::Number, ParamValue::Int(n)) => ScriptValue::Number(*n),
+        (ParamKind::Decimal, ParamValue::Int(n)) => ScriptValue::Decimal(*n as f64),
+        (ParamKind::Decimal, ParamValue::Float(x)) => ScriptValue::Decimal(*x),
+        (ParamKind::Bool, ParamValue::Bool(b)) => ScriptValue::Bool(*b),
+        (ParamKind::Text, ParamValue::Text(t)) => ScriptValue::Text(t.clone()),
+        (ParamKind::Class, ParamValue::Int(n)) if *n >= 0 => {
+            ScriptValue::Class(ObjectClass::Global(*n as u32))
+        }
+        (ParamKind::Class, ParamValue::Int(-1)) => ScriptValue::Class(ObjectClass::Unset),
+        (ParamKind::Class, ParamValue::Text(t)) => match ObjectClass::from_text(t) {
+            Some(class) => ScriptValue::Class(class),
+            None => return wrong(),
+        },
+        (ParamKind::Channel, ParamValue::Int(n)) if *n >= 0 => {
+            ScriptValue::Channel(ImageChannelIdx(*n as u32))
+        }
+        _ => return wrong(),
+    })
+}
+
+/// `value` as stored in the step.
+fn to_param_value(value: &ScriptValue) -> ParamValue {
+    match value {
+        ScriptValue::Number(n) => ParamValue::Int(*n),
+        ScriptValue::Decimal(x) => ParamValue::Float(*x),
+        ScriptValue::Bool(b) => ParamValue::Bool(*b),
+        ScriptValue::Text(t) => ParamValue::Text(t.clone()),
+        ScriptValue::Class(class) => match class {
+            ObjectClass::Global(n) => ParamValue::Int(*n as i64),
+            ObjectClass::Unset => ParamValue::Int(-1),
+            local => ParamValue::Text(local.to_text()),
+        },
+        ScriptValue::Channel(c) => ParamValue::Int(c.0 as i64),
+    }
+}
+
+/// `value` as the editor's control shows it.
+fn value_text(value: &ScriptValue) -> String {
+    match value {
+        ScriptValue::Number(n) => n.to_string(),
+        ScriptValue::Decimal(x) => x.to_string(),
+        ScriptValue::Bool(b) => b.to_string(),
+        ScriptValue::Text(t) => t.clone(),
+        ScriptValue::Class(class) => class.to_text(),
+        ScriptValue::Channel(c) => c.0.to_string(),
+    }
+}
+
+/// The value `decl` has in a step with `values`: the stored one if it fits,
+/// else the default.
+fn current(decl: &ParamDecl, values: &BTreeMap<String, ParamValue>) -> ScriptValue {
+    values
+        .get(&decl.name)
+        .and_then(|v| from_param_value(decl.kind, v).ok())
+        .unwrap_or_else(|| decl.default.clone())
+}
+
+/// The editor's settings for a step's `param`s: one per declaration, named
+/// `values.<name>`, with the control of its type.
+pub fn script_parameters(
+    decls: &[ParamDecl],
+    values: &BTreeMap<String, ParamValue>,
+) -> Vec<ParameterDef> {
+    decls
+        .iter()
+        .map(|decl| ParameterDef {
+            name: format!("values.{}", decl.name),
+            display_name: decl.name.clone(),
+            description: format!("`param {}` of the script", decl.name),
+            value: value_text(&current(decl, values)),
+            param_type: match decl.kind {
+                ParamKind::Number | ParamKind::Decimal => ParamType::Number,
+                ParamKind::Bool => ParamType::Toggle,
+                ParamKind::Text => ParamType::Text,
+                ParamKind::Class => ParamType::ObjClass,
+                ParamKind::Channel => ParamType::ImageChannel,
+            },
+            options: vec![],
+            min: 0.0,
+            max: 0.0,
+            step: if decl.kind == ParamKind::Decimal {
+                0.1
+            } else {
+                1.0
+            },
+            groups: vec![],
+            default_value: value_text(&decl.default),
+            advanced: false,
+            option_advanced: vec![],
+        })
+        .collect()
+}
+
+/// Sets `param` `name`'s value in `values` from `text` (as the editor's
+/// control reports it); a value equal to the default is removed - only
+/// changed values are stored.
+///
+/// # Errors
+/// The script declares no such `param`, or `text` is no value of its type.
+pub fn set_script_value(
+    decls: &[ParamDecl],
+    values: &mut BTreeMap<String, ParamValue>,
+    name: &str,
+    text: &str,
+) -> Result<(), String> {
+    let decl = decls
+        .iter()
+        .find(|d| d.name == name)
+        .ok_or_else(|| format!("the script has no `param {name}`"))?;
+    let text = text.trim();
+    let bad = || format!("`{text}` is no {}", decl.kind.name());
+    let value = match decl.kind {
+        ParamKind::Number => ScriptValue::Number(
+            text.parse::<i64>()
+                .or_else(|_| text.parse::<f64>().map(|x| x.round() as i64))
+                .map_err(|_| bad())?,
+        ),
+        ParamKind::Decimal => ScriptValue::Decimal(text.parse().map_err(|_| bad())?),
+        ParamKind::Bool => ScriptValue::Bool(match text {
+            "true" => true,
+            "false" => false,
+            _ => return Err(bad()),
+        }),
+        ParamKind::Text => ScriptValue::Text(text.to_string()),
+        ParamKind::Class => ScriptValue::Class(ObjectClass::from_text(text).ok_or_else(bad)?),
+        ParamKind::Channel => {
+            ScriptValue::Channel(ImageChannelIdx(text.parse().map_err(|_| bad())?))
+        }
+    };
+    if value == decl.default {
+        values.remove(name);
+    } else {
+        values.insert(name.to_string(), to_param_value(&value));
+    }
+    Ok(())
 }
 
 /// `value` as the script sees it.
@@ -292,7 +453,7 @@ fn parse(
             let mut map = rhai::Map::new();
             map.insert("name".into(), decl.name.into());
             map.insert("default".into(), Dynamic::from(decl.default.clone()));
-            map.insert("kind".into(), format!("{:?}", decl.kind).into());
+            map.insert("kind".into(), decl.kind.name().into());
             *state = map.into();
             return Ok(None);
         }
@@ -311,7 +472,7 @@ fn parse(
 /// hands to the script (its commands may use it).
 pub fn register(
     engine: &mut Engine,
-    value_of: impl Fn(&str) -> Option<ScriptValue> + 'static,
+    value_of: impl Fn(&str) -> Option<ParamValue> + 'static,
     uses_class: impl Fn(ObjectClass) + 'static,
 ) {
     engine.register_custom_syntax_with_state_raw(
@@ -328,20 +489,17 @@ pub fn register(
                 .and_then(|v| v.clone().into_immutable_string().ok())
                 .map(|s| s.to_string())
                 .unwrap_or_default();
-            let kind = map.get("kind").map(|v| v.to_string()).unwrap_or_default();
+            let kind = map
+                .get("kind")
+                .and_then(|v| ParamKind::from_name(&v.to_string()))
+                .unwrap_or(ParamKind::Number);
             let value = match value_of(&name) {
-                Some(value) if format!("{:?}", ParamKind::of(&value)) == kind => value,
-                Some(value) => {
-                    return Err(Box::new(EvalAltResult::ErrorRuntime(
-                        format!(
-                            "param `{name}` is a {} in the script, but the step's value is a {:?} - edit the script once to update the step",
-                            kind.to_lowercase(),
-                            ParamKind::of(&value)
-                        )
-                        .into(),
+                Some(stored) => from_param_value(kind, &stored).map_err(|why| {
+                    Box::new(EvalAltResult::ErrorRuntime(
+                        format!("param `{name}`: {why}").into(),
                         Position::NONE,
-                    )));
-                }
+                    ))
+                })?,
                 None => match map
                     .get("default")
                     .and_then(|d| d.clone().try_cast::<ScriptValue>())

@@ -697,7 +697,7 @@ pub fn setting_at(command: &PipelineCommand, path: &str) -> Option<(ParameterDef
             p.display_name.clone()
         }
     }
-    find(&command.to_parameters(), path)
+    find(&evanalyzer_core::command_parameters(command), path)
 }
 
 /// The parameters of group `key` a setting like `setting` could be added
@@ -966,7 +966,12 @@ fn class_paths(command: &PipelineCommand, class: ObjectClass) -> Vec<(String, Pa
         }
     }
     let mut out = Vec::new();
-    walk(&command.to_parameters(), "", class, &mut out);
+    walk(
+        &evanalyzer_core::command_parameters(command),
+        "",
+        class,
+        &mut out,
+    );
     out
 }
 
@@ -985,7 +990,8 @@ fn make_local(
             PathKind::Segmentation => continue,
             PathKind::Single => local.to_text(),
             PathKind::Multi => {
-                let current = find_value(&command.to_parameters(), &path).unwrap_or_default();
+                let current = find_value(&evanalyzer_core::command_parameters(command), &path)
+                    .unwrap_or_default();
                 current
                     .split(',')
                     .map(|item| {
@@ -999,8 +1005,10 @@ fn make_local(
                     .join(",")
             }
         };
-        command.apply_param_change(&path, &value);
-        if find_value(&command.to_parameters(), &path).as_deref() != Some(value.as_str()) {
+        evanalyzer_core::apply_command_param(command, &path, &value);
+        if find_value(&evanalyzer_core::command_parameters(command), &path).as_deref()
+            != Some(value.as_str())
+        {
             return Err(InternalErrors::InvalidArgument(format!(
                 "{} doesn't take the group class {} for {path}",
                 command.name(),

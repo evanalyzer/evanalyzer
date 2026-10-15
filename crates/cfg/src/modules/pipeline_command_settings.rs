@@ -1,5 +1,7 @@
 // @generated - do not edit by hand
 #[allow(unused_imports)]
+use crate::modules::command_groups::ParamValue;
+#[allow(unused_imports)]
 use crate::types::classes::{ModelClass, ModelSegmentationClass};
 use crate::{
     core_types::{ImageAddress, ImageChannelIdx, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel},
@@ -7,6 +9,8 @@ use crate::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[allow(unused_imports)]
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 // ============ ENUM SETTINGS ============
@@ -474,30 +478,6 @@ pub enum FiltersRankFilterRankFilterTypeSettings {
     /// by more than the specified threshold.
     #[serde(alias = "outliers")]
     Outliers(f32),
-}
-
-/// A script `param`'s value and type.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ScriptScriptExecutorScriptValueSettings {
-    #[serde(alias = "number")]
-    Number(i64),
-    #[serde(alias = "decimal")]
-    Decimal(f64),
-    #[serde(alias = "bool")]
-    Bool(bool),
-    #[serde(alias = "text")]
-    Text(String),
-    #[serde(alias = "class")]
-    Class(ObjectClass),
-    #[serde(alias = "channel")]
-    Channel(ImageChannelIdx),
-}
-
-impl Default for ScriptScriptExecutorScriptValueSettings {
-    fn default() -> Self {
-        Self::Number(Default::default())
-    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
@@ -1413,8 +1393,8 @@ impl Default for SaveImageSettings {
 fn _serde_default_script_classes() -> Vec<ObjectClass> {
     vec![]
 }
-fn _serde_default_script_params() -> Vec<ScriptParamSettings> {
-    vec![]
+fn _serde_default_script_values() -> BTreeMap<String, ParamValue> {
+    <BTreeMap<String, ParamValue>>::default()
 }
 /// Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.
 ///
@@ -1441,12 +1421,12 @@ pub struct ScriptSettings {
     pub classes: Vec<ObjectClass>,
     /// Script source code
     pub source: String,
-    /// The values of the script's `param`s. The script declares them
-    /// (`param max_rounds = 10;`); this list follows it when the script is
-    /// edited or the project loaded - a `param` without an entry runs with
-    /// its default.
-    #[serde(default = "_serde_default_script_params")]
-    pub params: Vec<ScriptParamSettings>,
+    /// The values set for the script's `param`s, by name - only those that
+    /// differ from the default the script gives. The script declares its
+    /// params (`param max_rounds = 10;`); a value for a name it doesn't
+    /// declare is ignored.
+    #[serde(default = "_serde_default_script_values")]
+    pub values: BTreeMap<String, ParamValue>,
 }
 
 impl Default for ScriptSettings {
@@ -1456,7 +1436,7 @@ impl Default for ScriptSettings {
             source: String::from(
                 "print(`Hello world from a ${image_width}x${image_height} tile`);\n",
             ),
-            params: vec![],
+            values: <BTreeMap<String, ParamValue>>::default(),
         }
     }
 }
@@ -2707,29 +2687,6 @@ impl Default for SimpleTrackerSettings {
             object_class: ObjectClass::default(),
             unit: SizeUnits::default(),
             max_distance: 10000.0f32,
-        }
-    }
-}
-
-// ============ OTHER ============
-
-/// A `param` of a script: a value the script gets from its step's settings
-/// (or a group parameter) instead of from its code.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
-#[schemars(default)]
-#[serde(rename_all = "camelCase")]
-pub struct ScriptParamSettings {
-    /// The name the script declares it with.
-    pub name: String,
-    /// Its value. The type comes from the script's `param` line.
-    pub value: ScriptScriptExecutorScriptValueSettings,
-}
-
-impl Default for ScriptParamSettings {
-    fn default() -> Self {
-        Self {
-            name: String::default(),
-            value: ScriptScriptExecutorScriptValueSettings::Number(0),
         }
     }
 }

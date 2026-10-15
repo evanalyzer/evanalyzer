@@ -48,7 +48,10 @@ pub use crate::object::ObjectInit;
 pub use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 
 // Job execution
-pub use crate::algos::{ParamDecl, ParamKind, ScriptValue, declared_script_params};
+pub use crate::algos::{
+    ParamDecl, ParamKind, ScriptValue, apply_command_param, command_parameters,
+    declared_script_params,
+};
 pub use crate::job::algos_from_config::{into_algorithm, into_pipeline_step};
 pub use crate::job::command_groups::{
     ExpandedCommand, ScopeCounter, expand_step, group_parameters, group_steps_with_values,

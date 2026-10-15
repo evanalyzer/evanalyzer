@@ -1843,12 +1843,6 @@ pub fn load_project(
         );
     }
 
-    // Script steps' settings follow their scripts' `param` lines (a script
-    // may have been edited by hand).
-    for problem in crate::workspace::script_params::sync_project_script_params(&mut inner) {
-        warn!("{problem}");
-    }
-
     // Values for parameters a group no longer has (e.g. a hand edit).
     crate::workspace::grouping::prune_group_values(&mut inner);
 

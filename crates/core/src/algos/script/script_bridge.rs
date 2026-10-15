@@ -90,7 +90,8 @@ pub(crate) struct ScriptHost {
     /// The script step's declared classes; commands may use only these.
     pub(crate) classes: Vec<ObjectClass>,
     /// The step's values of the script's `param`s, by name.
-    pub(crate) params: std::collections::HashMap<String, crate::algos::ScriptValue>,
+    pub(crate) params:
+        std::collections::HashMap<String, evanalyzer_cfg::settings::command_groups::ParamValue>,
 }
 
 impl ScriptHost {

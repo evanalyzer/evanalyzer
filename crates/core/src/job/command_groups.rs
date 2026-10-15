@@ -249,7 +249,7 @@ pub fn group_parameters(
                 .ok_or_else(|| missing_step(definition, parameter, binding))?;
             let bound = match &step.content {
                 StepContent::Command(command) => {
-                    find_param(&command.to_parameters(), &binding.param).cloned()
+                    find_param(&crate::algos::command_parameters(command), &binding.param).cloned()
                 }
                 StepContent::Group(inner) => group_parameters(inner, definitions)?
                     .into_iter()
@@ -305,8 +305,8 @@ pub fn set_group_parameter(
         .ok_or_else(|| missing_step(definition, parameter, binding))?;
     let value = match &mut step.content {
         StepContent::Command(command) => {
-            command.apply_param_change(&binding.param, text);
-            let now = find_param(&command.to_parameters(), &binding.param)
+            crate::algos::apply_command_param(command, &binding.param, text);
+            let now = find_param(&crate::algos::command_parameters(command), &binding.param)
                 .map(|p| p.value.clone())
                 .unwrap_or_default();
             value_from_text(&now)
@@ -448,11 +448,11 @@ fn set_bound_value(
     match &mut step.content {
         StepContent::Command(command) => {
             let text = value_text(value);
-            if find_param(&command.to_parameters(), param).is_none() {
+            if find_param(&crate::algos::command_parameters(command), param).is_none() {
                 return Err("the command has no such parameter".into());
             }
-            command.apply_param_change(param, &text);
-            let now = find_param(&command.to_parameters(), param)
+            crate::algos::apply_command_param(command, param, &text);
+            let now = find_param(&crate::algos::command_parameters(command), param)
                 .map(|p| p.value.clone())
                 .unwrap_or_default();
             if same_value(&now, &text) {

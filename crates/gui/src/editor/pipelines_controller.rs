@@ -2061,7 +2061,11 @@ impl PipelinesController {
                         let Some(command) = step.command_mut() else {
                             return;
                         };
-                        command.apply_param_change(&param_name, &value_str);
+                        evanalyzer_app::settings_of::apply_command_param(
+                            command,
+                            &param_name,
+                            &value_str,
+                        );
 
                         // A PixelClassifier/AiObjectClassifier's `segmentation_mapping`
                         // row count is driven by the loaded model's own class count,
@@ -2091,33 +2095,22 @@ impl PipelinesController {
                             }
                         }
 
-                        // A script's settings follow its `param` lines.
-                        let mut script_moved = None;
+                        // A new script: its `param`s are the step's settings now.
                         if param_name == "source"
                             && let PipelineCommand::Script(settings) = command
                         {
-                            match evanalyzer_app::scripts::sync_script_params(settings) {
-                                Ok(moved) => {
-                                    script_moved = Some(moved);
-                                    needs_full_resync = true;
-                                }
-                                Err(e) => script_problem = Some(e),
+                            needs_full_resync = true;
+                            if let Err(e) =
+                                evanalyzer_app::settings_of::declared_script_params(&settings.source)
+                            {
+                                script_problem = Some(e);
                             }
                         }
                         let mut result = (
                             command.to_summary(),
-                            command.to_parameters(),
+                            evanalyzer_app::settings_of::command_parameters(command),
                             needs_full_resync,
                         );
-                        if let Some(moved) = &script_moved
-                            && let Some(key) = manager.open_group_key(pipeline_id)
-                            && let Some(definition) =
-                                project.command_groups.iter_mut().find(|d| d.key == key)
-                        {
-                            evanalyzer_app::scripts::rebind_script_params(
-                                definition, step_id, moved,
-                            );
-                        }
                         // A setting of the opened group a parameter sets: the
                         // new value becomes the parameter's default (else it
                         // would never run), and the other settings it sets
@@ -2140,7 +2133,7 @@ impl PipelinesController {
                         manager.show_warning_titled(
                             "Script parameters",
                             &format!(
-                                "The script's param lines have a problem, so its settings weren't updated:\n{problem}"
+                                "A param line of the script has a problem, so the step shows no settings for its params:\n{problem}"
                             ),
                         );
                     }
@@ -3783,7 +3776,7 @@ impl PipelinesController {
                             },
                             category: step_category(*command.category()),
                             enabled: step.enabled,
-                            parameters: command.to_parameters(),
+                            parameters: evanalyzer_app::settings_of::command_parameters(command),
                             exposed: open_definition
                                 .map(|d| evanalyzer_app::groups::exposed_settings(d, step.id))
                                 .unwrap_or_default(),
@@ -6652,11 +6645,11 @@ mod tests {
         assert_eq!(shown.options.row_data(0).unwrap(), "group");
     }
 
-    /// A Script step in a group: editing its script makes the `param`s its
-    /// settings; one exposed on the group card runs with the card's value.
+    /// A Script step in a group: its script's `param`s are its settings;
+    /// one exposed on the group card runs with the card's value - and stays
+    /// bound when `param` lines move, since bindings use the name.
     #[test]
     fn a_scripts_param_is_a_setting_and_can_go_on_the_group_card() {
-        use evanalyzer_cfg::settings::pipeline_command_settings::ScriptScriptExecutorScriptValueSettings as Value;
         let (ui, ui_state, controller) = selected(vec![step("Script")]);
         {
             let mut project = ui_state.get_project_write();
@@ -6675,19 +6668,11 @@ mod tests {
             "param rounds = 10;\nparam start = 800.0;".into(),
         );
         drain_ui_queue();
-        let params = ui_param(&ui, 0, "params");
-        assert_eq!(params.group_items.row_count(), 2, "one entry per param");
+        assert_eq!(ui_param(&ui, 0, "values.rounds").value, "10");
 
-        panel.invoke_toggle_exposed(0, "params.0.value.0".into());
+        panel.invoke_toggle_exposed(0, "values.rounds".into());
         drain_ui_queue();
-        {
-            let project = ui_state.get_project();
-            let parameters = &project.command_groups[0].parameters;
-            assert_eq!(parameters.len(), 1);
-            assert_eq!(parameters[0].bindings[0].param, "params.0.value.0");
-        }
-
-        // A new param in front: the binding moves with "rounds".
+        // A new param in front: nothing to move, the binding is by name.
         panel.invoke_param_changed(
             0,
             "source".into(),
@@ -6696,16 +6681,16 @@ mod tests {
         drain_ui_queue();
         assert_eq!(
             ui_state.get_project().command_groups[0].parameters[0].bindings[0].param,
-            "params.1.value.0"
+            "values.rounds"
         );
 
         // On the card: 42 - what the script gets.
         panel.invoke_close_group();
         drain_ui_queue();
-        let id = ui_state.get_project().command_groups[0].parameters[0]
+        let key = ui_state.get_project().command_groups[0].parameters[0]
             .key
             .clone();
-        panel.invoke_param_changed(0, id.0.to_string().into(), "42".into());
+        panel.invoke_param_changed(0, key.to_string().into(), "42".into());
         drain_ui_queue();
         let project = ui_state.get_project();
         let StepContent::Group(instance) = &project.pipelines[0].steps[0].content else {
@@ -6717,24 +6702,16 @@ mod tests {
         let Some(PipelineCommand::Script(script)) = steps[0].command() else {
             panic!("script")
         };
-        assert_eq!(script.params[1].name, "rounds");
-        assert_eq!(script.params[1].value, Value::Number(42));
+        assert_eq!(script.values["rounds"], ParamValue::Int(42));
     }
 
     #[test]
-    fn a_script_with_a_wrong_param_line_says_so_and_keeps_its_settings() {
-        let (ui, ui_state, _controller) = selected(vec![step("Script")]);
+    fn a_script_with_a_wrong_param_line_says_so() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Script")]);
         let panel = ui.global::<PipelinesPanelState>();
-        panel.invoke_param_changed(0, "source".into(), "param n = 1;".into());
-        drain_ui_queue();
         panel.invoke_param_changed(0, "source".into(), "param n = 1 + 1;".into());
         drain_ui_queue();
         assert_eq!(active_dialog(&ui), DialogType::Warning);
-        let project = ui_state.get_project();
-        let Some(PipelineCommand::Script(script)) = project.pipelines[0].steps[0].command() else {
-            panic!("script")
-        };
-        assert_eq!(script.params.len(), 1, "the list stays");
     }
 
     #[test]

@@ -186,6 +186,9 @@ fn field_default_expr(field: &FieldInfo, enums: &[EnumInfo], commands: &[Command
         "vec![]".to_string()
     } else if field_type.starts_with("Option<") {
         "None".to_string()
+    } else if field_type.contains('<') {
+        // A generic type (`BTreeMap<String, ParamValue>`) needs the `<T>::` form.
+        format!("<{}>::default()", field_type)
     } else {
         format!("{}::default()", field_type)
     }
@@ -287,6 +290,9 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     out.push_str("use crate::{core_types::{ImageAddress,ImageChannelIdx,MemoryId,PixelUnits, SizeUnits, SizeUnitsRel}, types::classes::{ObjectClass, SegmentationClass}};\n");
     out.push_str("#[allow(unused_imports)]\nuse crate::types::classes::{ModelClass, ModelSegmentationClass};\n");
     out.push_str("use std::path::PathBuf;\n");
+    // A Script step's values (`ParamValue`s by `param` name).
+    out.push_str("#[allow(unused_imports)]\nuse std::collections::BTreeMap;\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::modules::command_groups::ParamValue;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
 
