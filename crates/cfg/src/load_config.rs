@@ -51,6 +51,8 @@ pub fn load_project_settings(raw: Value) -> Result<ProjectSettings, InternalErro
 const AI_LEARNING_SETTINGS_MIGRATIONS: &[MigrationStep] = &[
     |_raw| {}, // 0 -> 1: nothing to do yet
     |_raw| {}, // 1 -> 2: nothing to do yet
+    |_raw| {}, // 2 -> 3: nothing to do yet
+    |_raw| {}, // 3 -> 4: nothing to do yet
 ];
 
 /// Loads an [`AiLearningSettings`] from its raw on-disk JSON (a standalone
