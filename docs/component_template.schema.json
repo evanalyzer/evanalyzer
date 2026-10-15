@@ -1,30 +1,71 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "PipelineTemplate",
+  "title": "ComponentTemplate",
+  "description": "A component saved to a library file (`.evacomp`). Inserting it copies\nthe component into a project, where it lives on its own from then on.",
   "type": "object",
   "properties": {
+    "classes": {
+      "description": "Local classes used by the component. These classes are scoped to the component only",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Class"
+      }
+    },
+    "key": {
+      "description": "Unique component key, prefere SCREAMING_SNAKE_CASE",
+      "type": "string"
+    },
     "meta": {
-      "description": "Metadata of this pipeline template",
+      "description": "Metadata of this component",
       "$ref": "#/$defs/MetaData"
     },
+    "origin": {
+      "description": "The library file this definition was inserted from, if any. Not\nwritten when absent, so library files (`.evacomp`) never carry it.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ComponentOrigin"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parameters": {
+      "description": "The component's parameters, shown on the component card.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ComponentParameterDef"
+      }
+    },
     "schemaVersion": {
-      "description": "On-disk format version of this pipeline template (`.evapipe`). Absent\non files written before versioning was introduced, which\n`serde(default)` reads as `0` - see `CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION`.\nUnlike `ProjectSettings.schema_version`, nothing currently rejects a\ntoo-new version or migrates an old one forward on load - this field\nonly reserves the seam for that.",
+      "description": "On-disk format version (`.evacomp`), see\n`CURRENT_COMPONENT_TEMPLATE_SCHEMA_VERSION`. Like the other templates, not\nmigrated.",
       "type": "integer",
       "format": "uint32",
       "default": 0,
       "minimum": 0
     },
     "steps": {
-      "description": "The pipeline settings",
+      "description": "The steps which are executed in the given order",
       "type": "array",
       "items": {
         "$ref": "#/$defs/PipelineStepSettings"
       }
+    },
+    "uses": {
+      "description": "The components it uses inside, so the file is complete on its own.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ComponentDefinition"
+      }
     }
   },
   "required": [
+    "key",
     "meta",
-    "steps"
+    "steps",
+    "parameters"
   ],
   "$defs": {
     "AiObjectClassifierSettings": {
@@ -167,11 +208,6 @@
           "type": "string",
           "default": ""
         },
-        "objectClassId": {
-          "description": "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.",
-          "$ref": "#/$defs/SegmentationClass",
-          "default": 1
-        },
         "probabilityThreshold": {
           "description": "Cell probability above which a pixel takes part in the flow dynamics and\ncan be assigned to an object. The raw cell-probability logits are passed\nthrough a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's\ndefault logit threshold of `0` corresponds to `0.5`).",
           "type": "number",
@@ -184,8 +220,38 @@
           "description": "Copy the gray image into every input channel instead of filling the\nextra channels with zeros. With `input_channels = 3` this matches\nCellpose run on an RGB image whose channels are (nearly) equal.",
           "type": "boolean",
           "default": true
+        },
+        "segmentationClass": {
+          "description": "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
         }
       }
+    },
+    "Class": {
+      "type": "object",
+      "properties": {
+        "color": {
+          "type": "string"
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "color",
+        "name",
+        "notes"
+      ]
     },
     "ClassificationMappingSettings": {
       "description": "Maps one class the model was trained to predict to a class ID meaningful\nin this project. Model class IDs are a snapshot taken at training time\n(see `evanalyzer_cfg::ObjectClassLabel`'s doc comment) and aren't\nguaranteed to line up with this project's own `ObjectClass` IDs - this is\nthe bridge between the two.",
@@ -428,6 +494,154 @@
         "range"
       ]
     },
+    "ComponentDefinition": {
+      "description": "A component as defined in the project: its steps and the parameters it shows.",
+      "type": "object",
+      "properties": {
+        "classes": {
+          "description": "Local classes used by the component. These classes are scoped to the component only",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Class"
+          }
+        },
+        "key": {
+          "description": "Unique component key, prefere SCREAMING_SNAKE_CASE",
+          "type": "string"
+        },
+        "meta": {
+          "description": "Metadata of this component",
+          "$ref": "#/$defs/MetaData"
+        },
+        "origin": {
+          "description": "The library file this definition was inserted from, if any. Not\nwritten when absent, so library files (`.evacomp`) never carry it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComponentOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parameters": {
+          "description": "The component's parameters, shown on the component card.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ComponentParameterDef"
+          }
+        },
+        "steps": {
+          "description": "The steps which are executed in the given order",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PipelineStepSettings"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "meta",
+        "steps",
+        "parameters"
+      ]
+    },
+    "ComponentInstance": {
+      "description": "A use of a component in a pipeline: which definition, with which values.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The component's key in the project.",
+          "type": "string"
+        },
+        "values": {
+          "description": "This instance's parameter values. A parameter missing here has its\ndefinition's default (e.g. one the definition gained later).",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ParamValue"
+          },
+          "default": {}
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "ComponentOrigin": {
+      "description": "Where a definition came from: a component library file.",
+      "type": "object",
+      "properties": {
+        "contentHash": {
+          "description": "A fingerprint of the definition as inserted - if it differs now, the\nproject changed the component, and an update from the library would\nreplace those changes. Empty in files written before.",
+          "type": "string",
+          "default": ""
+        },
+        "library": {
+          "description": "The library file's name (`.evacomp`).",
+          "type": "string"
+        },
+        "originComponentKey": {
+          "description": "If this is a copy form an existing component, this is the origin component key.\nThis allows to reset the component default settings.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The definition's version in that file when it was inserted.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "originComponentKey",
+        "library",
+        "version"
+      ]
+    },
+    "ComponentParamKey": {
+      "description": "A component parameter's key, unique within its component definition and\nreadable in the file (`\"min_size\"`). The values a component instance holds\nare keyed by it, so they survive reordering and relabelling the\ndefinition's parameters, and updating it from the library. Made from the\nlabel when the parameter is made, then kept.",
+      "type": "string"
+    },
+    "ComponentParameterDef": {
+      "description": "One parameter of a component: what it sets inside the component, and its default.",
+      "type": "object",
+      "properties": {
+        "bindings": {
+          "description": "The inner parameters this one sets - all of the same type. Type,\noptions and range are those of the bound parameters (not stored here,\nso they can't go stale when a command changes).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParamBinding"
+          }
+        },
+        "default": {
+          "description": "The value an instance starts with.",
+          "$ref": "#/$defs/ParamValue"
+        },
+        "description": {
+          "description": "Explanation shown to the user.",
+          "type": "string",
+          "default": ""
+        },
+        "key": {
+          "description": "Unique within the component definition, readable (`\"min_size\"`); the\ninstances' values are keyed by it.",
+          "$ref": "#/$defs/ComponentParamKey"
+        },
+        "label": {
+          "description": "Name shown to the user, e.g. \"Cell class\".",
+          "type": "string"
+        },
+        "section": {
+          "description": "Section the parameter is shown in on the component card, e.g.\n\"Detection\"; empty: the unnamed first section.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "default",
+        "bindings"
+      ]
+    },
     "ConnectedComponentsSettings": {
       "description": "Identifies and labels discrete objects within a binary or multi-class image.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]",
       "type": "object",
@@ -526,10 +740,36 @@
         "equalizeHistogram"
       ]
     },
+    "ExtractClassMappingSettings": {
+      "description": "The object class the objects of one segmentation class get.",
+      "type": "object",
+      "properties": {
+        "objectClass": {
+          "description": "The object class its objects get: a project class, or inside a\ncomponent one of the component's own classes.",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "segmentationClass": {
+          "description": "The segmentation class, as set by Threshold, Pixel classifier, ...",
+          "$ref": "#/$defs/SegmentationClass"
+        }
+      },
+      "required": [
+        "segmentationClass",
+        "objectClass"
+      ]
+    },
     "ExtractObjectsSettings": {
       "description": "Represents a bounded object extracted from a labeled image.\nA command to extract spatial statistics and bounding boxes from labeled objects.",
       "type": "object",
       "properties": {
+        "classMapping": {
+          "description": "Which object class the objects of a segmentation class get.\n\nWithout an entry, a segmentation class's objects get the project class\nwith the same number - what the Threshold's class choice means. Inside\na component, map to one of the component's own classes to keep the\nobjects internal to the component.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExtractClassMappingSettings"
+          }
+        },
         "maxObjectsBeforeFail": {
           "description": "Maximum allowed ROIs to extract.\n\nIf this limit is exceeded the pipeline fails.\nThis is a protection against memory overload.",
           "type": "integer",
@@ -917,6 +1157,11 @@
           "required": [
             "channel"
           ]
+        },
+        {
+          "description": "No image - only as a pipeline's start: its first step loads one\n(Load Image Channel, Image Cache Load).",
+          "type": "string",
+          "const": "NONE"
         }
       ]
     },
@@ -1065,6 +1310,19 @@
         }
       }
     },
+    "LoadChannelSettings": {
+      "description": "Loads an image channel as the image the following steps work on.\n\nReplaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na component that detects nuclei in one channel and cells in another.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "The image channel to load.",
+          "$ref": "#/$defs/ImageChannelIdx"
+        }
+      },
+      "required": [
+        "channel"
+      ]
+    },
     "MathImageCacheImageCacheModeSettings": {
       "description": "Defines the interaction type with the persistent image storage.",
       "oneOf": [
@@ -1201,6 +1459,20 @@
           "required": [
             "projectCache"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "componentContext": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "componentContext"
+          ]
         }
       ]
     },
@@ -1249,6 +1521,15 @@
           "items": {
             "type": "string"
           }
+        },
+        "version": {
+          "description": "The author's version of this component or template",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       },
       "required": [
@@ -1352,7 +1633,7 @@
         {
           "type": "object",
           "properties": {
-            "VALID": {
+            "GLOBAL": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
@@ -1360,7 +1641,22 @@
           },
           "additionalProperties": false,
           "required": [
-            "VALID"
+            "GLOBAL"
+          ]
+        },
+        {
+          "description": "A class of a component (`ComponentDefinition::classes`): only valid\ninside the component, each instance has its own.",
+          "type": "object",
+          "properties": {
+            "LOCAL": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "LOCAL"
           ]
         }
       ]
@@ -1703,6 +1999,51 @@
         }
       ]
     },
+    "ParamBinding": {
+      "description": "An inner parameter a component parameter sets.",
+      "type": "object",
+      "properties": {
+        "param": {
+          "description": "The parameter's path in that step's command, as `ParameterDef::name`\ngives it (e.g. \"class_out\", \"method.classes\"). A path into a list\nentry (\"thresholds.2.min\") breaks when entries are added or removed.",
+          "type": "string"
+        },
+        "step": {
+          "description": "The step of the component that owns the parameter.",
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "step",
+        "param"
+      ]
+    },
+    "ParamValue": {
+      "description": "A component parameter's value - written as plain JSON (`4`, `4.5`, `true`,\n`\"PARABOLOID\"`, `[1, 2]`). Typed by JSON kind only: what it means (a\nclass, a channel, a dropdown option) and which values are valid come\nfrom the bound inner parameters.",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "description": "Dropdown options, units, paths ...",
+          "type": "string"
+        },
+        {
+          "description": "Several values, e.g. a multi-class or multi-channel selection.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParamValue"
+          }
+        }
+      ]
+    },
     "PipelineCommand": {
       "oneOf": [
         {
@@ -1996,6 +2337,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "LOAD_CHANNEL"
+            }
+          },
+          "$ref": "#/$defs/LoadChannelSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "MEDIAN_SUBTRACT"
             }
           },
@@ -2091,6 +2445,19 @@
             }
           },
           "$ref": "#/$defs/ScriptSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "SIMPLE_TRACKER"
+            }
+          },
+          "$ref": "#/$defs/SimpleTrackerSettings",
           "required": [
             "type"
           ]
@@ -2215,20 +2582,44 @@
       ]
     },
     "PipelineStepSettings": {
+      "description": "What a pipeline step runs. In JSON the variant name is the key, next to\n`id` and `enabled`: `\"command\": {...}` (as in files written before\ncomponents existed) or `\"component\": {...}`.",
       "type": "object",
       "properties": {
-        "command": {
-          "description": "The pipeline command to execute in this step",
-          "$ref": "#/$defs/PipelineCommand"
-        },
         "enabled": {
           "description": "If enabled, the command is executed, if not enabled, this command is skiped during pipeline execution",
           "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/StepId",
+          "default": 0
         }
       },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/PipelineCommand"
+            }
+          },
+          "required": [
+            "command"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "component": {
+              "$ref": "#/$defs/ComponentInstance"
+            }
+          },
+          "required": [
+            "component"
+          ]
+        }
+      ],
       "required": [
-        "enabled",
-        "command"
+        "enabled"
       ]
     },
     "PixelClassifierSettings": {
@@ -2306,19 +2697,33 @@
       "description": "A command that exports the current image to a persistent file on disk.\n\nThis is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.\n\n# Examples\n\n```\nuse imagec::backend::algos::SaveImage;\nlet saver = SaveImage {path:\"output/processed_cell.png\"};\n```",
       "type": "object",
       "properties": {
+        "displayClasses": {
+          "description": "Shows the selected classes in the image",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
         "name": {
           "description": "Name the image should be stord under",
-          "type": "string"
+          "type": "string",
+          "default": ""
+        },
+        "opacity": {
+          "description": "Opacity in percent of the filled `display_classes` objects (0 = only\nthe contours, 100 = solid). Contours are always drawn opaque.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 50,
+          "maximum": 100,
+          "minimum": 0
         },
         "source": {
           "description": "Which image from the pipeline should be stored",
-          "$ref": "#/$defs/MathSaveImageImageSourceSettings"
+          "$ref": "#/$defs/MathSaveImageImageSourceSettings",
+          "default": "IMAGE"
         }
-      },
-      "required": [
-        "name",
-        "source"
-      ]
+      }
     },
     "ScriptSettings": {
       "description": "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.\n\nThe script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.\n\n# Examples\n\n```rhai\nprint(`Hello world from a ${image_width}x${image_height} tile`);\nrun(\"gaussian_blur\", #{ kernel_size: 5 });\n```",
@@ -2336,6 +2741,14 @@
           "description": "Script source code",
           "type": "string",
           "default": "print(`Hello world from a ${image_width}x${image_height} tile`);\n"
+        },
+        "values": {
+          "description": "The values set for the script's `param`s, by name - only those that\ndiffer from the default the script gives. The script declares its\nparams (`param max_rounds = 10;`); a value for a name it doesn't\ndeclare is ignored.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ParamValue"
+          },
+          "default": {}
         }
       }
     },
@@ -2348,18 +2761,18 @@
       "description": "Maps one class the model was trained to predict to a class ID meaningful\nin this project. Model class IDs are a snapshot taken at training time\n(see `evanalyzer_cfg::PixelClassLabel`'s doc comment) and aren't\nguaranteed to line up with this project's own `SegmentationClass` IDs -\nthis is the bridge between the two.",
       "type": "object",
       "properties": {
-        "objectClassId": {
-          "description": "The project's own segmentation class pixels predicted as\n`segmentation_class` are written as.",
+        "modelClass": {
+          "description": "The class the classifier model predicts.",
           "$ref": "#/$defs/SegmentationClass"
         },
         "segmentationClass": {
-          "description": "Segmentation class predicted by the classifier model.",
+          "description": "The project's own segmentation class pixels predicted as\n`model_class` are written as.",
           "$ref": "#/$defs/SegmentationClass"
         }
       },
       "required": [
-        "segmentationClass",
-        "objectClassId"
+        "modelClass",
+        "segmentationClass"
       ]
     },
     "SegmentationThresholdAveragingSettings": {
@@ -2707,6 +3120,29 @@
         "INTENSITY"
       ]
     },
+    "SimpleTrackerSettings": {
+      "description": "Links each object to the nearest one in the next frame.\n\nObjects of `object_class` in two consecutive frames of the same image and\nz-plane are linked closest pair first, each object once, if they are at\nmost `max_distance` apart. Every object gets a track id; one that can't\nbe linked starts a new track.",
+      "type": "object",
+      "properties": {
+        "maxDistance": {
+          "description": "How far an object may move from one frame to the next.\n\nFarther apart, it starts a new track.",
+          "type": "number",
+          "format": "float",
+          "default": 10000.0,
+          "minimum": 0
+        },
+        "objectClass": {
+          "description": "Object class to track.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "unit": {
+          "description": "Unit in which `max_distance` is expressed (e.g. pixels, nm).",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "NANO_METER"
+        }
+      }
+    },
     "SizeUnits": {
       "type": "string",
       "enum": [
@@ -2739,11 +3175,6 @@
           "maximum": 1,
           "minimum": 0
         },
-        "objectClassId": {
-          "description": "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.",
-          "$ref": "#/$defs/SegmentationClass",
-          "default": 1
-        },
         "probabilityThreshold": {
           "description": "Probability above which a grid cell is considered a candidate object center.",
           "type": "number",
@@ -2751,8 +3182,19 @@
           "default": 0.5,
           "maximum": 1,
           "minimum": 0
+        },
+        "segmentationClass": {
+          "description": "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
         }
       }
+    },
+    "StepId": {
+      "description": "A pipeline step's id: a small number, unique within its list of steps\n(a pipeline, or a component definition), so it reads well in a hand-written\nproject file (`\"id\": 7`) and in references to the step. Assigned by\nwhoever adds a step - the next number after the list's highest, never\nreused within the list. `0` ([`StepId::UNASSIGNED`]) means \"not\nassigned yet\": a step written without an id gets one when the project is\nloaded.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
     },
     "StructureTensorSettings": {
       "description": "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.\n\nThis algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```",
@@ -2807,7 +3249,7 @@
           "maximum": 65535,
           "minimum": 0
         },
-        "objectClassId": {
+        "segmentationClass": {
           "description": "The classification ID assigned to pixels falling within this threshold range.",
           "$ref": "#/$defs/SegmentationClass",
           "default": 0
@@ -2825,7 +3267,7 @@
       }
     },
     "ThresholdSettings": {
-      "description": "A filter that segments an image into discrete classes based on intensity.\n\nThis supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.",
+      "description": "A filter that segments an image into discrete classes based on intensity.\n\nThis supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `segmentation_class` it belongs to.",
       "type": "object",
       "properties": {
         "thresholds": {
@@ -2897,11 +3339,6 @@
           "type": "string",
           "default": ""
         },
-        "objectClassId": {
-          "description": "The class assigned to pixels whose predicted probability reaches\n`probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.",
-          "$ref": "#/$defs/SegmentationClass",
-          "default": 1
-        },
         "outputMode": {
           "description": "How to interpret the model output when it has more than one channel.\nIgnored for single-channel outputs.",
           "$ref": "#/$defs/AiSegmentationUnetUNetOutputModeSettings",
@@ -2914,6 +3351,11 @@
           "default": 0.5,
           "maximum": 1,
           "minimum": 0
+        },
+        "segmentationClass": {
+          "description": "The class assigned to pixels whose predicted probability reaches\n`probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
         }
       }
     },

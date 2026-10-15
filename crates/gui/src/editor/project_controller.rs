@@ -1360,7 +1360,13 @@ pub(crate) mod tests {
         results_ui: slint::Weak<crate::ResultsWindow>,
         ui_state: Arc<UiState>,
     ) -> (Arc<UiState>, Arc<ProjectController>) {
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
             ui_state.clone(),
@@ -2070,6 +2076,7 @@ pub(crate) mod tests {
             classification: Default::default(),
             plate: Default::default(),
             pipelines,
+            components: Vec::new(),
         }
     }
 

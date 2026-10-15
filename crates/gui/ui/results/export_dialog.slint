@@ -34,7 +34,11 @@ export global ExportDialogState {
     in-out property <string> t-end: "1";
 
     // -- Filters --
+    // Only the rows matching `image-filter-text` - the actual selection
+    // lives in Rust (see `export_image_selection`), so hidden rows keep
+    // their checkmark while the search box narrows the view.
     in-out property <[MultiSelectItem]> image-items: [];
+    in-out property <string> image-filter-text: "";
     in-out property <string> image-summary: "All images";
     in-out property <[MultiSelectItem]> class-items: [];
     in-out property <string> class-summary: "All classes";
@@ -287,6 +291,7 @@ export component ExportDialog inherits Rectangle {
                                         multi-select: true;
                                         show-select-all: true;
                                         show-search: true;
+                                        filter-text <=> ExportDialogState.image-filter-text;
                                         pill-width: 210px;
                                         item-selected(key, value, selected) => { ExportDialogState.image-item-selected(key, selected); }
                                         select-all => { ExportDialogState.image-select-all(); }

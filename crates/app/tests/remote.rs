@@ -243,6 +243,7 @@ fn remote_analysis_runs_to_completion_like_a_local_one() {
             project_path: dir.path().to_path_buf(),
             job_name: Some("remote_test".into()),
             threads: Some(1),
+            base_results: None,
         })
         .unwrap();
     assert_eq!(job.parallelism(), 1);
@@ -291,6 +292,7 @@ fn a_remote_cancel_never_surfaces_as_a_different_error() {
             project_path: dir.path().to_path_buf(),
             job_name: None,
             threads: Some(1),
+            base_results: None,
         })
         .unwrap();
     job.cancel_handle().cancel();
@@ -313,11 +315,11 @@ fn two_class_object_settings() -> AiLearningSettings {
             },
             class_labels: vec![
                 ObjectClassLabel {
-                    class: ObjectClass::Valid(1),
+                    class: ObjectClass::Global(1),
                     name: "A".into(),
                 },
                 ObjectClassLabel {
-                    class: ObjectClass::Valid(2),
+                    class: ObjectClass::Global(2),
                     name: "B".into(),
                 },
             ],
@@ -332,7 +334,7 @@ fn project_with_labeled_objects(classes: &[u32]) -> ProjectSettings {
     for (i, class) in classes.iter().enumerate() {
         series.objects.push(ObjectMetricSettings {
             area: 10 + 1000 * i,
-            object_class: [ObjectClass::Valid(*class)].into(),
+            object_class: [ObjectClass::Global(*class)].into(),
             ..Default::default()
         });
     }
@@ -396,6 +398,7 @@ fn one_connection_serves_several_jobs_in_a_row() {
                 project_path: dir.path().to_path_buf(),
                 job_name: None,
                 threads: Some(1),
+                base_results: None,
             })
             .unwrap();
         drain(&job);
@@ -492,6 +495,7 @@ fn a_restricted_server_refuses_paths_outside_its_roots() {
         project_path: dir.path().to_path_buf(),
         job_name: None,
         threads: Some(1),
+        base_results: None,
     });
     assert!(result.is_err());
 }
@@ -552,6 +556,7 @@ fn analyzed_database(backend: &dyn Backend) -> (tempfile::TempDir, PathBuf) {
             project_path: dir.path().to_path_buf(),
             job_name: Some("results_test".into()),
             threads: Some(1),
+            base_results: None,
         })
         .unwrap();
     drain(&job);
@@ -766,7 +771,7 @@ fn remote_grouped_matrix_and_chart_queries_match_local_ones() {
         .get_object_classes()
         .unwrap()
         .first()
-        .map(|c| c.id)
+        .map(|c| c.global())
         .unwrap_or(evanalyzer_cfg::core_types::ObjectClass::Unset);
     let image = remote_db.get_images().unwrap()[0].rel_path.clone();
 

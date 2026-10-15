@@ -1,0 +1,919 @@
+import { LineEdit, ComboBox, ScrollView, TextEdit } from "std-widgets.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
+
+// "Create component": turns consecutive steps of a pipeline into a component.
+// The host fills the class list with suggested roles (see
+// `evanalyzer_app::components::plan_component`) and recomputes it when the range
+// changes.
+
+// -- Global state --------------------------------------------
+
+/// A project class the steps use, and what it becomes in the component.
+export struct ComponentClassRow {
+    /// The class in its text form ("3") - how the host knows which it is.
+    class-text: string,
+    name: string,
+    /// "Only used by these steps" / "Also used elsewhere".
+    detail: string,
+    /// 0 = internal (the component's own), 1 = component parameter, 2 = fixed.
+    role: int,
+}
+
+export global CreateComponentState {
+    in property <int> pipeline-id: 0;
+    /// "1 · Threshold", "2 · Extract Objects", ... - for the range pickers.
+    in property <[string]> step-names: [];
+    in-out property <int> from-step: 0;
+    in-out property <int> to-step: 0;
+    in-out property <string> name: "";
+    in property <[ComponentClassRow]> classes: [];
+    /// "Channel 1 becomes a component parameter", or empty.
+    in property <string> channels-text: "";
+    /// Why the component can't be made, or empty.
+    in property <string> error: "";
+    callback range-changed(int, int);
+    callback role-changed(int, int);
+    callback confirm();
+    callback cancel();
+}
+
+component RangeRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <[string]> model;
+    in property <int> current;
+    callback picked(int);
+
+    spacing: 8px;
+    Text {
+        text: label;
+        width: 40px;
+        font-size: 11px;
+        color: Theme.text-dim;
+        vertical-alignment: center;
+    }
+
+    ComboBox {
+        horizontal-stretch: 1;
+        model: root.model;
+        current-index: root.current;
+        selected(v) => {
+            root.picked(self.current-index);
+        }
+    }
+}
+
+// -- Dialog component -----------------------------------------
+
+export component CreateComponentDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    TouchArea {
+        clicked => {
+            CreateComponentState.cancel();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 480px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "Create component";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
+
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: close-ta.has-hover ? Theme.raised : transparent;
+                    Text {
+                        text: "✕";
+                        font-size: 12px;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            CreateComponentState.cancel();
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: "The steps become one step - a component you can use like a command, in this and other pipelines.";
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Component name";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    height: 30px;
+                    text: CreateComponentState.name;
+                    placeholder-text: "e.g. Cell reconstruction";
+                    font-size: 12px;
+                    edited(t) => {
+                        CreateComponentState.name = t;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 6px;
+                RangeRow {
+                    label: "From";
+                    model: CreateComponentState.step-names;
+                    current: CreateComponentState.from-step;
+                    picked(i) => {
+                        CreateComponentState.range-changed(i, CreateComponentState.to-step);
+                    }
+                }
+
+                RangeRow {
+                    label: "To";
+                    model: CreateComponentState.step-names;
+                    current: CreateComponentState.to-step;
+                    picked(i) => {
+                        CreateComponentState.range-changed(CreateComponentState.from-step, i);
+                    }
+                }
+            }
+
+            if CreateComponentState.classes.length > 0: VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: "Classes";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                for row[i] in CreateComponentState.classes: HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text {
+                            text: row.name;
+                            font-size: 12px;
+                            color: Theme.text;
+                        }
+
+                        Text {
+                            text: row.detail;
+                            font-size: 10px;
+                            color: Theme.text-mute;
+                        }
+                    }
+
+                    ComboBox {
+                        width: 190px;
+                        model: ["Internal (component only)", "Component parameter", "Fixed"];
+                        current-index: row.role;
+                        selected(v) => {
+                            CreateComponentState.role-changed(i, self.current-index);
+                        }
+                    }
+                }
+
+                Text {
+                    text: "Internal classes are the component's own: each use of the component has its own, and their objects don't reach the results.";
+                    font-size: 10px;
+                    color: Theme.text-mute;
+                    wrap: word-wrap;
+                }
+            }
+
+            if CreateComponentState.channels-text != "": Text {
+                text: CreateComponentState.channels-text;
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            if CreateComponentState.error != "": Text {
+                text: CreateComponentState.error;
+                font-size: 11px;
+                color: Theme.err;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        CreateComponentState.cancel();
+                    }
+                }
+
+                AppButton {
+                    text: "Create component";
+                    primary: true;
+                    clicked => {
+                        CreateComponentState.confirm();
+                    }
+                }
+            }
+        }
+
+        height: layout.preferred-height;
+    }
+}
+
+// -- "Edit for all" or "Only this step" -------------------------
+
+/// Asked when opening a component that other steps use too.
+export global ComponentEditChoiceState {
+    in property <int> pipeline-id: 0;
+    in property <int> step-idx: 0;
+    in property <string> component-name: "";
+    in property <int> uses: 0;
+    callback edit-all();
+    callback only-this();
+    callback cancel();
+}
+
+export component ComponentEditChoiceDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    TouchArea {
+        clicked => {
+            ComponentEditChoiceState.cancel();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+
+            Text {
+                text: "Open \{ComponentEditChoiceState.component-name}";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text;
+            }
+
+            Text {
+                text: "This component is used by \{ComponentEditChoiceState.uses} steps. Changes to it apply to all of them - or make a copy just for this step.";
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        ComponentEditChoiceState.cancel();
+                    }
+                }
+
+                AppButton {
+                    text: "Only this step";
+                    clicked => {
+                        ComponentEditChoiceState.only-this();
+                    }
+                }
+
+                AppButton {
+                    text: "Edit for all";
+                    primary: true;
+                    clicked => {
+                        ComponentEditChoiceState.edit-all();
+                    }
+                }
+            }
+        }
+
+        height: layout.preferred-height;
+    }
+}
+
+// -- Expose a setting: a new parameter, or one that exists -------
+
+/// Asked when exposing a setting that existing component parameters could set
+/// too (same kind of setting).
+export global ExposeChoiceState {
+    in property <string> setting-name: "";
+    /// "New parameter", then "Add to “Cell class”", ...
+    in property <[string]> choices: [];
+    callback chosen(int);
+    callback cancel();
+}
+
+export component ExposeChoiceDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    TouchArea {
+        clicked => {
+            ExposeChoiceState.cancel();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 380px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 10px;
+
+            Text {
+                text: "Expose \{ExposeChoiceState.setting-name}";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text;
+            }
+
+            Text {
+                text: "As a parameter of its own, or set by a parameter the component has already:";
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            for choice[i] in ExposeChoiceState.choices: AppButton {
+                text: choice;
+                primary: i == 0;
+                clicked => {
+                    ExposeChoiceState.chosen(i);
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        ExposeChoiceState.cancel();
+                    }
+                }
+            }
+        }
+
+        height: layout.preferred-height;
+    }
+}
+
+// -- Update a component from the library -------------------------------
+
+export global ComponentUpdateState {
+    in property <string> component-name: "";
+    /// "v1 → v3"
+    in property <string> versions: "";
+    /// The project changed the component since it was inserted - the update
+    /// replaces those changes.
+    in property <bool> changed-here: false;
+    callback confirm();
+    callback cancel();
+}
+
+export component ComponentUpdateDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    TouchArea {
+        clicked => {
+            ComponentUpdateState.cancel();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+
+            Text {
+                text: "Update \{ComponentUpdateState.component-name}";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text;
+            }
+
+            Text {
+                text: "The component library has a newer version (\{ComponentUpdateState.versions}). Every step using the component gets it; their values stay.";
+                font-size: 11px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            if ComponentUpdateState.changed-here: Text {
+                text: "This project changed the component since it was inserted - updating replaces those changes.";
+                font-size: 11px;
+                color: Theme.warn;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        ComponentUpdateState.cancel();
+                    }
+                }
+
+                AppButton {
+                    text: "Update";
+                    primary: true;
+                    clicked => {
+                        ComponentUpdateState.confirm();
+                    }
+                }
+            }
+        }
+
+        height: layout.preferred-height;
+    }
+}
+
+// -- Component settings ------------------------------------------------
+
+/// A parameter of the component, as it shows on the component card.
+export struct ComponentParamRow {
+    // The parameter's key ("min_size").
+    key: string,
+    label: string,
+    description: string,
+    /// The default value, as text.
+    default-value: string,
+    /// The help text of the setting it's bound to - shown while
+    /// `description` is empty.
+    default-description: string,
+    /// What it sets: "Blur › Kernel size, Blur › Kernel size".
+    sets: string,
+    /// The section it's shown in on the component card; empty: none.
+    section: string,
+}
+
+/// The opened component's name, descriptions and parameters (name, help text,
+/// order). Opened from "Settings…" in the bar of a component opened to edit, or
+/// from ✎ on an exposed setting (`focus-index` is then that parameter's
+/// row).
+export global ComponentSettingsState {
+    in property <string> name: "";
+    /// One line, shown in the command picker.
+    in property <string> description: "";
+    /// The full description, shown with the short one behind the component
+    /// card's "?".
+    in property <string> long-description: "";
+    /// The first author - shown in the command picker.
+    in property <string> author-name: "";
+    in property <string> author-organization: "";
+    in property <[ComponentParamRow]> parameters: [];
+    /// The row to scroll to and highlight, or -1.
+    in property <int> focus-index: -1;
+    callback name-edited(string);
+    callback description-edited(string);
+    callback long-description-edited(string);
+    /// name, organization
+    callback author-edited(string, string);
+    /// key, name - the help text stays (the rows aren't refreshed while
+    /// typing, so passing both would undo the other field's edit).
+    callback parameter-name-edited(string, string);
+    /// key, help text
+    callback parameter-help-edited(string, string);
+    /// key, section on the component card (empty: none)
+    callback parameter-section-edited(string, string);
+    /// key, -1 up / +1 down
+    callback parameter-moved(string, int);
+    /// key: back to the bound setting's own help text.
+    callback parameter-help-reset(string);
+    /// key: stop exposing it - its settings go back to the component's values.
+    callback parameter-removed(string);
+    callback close();
+}
+
+export component ComponentSettingsDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+    property <length> row-height: 190px;
+    property <length> row-spacing: 8px;
+
+    TouchArea {
+        clicked => {
+            ComponentSettingsState.close();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 520px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "Component settings";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
+
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: close-ta.has-hover ? Theme.raised : transparent;
+                    Text {
+                        text: "✕";
+                        font-size: 12px;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            ComponentSettingsState.close();
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Name";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    text: ComponentSettingsState.name;
+                    placeholder-text: "Component name";
+                    edited(t) => {
+                        ComponentSettingsState.name-edited(t);
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Short description (one line, shown in the command picker)";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    text: ComponentSettingsState.description;
+                    placeholder-text: "What the component does";
+                    edited(t) => {
+                        ComponentSettingsState.description-edited(t);
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    spacing: 5px;
+                    Text {
+                        text: "Author";
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                    }
+
+                    author-name-edit := LineEdit {
+                        text: ComponentSettingsState.author-name;
+                        placeholder-text: "Full name";
+                        edited(t) => {
+                            ComponentSettingsState.author-edited(t, author-organization-edit.text);
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 5px;
+                    Text {
+                        text: "Organization";
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                    }
+
+                    author-organization-edit := LineEdit {
+                        text: ComponentSettingsState.author-organization;
+                        placeholder-text: "Lab, institute, company";
+                        edited(t) => {
+                            ComponentSettingsState.author-edited(author-name-edit.text, t);
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Description (shown behind the component card's ?)";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                TextEdit {
+                    height: 72px;
+                    text: ComponentSettingsState.long-description;
+                    wrap: word-wrap;
+                    placeholder-text: "How to use it, what it expects, references…";
+                    edited(t) => {
+                        ComponentSettingsState.long-description-edited(t);
+                    }
+                }
+            }
+
+            Text {
+                text: ComponentSettingsState.parameters.length == 0 ? "No parameters yet - ◇ next to a setting of the opened component exposes it on the component card." : "Parameters on the component card, in this order";
+                font-size: 11px;
+                font-weight: 600;
+                color: Theme.cat-component;
+                wrap: word-wrap;
+            }
+
+            // Rows have a fixed height, so the scroll position of the
+            // focused one is known before the list is laid out.
+            if ComponentSettingsState.parameters.length > 0: list := ScrollView {
+                property <length> pitch: root.row-height + root.row-spacing;
+                property <length> total: ComponentSettingsState.parameters.length * self.pitch - root.row-spacing;
+                // Shrinks (down to about one row) when the window is small.
+                min-height: min(self.total, root.row-height);
+                preferred-height: min(self.total, 440px);
+                vertical-stretch: 1;
+                vertical-scrollbar-policy: always-on;
+                init => {
+                    if ComponentSettingsState.focus-index > 0 {
+                        self.content-y = max(-ComponentSettingsState.focus-index * self.pitch, min(0px, self.height - self.total));
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: root.row-spacing;
+                    for param[pi] in ComponentSettingsState.parameters: Rectangle {
+                        height: root.row-height;
+                        clip: true;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: pi == ComponentSettingsState.focus-index ? Theme.cat-component : Theme.border;
+                        background: Theme.raised.with-alpha(0.4);
+
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 6px;
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit {
+                                    horizontal-stretch: 1;
+                                    text: param.label;
+                                                    placeholder-text: "Name on the component card";
+                                    accessible-label: "Parameter name";
+                                    edited(t) => {
+                                        ComponentSettingsState.parameter-name-edited(param.key, t);
+                                    }
+                                }
+
+                                Text {
+                                    text: "default \{param.default-value}";
+                                    font-size: 10px;
+                                    color: Theme.text-mute;
+                                    vertical-alignment: center;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 2px;
+                                    Rectangle {
+                                        width: 24px;
+                                        opacity: pi > 0 ? 1 : 0.3;
+                                        border-radius: 4px;
+                                        background: up-ta.has-hover && pi > 0 ? Theme.raised : transparent;
+                                        Text {
+                                            text: "↑";
+                                            color: Theme.text-dim;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+
+                                        up-ta := TouchArea {
+                                            enabled: pi > 0;
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                ComponentSettingsState.parameter-moved(param.key, -1);
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 24px;
+                                        opacity: pi < ComponentSettingsState.parameters.length - 1 ? 1 : 0.3;
+                                        border-radius: 4px;
+                                        background: down-ta.has-hover && pi < ComponentSettingsState.parameters.length - 1 ? Theme.raised : transparent;
+                                        Text {
+                                            text: "↓";
+                                            color: Theme.text-dim;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+
+                                        down-ta := TouchArea {
+                                            enabled: pi < ComponentSettingsState.parameters.length - 1;
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                ComponentSettingsState.parameter-moved(param.key, 1);
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 24px;
+                                        border-radius: 4px;
+                                        background: remove-ta.has-hover ? Theme.raised : transparent;
+                                        Text {
+                                            text: "✕";
+                                            font-size: 11px;
+                                            color: remove-ta.has-hover ? Theme.warn : Theme.text-dim;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+
+                                        remove-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                ComponentSettingsState.parameter-removed(param.key);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            TextEdit {
+                                height: 46px;
+                                text: param.description;
+                                            wrap: word-wrap;
+                                placeholder-text: "Help text, shown as ? next to the parameter";
+                                accessible-label: "Parameter help text";
+                                edited(t) => {
+                                    ComponentSettingsState.parameter-help-edited(param.key, t);
+                                }
+                            }
+
+                            LineEdit {
+                                text: param.section;
+                                placeholder-text: "Section on the component card (optional), e.g. Detection";
+                                accessible-label: "Parameter section";
+                                edited(t) => {
+                                    ComponentSettingsState.parameter-section-edited(param.key, t);
+                                }
+                            }
+
+                            Text {
+                                text: "sets \{param.sets}";
+                                font-size: 10px;
+                                color: Theme.text-mute;
+                                overflow: elide;
+                            }
+
+                            // Which help the "?" shows: the setting's own while
+                            // there's none, else "Reset" back to it.
+                            HorizontalLayout {
+                                height: 18px;
+                                spacing: 6px;
+                                if param.description == "": Text {
+                                    horizontal-stretch: 1;
+                                    text: param.default-description == "" ? "No help text" : "Setting's own help: \{param.default-description}";
+                                    font-size: 10px;
+                                    color: Theme.text-mute;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+
+                                // Back to the setting's own help text.
+                                if param.description != "": Rectangle {
+                                    horizontal-stretch: 0;
+                                    width: reset-text.preferred-width + 12px;
+                                    height: 18px;
+                                    border-radius: 4px;
+                                    background: reset-ta.has-hover ? Theme.raised : transparent;
+                                    reset-text := Text {
+                                        text: "Reset to the setting's own help";
+                                        font-size: 10px;
+                                        color: Theme.text-dim;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    reset-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            ComponentSettingsState.parameter-help-reset(param.key);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                AppButton {
+                    text: "Close";
+                    primary: true;
+                    clicked => {
+                        ComponentSettingsState.close();
+                    }
+                }
+            }
+        }
+
+        height: min(layout.preferred-height, root.height - 40px);
+    }
+}

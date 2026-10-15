@@ -1,6 +1,8 @@
+use crate::pipeline::scope::Scope;
 use crate::{
     ImageInfo, ZProjection,
     algos::Connectivity,
+    dataset::{DatasetAlgorithm, DatasetContext},
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
     pipeline::{
         image_cache::ImageCache,
@@ -8,11 +10,13 @@ use crate::{
         pipeline::{Pipeline, PipelineImageMeta},
         pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache},
     },
-    resources::MAX_TILE_SIZE,
     storage::PipelineResultExporter,
+    utils::resources::MAX_TILE_SIZE,
 };
 use evanalyzer_cfg::{
-    core_types::{BreakpointMode, BreakpointSettings, ImageAddress, InternalErrors, PipelineId},
+    core_types::{
+        BreakpointMode, BreakpointSettings, ImageAddress, InternalErrors, ObjectClass, PipelineId,
+    },
     settings::{
         images_settings::{
             GlobalImageSettings, ImageEntry, TStackHandling, ZStackHandling, ZStackSettings,
@@ -25,7 +29,7 @@ use kornia_image::ImageSize;
 use log::{info, warn};
 use rayon::prelude::*;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ops::RangeInclusive,
     path::PathBuf,
     sync::{
@@ -169,6 +173,12 @@ pub struct JobExecutor {
     // after the preprocessing has been finished
     pub pipelines_pre_process: IndexMap<PipelineId, Pipeline>,
     pub pipelines_post_process: IndexMap<PipelineId, Pipeline>,
+    /// Dataset steps, in the order the pipelines and their steps are
+    /// authored. They run once after every image has been analysed.
+    pub dataset_steps: Vec<Box<dyn DatasetAlgorithm>>,
+    /// Run only the dataset steps, on the objects already in the results
+    /// storage (a copy of an earlier analysis's) - no image is analysed.
+    pub skip_image_phase: bool,
 
     pub image_base_path: PathBuf,
     pub images: IndexMap<PathBuf, ImageEntry>,
@@ -181,6 +191,9 @@ pub struct JobExecutor {
 
     /// Debugging settings, if set the pipeline stops at this point and returns the actual image
     pub breakpoint: Option<BreakpointSettings>,
+
+    /// The project's class colors (`0xRRGGBB`), handed to every image's pipeline cache
+    pub class_colors: Arc<HashMap<ObjectClass, u32>>,
 }
 
 impl<'a> JobExecutor {
@@ -192,10 +205,13 @@ impl<'a> JobExecutor {
         global_image_settings: GlobalImageSettings,
         result_storage: Arc<dyn PipelineResultExporter>,
         override_pixel_sizes: Option<PixelSizes>,
+        class_colors: Arc<HashMap<ObjectClass, u32>>,
     ) -> Self {
         Self {
             pipelines_pre_process: IndexMap::new(),
             pipelines_post_process: IndexMap::new(),
+            dataset_steps: Vec::new(),
+            skip_image_phase: false,
             project_path,
             output_path,
             image_base_path,
@@ -205,11 +221,39 @@ impl<'a> JobExecutor {
             override_pixel_sizes,
             preview_tile_settings: None,
             breakpoint: None,
+            class_colors,
         }
     }
 
     pub fn add_pre_process_pipeline(&mut self, p: Pipeline) {
         self.pipelines_pre_process.insert(p.id, p);
+    }
+
+    pub fn add_dataset_step(&mut self, step: Box<dyn DatasetAlgorithm>) {
+        self.dataset_steps.push(step);
+    }
+
+    /// Runs the dataset steps on the exported objects of every image - once
+    /// the image phase has finished.
+    fn run_dataset_steps(
+        &self,
+        progress: &Sender<ProgressEvent>,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<(), InternalErrors> {
+        if self.dataset_steps.is_empty() {
+            return Ok(());
+        }
+        let store = self.result_storage.dataset_store().ok_or_else(|| {
+            InternalErrors::Generic(
+                "These results can't be read back, so the dataset steps can't run on them".into(),
+            )
+        })?;
+        let mut ctx = DatasetContext {
+            store,
+            progress: Some(progress.clone()),
+            cancel: cancel.clone(),
+        };
+        crate::dataset::run_dataset_steps(&self.dataset_steps, &mut ctx)
     }
 
     pub fn add_post_process_pipeline(&mut self, p: Pipeline) {
@@ -256,7 +300,7 @@ impl<'a> JobExecutor {
         let start = Instant::now();
 
         let ram_budget = self.estimate_ram_budget();
-        let image_cache_bytes = crate::resources::recommended_image_cache_bytes(
+        let image_cache_bytes = crate::utils::resources::recommended_image_cache_bytes(
             parallelism,
             ram_budget.working_set_bytes + ram_budget.object_cache_margin_bytes,
             ram_budget.min_image_cache_bytes,
@@ -264,7 +308,7 @@ impl<'a> JobExecutor {
         info!(
             "Image cache capacity: {} bytes/worker ({}) x {} worker(s)",
             image_cache_bytes,
-            crate::resources::format_binary_bytes(image_cache_bytes),
+            crate::utils::resources::format_binary_bytes(image_cache_bytes),
             parallelism
         );
 
@@ -274,13 +318,20 @@ impl<'a> JobExecutor {
             .unwrap();
 
         let order = self.get_execution_order();
-        let total = self.images.len();
+        let total = if self.skip_image_phase {
+            0
+        } else {
+            self.images.len()
+        };
         let completed = AtomicUsize::new(0);
 
         progress.send(ProgressEvent::Started { total }).ok();
 
         let result = pool.install(|| {
-            if total == 1 {
+            if self.skip_image_phase {
+                info!("Image phase skipped: running the dataset steps only");
+                Ok(())
+            } else if total == 1 {
                 // Single image: parallelize over tiles instead of images
                 let (rel_path, image_info) = self.images.iter().next().unwrap();
                 let abs_path = self.image_base_path.join(rel_path);
@@ -290,7 +341,7 @@ impl<'a> JobExecutor {
                     image_info,
                     &order,
                     self.result_storage.clone(),
-                    cancel,
+                    cancel.clone(),
                     Some(progress.clone()),
                     image_cache_bytes,
                 ) {
@@ -391,6 +442,10 @@ impl<'a> JobExecutor {
                 }
             }
         });
+
+        // Only on complete results: a step over all images must not see a
+        // partial set (a failed or cancelled image).
+        let result = result.and_then(|()| self.run_dataset_steps(&progress, &cancel));
 
         info!("Pipeline completed in {:?}", start.elapsed());
         // Before `Finished`: whoever reads the results next sees the outcome.
@@ -650,10 +705,11 @@ impl<'a> JobExecutor {
 
         // The user's hand-annotated objects of this image, for
         // `LoadAnnotatedObjects` - only gathered when a pipeline uses them.
-        let loads_annotations = self
-            .pipelines_post_process
-            .values()
-            .any(|p| p.commands.iter().any(|(_, c)| c.uses_annotated_objects()));
+        let loads_annotations = self.pipelines_post_process.values().any(|p| {
+            p.commands
+                .iter()
+                .any(|(_, _, c)| c.uses_annotated_objects())
+        });
         let series_annotations: &[ObjectMetricSettings] = match loads_annotations {
             true => image_entry
                 .series
@@ -753,9 +809,7 @@ impl<'a> JobExecutor {
                                 .breakpoint
                                 .as_ref()
                                 .filter(|b| b.pipeline_id == *pipe_id)
-                                .map(|b| {
-                                    (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot)
-                                })
+                                .map(|b| (Some(b.step_id), b.mode == BreakpointMode::Snapshot))
                                 .unwrap_or((None, false));
                             let result = p.run_commands(
                                 self.output_path.clone(),
@@ -778,6 +832,8 @@ impl<'a> JobExecutor {
                             cache = result.cache;
                         }
                     }
+                    // Every pipeline ran on this tile: its shared slots are done.
+                    cache.clear_shared_slots();
 
                     // Snapshot: send the captured buffers but continue merging normally.
                     if let Some(capture) = snapshot_capture {
@@ -827,6 +883,8 @@ impl<'a> JobExecutor {
                         cache
                             .object_cache
                             .values()
+                            // Components' internal objects aren't shown.
+                            .filter(|r| r.scope() == Scope::Global)
                             .map(|r| r.to_object_settings())
                             .collect()
                     } else {
@@ -908,7 +966,7 @@ impl<'a> JobExecutor {
                             .breakpoint
                             .as_ref()
                             .filter(|b| b.pipeline_id == *pipe_id)
-                            .map(|b| (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot))
+                            .map(|b| (Some(b.step_id), b.mode == BreakpointMode::Snapshot))
                             .unwrap_or((None, false));
                         let result = p.run_commands(
                             self.output_path.clone(),
@@ -944,6 +1002,13 @@ impl<'a> JobExecutor {
                         }
                     }
 
+                    // Components' internal objects never reach the results.
+                    // `EndScope` after each instance's last command normally
+                    // removed them already (with the references to them) -
+                    // this catches a run stopped early by a breakpoint.
+                    merged_cache
+                        .object_cache
+                        .retain(|_, object| object.scope() == Scope::Global);
                     exporter.export(&merged_cache)?;
 
                     if let Some(sender) = &progress {
@@ -1161,6 +1226,7 @@ impl<'a> JobExecutor {
             object_cache: ObjectCache::default(),
             image_rel_path: image_rel_path.into(),
             annotated_objects: Default::default(),
+            class_colors: Arc::clone(&self.class_colors),
         })
     }
 
@@ -1428,14 +1494,14 @@ impl<'a> JobExecutor {
     /// dimensions/channel count come from already-scanned metadata
     /// (`ImageEntry`/`SeriesSettings`) - this never reopens a file, so it's
     /// cheap to call before starting a run.
-    pub fn estimate_ram_budget(&self) -> crate::resources::RamBudget {
+    pub fn estimate_ram_budget(&self) -> crate::utils::resources::RamBudget {
         self.images
             .values()
             .filter_map(|entry| entry.series.get(&self.active_series(entry)))
             .map(|series| {
                 let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
                 let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);
-                crate::resources::estimate_ram_budget(
+                crate::utils::resources::estimate_ram_budget(
                     tile_width,
                     tile_height,
                     series.channels.len(),
@@ -1443,7 +1509,7 @@ impl<'a> JobExecutor {
             })
             .max_by_key(|budget| budget.total_bytes())
             .unwrap_or_else(|| {
-                crate::resources::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
+                crate::utils::resources::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
             })
     }
 
@@ -1483,6 +1549,7 @@ mod z_t_stack_precedence_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         )
     }
 
@@ -1554,6 +1621,7 @@ mod z_t_stack_precedence_tests {
                 stack_handling: TStackHandling::AllStacks,
                 playback_speed: 1.0,
                 t_stack: 0,
+                frame_interval: None,
             }),
         );
         let entry = make_image_entry_with_default_series();
@@ -1575,6 +1643,7 @@ mod z_t_stack_precedence_tests {
                 stack_handling: TStackHandling::AllStacks,
                 playback_speed: 1.0,
                 t_stack: 0,
+                frame_interval: None,
             }),
         );
         let mut entry = make_image_entry_with_default_series();
@@ -1582,6 +1651,7 @@ mod z_t_stack_precedence_tests {
             stack_handling: TStackHandling::SingleStack,
             playback_speed: 1.0,
             t_stack: 3,
+            frame_interval: None,
         });
         let image_info = ImageInfo {
             nr_t_stacks: 5,
@@ -1601,6 +1671,7 @@ mod z_t_stack_precedence_tests {
                 stack_handling: TStackHandling::AllStacks,
                 playback_speed: 1.0,
                 t_stack: 0,
+                frame_interval: None,
             }),
         );
         let entry = make_image_entry_with_default_series();
@@ -1622,6 +1693,7 @@ mod z_t_stack_precedence_tests {
                 stack_handling: TStackHandling::SingleStack,
                 playback_speed: 1.0,
                 t_stack: 7,
+                frame_interval: None,
             }),
         );
         let entry = make_image_entry_with_default_series();
@@ -1664,6 +1736,7 @@ mod z_t_stack_precedence_tests {
                 stack_handling: TStackHandling::AllStacks,
                 playback_speed: 1.0,
                 t_stack: 0,
+                frame_interval: None,
             }),
         );
         let entry = ImageEntry {
@@ -1700,6 +1773,7 @@ mod preview_visible_tile_count_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         );
         job.preview_tile_settings = preview_tile_settings;
         job
@@ -1786,6 +1860,7 @@ mod preview_tile_size_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         );
         job.preview_tile_settings = zoom.map(|zoom| PreviewTileSettings {
             offset_x: 0.0,
@@ -1856,6 +1931,7 @@ mod tile_iterator_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         )
     }
 
@@ -2016,6 +2092,7 @@ mod z_stack_iterator_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         )
     }
 
@@ -2157,6 +2234,7 @@ mod execution_order_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         )
     }
 
@@ -2375,19 +2453,25 @@ mod full_run_integration_tests {
         // assigned to the same segmentation class, so the fixture image
         // (known non-empty from image_reader's tests on the same file)
         // reliably produces at least one connected component.
-        pipeline.add_command(Box::new(Threshold {
-            thresholds: vec![ThresholdEntry {
-                method: ThresholdMethod::Manual,
-                min_threshold: 0.0,
-                max_threshold: 255.0,
-                unit: PixelUnits::Bit,
-                object_class_id: SegmentationClass(1),
-                value_source: ThresholdValueSource::ActualImage,
-            }],
-        }));
+        // A project step (id 1): what the breakpoint tests target.
+        pipeline.add_step(
+            evanalyzer_cfg::core_types::StepId(1),
+            Scope::Global,
+            Box::new(Threshold {
+                thresholds: vec![ThresholdEntry {
+                    method: ThresholdMethod::Manual,
+                    min_threshold: 0.0,
+                    max_threshold: 255.0,
+                    unit: PixelUnits::Bit,
+                    segmentation_class: SegmentationClass(1),
+                    value_source: ThresholdValueSource::ActualImage,
+                }],
+            }),
+        );
         pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
         pipeline.add_command(Box::new(ExtractObjects {
             max_objects_before_fail: 100_000,
+            class_mapping: vec![],
         }));
         pipeline
     }
@@ -2415,6 +2499,7 @@ mod full_run_integration_tests {
             GlobalImageSettings::default(),
             Arc::new(MemoryExporter { out_objects }),
             None,
+            Default::default(),
         );
         job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
         job
@@ -2441,6 +2526,167 @@ mod full_run_integration_tests {
             message.contains("check the pipeline's image source"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_components_internal_objects_never_reach_the_results() {
+        use crate::algos::{ClassifyMatchHandling, ClassifyObjects};
+        use crate::pipeline::scope::ScopeId;
+
+        // Every extracted object is reclassified into a local class by a
+        // command running in a component instance's scope.
+        let run_with_reclassify_in = |scope: Scope| {
+            let out_objects = Arc::new(Mutex::new(Vec::new()));
+            let mut job = make_single_image_job(out_objects.clone());
+            let mut post = Pipeline::new(
+                PipelineId(1),
+                CorePipelineSettings {
+                    start_image: ImageAddress::Scratchpad,
+                },
+            );
+            post.add_step(
+                evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                scope,
+                Box::new(ClassifyObjects {
+                    match_handling: ClassifyMatchHandling::ReclassifyIfMatch,
+                    output_class: ObjectClass::Local(1),
+                    ..Default::default()
+                }),
+            );
+            job.add_post_process_pipeline(post);
+            let (tx, _rx) = std::sync::mpsc::channel();
+            job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+            out_objects.lock().unwrap().len()
+        };
+
+        assert_eq!(
+            run_with_reclassify_in(Scope::Scoped(ScopeId(1))),
+            0,
+            "local objects are internal"
+        );
+        // Control: the same run without the component's scope exports them (a
+        // local class outside a component is otherwise refused at expansion).
+        assert!(run_with_reclassify_in(Scope::Global) > 0);
+    }
+
+    #[test]
+    fn a_pipeline_without_an_image_source_loads_its_channel_like_a_channel_source() {
+        use crate::algos::LoadChannel;
+        use evanalyzer_cfg::core_types::ImageChannelIdx;
+        let run = |source_none: bool| {
+            let out_objects = Arc::new(Mutex::new(Vec::new()));
+            let mut job = make_single_image_job(out_objects.clone());
+            let mut pipeline = threshold_connected_components_extract_pipeline();
+            if source_none {
+                pipeline.settings.start_image = ImageAddress::None;
+                pipeline.commands.insert(
+                    0,
+                    (
+                        evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                        Scope::Global,
+                        Box::new(LoadChannel {
+                            channel: ImageChannelIdx(0),
+                        }),
+                    ),
+                );
+            }
+            job.pipelines_pre_process.clear();
+            job.add_pre_process_pipeline(pipeline);
+            let (tx, _rx) = std::sync::mpsc::channel();
+            job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+            let mut areas: Vec<usize> =
+                out_objects.lock().unwrap().iter().map(|o| o.area).collect();
+            areas.sort_unstable();
+            areas
+        };
+        let from_channel = run(false);
+        assert!(!from_channel.is_empty(), "the fixture image has objects");
+        assert_eq!(run(true), from_channel, "the same objects");
+    }
+
+    /// Pipeline 1 stores its image in a shared slot, pipeline 2 starts from
+    /// it - also when pipeline 2's source is a pipeline slot, as projects saved
+    /// before chose. (Every slot used to be dropped after each pipeline, so no
+    /// image could get from one pipeline to the next.)
+    #[test]
+    fn a_pipeline_starts_from_the_image_an_earlier_pipeline_stored() {
+        use crate::algos::{ImageCache, ImageCacheMode};
+        use evanalyzer_cfg::core_types::MemoryId;
+        for source in [MemoryId::ProjectCache(1), MemoryId::PipelineContext(1)] {
+            let out_objects = Arc::new(Mutex::new(Vec::new()));
+            let mut job = make_single_image_job(out_objects.clone());
+            job.pipelines_pre_process.clear();
+            let mut store = Pipeline::new(
+                PipelineId(1),
+                CorePipelineSettings {
+                    start_image: ImageAddress::Channel(0),
+                },
+            );
+            store.add_command(Box::new(ImageCache {
+                mode: ImageCacheMode::Store,
+                address: ImageAddress::Memory(MemoryId::ProjectCache(1)),
+            }));
+            job.add_pre_process_pipeline(store);
+            let mut detect = threshold_connected_components_extract_pipeline();
+            detect.id = PipelineId(2);
+            detect.settings.start_image = ImageAddress::Memory(source);
+            job.add_pre_process_pipeline(detect);
+
+            let (tx, _rx) = std::sync::mpsc::channel();
+            job.run(1, tx, Arc::new(AtomicBool::new(false)))
+                .unwrap_or_else(|e| panic!("{source:?}: {e}"));
+            assert!(!out_objects.lock().unwrap().is_empty(), "{source:?}");
+        }
+    }
+
+    /// `make_single_image_job` plus a [`RecordingStep`] as dataset step.
+    fn single_image_job_with_dataset_step(
+        fail: bool,
+    ) -> (
+        JobExecutor,
+        Arc<Mutex<Vec<ObjectMetricSettings>>>,
+        Arc<Mutex<Vec<usize>>>,
+    ) {
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let mut job = make_single_image_job(out_objects.clone());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        job.add_dataset_step(Box::new(crate::dataset::test_support::RecordingStep {
+            seen: seen.clone(),
+            fail,
+        }));
+        (job, out_objects, seen)
+    }
+
+    #[test]
+    fn dataset_steps_run_once_after_the_images_on_every_exported_object() {
+        let (job, out_objects, seen) = single_image_job_with_dataset_step(false);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(AtomicBool::new(false))).unwrap();
+
+        let exported = out_objects.lock().unwrap().len();
+        assert!(exported > 0, "the fixture image has objects");
+        assert_eq!(*seen.lock().unwrap(), [exported]);
+    }
+
+    #[test]
+    fn a_failing_dataset_step_fails_the_run() {
+        let (job, _out_objects, _seen) = single_image_job_with_dataset_step(true);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let err = job
+            .run(1, tx, Arc::new(AtomicBool::new(false)))
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("the dataset step failed"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_run_skips_the_dataset_steps() {
+        let (job, _out_objects, seen) = single_image_job_with_dataset_step(false);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        assert!(job.run(1, tx, Arc::new(AtomicBool::new(true))).is_err());
+        assert!(seen.lock().unwrap().is_empty(), "no partial results");
     }
 
     #[test]
@@ -2512,6 +2758,7 @@ mod full_run_integration_tests {
             GlobalImageSettings::default(),
             Arc::new(MemoryExporter { out_objects }),
             None,
+            Default::default(),
         );
         job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
         job
@@ -2683,12 +2930,18 @@ mod full_run_integration_tests {
         assert_eq!(JobExecutor::breakpoint_target_tile(&[], None), None);
     }
 
+    /// The id of pipeline 1's first step (the Threshold of
+    /// `threshold_connected_components_extract_pipeline`).
+    fn threshold_step(job: &JobExecutor) -> evanalyzer_cfg::core_types::StepId {
+        job.pipelines_pre_process[&PipelineId(1)].commands[0].0
+    }
+
     fn breakpoint_events(mode: BreakpointMode) -> (Vec<ProgressEvent>, usize) {
         let out_objects = Arc::new(Mutex::new(Vec::new()));
         let mut job = make_single_image_job(out_objects.clone());
         job.breakpoint = Some(BreakpointSettings {
             pipeline_id: PipelineId(1),
-            pipeline_step_id: 0, // right after Threshold
+            step_id: threshold_step(&job), // right after Threshold
             mode,
         });
         let (tx, rx) = std::sync::mpsc::channel();
@@ -2743,7 +2996,7 @@ mod full_run_integration_tests {
         let mut job = make_multi_image_job(out_objects.clone(), vec![a.clone(), b.clone()]);
         job.breakpoint = Some(BreakpointSettings {
             pipeline_id: PipelineId(1),
-            pipeline_step_id: 0, // right after Threshold, before ConnectedComponents/ExtractObjects
+            step_id: threshold_step(&job), // right after Threshold, before ConnectedComponents/ExtractObjects
             mode: BreakpointMode::Stop,
         });
 
@@ -2776,7 +3029,7 @@ mod full_run_integration_tests {
         let mut job = make_multi_image_job(out_objects.clone(), vec![a, b]);
         job.breakpoint = Some(BreakpointSettings {
             pipeline_id: PipelineId(1),
-            pipeline_step_id: 0,
+            step_id: threshold_step(&job),
             mode: BreakpointMode::Snapshot,
         });
 
@@ -2863,7 +3116,7 @@ mod full_run_integration_tests {
             area: 9,
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         let mut settings = object.to_object_settings();
         settings.z_stack = z;
         settings.t_stack = t;
@@ -2873,10 +3126,10 @@ mod full_run_integration_tests {
     #[test]
     fn load_annotated_objects_runs_without_segmentation_and_only_loads_the_analyzed_plane() {
         use crate::algos::LoadAnnotatedObjects;
-        const ANALYZED: ObjectClass = ObjectClass::Valid(1);
-        const OTHER_Z: ObjectClass = ObjectClass::Valid(2);
-        const OTHER_T: ObjectClass = ObjectClass::Valid(3);
-        const LOADED: ObjectClass = ObjectClass::Valid(4);
+        const ANALYZED: ObjectClass = ObjectClass::Global(1);
+        const OTHER_Z: ObjectClass = ObjectClass::Global(2);
+        const OTHER_T: ObjectClass = ObjectClass::Global(3);
+        const LOADED: ObjectClass = ObjectClass::Global(4);
 
         let out_objects = Arc::new(Mutex::new(Vec::new()));
         let rel_path = PathBuf::from("multi-channel-4D-series.ome.tif");
@@ -2913,6 +3166,7 @@ mod full_run_integration_tests {
                 out_objects: out_objects.clone(),
             }),
             None,
+            Default::default(),
         );
         // Built like `job_generator` does for a pipeline holding only this
         // command: an empty tile pipeline (nothing is segmented) plus the
@@ -3002,19 +3256,25 @@ mod tile_merge_end_to_end_tests {
                 start_image: ImageAddress::Channel(0),
             },
         );
-        pipeline.add_command(Box::new(Threshold {
-            thresholds: vec![ThresholdEntry {
-                method: ThresholdMethod::Manual,
-                min_threshold: 0.0,
-                max_threshold: 255.0,
-                unit: PixelUnits::Bit,
-                object_class_id: SegmentationClass(1),
-                value_source: ThresholdValueSource::ActualImage,
-            }],
-        }));
+        // A project step (id 1): what the breakpoint tests target.
+        pipeline.add_step(
+            evanalyzer_cfg::core_types::StepId(1),
+            Scope::Global,
+            Box::new(Threshold {
+                thresholds: vec![ThresholdEntry {
+                    method: ThresholdMethod::Manual,
+                    min_threshold: 0.0,
+                    max_threshold: 255.0,
+                    unit: PixelUnits::Bit,
+                    segmentation_class: SegmentationClass(1),
+                    value_source: ThresholdValueSource::ActualImage,
+                }],
+            }),
+        );
         pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
         pipeline.add_command(Box::new(ExtractObjects {
             max_objects_before_fail: 100_000,
+            class_mapping: vec![],
         }));
         pipeline
     }
@@ -3066,6 +3326,7 @@ mod tile_merge_end_to_end_tests {
             object_cache: Default::default(),
             image_rel_path: PathBuf::new(),
             annotated_objects: Default::default(),
+            class_colors: Default::default(),
             image_meta: GlobalImageMeta {
                 full_image_width: ImageSize {
                     width: full_width,
@@ -3108,7 +3369,7 @@ mod tile_merge_end_to_end_tests {
                 !object.touches_edge
                     && touches_tile_edge(object.bbox, tile)
                     && !object
-                        .object_class
+                        .object_classes()
                         .iter()
                         .any(|c| classes_to_not_merge.contains(c))
             })
@@ -3288,8 +3549,8 @@ mod tile_merge_end_to_end_tests {
             .cache
     }
 
-    const CENTER_CLASS: ObjectClass = ObjectClass::Valid(1);
-    const VORONOI_CLASS: ObjectClass = ObjectClass::Valid(2);
+    const CENTER_CLASS: ObjectClass = ObjectClass::Global(1);
+    const VORONOI_CLASS: ObjectClass = ObjectClass::Global(2);
 
     fn default_voronoi() -> Voronoi {
         Voronoi {
@@ -3369,7 +3630,7 @@ mod tile_merge_end_to_end_tests {
         let mut reference_regions: Vec<_> = reference_cache
             .object_cache
             .values()
-            .filter(|o| o.has_object_class(&VORONOI_CLASS))
+            .filter(|o| o.is_of(&VORONOI_CLASS, Scope::Global))
             .map(|o| (o.bbox, o.area))
             .collect();
         reference_regions.sort();
@@ -3446,7 +3707,7 @@ mod tile_merge_end_to_end_tests {
         let mut tiled_regions: Vec<_> = tiled_cache
             .object_cache
             .values()
-            .filter(|o| o.has_object_class(&VORONOI_CLASS))
+            .filter(|o| o.is_of(&VORONOI_CLASS, Scope::Global))
             .map(|o| (o.bbox, o.area))
             .collect();
         tiled_regions.sort();
@@ -3497,6 +3758,7 @@ mod estimate_ram_per_worker_bytes_tests {
                 out_objects: Arc::new(Mutex::new(Vec::new())),
             }),
             None,
+            Default::default(),
         )
     }
 
@@ -3507,7 +3769,7 @@ mod estimate_ram_per_worker_bytes_tests {
         images.insert(PathBuf::from("large.tif"), image_entry(2048, 2048, 4));
         let job = job_with(images);
 
-        let expected = crate::resources::estimate_ram_budget(2048, 2048, 4).total_bytes();
+        let expected = crate::utils::resources::estimate_ram_budget(2048, 2048, 4).total_bytes();
         assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
     }
 
@@ -3521,7 +3783,7 @@ mod estimate_ram_per_worker_bytes_tests {
         images.insert(PathBuf::from("huge.tif"), image_entry(20_000, 20_000, 2));
         let job = job_with(images);
 
-        let expected = crate::resources::estimate_ram_budget(4096, 4096, 2).total_bytes();
+        let expected = crate::utils::resources::estimate_ram_budget(4096, 4096, 2).total_bytes();
         assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
     }
 
@@ -3588,25 +3850,25 @@ mod tests {
                     method: ThresholdMethod::Manual,
                     min_threshold: 0.0,
                     max_threshold: 0.3,
-                    object_class_id: SegmentationClass(0),
+                    segmentation_class: SegmentationClass(0),
                 },
                 ThresholdEntry {
                     method: ThresholdMethod::Manual,
                     min_threshold: 0.3,
                     max_threshold: 0.5,
-                    object_class_id: SegmentationClass(2),
+                    segmentation_class: SegmentationClass(2),
                 },
                 ThresholdEntry {
                     method: ThresholdMethod::Manual,
                     min_threshold: 0.5,
                     max_threshold: 0.7,
-                    object_class_id: SegmentationClass(3),
+                    segmentation_class: SegmentationClass(3),
                 },
                 ThresholdEntry {
                     method: ThresholdMethod::Manual,
                     min_threshold: 0.7,
                     max_threshold: 1.0,
-                    object_class_id: SegmentationClass(4),
+                    segmentation_class: SegmentationClass(4),
                 },
             ],
         };
@@ -3649,6 +3911,7 @@ mod tests {
             stack_handling: TStackHandling::AllStacks,
             playback_speed: 0.0,
             t_stack: 0,
+            frame_interval: None,
         });
 
         project.add_image();

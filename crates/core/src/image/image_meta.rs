@@ -46,6 +46,8 @@ pub struct ImageInfo {
     pub pixel_sizes: PixelSizes,
     pub resolutions: BTreeMap<i32, PyramidInfo>, // Array of resolutions in case of a pyamid image
     pub channels: BTreeMap<i32, ChannelInfo>, // Contains the channel information <channelIdx | channelinfo>
+    /// Time between two frames [s] per the file's metadata
+    pub frame_interval: Option<f32>,
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]

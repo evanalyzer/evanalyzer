@@ -4,6 +4,7 @@
 #[cfg(feature = "ai")]
 mod ai_segmentation;
 mod filters;
+mod flow_control;
 mod math;
 mod morphology;
 mod object;
@@ -51,10 +52,12 @@ pub use self::filters::rolling_ball::RollingBall;
 pub use self::filters::structure_tensor::StructureTensor;
 pub use self::filters::structure_tensor::TensorMode;
 pub use self::filters::weighted_deviation::WeightedDeviation;
+pub(crate) use self::flow_control::end_scope::EndScope;
 pub use self::math::image_cache::ImageCache;
 pub use self::math::image_cache::ImageCacheMode;
 pub use self::math::image_math::ImageMath;
 pub use self::math::image_math::Operand;
+pub use self::math::load_channel::LoadChannel;
 pub use self::math::median_subtract::MedianSubtract;
 pub use self::math::save_image::ImageSource;
 pub use self::math::save_image::SaveImage;
@@ -76,7 +79,7 @@ pub use self::object::classify_objects::IntensityFilter;
 pub use self::object::classify_objects::IntensityMetric;
 pub use self::object::coloc_objects::ColocMultiplicity;
 pub use self::object::coloc_objects::Colocalization;
-pub use self::object::extract_objects::ExtractObjects;
+pub use self::object::extract_objects::{ExtractClassMapping, ExtractObjects};
 pub use self::object::load_annotaed_objects::LoadAnnotatedObjects;
 pub use self::object::object_math::ObjectMath;
 pub use self::object::object_math::ObjectSetOperation;
@@ -84,7 +87,10 @@ pub(crate) use self::object::tile_merge::{Connectivity, TileMerge, touches_tile_
 pub use self::object::transform_objects::TransformFunction;
 pub use self::object::transform_objects::TransformObjects;
 pub use self::object::voronoi::Voronoi;
-pub use self::script::script_executor::Script;
+pub use self::script::script_executor::{
+    Script, apply_command_param, command_parameters, declared_script_params,
+};
+pub use self::script::script_params::{ParamDecl, ParamKind, ScriptValue};
 pub use self::segmentation::connected_components::ConnectedComponents;
 pub use self::segmentation::threshold::Averaging;
 pub use self::segmentation::threshold::OtsuClasses;
@@ -103,6 +109,7 @@ use crate::pipeline::pipeline_context::PipelineContext;
 use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::InternalErrors;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionScope {
     Tile,
     WholeImage,

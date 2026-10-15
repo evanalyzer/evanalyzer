@@ -15,6 +15,8 @@ pub enum MemoryId {
     PipelineContext(MemorySlot),
     #[serde(alias = "PROJECT_CACHE", alias = "project_cache")]
     ProjectCache(MemorySlot),
+    #[serde(alias = "COMPONENT_CONTEXT", alias = "component_context")]
+    ComponentContext(MemorySlot),
 }
 
 impl Default for MemoryId {
@@ -32,6 +34,10 @@ pub enum ImageAddress {
     Memory(MemoryId), // Memory slot
     #[serde(alias = "CHANNEL", alias = "channel")]
     Channel(i32), // Initial based on image channel
+    /// No image - only as a pipeline's start: its first step loads one
+    /// (Load Image Channel, Image Cache Load).
+    #[serde(rename = "NONE", alias = "none")]
+    None,
 }
 
 impl Default for ImageAddress {
@@ -44,13 +50,16 @@ impl Default for ImageAddress {
 #[allow(dead_code)]
 impl ImageAddress {
     /// Kind and number as the pipeline UI edits them: ("scratchpad", 0),
-    /// ("memory", slot), ("cache", slot) or ("channel", channel).
+    /// ("memory", slot), ("cache", slot), ("component", slot) or ("channel",
+    /// channel).
     pub fn param_parts(&self) -> (&'static str, i64) {
         match *self {
             ImageAddress::Scratchpad => ("scratchpad", 0),
             ImageAddress::Memory(MemoryId::PipelineContext(slot)) => ("memory", slot as i64),
             ImageAddress::Memory(MemoryId::ProjectCache(slot)) => ("cache", slot as i64),
+            ImageAddress::Memory(MemoryId::ComponentContext(slot)) => ("component", slot as i64),
             ImageAddress::Channel(channel) => ("channel", channel as i64),
+            ImageAddress::None => ("none", 0),
         }
     }
 
@@ -59,6 +68,7 @@ impl ImageAddress {
     pub fn to_param_value(&self) -> String {
         match self.param_parts() {
             ("scratchpad", _) => "scratchpad".to_string(),
+            ("none", _) => "none".to_string(),
             (kind, nr) => format!("{kind}:{nr}"),
         }
     }
@@ -69,12 +79,18 @@ impl ImageAddress {
         if value == "scratchpad" {
             return Some(ImageAddress::Scratchpad);
         }
+        if value == "none" {
+            return Some(ImageAddress::None);
+        }
         let (kind, nr) = value.split_once(':')?;
         match kind {
             "memory" => Some(ImageAddress::Memory(MemoryId::PipelineContext(
                 nr.parse().ok()?,
             ))),
             "cache" => Some(ImageAddress::Memory(MemoryId::ProjectCache(
+                nr.parse().ok()?,
+            ))),
+            "component" => Some(ImageAddress::Memory(MemoryId::ComponentContext(
                 nr.parse().ok()?,
             ))),
             "channel" => Some(ImageAddress::Channel(nr.parse().ok()?)),
@@ -106,11 +122,148 @@ impl fmt::Display for PipelineId {
     }
 }
 
-// Object ID -----------------
 #[derive(
-    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, Hash, PartialOrd, Ord,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Default,
+    JsonSchema,
+    Ord,
+    PartialOrd,
 )]
-pub struct ObjectId(pub u128);
+pub struct ComponentId(pub u32);
+
+impl fmt::Display for ComponentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Component({})", self.0) // Or just self.0
+    }
+}
+
+/// A component parameter's key, unique within its component definition and
+/// readable in the file (`"min_size"`). The values a component instance holds
+/// are keyed by it, so they survive reordering and relabelling the
+/// definition's parameters, and updating it from the library. Made from the
+/// label when the parameter is made, then kept.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default, JsonSchema, Ord, PartialOrd,
+)]
+#[serde(transparent)]
+pub struct ComponentParamKey(pub String);
+
+impl ComponentParamKey {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for ComponentParamKey {
+    fn from(key: &str) -> Self {
+        Self(key.to_string())
+    }
+}
+
+impl fmt::Display for ComponentParamKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A pipeline step's id: a small number, unique within its list of steps
+/// (a pipeline, or a component definition), so it reads well in a hand-written
+/// project file (`"id": 7`) and in references to the step. Assigned by
+/// whoever adds a step - the next number after the list's highest, never
+/// reused within the list. `0` ([`StepId::UNASSIGNED`]) means "not
+/// assigned yet": a step written without an id gets one when the project is
+/// loaded.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Default,
+    JsonSchema,
+    Ord,
+    PartialOrd,
+)]
+pub struct StepId(pub u32);
+
+impl StepId {
+    /// Not assigned yet - also the id of a command that isn't a project
+    /// step (e.g. tile merging), which no breakpoint can target.
+    pub const UNASSIGNED: StepId = StepId(0);
+}
+
+impl fmt::Display for StepId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+// Object ID -----------------
+/// An object's id - a UUIDv7. Stored in JSON as the UUID string (as in the
+/// results database), in binary formats as the number: project files are loaded through `serde_json::Value`, which
+/// keeps numbers above 2^64 only as `f64`, so as a number the id came back
+/// wrong. Numbers are still read - from files written before; a rounded one
+/// rounds the same way everywhere in the file, so references between
+/// objects (parent, children, coloc partners) still match.
+#[derive(Debug, Clone, Default, PartialEq, Eq, JsonSchema, Hash, PartialOrd, Ord)]
+pub struct ObjectId(#[schemars(with = "String")] pub u128);
+
+impl Serialize for ObjectId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Binary formats (e.g. the tile scratch files) keep the compact number.
+        if serializer.is_human_readable() {
+            serializer.collect_str(self)
+        } else {
+            serializer.serialize_u128(self.0)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ObjectId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = ObjectId;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("an object id: a UUID string")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<ObjectId, E> {
+                u128::from_str_radix(&v.replace('-', ""), 16)
+                    .map(ObjectId)
+                    .map_err(E::custom)
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<ObjectId, E> {
+                Ok(ObjectId(v as u128))
+            }
+            fn visit_u128<E: serde::de::Error>(self, v: u128) -> Result<ObjectId, E> {
+                Ok(ObjectId(v))
+            }
+            // Files written before: an id above 2^64 came through as `f64`.
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<ObjectId, E> {
+                if v.is_finite() && v >= 0.0 {
+                    Ok(ObjectId(v as u128))
+                } else {
+                    Err(E::custom(format!("invalid object id {v}")))
+                }
+            }
+        }
+        if deserializer.is_human_readable() {
+            deserializer.deserialize_any(Visitor)
+        } else {
+            u128::deserialize(deserializer).map(ObjectId)
+        }
+    }
+}
 
 #[allow(dead_code)]
 impl ObjectId {
@@ -139,7 +292,7 @@ impl fmt::Display for ObjectId {
     }
 }
 
-// Tracking ID -----------------
+// Track ID -----------------
 #[allow(dead_code)]
 static GLOBAL_TRACK_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -196,6 +349,8 @@ mod tests {
             ImageAddress::Scratchpad,
             ImageAddress::Memory(MemoryId::PipelineContext(3)),
             ImageAddress::Memory(MemoryId::ProjectCache(7)),
+            ImageAddress::Memory(MemoryId::ComponentContext(2)),
+            ImageAddress::None,
             ImageAddress::Channel(0),
             ImageAddress::Channel(15),
         ] {
@@ -208,6 +363,14 @@ mod tests {
         }
         assert_eq!(ImageAddress::Channel(2).to_param_value(), "channel:2");
         assert_eq!(ImageAddress::Scratchpad.to_param_value(), "scratchpad");
+        assert_eq!(
+            ImageAddress::Memory(MemoryId::ComponentContext(2)).to_param_value(),
+            "component:2"
+        );
+        assert_eq!(
+            serde_json::to_string(&MemoryId::ComponentContext(2)).unwrap(),
+            r#"{"componentContext":2}"#
+        );
     }
 
     #[test]
@@ -346,7 +509,7 @@ mod tests {
     #[test]
     fn object_id_display_formats_as_a_uuid() {
         // 0x0123456789abcdef0123456789abcdef split into the standard
-        // 8-4-4-4-12 hex groups.
+        // 8-4-4-4-12 hex components.
         let id = ObjectId(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
         assert_eq!(id.to_string(), "01234567-89ab-cdef-0123-456789abcdef");
     }
@@ -372,5 +535,39 @@ mod tests {
     #[test]
     fn track_id_default_is_zero() {
         assert_eq!(TrackId::default(), TrackId(0));
+    }
+}
+
+#[cfg(test)]
+mod object_id_tests {
+    use super::*;
+
+    #[test]
+    fn object_ids_survive_loading_through_a_json_value() {
+        let id = ObjectId::next();
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(json, format!("\"{id}\""), "the UUID string");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::from_value::<ObjectId>(value).unwrap(), id);
+        assert_eq!(
+            serde_json::from_str::<ObjectId>(&format!("\"{:032x}\"", id.0)).unwrap(),
+            id,
+            "without dashes too"
+        );
+    }
+
+    #[test]
+    fn object_ids_of_files_written_before_still_load() {
+        assert_eq!(
+            serde_json::from_str::<ObjectId>("42").unwrap(),
+            ObjectId(42)
+        );
+        // A UUIDv7 written as a number arrives as f64: rounded, but the same
+        // number always rounds to the same id, so references still match.
+        let old = format!("{}", ObjectId::next().0);
+        let value: serde_json::Value = serde_json::from_str(&old).unwrap();
+        let a = serde_json::from_value::<ObjectId>(value.clone()).unwrap();
+        let b = serde_json::from_value::<ObjectId>(value).unwrap();
+        assert_eq!(a, b);
     }
 }

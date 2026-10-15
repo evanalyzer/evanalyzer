@@ -1,8 +1,9 @@
+use crate::pipeline::scope::Scope;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use evanalyzer_cfg::core_types::{
-    CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass,
+    CitationMetadata, InternalErrors, ModelClass, ObjectClass, ObjectId, SegmentationClass,
 };
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningClassifierSettings;
 use macros::CommandsMeta;
@@ -23,7 +24,7 @@ use crate::{
 #[derive(CommandsMeta)]
 pub struct ClassificationMapping {
     /// Object class predicted by the classifier model.
-    pub object_class: ObjectClass,
+    pub object_class: ModelClass,
 
     /// The project's own object class objects predicted as `object_class`
     /// are assigned.
@@ -92,7 +93,7 @@ pub struct AiObjectClassifier {
 impl ImageAlgorithm for AiObjectClassifier {
     fn execute(
         &self,
-        _ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext,
         cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let saved = load_cached_classifier(&self.model_path, || load_from_file(&self.model_path))?;
@@ -125,7 +126,7 @@ impl ImageAlgorithm for AiObjectClassifier {
         let (ids, rows): (Vec<ObjectId>, Vec<Vec<f32>>) = cache
             .object_cache
             .values()
-            .filter(|object| self.matches_input(object))
+            .filter(|object| self.matches_input(object, ctx.scope))
             .map(|object| {
                 (
                     object.id.clone(),
@@ -153,11 +154,11 @@ impl ImageAlgorithm for AiObjectClassifier {
             };
             match self.match_handling {
                 AiClassifyMatchHandling::AddOutputClassIfMatch => {
-                    object.add_object_class(output_class);
+                    object.add_object_class(output_class, ctx.scope)?;
                 }
                 AiClassifyMatchHandling::ReclassifyIfMatch => {
-                    object.object_class.clear();
-                    object.add_object_class(output_class);
+                    object.clear_object_classes();
+                    object.add_object_class(output_class, ctx.scope)?;
                 }
             }
         }
@@ -202,12 +203,16 @@ impl AiObjectClassifier {
     /// `origin_segmentation` (if any is configured) and carries at least one
     /// class listed in `input_classes` (if any is configured) - the same input
     /// selection `ClassifyObjects` applies before evaluating its criteria.
-    fn matches_input(&self, object: &Object) -> bool {
+    fn matches_input(&self, object: &Object, scope: Scope) -> bool {
         (self.origin_segmentation.is_empty()
             || self
                 .origin_segmentation
                 .contains(&object.segmentation_class))
-            && (self.input_classes.is_empty() || object.has_any_object_class(&self.input_classes))
+            && if self.input_classes.is_empty() {
+                object.is_visible_in(scope)
+            } else {
+                object.is_of_any(&self.input_classes, scope)
+            }
     }
 }
 
@@ -341,7 +346,12 @@ mod tests {
             segmentation_class: seg_class,
             ..Default::default()
         });
-        object.add_object_class(ObjectClass::from_segmentation_class(seg_class));
+        object
+            .add_object_class(
+                ObjectClass::from_segmentation_class(seg_class),
+                Scope::Global,
+            )
+            .unwrap();
         object
     }
 
@@ -351,11 +361,11 @@ mod tests {
     fn labels() -> Vec<ObjectClassLabel> {
         vec![
             ObjectClassLabel {
-                class: ObjectClass::Valid(5),
+                class: ObjectClass::Global(5),
                 name: "Small".into(),
             },
             ObjectClassLabel {
-                class: ObjectClass::Valid(6),
+                class: ObjectClass::Global(6),
                 name: "Large".into(),
             },
         ]
@@ -409,8 +419,8 @@ mod tests {
             // deliberately left unmapped, so a small object should be left
             // untouched entirely.
             segmentation_mapping: vec![ClassificationMapping {
-                object_class: ObjectClass::Valid(6),
-                output_class: ObjectClass::Valid(42),
+                object_class: ObjectClass::Global(6),
+                output_class: ObjectClass::Global(42),
             }],
             origin_segmentation: vec![],
             input_classes: vec![],
@@ -428,17 +438,20 @@ mod tests {
 
         let small = cache.object_cache.get(&ObjectId(SMALL_ID)).unwrap();
         assert!(
-            small.has_object_class(&ObjectClass::from_segmentation_class(SegmentationClass(1))),
+            small.is_of(
+                &ObjectClass::from_segmentation_class(SegmentationClass(1)),
+                Scope::Global
+            ),
             "unmapped prediction must leave the object's classes untouched"
         );
 
         let large = cache.object_cache.get(&ObjectId(LARGE_ID)).unwrap();
         assert!(
-            large.has_object_class(&ObjectClass::Valid(42)),
+            large.is_of(&ObjectClass::Global(42), Scope::Global),
             "mapped prediction must be applied"
         );
         assert_eq!(
-            large.object_class.len(),
+            large.object_classes().len(),
             1,
             "ReclassifyIfMatch must clear the object's previous classes"
         );
@@ -457,7 +470,7 @@ mod tests {
         let cmd = AiObjectClassifier {
             model_path: path,
             segmentation_mapping: vec![ClassificationMapping {
-                object_class: ObjectClass::Valid(6),
+                object_class: ObjectClass::Global(6),
                 output_class: ObjectClass::Unset,
             }],
             origin_segmentation: vec![],
@@ -474,7 +487,10 @@ mod tests {
 
         let large = cache.object_cache.get(&ObjectId(LARGE_ID)).unwrap();
         assert!(
-            large.has_object_class(&ObjectClass::from_segmentation_class(SegmentationClass(1))),
+            large.is_of(
+                &ObjectClass::from_segmentation_class(SegmentationClass(1)),
+                Scope::Global
+            ),
             "an unmapped (Unset) row must leave the object's classes untouched, \
              not clear them via ReclassifyIfMatch"
         );
@@ -489,8 +505,8 @@ mod tests {
         let cmd = AiObjectClassifier {
             model_path: path,
             segmentation_mapping: vec![ClassificationMapping {
-                object_class: ObjectClass::Valid(6),
-                output_class: ObjectClass::Valid(42),
+                object_class: ObjectClass::Global(6),
+                output_class: ObjectClass::Global(42),
             }],
             origin_segmentation: vec![],
             input_classes: vec![],
@@ -505,9 +521,12 @@ mod tests {
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let large = cache.object_cache.get(&ObjectId(LARGE_ID)).unwrap();
-        assert!(large.has_object_class(&ObjectClass::Valid(42)));
+        assert!(large.is_of(&ObjectClass::Global(42), Scope::Global));
         assert!(
-            large.has_object_class(&ObjectClass::from_segmentation_class(SegmentationClass(1))),
+            large.is_of(
+                &ObjectClass::from_segmentation_class(SegmentationClass(1)),
+                Scope::Global
+            ),
             "AddOutputClassIfMatch must keep the object's original class"
         );
     }
@@ -521,8 +540,8 @@ mod tests {
         let cmd = AiObjectClassifier {
             model_path: path,
             segmentation_mapping: vec![ClassificationMapping {
-                object_class: ObjectClass::Valid(6),
-                output_class: ObjectClass::Valid(42),
+                object_class: ObjectClass::Global(6),
+                output_class: ObjectClass::Global(42),
             }],
             origin_segmentation: vec![SegmentationClass(9)],
             input_classes: vec![],
@@ -538,7 +557,7 @@ mod tests {
 
         let large = cache.object_cache.get(&ObjectId(LARGE_ID)).unwrap();
         assert!(
-            !large.has_object_class(&ObjectClass::Valid(42)),
+            !large.is_of(&ObjectClass::Global(42), Scope::Global),
             "object from a non-matching segmentation class must not be classified"
         );
     }
@@ -553,13 +572,13 @@ mod tests {
         let cmd = AiObjectClassifier {
             model_path: path,
             segmentation_mapping: vec![ClassificationMapping {
-                object_class: ObjectClass::Valid(6),
-                output_class: ObjectClass::Valid(42),
+                object_class: ObjectClass::Global(6),
+                output_class: ObjectClass::Global(42),
             }],
             origin_segmentation: vec![],
             // The object carries only the second one.
             input_classes: vec![
-                ObjectClass::Valid(99),
+                ObjectClass::Global(99),
                 ObjectClass::from_segmentation_class(SegmentationClass(1)),
             ],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
@@ -574,7 +593,7 @@ mod tests {
 
         let large = cache.object_cache.get(&ObjectId(LARGE_ID)).unwrap();
         assert!(
-            large.has_object_class(&ObjectClass::Valid(42)),
+            large.is_of(&ObjectClass::Global(42), Scope::Global),
             "an object carrying one of the input classes must be classified"
         );
     }
@@ -588,11 +607,11 @@ mod tests {
         let cmd = AiObjectClassifier {
             model_path: path,
             segmentation_mapping: vec![ClassificationMapping {
-                object_class: ObjectClass::Valid(6),
-                output_class: ObjectClass::Valid(42),
+                object_class: ObjectClass::Global(6),
+                output_class: ObjectClass::Global(42),
             }],
             origin_segmentation: vec![],
-            input_classes: vec![ObjectClass::Valid(99)],
+            input_classes: vec![ObjectClass::Global(99)],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
         };
 
@@ -605,7 +624,7 @@ mod tests {
 
         let large = cache.object_cache.get(&ObjectId(LARGE_ID)).unwrap();
         assert!(
-            !large.has_object_class(&ObjectClass::Valid(42)),
+            !large.is_of(&ObjectClass::Global(42), Scope::Global),
             "object missing a required input class must not be classified"
         );
     }

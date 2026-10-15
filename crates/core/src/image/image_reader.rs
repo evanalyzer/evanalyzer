@@ -1,7 +1,7 @@
-use crate::converters::wavelength_to_rgb_float;
 use crate::image::Point2d;
 use crate::image::image_meta::{ImageMeta, ImagePlane, ImageTile};
 use crate::image::image_ome_parser::{build_image_meta, effective_size_c};
+use crate::utils::converters::wavelength_to_rgb_float;
 use bioformats::common::reader::FormatReader;
 use evanalyzer_cfg::core_types::{InternalErrors, ZProjection};
 use kornia_image::{Image, ImageSize};

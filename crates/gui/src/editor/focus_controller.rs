@@ -205,12 +205,15 @@ mod tests {
             image_source: ImageAddress::Scratchpad,
             enabled: true,
             steps: vec![PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
-                command: PipelineCommand::TransformObjects(TransformObjectsSettings {
-                    input_class: ObjectClass::Valid(class),
-                    output_class: ObjectClass::Valid(class),
-                    ..Default::default()
-                }),
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                    PipelineCommand::TransformObjects(TransformObjectsSettings {
+                        input_class: ObjectClass::Global(class),
+                        output_class: ObjectClass::Global(class),
+                        ..Default::default()
+                    }),
+                ),
             }],
         }
     }
@@ -229,7 +232,13 @@ mod tests {
         project.pipelines.push(pipeline(2, "Cells", 4));
         let ui_state = ui_state_with_windows(&ui, &results_ui, project);
         let weak = ui.as_weak();
-        let viewport = Arc::new(ViewportController::new(weak.clone(), ui_state.clone()));
+        let viewport = Arc::new(ViewportController::new(
+            weak.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let object_list = Arc::new(ObjectListController::new(
             weak.clone(),
             ui_state.clone(),

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
-use evanalyzer_core::into_algorithm;
+use evanalyzer_core::{ExpandedCommand, ScopeCounter, expand_step, into_pipeline_step};
 
 /// Renders every enabled pipeline as an ASCII/Unicode flow diagram followed
 /// by a consolidated reference list of every citation used, and writes the
@@ -44,9 +44,33 @@ pub fn cite_project(
 
         let mut rows = Vec::with_capacity(steps.len());
         for (i, step) in steps.iter().enumerate() {
-            let algo = into_algorithm(step.command.clone())?;
-            let label = format!("[Step {}] {}", i + 1, algo.name());
-            let cites = algo.cite();
+            // A component is cited with every method its commands use.
+            let (name, cites) = match &step.content {
+                evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(command) => {
+                    // Image and dataset steps alike.
+                    let algo = into_pipeline_step(command.clone())?;
+                    (algo.name().to_string(), algo.cite())
+                }
+                evanalyzer_cfg::settings::pipeline_settings::StepContent::Component(component) => {
+                    let mut cites: Vec<&'static CitationMetadata> = Vec::new();
+                    for ExpandedCommand { command, .. } in
+                        expand_step(step, &config.components, &mut ScopeCounter::default())?
+                    {
+                        for cite in into_pipeline_step(command)?.cite() {
+                            if !cites.iter().any(|c| c.cite_key == cite.cite_key) {
+                                cites.push(cite);
+                            }
+                        }
+                    }
+                    let name = config
+                        .components
+                        .iter()
+                        .find(|d| d.key == component.key)
+                        .map_or_else(|| component.key.clone(), |d| d.meta.name.clone());
+                    (format!("Component: {name}"), cites)
+                }
+            };
+            let label = format!("[Step {}] {}", i + 1, name);
             let citation_marker = if cites.is_empty() {
                 "(Uncited)".to_string()
             } else {
@@ -145,6 +169,66 @@ mod tests {
     use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 
     #[test]
+    fn a_component_step_is_cited_with_the_methods_of_its_commands() {
+        let threshold = |method| PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(1),
+            enabled: true,
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                PipelineCommand::Threshold(ThresholdSettings {
+                    thresholds: vec![ThresholdEntrySettings {
+                        method,
+                        ..Default::default()
+                    }],
+                }),
+            ),
+        };
+        let mut config = ProjectSettings::default();
+        config
+            .components
+            .push(evanalyzer_cfg::settings::components::ComponentDefinition {
+                key: "SEGMENT".into(),
+                meta: evanalyzer_cfg::settings::meta_data::MetaData {
+                    name: "Segment nuclei".into(),
+                    ..Default::default()
+                },
+                classes: vec![],
+                steps: vec![threshold(SegmentationThresholdThresholdMethodSettings::Li)],
+                parameters: vec![],
+                origin: None,
+            });
+        config.pipelines.push(PipelineSettings {
+            id: PipelineId(1),
+            name: "Nuclei".to_string(),
+            image_source: ImageAddress::Scratchpad,
+            enabled: true,
+            steps: vec![PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId(1),
+                enabled: true,
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Component(
+                    evanalyzer_cfg::settings::components::ComponentInstance {
+                        key: "SEGMENT".into(),
+                        values: Default::default(),
+                    },
+                ),
+            }],
+            description: None,
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let output_file = dir.path().join("cite.md");
+        cite_project(&LocalFileSystem::default(), &config, &output_file).unwrap();
+        let content = std::fs::read_to_string(&output_file).unwrap();
+        assert!(
+            content.contains("[Step 1] Component: Segment nuclei"),
+            "{content}"
+        );
+        assert!(
+            content.contains("Li"),
+            "the threshold method is cited: {content}"
+        );
+    }
+
+    #[test]
     fn a_step_with_several_citations_lists_all_of_them() {
         let entry = |method| ThresholdEntrySettings {
             method,
@@ -157,13 +241,16 @@ mod tests {
             image_source: ImageAddress::Scratchpad,
             enabled: true,
             steps: vec![PipelineStepSettings {
+                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                 enabled: true,
-                command: PipelineCommand::Threshold(ThresholdSettings {
-                    thresholds: vec![
-                        entry(SegmentationThresholdThresholdMethodSettings::Li),
-                        entry(SegmentationThresholdThresholdMethodSettings::Triangle),
-                    ],
-                }),
+                content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                    PipelineCommand::Threshold(ThresholdSettings {
+                        thresholds: vec![
+                            entry(SegmentationThresholdThresholdMethodSettings::Li),
+                            entry(SegmentationThresholdThresholdMethodSettings::Triangle),
+                        ],
+                    }),
+                ),
             }],
             description: None,
         });
@@ -192,16 +279,25 @@ mod tests {
             enabled: true,
             steps: vec![
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::RollingBall(RollingBallSettings::default()),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::RollingBall(RollingBallSettings::default()),
+                    ),
                 },
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: true,
-                    command: PipelineCommand::GaussianBlur(GaussianBlurSettings::default()),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::GaussianBlur(GaussianBlurSettings::default()),
+                    ),
                 },
                 PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                     enabled: false,
-                    command: PipelineCommand::Blur(BlurSettings { kernel_size: 3 }),
+                    content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
+                        PipelineCommand::Blur(BlurSettings { kernel_size: 3 }),
+                    ),
                 },
             ],
             description: None,

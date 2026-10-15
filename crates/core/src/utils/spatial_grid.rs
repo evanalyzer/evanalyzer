@@ -106,6 +106,7 @@ impl BboxGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::scope::Scope;
     use crate::{
         ImagePlane,
         object::{Object, ObjectInit},
@@ -127,7 +128,9 @@ mod tests {
             plane: ImagePlane::default(),
             ..Default::default()
         });
-        object.add_object_class(ObjectClass::Valid(1));
+        object
+            .add_object_class(ObjectClass::Global(1), Scope::Global)
+            .unwrap();
         object
     }
 

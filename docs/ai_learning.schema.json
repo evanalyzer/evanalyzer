@@ -480,6 +480,15 @@
           "items": {
             "type": "string"
           }
+        },
+        "version": {
+          "description": "The author's version of this component or template",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       },
       "required": [
@@ -562,7 +571,7 @@
         {
           "type": "object",
           "properties": {
-            "VALID": {
+            "GLOBAL": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
@@ -570,7 +579,22 @@
           },
           "additionalProperties": false,
           "required": [
-            "VALID"
+            "GLOBAL"
+          ]
+        },
+        {
+          "description": "A class of a component (`ComponentDefinition::classes`): only valid\ninside the component, each instance has its own.",
+          "type": "object",
+          "properties": {
+            "LOCAL": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "LOCAL"
           ]
         }
       ]

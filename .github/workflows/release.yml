@@ -24,7 +24,7 @@ jobs:
     # filtered out afterwards - the server never sends those blobs.
     #
     # Every fetched template is also checked against this repo's current
-    # PipelineTemplate/ProjectTemplate types before anything is uploaded -
+    # ProjectTemplate/ComponentTemplate types before anything is uploaded -
     # see crates/cfg/examples/check_templates.rs for why that's stronger
     # than a generic JSON Schema check. A failure here fails this job, which
     # blocks every build-* job below (needs: [templates]) and the release
@@ -54,9 +54,9 @@ jobs:
           git clone --filter=blob:none --sparse --depth 1 \
             https://github.com/evanalyzer/evanalyzer-templates.git evanalyzer-templates
           git -C evanalyzer-templates sparse-checkout set --no-cone \
-            '**/evanalyzer/*.evapipe' '**/evanalyzer/*.evapt'
+            '**/evanalyzer/*.evapt' '**/evanalyzer/*.evacomp'
           mkdir templates
-          find evanalyzer-templates -type f \( -name '*.evapipe' -o -name '*.evapt' \) -exec cp -t templates {} +
+          find evanalyzer-templates -type f \( -name '*.evapt' -o -name '*.evacomp' \) -exec cp -t templates {} +
 
       # Blocking for real releases. On a test tag (e.g. 0.1.0-test.11) a
       # failure is only reported (step below) and the builds still run.

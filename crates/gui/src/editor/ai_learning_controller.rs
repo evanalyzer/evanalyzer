@@ -257,7 +257,7 @@ impl AiLearningController {
             .classification
             .classes()
             .get(class_index as usize)
-            .map(|c| c.id)
+            .map(|c| c.global())
         else {
             return;
         };
@@ -404,7 +404,7 @@ impl AiLearningController {
                 let mut class_rows: Vec<ClassSelectionRowSlint> =
                     state.get_class_selection().iter().collect();
                 for row in &mut class_rows {
-                    let class_id = classes.get(row.class_index as usize).map(|c| c.id);
+                    let class_id = classes.get(row.class_index as usize).map(|c| c.global());
                     row.selected =
                         class_id.is_some_and(|id| class_labels.iter().any(|l| l.class == id));
                 }
@@ -465,7 +465,7 @@ impl AiLearningController {
                     .classification
                     .classes()
                     .get(c.class_index as usize)
-                    .map(|class| class.id)
+                    .map(|class| class.global())
             })
             .collect();
 
@@ -671,7 +671,7 @@ impl AiLearningController {
                 .map(|(i, c)| ClassSelectionRowSlint {
                     class_index: i as i32,
                     name: c.name.clone().into(),
-                    selected: used.contains(&c.id),
+                    selected: used.contains(&c.global()),
                 })
                 .collect();
             drop(project);
@@ -878,7 +878,7 @@ fn push_object_rows(
         let assigned_class_index = obj
             .object_class
             .iter()
-            .find_map(|oc| classes.iter().position(|c| &c.id == oc))
+            .find_map(|oc| classes.iter().position(|c| &c.global() == oc))
             .map(|i| i as i32)
             .unwrap_or(-1);
         rows.push(TrainingObjectRowSlint {
@@ -1958,7 +1958,7 @@ mod tests {
         let (ui, _results_ui) = test_ui_windows();
         let mut project = project_with_one_image();
         project.classification.classes_mut().push(Class {
-            id: evanalyzer_cfg::core_types::ObjectClass::Valid(1),
+            id: 1,
             name: "Cell".into(),
             ..Default::default()
         });
@@ -1986,7 +1986,7 @@ mod tests {
         let obj = &project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0];
         assert!(
             obj.object_class
-                .contains(&evanalyzer_cfg::core_types::ObjectClass::Valid(1))
+                .contains(&evanalyzer_cfg::core_types::ObjectClass::Global(1))
         );
         drop(project);
 
@@ -2171,8 +2171,8 @@ mod tests {
     use crate::editor::test_support::{choose_file, ui_state_with_windows};
     use crate::helper::ui_thread::drain_ui_queue;
 
-    const CELL: ObjectClass = ObjectClass::Valid(1);
-    const NUCLEUS: ObjectClass = ObjectClass::Valid(2);
+    const CELL: ObjectClass = ObjectClass::Global(1);
+    const NUCLEUS: ObjectClass = ObjectClass::Global(2);
 
     /// One image with labeled objects of two classes (areas well apart),
     /// plus a second, unselected image with one labeled object.
@@ -2180,7 +2180,7 @@ mod tests {
         let mut project = project_with_one_image();
         for (id, name) in [(CELL, "Cell"), (NUCLEUS, "Nucleus")] {
             project.classification.classes_mut().push(Class {
-                id,
+                id: id.to_u32().unwrap(),
                 name: name.into(),
                 ..Default::default()
             });

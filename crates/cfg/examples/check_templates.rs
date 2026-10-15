@@ -1,9 +1,9 @@
-//! Validates that every `.evapipe`/`.evapt` file under a given directory
-//! (searched recursively) still deserializes as `PipelineTemplate`/
-//! `ProjectTemplate` - the same types and the same `serde_json::from_str`
+//! Validates that every `.evapt`/`.evacomp` file under a given directory
+//! (searched recursively) still deserializes as `ProjectTemplate`/
+//! `ComponentTemplate` - the same types and the same `serde_json::from_str`
 //! call the GUI/CLI actually use to load them. This is stronger than
-//! validating against `docs/pipeline_template.schema.json`/
-//! `docs/project_template.schema.json` with a generic JSON Schema
+//! validating against `docs/project_template.schema.json`/
+//! `docs/component_template.schema.json` with a generic JSON Schema
 //! validator: a `#[serde(alias = ...)]` or an enum's tagging behavior can
 //! change what actually deserializes without necessarily showing up as a
 //! schema-shape difference.
@@ -17,7 +17,7 @@
 //!
 //! Usage: `cargo run -p evanalyzer_cfg --example check_templates -- <dir>`
 
-use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
+use evanalyzer_cfg::settings::templates::{ComponentTemplate, ProjectTemplate};
 use std::path::Path;
 
 fn main() {
@@ -28,14 +28,14 @@ fn main() {
     };
     let root = Path::new(&root);
 
-    let mut checked_evapipe = 0;
     let mut checked_evapt = 0;
+    let mut checked_evacomp = 0;
     let mut failures = Vec::new();
 
     walk(root, &mut |path| {
-        let is_evapipe = path.extension().and_then(|e| e.to_str()) == Some("evapipe");
         let is_evapt = path.extension().and_then(|e| e.to_str()) == Some("evapt");
-        if !is_evapipe && !is_evapt {
+        let is_evacomp = path.extension().and_then(|e| e.to_str()) == Some("evacomp");
+        if !is_evapt && !is_evacomp {
             return;
         }
 
@@ -44,11 +44,11 @@ fn main() {
             return;
         };
 
-        if is_evapipe {
-            checked_evapipe += 1;
-            if let Err(e) = serde_json::from_str::<PipelineTemplate>(&json) {
+        if is_evacomp {
+            checked_evacomp += 1;
+            if let Err(e) = serde_json::from_str::<ComponentTemplate>(&json) {
                 failures.push(format!(
-                    "{}: failed to deserialize as PipelineTemplate: {e}",
+                    "{}: failed to deserialize as ComponentTemplate: {e}",
                     path.display()
                 ));
             }
@@ -63,11 +63,11 @@ fn main() {
         }
     });
 
-    println!("checked {checked_evapipe} .evapipe file(s), {checked_evapt} .evapt file(s)");
+    println!("checked {checked_evapt} .evapt file(s), {checked_evacomp} .evacomp file(s)");
 
-    if checked_evapipe == 0 && checked_evapt == 0 {
+    if checked_evapt == 0 && checked_evacomp == 0 {
         eprintln!(
-            "no .evapipe/.evapt files found under {} - check the path/checkout is correct",
+            "no .evapt/.evacomp files found under {} - check the path/checkout is correct",
             root.display()
         );
         std::process::exit(1);

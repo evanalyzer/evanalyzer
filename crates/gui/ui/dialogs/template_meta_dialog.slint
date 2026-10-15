@@ -11,6 +11,8 @@ export struct TemplateMetaSlint {
     author_organization: string,
     category: string,
     tags: string,
+    // Optional: a whole number from 1, or empty for no version.
+    version: string,
 }
 
 export global TemplateMetaState {
@@ -23,6 +25,7 @@ export global TemplateMetaState {
         author_organization: "",
         category: "",
         tags: "",
+        version: "",
     };
     // Suggested categories from templates already on disk, shown as quick-pick chips.
     in property <[string]> known-categories;
@@ -33,6 +36,9 @@ export global TemplateMetaState {
 
 export component TemplateMetaDialog inherits Rectangle {
     background: Theme.modal-overlay;
+
+    // Empty, or a whole number from 1.
+    property <bool> version-valid: TemplateMetaState.meta.version == "" || (TemplateMetaState.meta.version.is-float() && TemplateMetaState.meta.version.to-float() >= 1 && Math.floor(TemplateMetaState.meta.version.to-float()) == TemplateMetaState.meta.version.to-float());
 
     TouchArea {
         clicked => {
@@ -217,6 +223,28 @@ export component TemplateMetaDialog inherits Rectangle {
             VerticalLayout {
                 spacing: 5px;
                 Text {
+                    text: "Version (optional)";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    height: 30px;
+                    input-type: InputType.number;
+                    text <=> TemplateMetaState.meta.version;
+                    placeholder-text: "e.g. 1 - count up when you change the template";
+                }
+
+                if !root.version-valid: Text {
+                    text: "A whole number from 1, or leave it empty.";
+                    font-size: 11px;
+                    color: Theme.err;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
                     text: "Tags";
                     font-size: 11px;
                     color: Theme.text-dim;
@@ -242,7 +270,7 @@ export component TemplateMetaDialog inherits Rectangle {
                 AppButton {
                     text: "Next…";
                     primary: true;
-                    enabled: TemplateMetaState.meta.name != "" && TemplateMetaState.meta.category != "" && TemplateMetaState.meta.tags != "";
+                    enabled: TemplateMetaState.meta.name != "" && TemplateMetaState.meta.category != "" && TemplateMetaState.meta.tags != "" && root.version-valid;
                     clicked => {
                         TemplateMetaState.confirm();
                     }

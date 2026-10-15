@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! AssignObjectClass {
     ($val:expr) => {
-        ObjectClass::Valid($val as u32)
+        ObjectClass::Global($val as u32)
     };
 }
 
@@ -26,7 +26,7 @@ macro_rules! object_class_set_from_u32 {
         {
             let mut temp_set = std::collections::HashSet::new();
             $(
-                temp_set.insert(ObjectClass::Valid($val));
+                temp_set.insert(ObjectClass::Global($val));
             )*
             temp_set
         }

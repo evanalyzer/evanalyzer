@@ -369,7 +369,7 @@ impl ResultExport {
 
         let classes_all = database.get_object_classes()?;
         let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
-            classes_all.iter().map(|class| class.id).collect()
+            classes_all.iter().map(|class| class.global()).collect()
         } else {
             self.object_classes.clone()
         };
@@ -561,7 +561,7 @@ impl ResultExport {
 
         let classes_all = database.get_object_classes()?;
         let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
-            classes_all.iter().map(|class| class.id).collect()
+            classes_all.iter().map(|class| class.global()).collect()
         } else {
             self.object_classes.clone()
         };
@@ -798,7 +798,7 @@ impl ResultExport {
     ) -> Result<(), InternalErrors> {
         let classes_all = database.get_object_classes()?;
         let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
-            classes_all.iter().map(|class| class.id).collect()
+            classes_all.iter().map(|class| class.global()).collect()
         } else {
             self.object_classes.clone()
         };
@@ -2515,7 +2515,7 @@ mod tests {
                     },
                     grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
-                    object_class: ObjectClass::Valid(1),
+                    object_class: ObjectClass::Global(1),
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
@@ -2563,7 +2563,7 @@ mod tests {
                     },
                     grouping: Grouping::Auto,
                     aggregation: Aggregation::Avg,
-                    object_class: ObjectClass::Valid(1),
+                    object_class: ObjectClass::Global(1),
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
@@ -2616,7 +2616,7 @@ mod tests {
                     },
                     image_rel_path: "img1.tif".to_string(),
                     aggregation: Aggregation::Avg,
-                    object_class: ObjectClass::Valid(1),
+                    object_class: ObjectClass::Global(1),
                     column: Column::AreaSizePx,
                     color_schema: ColorSchema::default(),
                     color_scale: ColorScale::default(),
@@ -2908,7 +2908,7 @@ mod tests {
             format: ExportFormat::XLSX,
             columns: vec![Column::AreaSizePx],
             aggregations: vec![Aggregation::Avg],
-            object_classes: vec![ObjectClass::Valid(1)],
+            object_classes: vec![ObjectClass::Global(1)],
             square_size: Some(50),
             with_plate_view_heatmap: true,
             with_well_view_heatmap: true,
@@ -2959,7 +2959,7 @@ mod tests {
             columns: vec![
                 Column::ObjectClass,
                 Column::AreaSizePx,
-                Column::ColocCount(ObjectClass::Valid(2)),
+                Column::ColocCount(ObjectClass::Global(2)),
             ],
             with_list_view: true,
             with_list_coloc_details: true,
@@ -3035,7 +3035,7 @@ mod tests {
             // explicitly-empty `Some(vec![])` selection, which short-
             // circuits earlier). The analysed image still gets its row:
             // "none found" is a result, and there's no average to show.
-            object_classes: vec![ObjectClass::Valid(99)],
+            object_classes: vec![ObjectClass::Global(99)],
             with_grouped_by_image_list: true,
             ..Default::default()
         };

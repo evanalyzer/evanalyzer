@@ -1,3 +1,4 @@
+use crate::modules::components::ComponentDefinition;
 use crate::{
     modules::meta_data::MetaData,
     settings::{
@@ -110,4 +111,9 @@ pub struct ProjectSettings {
 
     /// Pipelines to execute
     pub pipelines: Vec<PipelineSettings>,
+
+    /// The component definitions; pipelines use them as instances
+    /// (by `key`). Absent in projects saved before components existed.
+    #[serde(default)]
+    pub components: Vec<ComponentDefinition>,
 }

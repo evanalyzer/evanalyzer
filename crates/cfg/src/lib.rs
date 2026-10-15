@@ -12,7 +12,7 @@ pub use load_config::{load_ai_learning_settings, load_project_settings};
 // Constants
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
 pub const PROJECT_FILE_TEMPLATE_EXTENSIONS: &str = &"evapt";
-pub const PIPELINE_EXTENSIONS: &str = &"evapipe";
+pub const COMPONENT_TEMPLATE_EXTENSION: &str = &"evacomp";
 pub const RESULTS_FILE_EXTENSION: &str = &"evadb";
 pub const EVANALYZER_TRAINED_AI_MODELS: &str = &"evamodel";
 /// Project file extension used by the old (pre-rewrite) application.
@@ -25,7 +25,7 @@ pub const LEGACY_PROJECT_FILE_EXTENSION: &str = &"icproj";
 /// of `.evaproj` files written by an older version of the app - e.g. a
 /// renamed field/enum variant that isn't just an additive
 /// `#[serde(default)]` field.
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 4;
 
 /// Current on-disk format version for
 /// [`settings::ai_learning_settings::AiLearningSettings`] - both the
@@ -34,21 +34,19 @@ pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 3;
 /// migration step in `load_config::AI_LEARNING_SETTINGS_MIGRATIONS` whenever a
 /// change to `AiLearningSettings` would break deserialization of a file
 /// written by an older version of the app.
-pub const CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION: u32 = 4;
 
 /// Current on-disk format version for
 /// [`settings::templates::ProjectTemplate`] (`.evapt` files). Unlike
-/// `ProjectSettings`/`AiLearningSettings`, nothing currently loads templates
-/// through a version-checked/migrated path (see that struct's
-/// `schema_version` doc comment) - this only reserves the version number for
-/// when that's added.
-pub const CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION: u32 = 2;
+/// `ProjectSettings`/`AiLearningSettings`, nothing loads templates through a
+/// version-checked/migrated path: breaking changes to templates are allowed,
+/// old templates are updated by hand. The number only marks the format.
+pub const CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 /// Current on-disk format version for
-/// [`settings::templates::PipelineTemplate`] (`.evapipe` files, and each
-/// entry of a `ProjectTemplate`'s `pipelines`). See
+/// [`settings::templates::ComponentTemplate`] (`.evacomp` files). See
 /// `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`.
-pub const CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_COMPONENT_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 // Project Settings structs
 pub mod settings {
@@ -60,17 +58,23 @@ pub mod core_types {
     pub use crate::types::breakpoint::BreakpointMode;
     pub use crate::types::breakpoint::BreakpointSettings;
     pub use crate::types::cite::CitationMetadata;
+    pub use crate::types::classes::MAX_CLASS_ID;
+    pub use crate::types::classes::ModelClass;
+    pub use crate::types::classes::ModelSegmentationClass;
     pub use crate::types::classes::ObjectClass;
     pub use crate::types::classes::SegmentationClass;
     pub use crate::types::errors::*;
     pub use crate::types::events::TrainingProgressEvent;
     pub use crate::types::events::TrainingStats;
+    pub use crate::types::ids::ComponentId;
+    pub use crate::types::ids::ComponentParamKey;
     pub use crate::types::ids::ImageAddress;
     pub use crate::types::ids::ImageChannelIdx;
     pub use crate::types::ids::MemoryId;
     pub use crate::types::ids::MemorySlot;
     pub use crate::types::ids::ObjectId;
     pub use crate::types::ids::PipelineId;
+    pub use crate::types::ids::StepId;
     pub use crate::types::ids::TrackId;
     pub use crate::types::image::ImagePlane;
     pub use crate::types::image::ImageTile;

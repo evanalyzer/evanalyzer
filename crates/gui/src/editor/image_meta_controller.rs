@@ -108,6 +108,16 @@ impl ImageMetaController {
             let manager = Arc::clone(self);
             ui.global::<ChannelState>()
                 .on_grayscale_toggled(move |grayscale| manager.set_grayscale(grayscale));
+
+            // Frame interval: set for the project, or back to the image's own.
+            let manager = Arc::clone(self);
+            ui.global::<ImageMetaData>()
+                .on_frame_interval_changed(move |seconds| {
+                    manager.set_frame_interval(Some(seconds));
+                });
+            let manager = Arc::clone(self);
+            ui.global::<ImageMetaData>()
+                .on_reset_frame_interval(move || manager.set_frame_interval(None));
         }
     }
 
@@ -127,6 +137,42 @@ impl ImageMetaController {
             warn!("Could not refresh the channel list: {e}");
         }
         self.viewport_controller.trigger_image_redraw();
+    }
+
+    /// Sets (`Some`) or clears (`None`, back to the image's own) the
+    /// project's frame interval [s], then shows the result.
+    pub(crate) fn set_frame_interval(&self, seconds: Option<f32>) {
+        self.app_state
+            .get_project_write()
+            .set_frame_interval(seconds);
+        self.app_state.mark_dirty();
+        let (text, overridden) = self.frame_interval_to_show();
+        let ui = self.ui.clone();
+        let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui.upgrade() else {
+                return;
+            };
+            let meta = ui.global::<ImageMetaData>();
+            meta.set_frame_interval_text(text.into());
+            meta.set_frame_interval_overridden(overridden);
+        });
+    }
+
+    /// The open image's frame interval as the panel shows it - see
+    /// [`frame_interval_shown`].
+    fn frame_interval_to_show(&self) -> (String, bool) {
+        let (path, series, project_value) = {
+            let project = self.app_state.get_project();
+            (
+                project.get_current_image_path_cloned(),
+                project.get_selected_series_idx(),
+                project.get_frame_interval(),
+            )
+        };
+        let image_value = path
+            .and_then(|path| self.app_state.get_image_meta(&path).ok())
+            .and_then(|meta| meta.series.get(&series).and_then(|s| s.frame_interval));
+        frame_interval_shown(project_value, image_value)
     }
 
     /// Switches grayscale mode (all channels white, one visible at a time),
@@ -202,6 +248,13 @@ impl ImageMetaController {
         };
 
         let image_meta = self.app_state.get_image_meta(&path)?;
+        let (frame_interval_text, frame_interval_overridden) = frame_interval_shown(
+            self.app_state.get_project().get_frame_interval(),
+            image_meta
+                .series
+                .get(&selected_series)
+                .and_then(|s| s.frame_interval),
+        );
 
         // Per channel: the project's emission wavelength (its own setting if
         // the user changed it, else the image's) and whether it was changed.
@@ -389,6 +442,10 @@ impl ImageMetaController {
                 .into(),
             );
 
+            // --- Frame interval ---
+            image_meta_ui.set_frame_interval_text(frame_interval_text.into());
+            image_meta_ui.set_frame_interval_overridden(frame_interval_overridden);
+
             // --- Playback + projection ---
             let state = ui.global::<ChannelState>();
             state.set_selected_series(selected_series);
@@ -496,6 +553,25 @@ impl ImageMetaController {
     }
 }
 
+/// A frame interval [s] as the image info panel shows it, like a channel's
+/// colour: the project's (`project_value`, then "edited") if set, else the
+/// image's own from its metadata, else nothing (an empty text). Unlike
+/// `ProjectExt::get_effective_frame_interval`, no default is shown.
+fn frame_interval_shown(project_value: Option<f32>, image_value: Option<f32>) -> (String, bool) {
+    let valid = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0);
+    match (valid(project_value), valid(image_value)) {
+        (Some(v), _) => (format_seconds(v), true),
+        (None, Some(v)) => (format_seconds(v), false),
+        (None, None) => (String::new(), false),
+    }
+}
+
+/// `seconds` without needless digits: "2", "0.5", "1.25".
+fn format_seconds(seconds: f32) -> String {
+    let text = format!("{seconds:.3}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,6 +583,9 @@ mod tests {
         let viewport_controller = Arc::new(ViewportController::new(
             slint::Weak::default(),
             ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
         ));
         let controller = ImageMetaController::new(
             slint::Weak::default(),
@@ -514,6 +593,72 @@ mod tests {
             viewport_controller,
         );
         (ui_state, controller)
+    }
+
+    #[test]
+    fn the_frame_interval_is_set_for_the_project_and_reset_to_the_images() {
+        let (ui_state, controller) = make_controller();
+
+        controller.set_frame_interval(Some(12.5));
+        assert_eq!(ui_state.get_project().get_frame_interval(), Some(12.5));
+        assert!(ui_state.is_dirty());
+
+        controller.set_frame_interval(None);
+        assert_eq!(ui_state.get_project().get_frame_interval(), None);
+    }
+
+    #[test]
+    fn editing_and_resetting_in_the_panel_reaches_the_project_and_the_panel() {
+        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.as_weak(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
+        let controller = Arc::new(ImageMetaController::new(
+            ui.as_weak(),
+            ui_state.clone(),
+            viewport_controller,
+        ));
+        controller.attach_callbacks();
+        let meta = ui.global::<ImageMetaData>();
+
+        meta.invoke_frame_interval_changed(30.0);
+        crate::helper::ui_thread::drain_ui_queue();
+        assert_eq!(ui_state.get_project().get_frame_interval(), Some(30.0));
+        assert_eq!(meta.get_frame_interval_text(), "30");
+        assert!(meta.get_frame_interval_overridden(), "shown as edited");
+
+        // No image open: back to showing nothing.
+        meta.invoke_reset_frame_interval();
+        crate::helper::ui_thread::drain_ui_queue();
+        assert_eq!(ui_state.get_project().get_frame_interval(), None);
+        assert_eq!(meta.get_frame_interval_text(), "");
+        assert!(!meta.get_frame_interval_overridden());
+    }
+
+    #[test]
+    fn frame_intervals_are_shown_without_needless_digits() {
+        assert_eq!(format_seconds(2.0), "2");
+        assert_eq!(format_seconds(0.5), "0.5");
+        assert_eq!(format_seconds(1.25), "1.25");
+    }
+
+    #[test]
+    fn the_panel_shows_the_projects_frame_interval_else_the_images_else_nothing() {
+        assert_eq!(
+            frame_interval_shown(Some(2.0), Some(5.0)),
+            ("2".into(), true)
+        );
+        assert_eq!(frame_interval_shown(None, Some(5.0)), ("5".into(), false));
+        assert_eq!(frame_interval_shown(None, None), (String::new(), false));
+        assert_eq!(
+            frame_interval_shown(Some(0.0), None),
+            (String::new(), false)
+        );
     }
 
     #[test]
@@ -562,6 +707,9 @@ mod tests {
         let viewport_controller = Arc::new(ViewportController::new(
             slint::Weak::default(),
             ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
         ));
         let controller =
             ImageMetaController::new(slint::Weak::default(), ui_state, viewport_controller);
@@ -583,7 +731,13 @@ mod tests {
     ) -> (AppWindow, Arc<UiState>, Arc<ImageMetaController>) {
         let (ui, _results_ui) = test_ui_windows();
         let ui_state = test_ui_state_with_project(project);
-        let viewport_controller = Arc::new(ViewportController::new(ui.as_weak(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.as_weak(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         let controller = Arc::new(ImageMetaController::new(
             ui.as_weak(),
             ui_state.clone(),

@@ -1,11 +1,14 @@
 use crate::ViewportState as ViewportSlintState;
+use crate::editor::viewport_cache::{ViewportCache, effective_cache_mb};
 use crate::editor::viewport_task::{DrawingTask, TaskDispatch};
 use crate::helper::color_generators::get_colors_from_class;
-use crate::{AppWindow, HistogramData, HistogramState, PipelinesPanelState, UiState};
+use crate::helper::size_formater::{BYTES_PER_MB, format_bytes};
+use crate::{AppWindow, HistogramData, HistogramState, PipelinesPanelState, RetainedTile, UiState};
+use evanalyzer_app::global::ViewportMemorySettings;
 use evanalyzer_app::images::ImageContainer;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
-use slint::{Color, ComponentHandle, VecModel};
+use slint::{Color, ComponentHandle, Model, VecModel};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
@@ -40,6 +43,192 @@ pub struct ViewportState {
     pub(crate) offset_y: f32,
     pub(crate) mouse_pos_x: f32,
     pub(crate) mouse_pos_y: f32,
+}
+
+/// Where a rendered buffer lies, in full-resolution image pixels. The
+/// viewport places it with the live zoom/offset (see `viewport.slint`), so a
+/// pan/zoom moves what is already on screen without waiting for a re-render.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct ImageRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl ImageRect {
+    /// The image area under the screen rectangle (`x`, `y`, `w`, `h`) of a
+    /// buffer rendered at `zoom` and `offset_x`/`offset_y`.
+    pub fn from_screen(
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        zoom: f32,
+        offset_x: f32,
+        offset_y: f32,
+    ) -> Self {
+        if zoom <= 0.0 {
+            return Self::default();
+        }
+        Self {
+            x: (x - offset_x) / zoom,
+            y: (y - offset_y) / zoom,
+            w: w / zoom,
+            h: h / zoom,
+        }
+    }
+
+    /// Whether `other` lies within this rectangle (up to `eps` image pixels).
+    fn contains(&self, other: &ImageRect, eps: f32) -> bool {
+        other.x >= self.x - eps
+            && other.y >= self.y - eps
+            && other.x + other.w <= self.x + self.w + eps
+            && other.y + other.h <= self.y + self.h + eps
+    }
+}
+
+/// Bookkeeping of one high-res render in the tile history - the data
+/// [`plan_tile_history`] decides on, without the image itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TileMeta {
+    pub rect: ImageRect,
+    /// Zoom it was rendered for - higher is sharper.
+    pub zoom: f32,
+    /// Content generation (see `ViewportController::content_generation`) it
+    /// shows; only renders of the current one may be kept.
+    pub generation: i32,
+    /// Insertion order - the oldest is evicted first.
+    pub seq: i32,
+    pub bytes: u64,
+}
+
+/// Whether `top` hides `tile` entirely, at least as sharply.
+fn covers(top: &TileMeta, tile: &TileMeta) -> bool {
+    top.rect.contains(&tile.rect, 0.5) && tile.zoom <= top.zoom * 1.0001
+}
+
+/// Which renders the tile history keeps once the current high-res render
+/// (`displaced`) is replaced by `current` (`None`: nothing replaced, just
+/// re-check against `budget_bytes`), both of content `generation`.
+///
+/// Returns indexes in draw order (bottom to top, sharpest last): `0..len`
+/// are `existing`, `existing.len()` is `displaced`. With `budget_bytes`
+/// `None` (history off) nothing is kept. Renders of another generation show
+/// outdated content and are dropped; so are renders `current` or
+/// `displaced` hide entirely at least as sharply - e.g. the same tile
+/// rendered again after a small pan; `current` joins the history itself
+/// once replaced. Then the oldest go until the rest fits the budget.
+pub(crate) fn plan_tile_history(
+    existing: &[TileMeta],
+    displaced: Option<TileMeta>,
+    current: Option<TileMeta>,
+    generation: i32,
+    budget_bytes: Option<u64>,
+) -> Vec<usize> {
+    let Some(budget) = budget_bytes else {
+        return Vec::new();
+    };
+    let hidden_by_current = |t: &TileMeta| current.is_some_and(|c| covers(&c, t));
+    let displaced =
+        displaced.filter(|d| d.generation == generation && d.rect.w > 0.0 && !hidden_by_current(d));
+    let mut keep: Vec<(usize, TileMeta)> = existing
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, t)| t.generation == generation && !hidden_by_current(t))
+        .filter(|(_, t)| displaced.is_none_or(|d| !covers(&d, t)))
+        .collect();
+    if let Some(d) = displaced {
+        keep.push((existing.len(), d));
+    }
+
+    // Evict the oldest until the rest fits.
+    keep.sort_by_key(|(_, t)| t.seq);
+    let mut total: u64 = keep.iter().map(|(_, t)| t.bytes).sum();
+    let mut first = 0;
+    while total > budget && first < keep.len() {
+        total -= keep[first].1.bytes;
+        first += 1;
+    }
+    let mut keep = keep.split_off(first);
+
+    keep.sort_by(|(_, a), (_, b)| a.zoom.total_cmp(&b.zoom).then(a.seq.cmp(&b.seq)));
+    keep.into_iter().map(|(i, _)| i).collect()
+}
+
+fn retained_tile_meta(tile: &RetainedTile) -> TileMeta {
+    TileMeta {
+        rect: ImageRect {
+            x: tile.img_x,
+            y: tile.img_y,
+            w: tile.img_w,
+            h: tile.img_h,
+        },
+        zoom: tile.zoom,
+        generation: tile.generation,
+        seq: tile.seq,
+        bytes: tile.bytes.max(0) as u64,
+    }
+}
+
+/// Applies [`plan_tile_history`] to the Slint tile history, `displaced`
+/// being the high-res render about to be replaced. UI thread only.
+fn update_retained_tiles(
+    view_state: &ViewportSlintState,
+    displaced: Option<RetainedTile>,
+    current: Option<TileMeta>,
+    generation: i32,
+    budget_bytes: Option<u64>,
+) {
+    let existing: Vec<RetainedTile> = view_state.get_retained_tiles().iter().collect();
+    if existing.is_empty() && (displaced.is_none() || budget_bytes.is_none()) {
+        return;
+    }
+    let metas: Vec<TileMeta> = existing.iter().map(retained_tile_meta).collect();
+    let displaced = displaced.map(|mut d| {
+        d.seq = existing
+            .iter()
+            .map(|t| t.seq)
+            .max()
+            .map_or(0, |s| s.wrapping_add(1));
+        d
+    });
+    let plan = plan_tile_history(
+        &metas,
+        displaced.as_ref().map(retained_tile_meta),
+        current,
+        generation,
+        budget_bytes,
+    );
+    let kept: Vec<RetainedTile> = plan
+        .into_iter()
+        .map(|i| match existing.get(i) {
+            Some(tile) => tile.clone(),
+            None => displaced
+                .clone()
+                .expect("index past `existing` is the displaced tile"),
+        })
+        .collect();
+    view_state.set_retained_tiles(Rc::new(VecModel::from(kept)).into());
+}
+
+/// Hands freed heap memory back to the operating system. glibc keeps freed
+/// chunks of its heap for reuse instead, so the process wouldn't shrink
+/// after a cache is emptied. Elsewhere large blocks go back on their own.
+fn return_freed_memory_to_os() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim only releases free memory of the allocator.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
+/// The tile history budget in bytes, `None` when the history is off.
+fn tile_history_budget(settings: &ViewportMemorySettings) -> Option<u64> {
+    settings
+        .tile_history_enabled
+        .then(|| settings.tile_history_budget_mb as u64 * BYTES_PER_MB)
 }
 
 #[derive(Clone)]
@@ -99,6 +288,20 @@ pub struct ViewportController {
     pub(crate) high_res_posted_count: Arc<AtomicU64>,
     pub(crate) high_res_last_count_at_false: Arc<AtomicU64>,
     pub(crate) high_res_is_ready: AtomicBool,
+    /// Bumped by every redraw request that changes what the image looks
+    /// like (new image/series, channels, histogram, breakpoint view) - but
+    /// not by pan/zoom/resize. Renders are tagged with it, so the tile
+    /// history only ever keeps renders of what is shown now.
+    pub(crate) content_generation: AtomicU64,
+    /// This computer's viewport memory settings - see
+    /// [`ViewportMemorySettings`].
+    pub(crate) memory_settings: RwLock<ViewportMemorySettings>,
+    /// Full-resolution size of the current image, for the navigator, which
+    /// pan/zoom update without a render.
+    pub(crate) full_image_size: Mutex<(i64, i64)>,
+    /// The tile cache the viewport workers read through - limited by the
+    /// memory settings, emptied for an analysis.
+    pub(crate) viewport_cache: Arc<ViewportCache>,
 }
 
 /// Posts `t` into the worker's single-slot task queue, merging it with
@@ -122,7 +325,11 @@ fn merge_into_slot(pair: &(Mutex<Option<DrawingTask>>, Condvar), t: DrawingTask)
 }
 
 impl ViewportController {
-    pub fn new(ui: slint::Weak<AppWindow>, app_state: Arc<UiState>) -> Self {
+    pub fn new(
+        ui: slint::Weak<AppWindow>,
+        app_state: Arc<UiState>,
+        viewport_cache: Arc<ViewportCache>,
+    ) -> Self {
         let drawing_tasks = Tasks {
             low_res_task: Arc::new(DrawingTaskContainer {
                 task_count: Arc::new(AtomicU32::new(0)),
@@ -140,7 +347,6 @@ impl ViewportController {
 
         Self {
             ui,
-            app_state,
             viewport_state: Arc::new(RwLock::new(ViewportState {
                 viewport_width: 0.0,
                 viewport_height: 0.0,
@@ -160,10 +366,95 @@ impl ViewportController {
             high_res_posted_count: Arc::new(AtomicU64::new(0)),
             high_res_last_count_at_false: Arc::new(AtomicU64::new(0)),
             high_res_is_ready: AtomicBool::new(false),
+            content_generation: AtomicU64::new(0),
+            memory_settings: RwLock::new(app_state.viewport_memory_settings()),
+            full_image_size: Mutex::new((0, 0)),
+            viewport_cache,
+            app_state,
         }
     }
 
+    /// The current content generation - see `content_generation`.
+    pub(crate) fn content_generation(&self) -> u64 {
+        self.content_generation.load(Ordering::SeqCst)
+    }
+
+    fn bump_content_generation(&self) {
+        self.content_generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The viewport memory settings in effect.
+    pub fn memory_settings(&self) -> ViewportMemorySettings {
+        self.memory_settings.read().expect("Poisoned").clone()
+    }
+
+    /// Applies new viewport memory settings: frees kept renders and cached
+    /// tiles the new limits no longer allow right away and redraws the
+    /// objects with the new margin.
+    pub fn set_memory_settings(&self, settings: ViewportMemorySettings) {
+        let margin_changed =
+            self.memory_settings().object_overlay_margin_px != settings.object_overlay_margin_px;
+        let budget = tile_history_budget(&settings);
+        let (tile_mb, overview_mb) = effective_cache_mb(&settings);
+        self.viewport_cache.set_limits(tile_mb, overview_mb);
+        *self.memory_settings.write().expect("Poisoned") = settings;
+
+        let generation = self.content_generation() as i32;
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                update_retained_tiles(
+                    &ui.global::<ViewportSlintState>(),
+                    None,
+                    None,
+                    generation,
+                    budget,
+                );
+            }
+        })
+        .ok();
+        if margin_changed {
+            self.trigger_image_redraw_objects();
+        }
+    }
+
+    /// Frees what the viewport keeps beyond what is on screen - the tile
+    /// and overview caches and the kept earlier renders - if the settings
+    /// ask for it. Called when an analysis starts on this computer; the
+    /// caches fill up again as the viewport is used.
+    pub fn release_preview_memory_for_analysis(&self) {
+        if !self.memory_settings().free_caches_on_analysis {
+            return;
+        }
+        let (tiles, overviews) = self.viewport_cache.held_bytes();
+        self.viewport_cache.clear();
+        log::info!(
+            "Freed the viewport caches for the analysis: {} tiles, {} overviews",
+            format_bytes(tiles as f64),
+            format_bytes(overviews as f64)
+        );
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ViewportSlintState>()
+                    .set_retained_tiles(Rc::new(VecModel::<RetainedTile>::default()).into());
+            }
+            return_freed_memory_to_os();
+        })
+        .ok();
+    }
+
+    /// Lets a 'not ready' from the next low-res render of new content hide
+    /// the high-res layer again - see `sync_high_res_ready_to_slint`.
+    fn reset_high_res_barrier(&self) {
+        self.high_res_is_ready.store(false, Ordering::SeqCst);
+        self.high_res_posted_count.store(0, Ordering::SeqCst);
+        self.high_res_last_count_at_false.store(0, Ordering::SeqCst);
+    }
+
     pub fn trigger_new_image_redraw(&self) {
+        self.bump_content_generation();
+        self.reset_high_res_barrier();
         let mut task: DrawingTask = DrawingTask::default();
         task.auto_adjust_if_not_set = true;
         task.auto_adjust_selected = false;
@@ -175,6 +466,8 @@ impl ViewportController {
     }
 
     pub fn trigger_new_series_redraw(&self) {
+        self.bump_content_generation();
+        self.reset_high_res_barrier();
         let mut task: DrawingTask = DrawingTask::default();
         task.auto_adjust_if_not_set = true;
         task.auto_adjust_selected = false;
@@ -185,24 +478,29 @@ impl ViewportController {
         self.dispatch_worker_task(task, TaskDispatch::Objects);
     }
 
+    /// Redraws after a display change (histogram, breakpoint view, ...).
+    /// The overview is redrawn too: pan/zoom no longer re-render it, so it
+    /// would otherwise keep showing the old look.
     pub fn trigger_image_redraw(&self) {
+        self.bump_content_generation();
         let mut task: DrawingTask = DrawingTask::default();
         task.auto_adjust_if_not_set = false;
         task.auto_adjust_selected = false;
         task.is_new_image = false;
         task.fit_to_screen = false;
         task.is_new_series = false;
-        self.dispatch_worker_task(task, TaskDispatch::HighRes);
+        self.dispatch_worker_task(task, TaskDispatch::HighResAndLowRes);
     }
 
     pub fn trigger_image_redraw_with_auto_adjust(&self) {
+        self.bump_content_generation();
         let mut task: DrawingTask = DrawingTask::default();
         task.auto_adjust_if_not_set = false;
         task.auto_adjust_selected = true;
         task.is_new_image = false;
         task.fit_to_screen = false;
         task.is_new_series = false;
-        self.dispatch_worker_task(task, TaskDispatch::HighRes);
+        self.dispatch_worker_task(task, TaskDispatch::HighResAndLowRes);
     }
 
     pub fn trigger_image_redraw_objects(&self) {
@@ -210,39 +508,44 @@ impl ViewportController {
         self.dispatch_worker_task(task, TaskDispatch::Objects);
     }
 
+    /// Re-renders only the overview - while panning/zooming with the
+    /// software renderer (Windows), whose overview covers just the viewport.
     pub fn trigger_redraw_low_res(&self) {
-        //  RESET THE BARRIER HERE: Allow 'false' states to pass through again
-        self.high_res_is_ready.store(false, Ordering::SeqCst);
-
-        // Reset your counts if necessary
-        self.high_res_posted_count.store(0, Ordering::SeqCst);
-        self.high_res_last_count_at_false.store(0, Ordering::SeqCst);
-
-        // Hide the object overlay immediately: it is rendered in screen-space so it
-        // detaches visually from image objects the moment the viewport pans or zooms.
-        // The debounce-triggered trigger_image_redraw_objects() will re-enable it once
-        // the overlay has been re-composited at the new viewport position.
-        let ui_weak = self.ui.clone();
-        crate::helper::ui_thread::invoke_from_event_loop(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<ViewportSlintState>().set_object_ready(false);
-            }
-        })
-        .ok();
         let task = DrawingTask::default();
         self.dispatch_worker_task(task, TaskDispatch::LowRes);
     }
 
+    /// Redraws after a change of what is shown (channels, z/t stack, ...).
     pub fn trigger_redraw_low_res_and_high_res(&self) {
-        //  RESET THE BARRIER HERE: Allow 'false' states to pass through again
-        self.high_res_is_ready.store(false, Ordering::SeqCst);
-
-        // Reset your counts if necessary
-        self.high_res_posted_count.store(0, Ordering::SeqCst);
-        self.high_res_last_count_at_false.store(0, Ordering::SeqCst);
-
+        self.bump_content_generation();
         let task = DrawingTask::default();
         self.dispatch_worker_task(task, TaskDispatch::HighResAndLowRes);
+    }
+
+    /// Re-renders once a pan/zoom/resize settled: the sharp tile and the
+    /// objects for the new view. The content is unchanged, so the render
+    /// being replaced may join the tile history. Elsewhere the overview
+    /// covers the whole image and needs no re-render; the software renderer
+    /// (Windows) gets a viewport-sized one, which does.
+    pub fn trigger_viewport_redraw(&self) {
+        let scope = if cfg!(target_os = "windows") {
+            TaskDispatch::HighResAndLowRes
+        } else {
+            TaskDispatch::HighRes
+        };
+        self.dispatch_worker_task(DrawingTask::default(), scope);
+        self.trigger_image_redraw_objects();
+    }
+
+    /// Updates the navigator from the current viewport transform - pan/zoom
+    /// call this directly, since they no longer wait for a render.
+    pub fn sync_navigator_from_viewport_state(&self) {
+        let (full_w, full_h) = *self.full_image_size.lock().expect("Poisoned");
+        let (vp_w, vp_h, off_x, off_y) = {
+            let s = self.viewport_state.read().expect("Poisoned");
+            (s.viewport_width, s.viewport_height, s.offset_x, s.offset_y)
+        };
+        self.sync_navigator_to_slint(full_w, full_h, vp_w, vp_h, off_x, off_y);
     }
 
     /// Dispatches a drawing task to the background worker threads based on the specified scope.
@@ -293,8 +596,10 @@ impl ViewportController {
     /// ### Arguments
     /// * `pixel_buffer` - The raw RGB8 image data to be rendered in the UI.
     /// * `svg_histogram_data` - A collection of pre-calculated histogram points for SVG rendering.
-    /// * `display_x` / `display_y` - The top-left offset of the current view within the global coordinate system.
-    /// * `zoomed_w` / `zoomed_h` - The dimensions of the current zoomed viewport area.
+    /// * `rect` - Where the buffer lies, in full-resolution image pixels.
+    /// * `render_zoom` - The zoom the buffer was rendered for.
+    /// * `generation` - The content generation the buffer shows (see
+    ///   `content_generation`), for the tile history.
     /// * `is_low_res` - A flag indicating if the provided buffer is a preview (proxy) or a full-resolution render.
     ///
     /// ### Returns
@@ -304,30 +609,62 @@ impl ViewportController {
         &self,
         pixel_buffer: slint::SharedPixelBuffer<slint::Rgb8Pixel>,
         svg_histogram_data: Vec<HistogramData>,
-        draw_x: f32,
-        draw_y: f32,
-        zoomed_w: f32,
-        zoomed_h: f32,
+        rect: ImageRect,
+        render_zoom: f32,
+        generation: u64,
         is_low_res: bool,
     ) {
+        let budget = tile_history_budget(&self.memory_settings());
+        let generation = generation as i32;
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let view_state = ui.global::<ViewportSlintState>();
                 if is_low_res {
-                    view_state.set_display_x_ghost(draw_x);
-                    view_state.set_display_y_ghost(draw_y);
-
-                    view_state.set_tile_width_ghost(zoomed_w);
-                    view_state.set_tile_height_ghost(zoomed_h);
+                    view_state.set_ghost_img_x(rect.x);
+                    view_state.set_ghost_img_y(rect.y);
+                    view_state.set_ghost_img_w(rect.w);
+                    view_state.set_ghost_img_h(rect.h);
 
                     ui.set_ghost_image(slint::Image::from_rgb8(pixel_buffer));
                 } else {
-                    view_state.set_display_x(draw_x);
-                    view_state.set_display_y(draw_y);
+                    // The render being replaced may join the tile history.
+                    let previous = ui.get_display_image();
+                    let size = previous.size();
+                    let displaced =
+                        (size.width > 0 && view_state.get_high_res_ready()).then(|| RetainedTile {
+                            image: previous,
+                            img_x: view_state.get_hr_img_x(),
+                            img_y: view_state.get_hr_img_y(),
+                            img_w: view_state.get_hr_img_w(),
+                            img_h: view_state.get_hr_img_h(),
+                            zoom: view_state.get_hr_zoom(),
+                            generation: view_state.get_hr_generation(),
+                            seq: 0,
+                            bytes: (size.width as u64 * size.height as u64 * 3).min(i32::MAX as u64)
+                                as i32,
+                        });
+                    let current = TileMeta {
+                        rect,
+                        zoom: render_zoom,
+                        generation,
+                        seq: 0,
+                        bytes: 0,
+                    };
+                    update_retained_tiles(
+                        &view_state,
+                        displaced,
+                        Some(current),
+                        generation,
+                        budget,
+                    );
 
-                    view_state.set_tile_width(zoomed_w);
-                    view_state.set_tile_height(zoomed_h);
+                    view_state.set_hr_img_x(rect.x);
+                    view_state.set_hr_img_y(rect.y);
+                    view_state.set_hr_img_w(rect.w);
+                    view_state.set_hr_img_h(rect.h);
+                    view_state.set_hr_zoom(render_zoom);
+                    view_state.set_hr_generation(generation);
 
                     let hist_state = ui.global::<HistogramState>();
 
@@ -420,6 +757,10 @@ impl ViewportController {
         }
     }
 
+    /// Shows (`true`, a high-res render arrived) or hides (`false`, the
+    /// overview of new content arrived first) the high-res layer and the
+    /// tile history. A `false` after a `true` for the same new content is
+    /// out of date and ignored - `reset_high_res_barrier` re-arms it.
     pub fn sync_high_res_ready_to_slint(&self, ready: bool) {
         let ui_weak = self.ui.clone();
 
@@ -436,10 +777,6 @@ impl ViewportController {
             crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.global::<ViewportSlintState>().set_high_res_ready(true);
-                    // object_ready is managed solely by trigger_redraw_low_res (sets false)
-                    // and sync_objects_to_slint_viewport (sets true). The LowRes image worker
-                    // must not touch it, otherwise it races with the object worker and leaves
-                    // object_ready permanently false after a pan/zoom.
                 }
             })
             .ok();
@@ -458,11 +795,11 @@ impl ViewportController {
             // Forward the false status to your Slint UI thread safely
             crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
-                    ui.global::<ViewportSlintState>().set_high_res_ready(false);
-                    // object_ready is managed solely by trigger_redraw_low_res (sets false)
-                    // and sync_objects_to_slint_viewport (sets true). The LowRes image worker
-                    // must not touch it, otherwise it races with the object worker and leaves
-                    // object_ready permanently false after a pan/zoom.
+                    let view_state = ui.global::<ViewportSlintState>();
+                    view_state.set_high_res_ready(false);
+                    // New content: the kept renders show the previous one.
+                    view_state
+                        .set_retained_tiles(Rc::new(VecModel::<RetainedTile>::default()).into());
                 }
             })
             .ok();
@@ -520,12 +857,23 @@ impl ViewportController {
             return;
         }
 
-        // The object image is positioned at (0,0) in the viewport and covers the whole
-        // viewport (see viewport.slint Layer 3). The buffer is therefore viewport-sized
-        // and object pixels are mapped to screen coordinates directly, so the overlay
-        // is always rendered at screen resolution regardless of zoom.
-        let buf_w = viewport_width as u32;
-        let buf_h = viewport_height as u32;
+        // The overlay is rendered in screen space - at screen resolution
+        // regardless of zoom - covering the viewport plus `margin` on every
+        // side, so a pan doesn't uncover an empty border right away. It is
+        // placed like the image layers (see viewport.slint Layer 3), so it
+        // follows the image until the next render replaces it.
+        let margin = self.memory_settings().object_overlay_margin_px as f32;
+        let buf_w = (viewport_width + 2.0 * margin) as u32;
+        let buf_h = (viewport_height + 2.0 * margin) as u32;
+        let rect = ImageRect::from_screen(
+            -margin,
+            -margin,
+            buf_w as f32,
+            buf_h as f32,
+            zoom,
+            off_x,
+            off_y,
+        );
 
         let selected_object_id = project.get_selected_object_id();
         let Some(objects) = project.get_objects() else {
@@ -576,17 +924,31 @@ impl ViewportController {
         keyed.sort_by_key(|(k, _)| *k);
         let instances: Vec<ObjectDrawInstance> = keyed.into_iter().map(|(_, i)| i).collect();
 
-        let pixels = composite_object_instances(&instances, buf_w, buf_h, zoom, off_x, off_y);
-
+        // Composited straight into the buffer handed to Slint (starts out
+        // transparent) - no second overlay-sized copy.
         let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(buf_w, buf_h);
-        buffer.make_mut_slice().copy_from_slice(&pixels);
+        composite_object_instances_into(
+            buffer.make_mut_slice(),
+            &instances,
+            buf_w,
+            buf_h,
+            zoom,
+            off_x + margin,
+            off_y + margin,
+            zoom < 1.0,
+        );
 
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let image = slint::Image::from_rgba8(buffer);
                 ui.set_object_image(image);
-                ui.global::<ViewportSlintState>().set_object_ready(true);
+                let view_state = ui.global::<ViewportSlintState>();
+                view_state.set_obj_img_x(rect.x);
+                view_state.set_obj_img_y(rect.y);
+                view_state.set_obj_img_w(rect.w);
+                view_state.set_obj_img_h(rect.h);
+                view_state.set_object_ready(true);
             }
         })
         .ok();
@@ -797,6 +1159,7 @@ fn blend_pixel_over(dst: &mut slint::Rgba8Pixel, src: slint::Rgba8Pixel) {
 /// - bboxes within one screen pixel collapse to a single stamped pixel,
 /// - only the visible sub-rectangle of each mask is walked,
 /// - zoomed out, mask columns sharing a screen column are checked as one run.
+#[cfg(test)]
 fn composite_object_instances(
     instances: &[ObjectDrawInstance],
     buf_w: u32,
@@ -810,6 +1173,7 @@ fn composite_object_instances(
 
 /// [`composite_object_instances`], with the column runs (`use_runs`) chosen
 /// by the caller - the tests check both ways produce the same pixels.
+#[cfg(test)]
 fn composite_object_instances_with(
     instances: &[ObjectDrawInstance],
     buf_w: u32,
@@ -819,9 +1183,6 @@ fn composite_object_instances_with(
     off_y: f32,
     use_runs: bool,
 ) -> Vec<slint::Rgba8Pixel> {
-    let bw = buf_w as i32;
-    let bh = buf_h as i32;
-    let stride = buf_w as usize;
     let mut pixels = vec![
         slint::Rgba8Pixel {
             r: 0,
@@ -829,10 +1190,40 @@ fn composite_object_instances_with(
             b: 0,
             a: 0
         };
-        stride * buf_h as usize
+        buf_w as usize * buf_h as usize
     ];
+    composite_object_instances_into(
+        &mut pixels,
+        instances,
+        buf_w,
+        buf_h,
+        zoom,
+        off_x,
+        off_y,
+        use_runs,
+    );
+    pixels
+}
+
+/// [`composite_object_instances`] into `pixels` - a transparent
+/// `buf_w * buf_h` buffer.
+#[allow(clippy::too_many_arguments)]
+fn composite_object_instances_into(
+    pixels: &mut [slint::Rgba8Pixel],
+    instances: &[ObjectDrawInstance],
+    buf_w: u32,
+    buf_h: u32,
+    zoom: f32,
+    off_x: f32,
+    off_y: f32,
+    use_runs: bool,
+) {
+    let bw = buf_w as i32;
+    let bh = buf_h as i32;
+    let stride = buf_w as usize;
+    debug_assert_eq!(pixels.len(), stride * buf_h as usize);
     if zoom <= 0.0 || buf_w == 0 || buf_h == 0 {
-        return pixels;
+        return;
     }
 
     // Scratch buffers reused across instances (no per-instance allocation).
@@ -1014,8 +1405,6 @@ fn composite_object_instances_with(
         }
         start = end;
     }
-
-    pixels
 }
 
 /// Whether an object with `classes` is drawn at all: not when it's
@@ -1065,7 +1454,7 @@ impl ZOrder {
             .get_object_classes()
             .iter()
             .enumerate()
-            .map(|(i, c)| (c.id, i))
+            .map(|(i, c)| (c.global(), i))
             .collect();
         Self {
             class_count: rank.len().max(1),
@@ -1076,7 +1465,7 @@ impl ZOrder {
 
     /// Bigger = further on top.
     pub(crate) fn key(&self, classes: &HashSet<ObjectClass>, is_selected_object: bool) -> u32 {
-        let in_selected_class = matches!(self.selected_class, ObjectClass::Valid(_))
+        let in_selected_class = matches!(self.selected_class, ObjectClass::Global(_))
             && classes.contains(&self.selected_class);
         let best_rank = classes
             .iter()
@@ -1445,7 +1834,12 @@ mod breakpoint_state_tests {
     use kornia_image::{Image, ImageSize};
 
     fn make_controller() -> ViewportController {
-        ViewportController::new(slint::Weak::default(), test_ui_state())
+        let ui_state = test_ui_state();
+        ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            Arc::new(ViewportCache::new(ui_state)),
+        )
     }
 
     fn gray_image() -> ImageContainer {
@@ -1555,5 +1949,104 @@ mod breakpoint_state_tests {
         assert_eq!(data.tile_offset_x, 5);
         assert_eq!(data.nr_bits, 16);
         assert_eq!(data.channel_idx, Some(1));
+    }
+}
+
+#[cfg(test)]
+mod tile_history_tests {
+    use super::*;
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> ImageRect {
+        ImageRect { x, y, w, h }
+    }
+
+    fn tile(r: ImageRect, zoom: f32, seq: i32) -> TileMeta {
+        TileMeta {
+            rect: r,
+            zoom,
+            generation: 1,
+            seq,
+            bytes: 100,
+        }
+    }
+
+    const PLENTY: Option<u64> = Some(1 << 30);
+
+    #[test]
+    fn a_screen_rectangle_maps_back_to_the_image_pixels_under_it() {
+        // Zoom 2, image origin drawn at (-100, 40): screen x 0 shows image
+        // x 50, and 200 screen pixels span 100 image pixels.
+        let r = ImageRect::from_screen(0.0, 0.0, 200.0, 100.0, 2.0, -100.0, 40.0);
+        assert_eq!(r, rect(50.0, -20.0, 100.0, 50.0));
+        assert_eq!(
+            ImageRect::from_screen(1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0),
+            ImageRect::default(),
+            "no zoom yet - no rectangle"
+        );
+    }
+
+    #[test]
+    fn with_the_history_off_nothing_is_kept() {
+        let existing = [tile(rect(0.0, 0.0, 10.0, 10.0), 1.0, 0)];
+        let displaced = tile(rect(50.0, 0.0, 10.0, 10.0), 1.0, 1);
+        assert!(plan_tile_history(&existing, Some(displaced), None, 1, None).is_empty());
+    }
+
+    #[test]
+    fn the_replaced_render_is_kept_and_the_sharpest_is_drawn_last() {
+        let existing = [
+            tile(rect(0.0, 0.0, 10.0, 10.0), 4.0, 0),
+            tile(rect(100.0, 0.0, 10.0, 10.0), 1.0, 1),
+        ];
+        let displaced = tile(rect(200.0, 0.0, 10.0, 10.0), 2.0, 2);
+        let current = tile(rect(300.0, 0.0, 10.0, 10.0), 2.0, 0);
+        assert_eq!(
+            plan_tile_history(&existing, Some(displaced), Some(current), 1, PLENTY),
+            [1, 2, 0]
+        );
+    }
+
+    #[test]
+    fn renders_of_other_content_are_dropped() {
+        let mut outdated = tile(rect(0.0, 0.0, 10.0, 10.0), 1.0, 0);
+        outdated.generation = 0;
+        let mut displaced = tile(rect(50.0, 0.0, 10.0, 10.0), 1.0, 1);
+        displaced.generation = 0;
+        assert!(plan_tile_history(&[outdated], Some(displaced), None, 1, PLENTY).is_empty());
+    }
+
+    #[test]
+    fn a_render_hidden_at_least_as_sharply_is_dropped_a_sharper_one_stays() {
+        let big = rect(0.0, 0.0, 100.0, 100.0);
+        let inside = rect(10.0, 10.0, 20.0, 20.0);
+        // The same tile rendered again after a small pan: no second copy.
+        let displaced = tile(big, 1.0, 0);
+        let current = tile(big, 1.0, 0);
+        assert!(plan_tile_history(&[], Some(displaced), Some(current), 1, PLENTY).is_empty());
+
+        // The replaced render hides a blurrier one but not a sharper one.
+        let existing = [tile(inside, 0.5, 0), tile(inside, 3.0, 1)];
+        let displaced = tile(big, 1.0, 2);
+        assert_eq!(
+            plan_tile_history(&existing, Some(displaced), None, 1, PLENTY),
+            [2, 1]
+        );
+    }
+
+    #[test]
+    fn the_oldest_renders_go_first_until_the_rest_fits_the_budget() {
+        let existing = [
+            tile(rect(0.0, 0.0, 1.0, 1.0), 1.0, 5),
+            tile(rect(10.0, 0.0, 1.0, 1.0), 1.0, 3),
+            tile(rect(20.0, 0.0, 1.0, 1.0), 1.0, 4),
+        ];
+        let displaced = tile(rect(30.0, 0.0, 1.0, 1.0), 1.0, 6);
+        // Room for two of the four (100 bytes each): the two newest.
+        assert_eq!(
+            plan_tile_history(&existing, Some(displaced), None, 1, Some(250)),
+            [0, 3]
+        );
+        // A budget smaller than one render keeps none.
+        assert!(plan_tile_history(&existing, Some(displaced), None, 1, Some(50)).is_empty());
     }
 }

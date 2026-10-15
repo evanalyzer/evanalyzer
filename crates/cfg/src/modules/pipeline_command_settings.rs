@@ -1,10 +1,16 @@
 // @generated - do not edit by hand
+#[allow(unused_imports)]
+use crate::modules::components::ParamValue;
+#[allow(unused_imports)]
+use crate::types::classes::{ModelClass, ModelSegmentationClass};
 use crate::{
     core_types::{ImageAddress, ImageChannelIdx, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel},
     types::classes::{ObjectClass, SegmentationClass},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[allow(unused_imports)]
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 // ============ ENUM SETTINGS ============
@@ -1228,6 +1234,18 @@ pub struct LaplacianSettings {
     pub kernel_size: usize,
 }
 
+/// Loads an image channel as the image the following steps work on.
+///
+/// Replaces the current image. Use it as the first step of a pipeline
+/// without an image source, or to switch channels within a pipeline - e.g.
+/// a component that detects nuclei in one channel and cells in another.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadChannelSettings {
+    /// The image channel to load.
+    pub channel: ImageChannelIdx,
+}
+
 /// A background subtraction filter that uses a median rank operator.
 ///
 /// This algorithm is highly effective for removing large-scale background
@@ -1345,17 +1363,38 @@ impl Default for RollingBallSettings {
 /// use imagec::backend::algos::SaveImage;
 /// let saver = SaveImage {path:"output/processed_cell.png"};
 /// ```
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveImageSettings {
     /// Name the image should be stord under
     pub name: String,
+    /// Shows the selected classes in the image
+    pub display_classes: Vec<ObjectClass>,
     /// Which image from the pipeline should be stored
     pub source: MathSaveImageImageSourceSettings,
+    /// Opacity in percent of the filled `display_classes` objects (0 = only
+    /// the contours, 100 = solid). Contours are always drawn opaque.
+    #[schemars(range(min = 0, max = 100))]
+    pub opacity: u32,
+}
+
+impl Default for SaveImageSettings {
+    fn default() -> Self {
+        Self {
+            name: String::default(),
+            display_classes: vec![],
+            source: MathSaveImageImageSourceSettings::Image,
+            opacity: 50u32,
+        }
+    }
 }
 
 fn _serde_default_script_classes() -> Vec<ObjectClass> {
     vec![]
+}
+fn _serde_default_script_values() -> BTreeMap<String, ParamValue> {
+    <BTreeMap<String, ParamValue>>::default()
 }
 /// Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.
 ///
@@ -1382,6 +1421,12 @@ pub struct ScriptSettings {
     pub classes: Vec<ObjectClass>,
     /// Script source code
     pub source: String,
+    /// The values set for the script's `param`s, by name - only those that
+    /// differ from the default the script gives. The script declares its
+    /// params (`param max_rounds = 10;`); a value for a name it doesn't
+    /// declare is ignored.
+    #[serde(default = "_serde_default_script_values")]
+    pub values: BTreeMap<String, ParamValue>,
 }
 
 impl Default for ScriptSettings {
@@ -1391,6 +1436,7 @@ impl Default for ScriptSettings {
             source: String::from(
                 "print(`Hello world from a ${image_width}x${image_height} tile`);\n",
             ),
+            values: <BTreeMap<String, ParamValue>>::default(),
         }
     }
 }
@@ -1503,7 +1549,7 @@ pub struct CellposeSettings {
     pub model_path: PathBuf,
     /// The class assigned to pixels of every detected object. All other
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
     /// Number of input channels the model expects. The grayscale image goes in
     /// channel 0; any further channels are zero-filled. Cellpose-SAM's
     /// patch-embedding convolution only has weights for up to 3 input
@@ -1561,7 +1607,7 @@ impl Default for CellposeSettings {
     fn default() -> Self {
         Self {
             model_path: PathBuf::default(),
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             input_channels: 2i32,
             probability_threshold: 0.5f32,
             flow_iterations: 200i32,
@@ -1605,11 +1651,11 @@ pub struct PixelClassifierSettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SegmentationMappingSettings {
-    /// Segmentation class predicted by the classifier model.
-    pub segmentation_class: SegmentationClass,
+    /// The class the classifier model predicts.
+    pub model_class: ModelSegmentationClass,
     /// The project's own segmentation class pixels predicted as
-    /// `segmentation_class` are written as.
-    pub object_class_id: SegmentationClass,
+    /// `model_class` are written as.
+    pub segmentation_class: SegmentationClass,
 }
 
 /// Instance segmentation using a pretrained StarDist model exported as TorchScript.
@@ -1641,7 +1687,7 @@ pub struct StardistSettings {
     pub model_path: PathBuf,
     /// The class assigned to pixels of every detected object. All other
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
     /// Probability above which a grid cell is considered a candidate object center.
     #[schemars(range(min = 0, max = 1))]
     pub probability_threshold: f32,
@@ -1655,7 +1701,7 @@ impl Default for StardistSettings {
     fn default() -> Self {
         Self {
             model_path: PathBuf::default(),
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             probability_threshold: 0.5f32,
             nms_threshold: 0.3f32,
         }
@@ -1666,7 +1712,7 @@ impl Default for StardistSettings {
 ///
 /// This supports "Multi-Otsu" style behavior by allowing a vector of
 /// [`ThresholdSettings`]. Each pixel is evaluated against the settings to
-/// determine which `object_class_id` it belongs to.
+/// determine which `segmentation_class` it belongs to.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThresholdSettings {
@@ -1701,7 +1747,7 @@ pub struct ThresholdEntrySettings {
     /// rel: 0 - 1.0
     pub unit: PixelUnits,
     /// The classification ID assigned to pixels falling within this threshold range.
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
     /// Defines which image should be taken for calculating the threhold value.
     ///
     /// This is the source which is used to calculate the threshold value.
@@ -1717,7 +1763,7 @@ impl Default for ThresholdEntrySettings {
             min_threshold: 0.0f32,
             max_threshold: 65535.0f32,
             unit: PixelUnits::Bit,
-            object_class_id: SegmentationClass::default(),
+            segmentation_class: SegmentationClass::default(),
             value_source: SegmentationThresholdThresholdValueSourceSettings::ActualImage,
         }
     }
@@ -1746,7 +1792,7 @@ pub struct UNetSettings {
     pub model_path: PathBuf,
     /// The class assigned to pixels whose predicted probability reaches
     /// `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.
-    pub object_class_id: SegmentationClass,
+    pub segmentation_class: SegmentationClass,
     /// Probability above which a pixel is classified as foreground.
     #[schemars(range(min = 0, max = 1))]
     pub probability_threshold: f32,
@@ -1789,7 +1835,7 @@ impl Default for UNetSettings {
     fn default() -> Self {
         Self {
             model_path: PathBuf::default(),
-            object_class_id: SegmentationClass(1),
+            segmentation_class: SegmentationClass(1),
             probability_threshold: 0.5f32,
             output_mode: AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses,
             foreground_channel: 1i32,
@@ -2036,6 +2082,9 @@ impl Default for WatershedSettings {
 fn _serde_default_extractobjects_max_objects_before_fail() -> i32 {
     100000i32
 }
+fn _serde_default_extractobjects_class_mapping() -> Vec<ExtractClassMappingSettings> {
+    vec![]
+}
 /// Represents a bounded object extracted from a labeled image.
 /// A command to extract spatial statistics and bounding boxes from labeled objects.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -2049,12 +2098,21 @@ pub struct ExtractObjectsSettings {
     #[schemars(range(min = 100000, max = 100000))]
     #[serde(default = "_serde_default_extractobjects_max_objects_before_fail")]
     pub max_objects_before_fail: i32,
+    /// Which object class the objects of a segmentation class get.
+    ///
+    /// Without an entry, a segmentation class's objects get the project class
+    /// with the same number - what the Threshold's class choice means. Inside
+    /// a component, map to one of the component's own classes to keep the
+    /// objects internal to the component.
+    #[serde(default = "_serde_default_extractobjects_class_mapping")]
+    pub class_mapping: Vec<ExtractClassMappingSettings>,
 }
 
 impl Default for ExtractObjectsSettings {
     fn default() -> Self {
         Self {
             max_objects_before_fail: 100000i32,
+            class_mapping: vec![],
         }
     }
 }
@@ -2141,7 +2199,7 @@ impl Default for AiObjectClassifierSettings {
 #[serde(rename_all = "camelCase")]
 pub struct ClassificationMappingSettings {
     /// Object class predicted by the classifier model.
-    pub object_class: ObjectClass,
+    pub object_class: ModelClass,
     /// The project's own object class objects predicted as `object_class`
     /// are assigned.
     pub output_class: ObjectClass,
@@ -2389,6 +2447,17 @@ impl Default for ColocalizationSettings {
     }
 }
 
+/// The object class the objects of one segmentation class get.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractClassMappingSettings {
+    /// The segmentation class, as set by Threshold, Pixel classifier, ...
+    pub segmentation_class: SegmentationClass,
+    /// The object class its objects get: a project class, or inside a
+    /// component one of the component's own classes.
+    pub object_class: ObjectClass,
+}
+
 /// One intensity criterion of [`ClassifyObjects`], e.g. "average intensity
 /// in channel 1 brighter than 1200".
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -2587,4 +2656,37 @@ pub struct VoronoiSettings {
     pub exclude_areas_at_the_edges: bool,
     /// Discard Voronoi regions whose originating center object was filtered out or missing.
     pub exclude_areas_with_no_center: bool,
+}
+
+// ============ DATASET ============
+
+/// Links each object to the nearest one in the next frame.
+///
+/// Objects of `object_class` in two consecutive frames of the same image and
+/// z-plane are linked closest pair first, each object once, if they are at
+/// most `max_distance` apart. Every object gets a track id; one that can't
+/// be linked starts a new track.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct SimpleTrackerSettings {
+    /// Object class to track.
+    pub object_class: ObjectClass,
+    /// Unit in which `max_distance` is expressed (e.g. pixels, nm).
+    pub unit: SizeUnits,
+    /// How far an object may move from one frame to the next.
+    ///
+    /// Farther apart, it starts a new track.
+    #[schemars(range(min = 0))]
+    pub max_distance: f32,
+}
+
+impl Default for SimpleTrackerSettings {
+    fn default() -> Self {
+        Self {
+            object_class: ObjectClass::default(),
+            unit: SizeUnits::default(),
+            max_distance: 10000.0f32,
+        }
+    }
 }

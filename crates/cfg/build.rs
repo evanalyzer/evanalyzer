@@ -7,7 +7,7 @@
 // is include!()-d into this separate build-script crate root, so it needs its
 // own copy of anything from `crate::` that it references.
 #[allow(dead_code)]
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 4;
 
 mod utils {
     pub mod hex_colors {
@@ -21,6 +21,8 @@ mod types {
     pub mod classes {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/types/classes.rs"));
     }
+    // The schema only needs some of the ids; the rest are unused here.
+    #[allow(dead_code)]
     pub mod ids {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/types/ids.rs"));
     }
@@ -85,10 +87,19 @@ mod modules {
             "/src/modules/pipeline_command.rs"
         ));
     }
+    // Only the types are needed for the schema, not their helpers.
+    #[allow(dead_code)]
     pub mod pipeline_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/src/modules/pipeline_settings.rs"
+        ));
+    }
+    #[allow(dead_code)]
+    pub mod components {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/modules/components.rs"
         ));
     }
     // Only the types are needed for the schema, not their helpers.
@@ -126,6 +137,7 @@ mod modules {
 }
 mod settings {
     pub use crate::modules::classification_settings;
+    pub use crate::modules::components;
     pub use crate::modules::images_settings;
     pub use crate::modules::object_settings;
     pub use crate::modules::pipeline_command;
@@ -153,6 +165,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/modules/images_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/parameter_def.rs");
     println!("cargo:rerun-if-changed=src/modules/pipeline_settings.rs");
+    println!("cargo:rerun-if-changed=src/modules/components.rs");
     println!("cargo:rerun-if-changed=src/modules/plate_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/project_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/meta_data.rs");
@@ -162,6 +175,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/modules/ai_learning_settings.rs");
     // Input: algo structs the generator reads to produce pipeline_command*.rs
     println!("cargo:rerun-if-changed=../core/src/algos");
+    println!("cargo:rerun-if-changed=../core/src/dataset");
 
     if let Err(e) = pipeline_commands_generator_old::generate_mappings() {
         eprintln!("Command Mapping Error: {}", e);

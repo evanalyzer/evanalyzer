@@ -1,5 +1,7 @@
 // @generated - do not edit by hand
 use crate::algos::*;
+#[allow(unused_imports)]
+use crate::dataset::*;
 use evanalyzer_cfg::settings::pipeline_command_settings::*;
 
 // ============ ENUM FROM IMPLS ============
@@ -451,7 +453,7 @@ impl From<CellposeSettings> for Cellpose {
     fn from(_s: CellposeSettings) -> Self {
         Cellpose {
             model_path: _s.model_path,
-            object_class_id: _s.object_class_id,
+            segmentation_class: _s.segmentation_class,
             input_channels: _s.input_channels,
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             flow_iterations: _s.flow_iterations,
@@ -573,10 +575,20 @@ impl From<EnhanceContrastSettings> for EnhanceContrast {
     }
 }
 
+impl From<ExtractClassMappingSettings> for ExtractClassMapping {
+    fn from(_s: ExtractClassMappingSettings) -> Self {
+        ExtractClassMapping {
+            segmentation_class: _s.segmentation_class,
+            object_class: _s.object_class,
+        }
+    }
+}
+
 impl From<ExtractObjectsSettings> for ExtractObjects {
     fn from(_s: ExtractObjectsSettings) -> Self {
         ExtractObjects {
             max_objects_before_fail: _s.max_objects_before_fail,
+            class_mapping: _s.class_mapping.into_iter().map(|v| v.into()).collect(),
         }
     }
 }
@@ -694,6 +706,14 @@ impl From<LoadAnnotatedObjectsSettings> for LoadAnnotatedObjects {
     }
 }
 
+impl From<LoadChannelSettings> for LoadChannel {
+    fn from(_s: LoadChannelSettings) -> Self {
+        LoadChannel {
+            channel: _s.channel,
+        }
+    }
+}
+
 impl From<MedianSubtractSettings> for MedianSubtract {
     fn from(_s: MedianSubtractSettings) -> Self {
         MedianSubtract { radius: _s.radius }
@@ -767,7 +787,9 @@ impl From<SaveImageSettings> for SaveImage {
     fn from(_s: SaveImageSettings) -> Self {
         SaveImage {
             name: _s.name,
+            display_classes: _s.display_classes.into_iter().map(|v| v.into()).collect(),
             source: ImageSource::from(_s.source),
+            opacity: _s.opacity,
         }
     }
 }
@@ -777,6 +799,7 @@ impl From<ScriptSettings> for Script {
         Script {
             classes: _s.classes.into_iter().map(|v| v.into()).collect(),
             source: _s.source,
+            values: _s.values,
         }
     }
 }
@@ -785,8 +808,18 @@ impl From<ScriptSettings> for Script {
 impl From<SegmentationMappingSettings> for SegmentationMapping {
     fn from(_s: SegmentationMappingSettings) -> Self {
         SegmentationMapping {
+            model_class: _s.model_class,
             segmentation_class: _s.segmentation_class,
-            object_class_id: _s.object_class_id,
+        }
+    }
+}
+
+impl From<SimpleTrackerSettings> for SimpleTracker {
+    fn from(_s: SimpleTrackerSettings) -> Self {
+        SimpleTracker {
+            object_class: _s.object_class,
+            unit: _s.unit,
+            max_distance: _s.max_distance.max(0.0),
         }
     }
 }
@@ -796,7 +829,7 @@ impl From<StardistSettings> for Stardist {
     fn from(_s: StardistSettings) -> Self {
         Stardist {
             model_path: _s.model_path,
-            object_class_id: _s.object_class_id,
+            segmentation_class: _s.segmentation_class,
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             nms_threshold: _s.nms_threshold.clamp(0.0, 1.0),
         }
@@ -828,7 +861,7 @@ impl From<ThresholdEntrySettings> for ThresholdEntry {
             min_threshold: _s.min_threshold.clamp(0.0, 65535.0),
             max_threshold: _s.max_threshold.clamp(0.0, 65535.0),
             unit: _s.unit,
-            object_class_id: _s.object_class_id,
+            segmentation_class: _s.segmentation_class,
             value_source: ThresholdValueSource::from(_s.value_source),
         }
     }
@@ -849,7 +882,7 @@ impl From<UNetSettings> for UNet {
     fn from(_s: UNetSettings) -> Self {
         UNet {
             model_path: _s.model_path,
-            object_class_id: _s.object_class_id,
+            segmentation_class: _s.segmentation_class,
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             output_mode: UNetOutputMode::from(_s.output_mode),
             foreground_channel: _s.foreground_channel,
@@ -931,143 +964,179 @@ impl From<Yolov5Settings> for Yolov5 {
 
 // ============ INTO ALGORITHM ============
 
+use crate::job::pipeline_step::PipelineStep;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 
-pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, InternalErrors> {
+/// The step `cmd` configures, ready to run.
+pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, InternalErrors> {
     match cmd {
         #[cfg(feature = "ai")]
-        PipelineCommand::AiObjectClassifier(settings) => {
-            Ok(Box::new(crate::algos::AiObjectClassifier::from(settings)))
-        }
+        PipelineCommand::AiObjectClassifier(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::AiObjectClassifier::from(settings),
+        ))),
         #[cfg(not(feature = "ai"))]
         PipelineCommand::AiObjectClassifier(_settings) => Err(InternalErrors::Generic(
             "This build was compiled without the ai feature; AiObjectClassifier is unavailable."
                 .into(),
         )),
-        PipelineCommand::Blur(settings) => Ok(Box::new(crate::algos::Blur::from(settings))),
+        PipelineCommand::Blur(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Blur::from(settings),
+        ))),
         #[cfg(feature = "ai")]
-        PipelineCommand::Cellpose(settings) => Ok(Box::new(crate::algos::Cellpose::from(settings))),
+        PipelineCommand::Cellpose(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Cellpose::from(settings),
+        ))),
         #[cfg(not(feature = "ai"))]
         PipelineCommand::Cellpose(_settings) => Err(InternalErrors::Generic(
             "This build was compiled without the ai feature; Cellpose is unavailable.".into(),
         )),
-        PipelineCommand::ClassifyObjects(settings) => {
-            Ok(Box::new(crate::algos::ClassifyObjects::from(settings)))
-        }
-        PipelineCommand::Colocalization(settings) => {
-            Ok(Box::new(crate::algos::Colocalization::from(settings)))
-        }
-        PipelineCommand::ColorFilterCommand(settings) => {
-            Ok(Box::new(crate::algos::ColorFilterCommand::from(settings)))
-        }
-        PipelineCommand::ConnectedComponents(settings) => {
-            Ok(Box::new(crate::algos::ConnectedComponents::from(settings)))
-        }
-        PipelineCommand::DistanceTransform(settings) => {
-            Ok(Box::new(crate::algos::DistanceTransform::from(settings)))
-        }
-        PipelineCommand::EdgeDetectionCanny(settings) => {
-            Ok(Box::new(crate::algos::EdgeDetectionCanny::from(settings)))
-        }
-        PipelineCommand::EdgeDetectionSobel(settings) => {
-            Ok(Box::new(crate::algos::EdgeDetectionSobel::from(settings)))
-        }
-        PipelineCommand::EnhanceContrast(settings) => {
-            Ok(Box::new(crate::algos::EnhanceContrast::from(settings)))
-        }
-        PipelineCommand::ExtractObjects(settings) => {
-            Ok(Box::new(crate::algos::ExtractObjects::from(settings)))
-        }
-        PipelineCommand::FillHoles(settings) => {
-            Ok(Box::new(crate::algos::FillHoles::from(settings)))
-        }
-        PipelineCommand::FillObjectHoles(settings) => {
-            Ok(Box::new(crate::algos::FillObjectHoles::from(settings)))
-        }
-        PipelineCommand::GaussianBlur(settings) => {
-            Ok(Box::new(crate::algos::GaussianBlur::from(settings)))
-        }
-        PipelineCommand::Hessian(settings) => Ok(Box::new(crate::algos::Hessian::from(settings))),
-        PipelineCommand::IlluminationCorrection(settings) => Ok(Box::new(
+        PipelineCommand::ClassifyObjects(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ClassifyObjects::from(settings),
+        ))),
+        PipelineCommand::Colocalization(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Colocalization::from(settings),
+        ))),
+        PipelineCommand::ColorFilterCommand(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ColorFilterCommand::from(settings),
+        ))),
+        PipelineCommand::ConnectedComponents(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ConnectedComponents::from(settings),
+        ))),
+        PipelineCommand::DistanceTransform(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::DistanceTransform::from(settings),
+        ))),
+        PipelineCommand::EdgeDetectionCanny(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::EdgeDetectionCanny::from(settings),
+        ))),
+        PipelineCommand::EdgeDetectionSobel(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::EdgeDetectionSobel::from(settings),
+        ))),
+        PipelineCommand::EnhanceContrast(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::EnhanceContrast::from(settings),
+        ))),
+        PipelineCommand::ExtractObjects(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ExtractObjects::from(settings),
+        ))),
+        PipelineCommand::FillHoles(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::FillHoles::from(settings),
+        ))),
+        PipelineCommand::FillObjectHoles(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::FillObjectHoles::from(settings),
+        ))),
+        PipelineCommand::GaussianBlur(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::GaussianBlur::from(settings),
+        ))),
+        PipelineCommand::Hessian(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Hessian::from(settings),
+        ))),
+        PipelineCommand::IlluminationCorrection(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::IlluminationCorrection::from(settings),
-        )),
-        PipelineCommand::ImageCache(settings) => {
-            Ok(Box::new(crate::algos::ImageCache::from(settings)))
-        }
-        PipelineCommand::ImageMath(settings) => {
-            Ok(Box::new(crate::algos::ImageMath::from(settings)))
-        }
-        PipelineCommand::IntensityTransformation(settings) => Ok(Box::new(
+        ))),
+        PipelineCommand::ImageCache(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ImageCache::from(settings),
+        ))),
+        PipelineCommand::ImageMath(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ImageMath::from(settings),
+        ))),
+        PipelineCommand::IntensityTransformation(settings) => Ok(PipelineStep::Image(Box::new(
             crate::algos::IntensityTransformation::from(settings),
-        )),
-        PipelineCommand::Laplacian(settings) => {
-            Ok(Box::new(crate::algos::Laplacian::from(settings)))
-        }
-        PipelineCommand::LoadAnnotatedObjects(settings) => {
-            Ok(Box::new(crate::algos::LoadAnnotatedObjects::from(settings)))
-        }
-        PipelineCommand::MedianSubtract(settings) => {
-            Ok(Box::new(crate::algos::MedianSubtract::from(settings)))
-        }
-        PipelineCommand::MorphologicalCommand(settings) => {
-            Ok(Box::new(crate::algos::MorphologicalCommand::from(settings)))
-        }
-        PipelineCommand::ObjectMath(settings) => {
-            Ok(Box::new(crate::algos::ObjectMath::from(settings)))
-        }
+        ))),
+        PipelineCommand::Laplacian(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Laplacian::from(settings),
+        ))),
+        PipelineCommand::LoadAnnotatedObjects(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::LoadAnnotatedObjects::from(settings),
+        ))),
+        PipelineCommand::LoadChannel(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::LoadChannel::from(settings),
+        ))),
+        PipelineCommand::MedianSubtract(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MedianSubtract::from(settings),
+        ))),
+        PipelineCommand::MorphologicalCommand(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::MorphologicalCommand::from(settings),
+        ))),
+        PipelineCommand::ObjectMath(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::ObjectMath::from(settings),
+        ))),
         #[cfg(feature = "ai")]
-        PipelineCommand::PixelClassifier(settings) => {
-            Ok(Box::new(crate::algos::PixelClassifier::from(settings)))
-        }
+        PipelineCommand::PixelClassifier(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::PixelClassifier::from(settings),
+        ))),
         #[cfg(not(feature = "ai"))]
         PipelineCommand::PixelClassifier(_settings) => Err(InternalErrors::Generic(
             "This build was compiled without the ai feature; PixelClassifier is unavailable."
                 .into(),
         )),
-        PipelineCommand::RankFilter(settings) => {
-            Ok(Box::new(crate::algos::RankFilter::from(settings)))
-        }
-        PipelineCommand::RollingBall(settings) => {
-            Ok(Box::new(crate::algos::RollingBall::from(settings)))
-        }
-        PipelineCommand::SaveImage(settings) => {
-            Ok(Box::new(crate::algos::SaveImage::from(settings)))
-        }
-        PipelineCommand::Script(settings) => Ok(Box::new(crate::algos::Script::from(settings))),
+        PipelineCommand::RankFilter(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::RankFilter::from(settings),
+        ))),
+        PipelineCommand::RollingBall(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::RollingBall::from(settings),
+        ))),
+        PipelineCommand::SaveImage(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::SaveImage::from(settings),
+        ))),
+        PipelineCommand::Script(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Script::from(settings),
+        ))),
+        PipelineCommand::SimpleTracker(settings) => Ok(PipelineStep::Dataset(Box::new(
+            crate::dataset::SimpleTracker::from(settings),
+        ))),
         #[cfg(feature = "ai")]
-        PipelineCommand::Stardist(settings) => Ok(Box::new(crate::algos::Stardist::from(settings))),
+        PipelineCommand::Stardist(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Stardist::from(settings),
+        ))),
         #[cfg(not(feature = "ai"))]
         PipelineCommand::Stardist(_settings) => Err(InternalErrors::Generic(
             "This build was compiled without the ai feature; Stardist is unavailable.".into(),
         )),
-        PipelineCommand::StructureTensor(settings) => {
-            Ok(Box::new(crate::algos::StructureTensor::from(settings)))
-        }
-        PipelineCommand::Threshold(settings) => {
-            Ok(Box::new(crate::algos::Threshold::from(settings)))
-        }
-        PipelineCommand::TransformObjects(settings) => {
-            Ok(Box::new(crate::algos::TransformObjects::from(settings)))
-        }
+        PipelineCommand::StructureTensor(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::StructureTensor::from(settings),
+        ))),
+        PipelineCommand::Threshold(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Threshold::from(settings),
+        ))),
+        PipelineCommand::TransformObjects(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::TransformObjects::from(settings),
+        ))),
         #[cfg(feature = "ai")]
-        PipelineCommand::UNet(settings) => Ok(Box::new(crate::algos::UNet::from(settings))),
+        PipelineCommand::UNet(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::UNet::from(settings),
+        ))),
         #[cfg(not(feature = "ai"))]
         PipelineCommand::UNet(_settings) => Err(InternalErrors::Generic(
             "This build was compiled without the ai feature; UNet is unavailable.".into(),
         )),
-        PipelineCommand::Voronoi(settings) => Ok(Box::new(crate::algos::Voronoi::from(settings))),
-        PipelineCommand::Watershed(settings) => {
-            Ok(Box::new(crate::algos::Watershed::from(settings)))
-        }
-        PipelineCommand::WeightedDeviation(settings) => {
-            Ok(Box::new(crate::algos::WeightedDeviation::from(settings)))
-        }
+        PipelineCommand::Voronoi(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Voronoi::from(settings),
+        ))),
+        PipelineCommand::Watershed(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Watershed::from(settings),
+        ))),
+        PipelineCommand::WeightedDeviation(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::WeightedDeviation::from(settings),
+        ))),
         #[cfg(feature = "ai")]
-        PipelineCommand::Yolov5(settings) => Ok(Box::new(crate::algos::Yolov5::from(settings))),
+        PipelineCommand::Yolov5(settings) => Ok(PipelineStep::Image(Box::new(
+            crate::algos::Yolov5::from(settings),
+        ))),
         #[cfg(not(feature = "ai"))]
         PipelineCommand::Yolov5(_settings) => Err(InternalErrors::Generic(
             "This build was compiled without the ai feature; Yolov5 is unavailable.".into(),
         )),
+    }
+}
+
+/// The image step `cmd` configures - an error for a dataset step, which
+/// doesn't run per image.
+pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, InternalErrors> {
+    match into_pipeline_step(cmd)? {
+        PipelineStep::Image(algo) => Ok(algo),
+        PipelineStep::Dataset(algo) => Err(InternalErrors::InvalidArgument(format!(
+            "{} is a dataset step: it runs once after all images, not per image",
+            algo.name()
+        ))),
     }
 }

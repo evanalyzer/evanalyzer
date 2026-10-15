@@ -2,38 +2,13 @@ use std::{collections::HashMap, fs, path::Path};
 use syn::{GenericArgument, Item, ItemEnum, ItemStruct, PathArguments, Type, parse_file};
 
 pub fn generate_mappings() -> Result<(), Box<dyn std::error::Error>> {
-    let algos_path = Path::new("../core/src/algos");
-    let module_features = parse_module_features(Path::new("../core/src/algos.rs"));
     let mut commands = Vec::new();
     let mut enums = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(algos_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            // Top-level module name as declared in algos.rs (`mod <name>;` /
-            // `mod <name>.rs`), used to look up an optional `#[cfg(feature = "...")]`
-            // gate that must be propagated onto the generated glue code.
-            let module_name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
-            let feature = module_features.get(module_name).and_then(|f| f.clone());
-
-            if path.is_dir() {
-                // A directory's own per-file `#[cfg(feature = "...")]` gates live on
-                // the `pub mod <child>;` declarations in its sibling mod-root file
-                // (e.g. `classification.rs` for `classification/`), not in `algos.rs` -
-                // parse those too so a submodule can be gated more specifically than
-                // (or independently of) the directory's inherited top-level feature.
-                let mod_root_overrides = parse_module_features(&path.with_extension("rs"));
-                scan_directory(
-                    &path,
-                    &mut commands,
-                    &mut enums,
-                    feature.as_deref(),
-                    &mod_root_overrides,
-                );
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
-                extract_command_structs(&path, &mut commands, &mut enums, feature.as_deref());
-            }
-        }
+    // Image steps (`impl ImageAlgorithm`) live in `algos`, dataset steps
+    // (`impl DatasetAlgorithm`) in `dataset` - both become pipeline commands.
+    for root in ["algos", "dataset"] {
+        scan_module_root(root, &mut commands, &mut enums);
     }
 
     commands.sort_by(|a, b| a.struct_name.cmp(&b.struct_name));
@@ -61,6 +36,42 @@ pub fn generate_mappings() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     Ok(())
+}
+
+/// Collects the command structs and enums of the core module `root`
+/// (`../core/src/<root>.rs` and `../core/src/<root>/`).
+fn scan_module_root(root: &str, commands: &mut Vec<CommandInfo>, enums: &mut Vec<EnumInfo>) {
+    let root_dir = Path::new("../core/src").join(root);
+    let module_features = parse_module_features(&root_dir.with_extension("rs"));
+
+    if let Ok(entries) = fs::read_dir(&root_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Top-level module name as declared in <root>.rs (`mod <name>;` /
+            // `mod <name>.rs`), used to look up an optional `#[cfg(feature = "...")]`
+            // gate that must be propagated onto the generated glue code.
+            let module_name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+            let feature = module_features.get(module_name).and_then(|f| f.clone());
+
+            if path.is_dir() {
+                // A directory's own per-file `#[cfg(feature = "...")]` gates live on
+                // the `pub mod <child>;` declarations in its sibling mod-root file
+                // (e.g. `classification.rs` for `classification/`), not in <root>.rs -
+                // parse those too so a submodule can be gated more specifically than
+                // (or independently of) the directory's inherited top-level feature.
+                let mod_root_overrides = parse_module_features(&path.with_extension("rs"));
+                scan_directory(
+                    &path,
+                    commands,
+                    enums,
+                    feature.as_deref(),
+                    &mod_root_overrides,
+                );
+            } else if path.extension().map_or(false, |ext| ext == "rs") {
+                extract_command_structs(&path, commands, enums, feature.as_deref());
+            }
+        }
+    }
 }
 
 fn write_if_changed(path: &Path, content: &str) {
@@ -175,6 +186,9 @@ fn field_default_expr(field: &FieldInfo, enums: &[EnumInfo], commands: &[Command
         "vec![]".to_string()
     } else if field_type.starts_with("Option<") {
         "None".to_string()
+    } else if field_type.contains('<') {
+        // A generic type (`BTreeMap<String, ParamValue>`) needs the `<T>::` form.
+        format!("<{}>::default()", field_type)
     } else {
         format!("{}::default()", field_type)
     }
@@ -231,6 +245,14 @@ fn collect_used_type_names(
     for cmd in commands {
         for field in &cmd.fields {
             used_type_names.insert(field.ty.clone());
+            // A list's entry type counts too (`Vec<ScriptParam>`).
+            if let Some(inner) = field
+                .ty
+                .strip_prefix("Vec<")
+                .and_then(|t| t.strip_suffix('>'))
+            {
+                used_type_names.insert(inner.trim().to_string());
+            }
         }
     }
     for e in enums {
@@ -266,7 +288,11 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     out.push_str("// @generated - do not edit by hand\n");
     // out.push_str("use indexmap::IndexMap;\n");
     out.push_str("use crate::{core_types::{ImageAddress,ImageChannelIdx,MemoryId,PixelUnits, SizeUnits, SizeUnitsRel}, types::classes::{ObjectClass, SegmentationClass}};\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::types::classes::{ModelClass, ModelSegmentationClass};\n");
     out.push_str("use std::path::PathBuf;\n");
+    // A Script step's values (`ParamValue`s by `param` name).
+    out.push_str("#[allow(unused_imports)]\nuse std::collections::BTreeMap;\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::modules::components::ParamValue;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
 
@@ -279,6 +305,12 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
         for doc in &enum_info.doc_comments {
             out.push_str(&format!("/// {}\n", doc));
         }
+        // `#[default]` only fits a unit variant: a first variant carrying a value
+        // (`Number(i64)`) gets a hand-rolled Default below.
+        let first_carries_value = enum_info
+            .variants
+            .first()
+            .is_some_and(|v| v.data_type.is_some());
         if is_rich {
             // Internally tagged: each variant's own fields sit alongside the discriminant,
             // which schemars renders as `oneOf` + a `const`-valued "type" property — the
@@ -288,6 +320,11 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                 "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]\n",
             );
             out.push_str("#[serde(tag = \"type\", rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
+        } else if first_carries_value {
+            out.push_str(
+                "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]\n",
+            );
+            out.push_str("#[serde(rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
         } else {
             out.push_str(
                 "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]\n",
@@ -299,7 +336,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
             for doc in &variant.doc_comments {
                 out.push_str(&format!("    /// {}\n", doc));
             }
-            if !is_rich && vi == 0 {
+            if !is_rich && !first_carries_value && vi == 0 {
                 out.push_str("    #[default]\n");
             }
             if variant.is_rich() {
@@ -344,6 +381,13 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
         // Rich enums opt out of #[derive(Default)] (the field defaults would otherwise be each
         // field type's zero value, ignoring any #[cmdsmeta(default = ...)] override), so they
         // need a hand-rolled Default impl — same idea as a command struct's Default impl below.
+        if !is_rich && first_carries_value {
+            let first = &enum_info.variants[0];
+            out.push_str(&format!(
+                "impl Default for {settings_name} {{\n    fn default() -> Self {{\n        Self::{}(Default::default())\n    }}\n}}\n\n",
+                first.name
+            ));
+        }
         if is_rich {
             if let Some(first) = enum_info.variants.first() {
                 out.push_str(&format!("impl Default for {} {{\n", settings_name));
@@ -373,6 +417,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
         "InstanceSegmentation",
         "Measure",
         "Object",
+        "Dataset",
         "Other",
     ] {
         if let Some(cmds) = by_category.get(*category) {
@@ -507,7 +552,8 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
     // Header - imports both core algos and config settings
     out.push_str("// @generated - do not edit by hand\n");
     out.push_str("use evanalyzer_cfg::settings::pipeline_command_settings::*;\n");
-    out.push_str("use crate::algos::*;\n\n");
+    out.push_str("use crate::algos::*;\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::dataset::*;\n\n");
 
     // Enum From impls
     out.push_str("// ============ ENUM FROM IMPLS ============\n\n");
@@ -582,39 +628,78 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
         out.push_str("        }\n    }\n}\n\n");
     }
 
-    // into_algorithm standalone function - only structs that implement ImageAlgorithm
+    // into_algorithm / into_pipeline_step standalone functions - only
+    // structs that implement ImageAlgorithm or DatasetAlgorithm.
+    let steps: Vec<&&CommandInfo> = filtered_commands
+        .iter()
+        .filter(|c| c.kind.is_some())
+        .collect();
     out.push_str("// ============ INTO ALGORITHM ============\n\n");
     out.push_str("use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;\n");
-    out.push_str("use evanalyzer_cfg::core_types::InternalErrors;\n\n");
+    out.push_str("use evanalyzer_cfg::core_types::InternalErrors;\n");
+    out.push_str("use crate::job::pipeline_step::PipelineStep;\n\n");
+
+    out.push_str("/// The step `cmd` configures, ready to run.\n");
+    out.push_str(
+        "pub fn into_pipeline_step(cmd: PipelineCommand) -> Result<PipelineStep, InternalErrors> {\n",
+    );
+    out.push_str("    match cmd {\n");
+    for cmd in &steps {
+        let kind = cmd.kind.expect("filtered to steps");
+        let variant = match kind {
+            StepKind::Image => "Image",
+            StepKind::Dataset => "Dataset",
+        };
+        let build = format!(
+            "Ok(PipelineStep::{variant}(Box::new(crate::{}::{}::from(settings))))",
+            kind.module(),
+            cmd.struct_name
+        );
+        push_feature_gated_arm(&mut out, cmd, &build);
+    }
+    out.push_str("    }\n}\n\n");
+
+    out.push_str("/// The image step `cmd` configures - an error for a dataset step, which\n");
+    out.push_str("/// doesn't run per image.\n");
     out.push_str(
         "pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, InternalErrors> {\n",
     );
-    out.push_str("    match cmd {\n");
-    for cmd in filtered_commands.iter().filter(|c| c.is_algo) {
-        match &cmd.feature {
-            Some(feature) => {
-                out.push_str(&format!("        #[cfg(feature = {feature:?})]\n"));
-                out.push_str(&format!(
-                    "        PipelineCommand::{}(settings) => Ok(Box::new(crate::algos::{}::from(settings))),\n",
-                    cmd.struct_name, cmd.struct_name
-                ));
-                out.push_str(&format!("        #[cfg(not(feature = {feature:?}))]\n"));
-                out.push_str(&format!(
-                    "        PipelineCommand::{}(_settings) => Err(InternalErrors::Generic(\"This build was compiled without the {feature} feature; {} is unavailable.\".into())),\n",
-                    cmd.struct_name, cmd.struct_name
-                ));
-            }
-            None => {
-                out.push_str(&format!(
-                    "        PipelineCommand::{}(settings) => Ok(Box::new(crate::algos::{}::from(settings))),\n",
-                    cmd.struct_name, cmd.struct_name
-                ));
-            }
-        }
-    }
+    out.push_str("    match into_pipeline_step(cmd)? {\n");
+    out.push_str("        PipelineStep::Image(algo) => Ok(algo),\n");
+    out.push_str(
+        "        PipelineStep::Dataset(algo) => Err(InternalErrors::InvalidArgument(format!(\n",
+    );
+    out.push_str(
+        "            \"{} is a dataset step: it runs once after all images, not per image\",\n",
+    );
+    out.push_str("            algo.name()\n");
+    out.push_str("        ))),\n");
     out.push_str("    }\n}\n");
 
     out
+}
+
+/// One `PipelineCommand::<cmd>(settings) => <build>` match arm - for a
+/// feature-gated command, plus the arm that reports the missing feature.
+fn push_feature_gated_arm(out: &mut String, cmd: &CommandInfo, build: &str) {
+    match &cmd.feature {
+        Some(feature) => {
+            out.push_str(&format!("        #[cfg(feature = {feature:?})]\n"));
+            out.push_str(&format!(
+                "        PipelineCommand::{}(settings) => {build},\n",
+                cmd.struct_name
+            ));
+            out.push_str(&format!("        #[cfg(not(feature = {feature:?}))]\n"));
+            out.push_str(&format!(
+                "        PipelineCommand::{}(_settings) => Err(InternalErrors::Generic(\"This build was compiled without the {feature} feature; {} is unavailable.\".into())),\n",
+                cmd.struct_name, cmd.struct_name
+            ));
+        }
+        None => out.push_str(&format!(
+            "        PipelineCommand::{}(settings) => {build},\n",
+            cmd.struct_name
+        )),
+    }
 }
 
 // ============================================================
@@ -703,6 +788,13 @@ struct FieldMetadata {
     /// `#[cmdsmeta(script)]` on a `String` field: a Rhai script, edited in
     /// the script editor (`ParamType::Script`) instead of a text field.
     script: bool,
+    /// `#[cmdsmeta(read_only)]`: shown, not editable (`ParamType::Label`) -
+    /// e.g. a value that comes from elsewhere. On a data-carrying enum it's
+    /// the variant choice that's fixed; the variant's own value stays
+    /// editable.
+    read_only: bool,
+    /// `#[cmdsmeta(section = "...")]`: the section the setting is shown in.
+    section: Option<String>,
 }
 
 /// `#[cmdsmeta(visibility = ...)]` of a setting or a dropdown option.
@@ -756,6 +848,8 @@ impl Default for FieldMetadata {
             visibility: Visibility::Default,
             file_extensions: None,
             script: false,
+            read_only: false,
+            section: None,
         }
     }
 }
@@ -780,6 +874,33 @@ struct StructMetadata {
     key: Option<String>,
 }
 
+/// Which step trait a command implements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepKind {
+    /// `impl ImageAlgorithm`: runs per tile or per image (`crate::algos`).
+    Image,
+    /// `impl DatasetAlgorithm`: runs once after every image (`crate::dataset`).
+    Dataset,
+}
+
+impl StepKind {
+    fn from_trait(name: &str) -> Option<Self> {
+        match name {
+            "ImageAlgorithm" => Some(Self::Image),
+            "DatasetAlgorithm" => Some(Self::Dataset),
+            _ => None,
+        }
+    }
+
+    /// The core module the command struct is re-exported from.
+    fn module(self) -> &'static str {
+        match self {
+            Self::Image => "algos",
+            Self::Dataset => "dataset",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CommandInfo {
     struct_name: String,
@@ -787,7 +908,9 @@ struct CommandInfo {
     category: String,
     _source_file: String,
     doc_comments: Vec<String>,
-    is_algo: bool,
+    /// `Some` for a pipeline command - a struct that implements one of the
+    /// step traits - `None` for a helper struct used by one.
+    kind: Option<StepKind>,
     struct_meta: StructMetadata,
     /// Cargo feature (in the `core` crate) that must be enabled for this command's
     /// `crate::algos::<struct_name>` to exist, e.g. `Some("ai")` for U-Net/Cellpose/StarDist.
@@ -879,7 +1002,7 @@ fn extract_command_structs(
         Err(_) => return,
     };
 
-    if !content.contains("impl ImageAlgorithm") && !content.contains("impl ") {
+    if !content.contains("impl ") {
         return;
     }
 
@@ -894,8 +1017,9 @@ fn extract_command_structs(
     let category = determine_category(file_path);
     let source_file = extract_source_module(file_path);
 
-    // Only structs with `impl ImageAlgorithm for X` are pipeline commands.
-    let algo_structs: std::collections::HashSet<String> = ast
+    // Only structs with `impl ImageAlgorithm for X` / `impl DatasetAlgorithm
+    // for X` are pipeline commands.
+    let algo_structs: HashMap<String, StepKind> = ast
         .items
         .iter()
         .filter_map(|item| {
@@ -906,9 +1030,9 @@ fn extract_command_structs(
                     .and_then(|(path, _)| path.segments.last())
                     .map(|s| s.ident.to_string())
                     .unwrap_or_default();
-                if trait_name == "ImageAlgorithm" {
+                if let Some(kind) = StepKind::from_trait(&trait_name) {
                     if let Type::Path(tp) = item_impl.self_ty.as_ref() {
-                        return tp.path.segments.last().map(|s| s.ident.to_string());
+                        return tp.path.segments.last().map(|s| (s.ident.to_string(), kind));
                     }
                 }
             }
@@ -929,7 +1053,12 @@ fn extract_command_structs(
                 {
                     continue;
                 }
-                let is_algo = algo_structs.contains(&struct_name);
+                let kind = algo_structs.get(&struct_name).copied();
+                // Neither a step nor a settings helper of one (those derive
+                // `CommandsMeta`): e.g. `DatasetContext` next to the steps.
+                if kind.is_none() && !derives(&item_struct.attrs, "CommandsMeta") {
+                    continue;
+                }
                 let fields = extract_fields(&item_struct);
                 let doc_comments = extract_doc_comments(&item_struct.attrs);
                 let struct_meta = parse_struct_meta(&item_struct.attrs);
@@ -939,17 +1068,13 @@ fn extract_command_structs(
                     .as_deref()
                     .map(normalize_category)
                     .unwrap_or_else(|| category.clone());
-                eprintln!(
-                    "DBG extract struct={} raw_cat={:?} effective_cat={:?}",
-                    item_struct.ident, struct_meta.category, effective_category
-                );
                 commands.push(CommandInfo {
                     struct_name,
                     fields,
                     category: effective_category,
                     _source_file: source_file.clone(),
                     doc_comments,
-                    is_algo,
+                    kind,
                     struct_meta,
                     feature: feature.map(str::to_string),
                 });
@@ -980,13 +1105,26 @@ fn extract_command_structs(
     }
 }
 
+/// Whether `attrs` contain `#[derive(..., <name>, ...)]`.
+fn derives(attrs: &[syn::Attribute], name: &str) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("derive")
+            && attr
+                .meta
+                .require_list()
+                .is_ok_and(|list| list.tokens.to_string().split(',').any(|t| t.trim() == name))
+    })
+}
+
 fn determine_category(file_path: &Path) -> String {
     let path_str = file_path.to_string_lossy();
     // Checked first, ahead of the generic filename-substring checks below:
     // a file living under `algos/object/` (e.g. `object_math.rs`) would
     // otherwise get misclassified by, say, the `"math"` check meant for
     // `algos/math/`.
-    if path_str.contains("/object/")
+    if path_str.contains("/dataset/") {
+        "Dataset".to_string()
+    } else if path_str.contains("/object/")
         || path_str.contains("classification")
         || path_str.contains("extract")
     {
@@ -1017,6 +1155,7 @@ fn normalize_category(raw: &str) -> String {
         "instance_segmentation" => "InstanceSegmentation".to_string(),
         "measure" | "measurement" => "Measure".to_string(),
         "object" | "classify" | "classification" => "Object".to_string(),
+        "dataset" => "Dataset".to_string(),
         _ => "Other".to_string(),
     }
 }
@@ -1324,6 +1463,11 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                 } else if meta.path.is_ident("file_extensions") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     metadata.file_extensions = Some(value.value());
+                } else if meta.path.is_ident("read_only") {
+                    metadata.read_only = true;
+                } else if meta.path.is_ident("section") {
+                    let value: syn::LitStr = meta.value()?.parse()?;
+                    metadata.section = Some(value.value());
                 } else if meta.path.is_ident("script") {
                     metadata.script = true;
                     if let Ok(stream) = meta.value() {
@@ -1643,8 +1787,27 @@ fn leaf_param_def_literal(
     };
     let advanced = meta.visibility.is_advanced();
     Some(format!(
-        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: {option_advanced_expr} }}",
+        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: {option_advanced_expr}, section: String::new() }}",
     ))
+}
+
+/// `ty` with the model-class aliases (`ModelClass`, `ModelSegmentationClass`,
+/// see `types/classes.rs`) replaced by the class type they alias, so they get
+/// the same picker and parsing. Only `object_classes()` tells them apart.
+fn class_base_type(ty: &str) -> String {
+    fn base(name: &str) -> &str {
+        match name {
+            "ModelClass" => "ObjectClass",
+            "ModelSegmentationClass" => "SegmentationClass",
+            other => other,
+        }
+    }
+    for wrapper in ["Vec<", "Option<"] {
+        if let Some(inner) = ty.strip_prefix(wrapper).and_then(|t| t.strip_suffix('>')) {
+            return format!("{wrapper}{}>", base(inner));
+        }
+    }
+    base(ty).to_string()
 }
 
 /// The type-dependent parts of a leaf `ParameterDef`: param type, value expression,
@@ -1655,6 +1818,8 @@ fn leaf_parts(
     access: &str,
     enums: &[EnumInfo],
 ) -> Option<(&'static str, String, String, String, f32, f32)> {
+    let ty = class_base_type(ty);
+    let ty = ty.as_str();
     let no_flags = || "vec![]".to_string();
     let (param_type, value_expr, options_expr, min, max) = match ty {
         "f32" | "f64" => {
@@ -1803,9 +1968,7 @@ fn leaf_parts(
         }
         "ObjectClass" => (
             "ParamType::ObjClass",
-            format!(
-                "match {access}.to_u32() {{ Some(v) => format!(\"{{}}\", v), None => \"-1\".to_string() }}"
-            ),
+            format!("{access}.to_text()"),
             "vec![]".to_string(),
             0.0_f32,
             0.0_f32,
@@ -2062,6 +2225,8 @@ fn tuple_variant_param_def_literal(
     description: &str,
     enums: &[EnumInfo],
 ) -> Option<String> {
+    let ty = class_base_type(ty);
+    let ty = ty.as_str();
     // A tuple variant's payload has no settings field (and so no default value or
     // visibility) of its own.
     let default_expr = "String::new()";
@@ -2072,13 +2237,13 @@ fn tuple_variant_param_def_literal(
     // special-cased Vec forms and `leaf_param_def_literal`'s leaf types are supported).
     if ty == "Vec<ObjectClass>" {
         let value_expr = format!(
-            "{access}.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(\",\")"
+            "{access}.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(\",\")"
         );
         let flags_expr = format!(
             "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
         );
         return Some(format!(
-            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}"
+            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![], section: String::new() }}"
         ));
     }
     if ty == "Vec<SegmentationClass>" {
@@ -2089,7 +2254,7 @@ fn tuple_variant_param_def_literal(
             "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
         );
         return Some(format!(
-            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}"
+            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![], section: String::new() }}"
         ));
     }
     let meta = FieldMetadata::default();
@@ -2118,7 +2283,27 @@ fn field_to_param_def(
     var: &str,
     name_prefix: &str,
 ) -> Vec<String> {
-    let ty = &field.ty;
+    let parts = field_param_defs(field, enums, commands, var, name_prefix);
+    // Everything the field contributes (a rich enum's variant fields, a
+    // flattened struct's fields) goes in its section.
+    match &field.meta.section {
+        Some(section) if !parts.is_empty() => vec![format!(
+            "ParameterDef::in_section({}, {section:?})",
+            concat_param_vecs(&parts)
+        )],
+        _ => parts,
+    }
+}
+
+/// [`field_to_param_def`] without the field's section.
+fn field_param_defs(
+    field: &FieldInfo,
+    enums: &[EnumInfo],
+    commands: &[CommandInfo],
+    var: &str,
+    name_prefix: &str,
+) -> Vec<String> {
+    let ty = &class_base_type(&field.ty);
     let name = &field.name;
     let meta = &field.meta;
 
@@ -2156,7 +2341,7 @@ fn field_to_param_def(
                 .collect();
             let inner_expr = concat_param_vecs(&inner_parts);
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: {access}.iter().map(|__item| {inner_expr}).collect(), default_value: String::new(), advanced: {advanced}, option_advanced: vec![] }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: {access}.iter().map(|__item| {inner_expr}).collect(), default_value: String::new(), advanced: {advanced}, option_advanced: vec![], section: String::new() }}]"
             )];
         }
         // Vec<ObjectClass> / Vec<SegmentationClass> → multi-select class picker.
@@ -2164,14 +2349,14 @@ fn field_to_param_def(
         // popup reads options[i] instead of doing a string.contains() check.
         if inner_ty == "ObjectClass" {
             let value_expr = format!(
-                "{access}.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(\",\")"
+                "{access}.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(\",\")"
             );
             let default_expr = value_expr.replace(&access, &format!("({default_list})"));
             let flags_expr = format!(
                 "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
             );
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![], section: String::new() }}]"
             )];
         }
         if inner_ty == "SegmentationClass" {
@@ -2183,7 +2368,7 @@ fn field_to_param_def(
                 "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
             );
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![], section: String::new() }}]"
             )];
         }
 
@@ -2225,6 +2410,11 @@ fn field_to_param_def(
                 Some(&field_default_expr(field, enums, commands)),
             )
             .expect("enum dropdown literal is always Some");
+            let dropdown = if meta.read_only {
+                as_label(&dropdown)
+            } else {
+                dropdown
+            };
             let variant_fields = enum_variant_param_defs(enum_info, &access, &routing_name, enums);
             return vec![format!("vec![{dropdown}]"), variant_fields];
         }
@@ -2240,9 +2430,27 @@ fn field_to_param_def(
         enums,
         Some(&field_default_expr(field, enums, commands)),
     ) {
+        Some(literal) if meta.read_only => vec![format!("vec![{}]", as_label(&literal))],
         Some(literal) => vec![format!("vec![{literal}]")],
         None => vec![],
     }
+}
+
+/// A `ParameterDef` literal shown as a read-only label instead of its
+/// control (`#[cmdsmeta(read_only)]`).
+fn as_label(literal: &str) -> String {
+    let start = literal
+        .find("param_type: ")
+        .expect("a ParameterDef literal names its param_type");
+    let end = start
+        + literal[start..]
+            .find(',')
+            .expect("param_type is followed by more fields");
+    format!(
+        "{}param_type: ParamType::Label{}",
+        &literal[..start],
+        &literal[end..]
+    )
 }
 
 /// Returns (label, value_expr) pairs for fields with `summary = true`.
@@ -2328,6 +2536,149 @@ fn collect_summary_exprs(
     vec![(label, expr)]
 }
 
+/// Statements pushing every project object class held by `expr` (of type
+/// `ty`) onto a `classes: Vec<ObjectClass>` - for
+/// `PipelineCommand::object_classes()`. Walks into group structs, lists,
+/// options and enum variant payloads, so a class field anywhere in a command
+/// is found without listing it by hand. The model-class aliases
+/// (`ModelClass`, `ModelSegmentationClass`) don't match and are skipped -
+/// they hold a trained model's own class IDs. `is_ref` says whether `expr` is a
+/// reference (a loop item or pattern binding) rather than a field place.
+/// `depth` keeps loop/binding names of nested levels apart.
+fn class_collect_stmts(
+    ty: &str,
+    expr: &str,
+    is_ref: bool,
+    enums: &[EnumInfo],
+    commands: &[CommandInfo],
+    depth: usize,
+) -> Vec<String> {
+    let value = if is_ref {
+        format!("*{expr}")
+    } else {
+        expr.to_string()
+    };
+    match ty {
+        "ObjectClass" => return vec![format!("classes.push({value});")],
+        "SegmentationClass" => {
+            return vec![format!(
+                "classes.push(ObjectClass::from_segmentation_class({value}));"
+            )];
+        }
+        _ => {}
+    }
+    // Lists and options of classes: `iter()` works on both.
+    let list_inner = ty
+        .strip_prefix("Vec<")
+        .or_else(|| ty.strip_prefix("Option<"))
+        .and_then(|t| t.strip_suffix('>'));
+    match list_inner {
+        Some("ObjectClass") => return vec![format!("classes.extend({expr}.iter().copied());")],
+        Some("SegmentationClass") => {
+            return vec![format!(
+                "classes.extend({expr}.iter().copied().map(ObjectClass::from_segmentation_class));"
+            )];
+        }
+        Some(inner) => {
+            let item = format!("item{depth}");
+            let body = class_collect_stmts(inner, &item, true, enums, commands, depth + 1);
+            if body.is_empty() {
+                return vec![];
+            }
+            return vec![format!(
+                "for {item} in {expr}.iter() {{ {} }}",
+                body.join(" ")
+            )];
+        }
+        None => {}
+    }
+    if let Some(nested) = commands.iter().find(|c| c.struct_name == ty) {
+        return nested
+            .fields
+            .iter()
+            .flat_map(|f| {
+                field_class_collect_stmts(
+                    f,
+                    &format!("{expr}.{}", f.name),
+                    false,
+                    enums,
+                    commands,
+                    depth,
+                )
+            })
+            .collect();
+    }
+    if let Some(enum_info) = enums.iter().find(|e| e.enum_name == ty) {
+        let settings_name = enum_info.settings_name();
+        let arms: Vec<String> = enum_info
+            .variants
+            .iter()
+            .filter_map(|v| {
+                if v.is_rich() {
+                    let mut bindings = Vec::new();
+                    let mut body = Vec::new();
+                    for f in &v.named_fields {
+                        let binding = format!("{}{depth}", f.name);
+                        let stmts = field_class_collect_stmts(
+                            f,
+                            &binding,
+                            true,
+                            enums,
+                            commands,
+                            depth + 1,
+                        );
+                        if !stmts.is_empty() {
+                            bindings.push(format!("{}: {binding}", f.name));
+                            body.extend(stmts);
+                        }
+                    }
+                    (!body.is_empty()).then(|| {
+                        format!(
+                            "{settings_name}::{} {{ {}, .. }} => {{ {} }}",
+                            v.name,
+                            bindings.join(", "),
+                            body.join(" ")
+                        )
+                    })
+                } else if let Some(data_ty) = &v.data_type {
+                    let binding = format!("payload{depth}");
+                    let body =
+                        class_collect_stmts(data_ty, &binding, true, enums, commands, depth + 1);
+                    (!body.is_empty()).then(|| {
+                        format!(
+                            "{settings_name}::{}({binding}) => {{ {} }}",
+                            v.name,
+                            body.join(" ")
+                        )
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if arms.is_empty() {
+            return vec![];
+        }
+        return vec![format!(
+            "#[allow(unreachable_patterns)] match &{expr} {{ {}, _ => {{}} }}",
+            arms.join(", ")
+        )];
+    }
+    vec![]
+}
+
+/// [`class_collect_stmts`] for one field.
+fn field_class_collect_stmts(
+    field: &FieldInfo,
+    expr: &str,
+    is_ref: bool,
+    enums: &[EnumInfo],
+    commands: &[CommandInfo],
+    depth: usize,
+) -> Vec<String> {
+    class_collect_stmts(&field.ty, expr, is_ref, enums, commands, depth)
+}
+
 fn field_to_apply_change(
     field: &FieldInfo,
     enums: &[EnumInfo],
@@ -2335,7 +2686,7 @@ fn field_to_apply_change(
     var: &str,
     name_prefix: &str,
 ) -> Vec<String> {
-    let ty = &field.ty;
+    let ty = &class_base_type(&field.ty);
     let name = &field.name;
     let display_name = format!("{}{}", name_prefix, name);
 
@@ -2348,14 +2699,14 @@ fn field_to_apply_change(
         if inner == "ObjectClass" {
             let branch = format!(
                 "if param_name == \"{display_name}\" {{ \
-                    if let Some(id) = value.strip_prefix(\"toggle:\").and_then(|x| x.trim().parse::<u32>().ok()) {{ \
-                        if {var}.{name}.iter().any(|c| c.to_u32().map_or(false, |v| v == id)) {{ \
-                            {var}.{name}.retain(|c| c.to_u32().map_or(true, |v| v != id)); \
+                    if let Some(id) = value.strip_prefix(\"toggle:\").and_then(ObjectClass::from_text) {{ \
+                        if {var}.{name}.contains(&id) {{ \
+                            {var}.{name}.retain(|c| *c != id); \
                         }} else {{ \
-                            {var}.{name}.push(ObjectClass::Valid(id)); \
+                            {var}.{name}.push(id); \
                         }} \
                     }} else {{ \
-                        {var}.{name} = value.split(',').filter(|x| !x.is_empty()).filter_map(|x| x.trim().parse::<u32>().ok()).map(|v| ObjectClass::Valid(v)).collect(); \
+                        {var}.{name} = value.split(',').filter(|x| !x.trim().is_empty()).filter_map(ObjectClass::from_text).filter(|c| *c != ObjectClass::Unset).collect(); \
                     }} \
                 }}"
             );
@@ -2471,6 +2822,8 @@ fn leaf_apply_change_branch(
     condition: &str,
     enums: &[EnumInfo],
 ) -> Option<String> {
+    let ty = class_base_type(ty);
+    let ty = ty.as_str();
     let body = match ty {
         "f32" => format!("if let Ok(v) = value.parse::<f32>() {{ {assign} = v; }}"),
         "f64" => format!("if let Ok(v) = value.parse::<f64>() {{ {assign} = v; }}"),
@@ -2482,10 +2835,9 @@ fn leaf_apply_change_branch(
         "bool" => format!("{assign} = value == \"true\";"),
         "String" => format!("{assign} = value.to_string();"),
         "PathBuf" => format!("{assign} = std::path::PathBuf::from(value);"),
-        "ObjectClass" => format!(
-            "if value == \"-1\" {{ {assign} = ObjectClass::Unset; }} \
-             else if let Ok(v) = value.parse::<u32>() {{ {assign} = ObjectClass::Valid(v); }}"
-        ),
+        "ObjectClass" => {
+            format!("if let Some(v) = ObjectClass::from_text(value) {{ {assign} = v; }}")
+        }
         "SegmentationClass" => {
             format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = SegmentationClass(v); }}")
         }
@@ -2679,17 +3031,19 @@ fn tuple_variant_apply_change_branch(
     condition: &str,
     enums: &[EnumInfo],
 ) -> Option<String> {
+    let ty = class_base_type(ty);
+    let ty = ty.as_str();
     if ty == "Vec<ObjectClass>" {
         return Some(format!(
             "if param_name == \"{condition}\" {{ \
-                if let Some(id) = value.strip_prefix(\"toggle:\").and_then(|x| x.trim().parse::<u32>().ok()) {{ \
-                    if {assign}.iter().any(|c| c.to_u32().map_or(false, |v| v == id)) {{ \
-                        {assign}.retain(|c| c.to_u32().map_or(true, |v| v != id)); \
+                if let Some(id) = value.strip_prefix(\"toggle:\").and_then(ObjectClass::from_text) {{ \
+                    if {assign}.contains(&id) {{ \
+                        {assign}.retain(|c| *c != id); \
                     }} else {{ \
-                        {assign}.push(ObjectClass::Valid(id)); \
+                        {assign}.push(id); \
                     }} \
                 }} else {{ \
-                    *{assign} = value.split(',').filter(|x| !x.is_empty()).filter_map(|x| x.trim().parse::<u32>().ok()).map(ObjectClass::Valid).collect(); \
+                    *{assign} = value.split(',').filter(|x| !x.trim().is_empty()).filter_map(ObjectClass::from_text).filter(|c| *c != ObjectClass::Unset).collect(); \
                 }} \
             }}"
         ));
@@ -2735,6 +3089,7 @@ fn category_to_enum_variant(category: &str) -> &str {
         "InstanceSegmentation" => "InstanceSegmentation",
         "Measure" => "Measure",
         "Object" => "Object",
+        "Dataset" => "Dataset",
         _ => "Preprocess",
     }
 }
@@ -2757,6 +3112,7 @@ fn default_next_for_category(variant: &str) -> &'static [&'static str] {
         "InstanceSegmentation" => &["Measure", "InstanceSegmentation"],
         "Measure" => &["Object", "Measure"],
         "Object" => &["Object"],
+        "Dataset" => &["Dataset"],
         _ => &["Segment"],
     }
 }
@@ -2766,12 +3122,13 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     const GENERATE_ALL_DEFAULT: bool = false;
 
     // Only true algorithm structs go into the PipelineCommand enum.
-    let algo_commands: Vec<&CommandInfo> = commands.iter().filter(|c| c.is_algo).collect();
+    let algo_commands: Vec<&CommandInfo> = commands.iter().filter(|c| c.kind.is_some()).collect();
 
     out.push_str("// @generated - do not edit by hand\n");
     out.push_str("use crate::modules::pipeline_command_settings::*;\n");
     out.push_str("use crate::modules::parameter_def::{ParamType, ParameterDef};\n");
     out.push_str("use crate::types::classes::{ObjectClass, SegmentationClass};\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::types::classes::{ModelClass, ModelSegmentationClass};\n");
     out.push_str("#[allow(unused_imports)]\nuse crate::core_types::{ImageAddress, ImageChannelIdx, MemoryId, PixelUnits, SizeUnits, SizeUnitsRel};\n");
     // Default values of `PathBuf` settings (`ParameterDef::default_value`).
     out.push_str("#[allow(unused_imports)]\nuse std::path::PathBuf;\n");
@@ -2789,6 +3146,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("    InstanceSegmentation,\n");
     out.push_str("    Measure,\n");
     out.push_str("    Object,\n");
+    out.push_str("    /// Runs once after every image, on the objects of all of them.\n");
+    out.push_str("    Dataset,\n");
     out.push_str("}\n\n");
 
     // --- CommandCategory methods (ordering rules) ---
@@ -2802,6 +3161,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("            Self::InstanceSegmentation => 2,\n");
     out.push_str("            Self::Measure              => 3,\n");
     out.push_str("            Self::Object               => 4,\n");
+    out.push_str("            Self::Dataset              => 5,\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// Which categories are valid immediately before this one in a pipeline.\n");
     out.push_str("    /// An empty slice means this category can start a pipeline.\n");
@@ -2817,6 +3177,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         "            Self::Measure              => &[Self::InstanceSegmentation, Self::Measure],\n",
     );
     out.push_str("            Self::Object               => &[Self::Measure, Self::Object],\n");
+    out.push_str("            Self::Dataset              => &[Self::Measure, Self::Object, Self::Dataset],\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// The natural next category after this one, used to pre-filter the command picker.\n");
     out.push_str("#[allow(dead_code)]\n");
@@ -2827,6 +3188,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("            Self::InstanceSegmentation => Self::Measure,\n");
     out.push_str("            Self::Measure              => Self::Object,\n");
     out.push_str("            Self::Object               => Self::Object,\n");
+    out.push_str("            Self::Dataset              => Self::Dataset,\n");
     out.push_str("        }\n    }\n");
     out.push_str("}\n\n");
 
@@ -2972,7 +3334,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("        match self {\n");
     for cmd in &algo_commands {
         let variant = category_to_enum_variant(&cmd.category);
-        let next_variants: Vec<String> = match &cmd.struct_meta.next {
+        let mut next_variants: Vec<String> = match &cmd.struct_meta.next {
             Some(list) => list
                 .iter()
                 .map(|c| {
@@ -2987,6 +3349,14 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
                 .map(|c| format!("CommandCategory::{c}"))
                 .collect(),
         };
+        // A dataset step may follow wherever an object step may - both need
+        // extracted objects. It runs after every image anyway, wherever it sits.
+        let dataset = "CommandCategory::Dataset".to_string();
+        if next_variants.contains(&"CommandCategory::Object".to_string())
+            && !next_variants.contains(&dataset)
+        {
+            next_variants.push(dataset);
+        }
         out.push_str(&format!(
             "            Self::{}(_) => &[{}],\n",
             cmd.struct_name,
@@ -3057,6 +3427,57 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         }
     }
     out.push_str("        }\n    }\n\n");
+
+    // object_classes() - every project class a command creates, reads or filters on
+    out.push_str("    /// Every object class this command creates, reads or filters on.\n");
+    out.push_str("    /// Segmentation classes count as the object class Extract Objects turns\n");
+    out.push_str("    /// them into. `Unset`, a component's `Local` classes, Background, the\n");
+    out.push_str("    /// manual-annotation marker and\n");
+    out.push_str("    /// `ModelClass`/`ModelSegmentationClass` fields (a trained model's own\n");
+    out.push_str("    /// class IDs) are left out - they never name a class of the project.\n");
+    out.push_str("    pub fn object_classes(&self) -> Vec<ObjectClass> {\n");
+    out.push_str("        let mut classes = self.all_object_classes();\n");
+    out.push_str("        classes.retain(|c| {\n");
+    out.push_str("            !matches!(c, ObjectClass::Unset | ObjectClass::Local(_))\n");
+    out.push_str("                && *c != ObjectClass::BACKGROUND\n");
+    out.push_str("                && c.to_u32() != Some(SegmentationClass::MANUAL_ANNOTATED.0)\n");
+    out.push_str("        });\n");
+    out.push_str("        classes\n");
+    out.push_str("    }\n\n");
+    out.push_str("    /// The component local classes (`ObjectClass::Local`) this command\n");
+    out.push_str("    /// uses - only allowed inside a component.\n");
+    out.push_str("    pub fn local_classes(&self) -> Vec<ObjectClass> {\n");
+    out.push_str("        let mut classes = self.all_object_classes();\n");
+    out.push_str("        classes.retain(|c| matches!(c, ObjectClass::Local(_)));\n");
+    out.push_str("        classes\n");
+    out.push_str("    }\n\n");
+    out.push_str("    fn all_object_classes(&self) -> Vec<ObjectClass> {\n");
+    out.push_str("        let mut classes: Vec<ObjectClass> = Vec::new();\n");
+    out.push_str("        match self {\n");
+    for cmd in &algo_commands {
+        let stmts: Vec<String> = cmd
+            .fields
+            .iter()
+            .flat_map(|f| {
+                field_class_collect_stmts(f, &format!("s.{}", f.name), false, enums, commands, 0)
+            })
+            .collect();
+        if stmts.is_empty() {
+            out.push_str(&format!(
+                "            Self::{}(_) => {{}}\n",
+                cmd.struct_name
+            ));
+        } else {
+            out.push_str(&format!(
+                "            Self::{}(s) => {{ {} }}\n",
+                cmd.struct_name,
+                stmts.join(" ")
+            ));
+        }
+    }
+    out.push_str("        }\n");
+    out.push_str("        classes\n");
+    out.push_str("    }\n\n");
 
     // apply_param_change() - write a single leaf parameter value back to settings
     out.push_str("    pub fn apply_param_change(&mut self, param_name: &str, value: &str) {\n");

@@ -60,6 +60,14 @@ impl ObjectCache {
     pub fn is_empty(&self) -> bool {
         self.objects.is_empty()
     }
+
+    pub fn retain(&mut self, keep: impl FnMut(&ObjectId, &mut Object) -> bool) {
+        self.objects.retain(keep);
+    }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Object> {
+        self.objects.values_mut()
+    }
 }
 
 impl Extend<(ObjectId, Object)> for ObjectCache {

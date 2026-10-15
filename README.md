@@ -505,7 +505,16 @@ type - no per-field opt-in needed:
   automatic. See the doc comment on `commands_meta_derive` in
   `crates/core/macros/src/lib.rs` for the full list of field-level
   `#[cmdsmeta(...)]` keys (`min`/`max`/`step`/`default`/`unit`/`regex`/
-  `optional`/`visible`/`file_extensions`).
+  `optional`/`visibility`/`file_extensions`/`section`). `#[cmdsmeta(section
+  = "Detection")]` puts a setting in a section of its own: settings of the
+  same section are listed together under its header on the step card and
+  get their own page in the step's settings dialog.
+- `ObjectClass` / `SegmentationClass` (also in `Vec`/`Option`, group
+  structs and enum variants) → a class picker **and** an entry in the
+  generated `PipelineCommand::object_classes()`, which pipeline focus mode
+  and script steps' declared-class check use. A field holding a trained
+  model's *own* class ID (not a project class) is typed `ModelClass` /
+  `ModelSegmentationClass` instead - same picker, but left out.
 
 One thing that *isn't* generated and needs a manual touch: `#[derive(...)]`
 assigns each `PipelineCommand` variant a numeric id in **alphabetical order

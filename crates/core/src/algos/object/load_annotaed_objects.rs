@@ -46,7 +46,7 @@ pub struct LoadAnnotatedObjects {
 impl ImageAlgorithm for LoadAnnotatedObjects {
     fn execute(
         &self,
-        _ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
+        ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
         cache: &mut crate::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let annotations = std::sync::Arc::clone(&cache.annotated_objects);
@@ -72,10 +72,10 @@ impl ImageAlgorithm for LoadAnnotatedObjects {
             object.children.clear();
             object.track = Default::default();
             if !self.keep_annotated_classes {
-                object.object_class.clear();
+                object.clear_object_classes();
             }
-            if matches!(self.output_class, ObjectClass::Valid(_)) {
-                object.add_object_class(self.output_class);
+            if matches!(self.output_class, ObjectClass::Global(_)) {
+                object.add_object_class(self.output_class, ctx.scope)?;
             }
             // The stored values may be stale (or were never measured for an
             // object drawn by hand): measure on the image being analyzed.
@@ -109,6 +109,7 @@ impl ImageAlgorithm for LoadAnnotatedObjects {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::scope::Scope;
     use crate::{
         GlobalPipelineCache, ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::{PixelSizes, Point2d},
@@ -126,9 +127,9 @@ mod tests {
     };
     const CHANNEL: i32 = 0;
     const VALUE: f64 = 7.0;
-    const NUCLEUS: ObjectClass = ObjectClass::Valid(1);
-    const CELL: ObjectClass = ObjectClass::Valid(2);
-    const LOADED: ObjectClass = ObjectClass::Valid(50);
+    const NUCLEUS: ObjectClass = ObjectClass::Global(1);
+    const CELL: ObjectClass = ObjectClass::Global(2);
+    const LOADED: ObjectClass = ObjectClass::Global(50);
     // Far above the ObjectId::next() counter so a reused id would be visible.
     const STORED_ID: u128 = 900_000;
 
@@ -182,7 +183,7 @@ mod tests {
             ..Default::default()
         });
         for class in classes {
-            object.add_object_class(*class);
+            object.add_object_class(*class, Scope::Global).unwrap();
         }
         object.parent_id = Some(ObjectId(id + 1));
         object.children.push(ObjectId(id + 2));
@@ -272,8 +273,8 @@ mod tests {
             ..load_all()
         };
         let object = &run(&cmd, &mut cache)[0];
-        assert!(object.has_object_class(&NUCLEUS));
-        assert!(object.has_object_class(&LOADED));
+        assert!(object.is_of(&NUCLEUS, Scope::Global));
+        assert!(object.is_of(&LOADED, Scope::Global));
     }
 
     #[test]
@@ -285,8 +286,8 @@ mod tests {
             ..load_all()
         };
         let object = &run(&cmd, &mut cache)[0];
-        assert_eq!(object.object_class.len(), 1);
-        assert!(object.has_object_class(&LOADED));
+        assert_eq!(object.object_classes().len(), 1);
+        assert!(object.is_of(&LOADED, Scope::Global));
 
         // Without an output class the object ends up unclassified.
         let mut cache = cache_with(vec![annotation(STORED_ID, [0, 0, 2, 2], &[NUCLEUS])]);
@@ -294,7 +295,7 @@ mod tests {
             keep_annotated_classes: false,
             ..load_all()
         };
-        assert!(run(&cmd, &mut cache)[0].object_class.is_empty());
+        assert!(run(&cmd, &mut cache)[0].object_classes().is_empty());
     }
 
     #[test]

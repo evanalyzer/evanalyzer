@@ -18,7 +18,7 @@
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     object::{Object, ObjectInit},
-    spatial_grid::BboxGrid,
+    utils::spatial_grid::BboxGrid,
 };
 use evanalyzer_cfg::core_types::{
     CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,
@@ -148,12 +148,12 @@ impl ImageAlgorithm for Colocalization {
                 let passes_filter = self
                     .filter_classes
                     .iter()
-                    .all(|f_class| object.has_object_class(f_class));
+                    .all(|f_class| object.is_of(f_class, ctx.scope));
                 if !passes_filter {
                     continue;
                 }
 
-                if object.has_object_class(target_class) {
+                if object.is_of(target_class, ctx.scope) {
                     matched_ids.push(object.id.clone());
                 }
             }
@@ -183,11 +183,8 @@ impl ImageAlgorithm for Colocalization {
                 .filter(|object| {
                     self.filter_classes
                         .iter()
-                        .all(|f_class| object.has_object_class(f_class))
-                        && self
-                            .exclude_classes
-                            .iter()
-                            .any(|c| object.has_object_class(c))
+                        .all(|f_class| object.is_of(f_class, ctx.scope))
+                        && object.is_of_any(&self.exclude_classes, ctx.scope)
                 })
                 .map(|object| object.id.clone())
                 .collect()
@@ -356,8 +353,8 @@ impl ImageAlgorithm for Colocalization {
                 }
 
                 // Compute the N-way intersection area (chain of pairwise intersections).
-                if let ObjectClass::Valid(overlap_class_id) = self.class_for_overlapping_areas {
-                    let overlap_class = ObjectClass::Valid(overlap_class_id);
+                if let ObjectClass::Global(overlap_class_id) = self.class_for_overlapping_areas {
+                    let overlap_class = ObjectClass::Global(overlap_class_id);
                     let mut states: Vec<(Object, Vec<ObjectId>)> = Vec::new();
 
                     let mut matches_iter = class_matches.iter();
@@ -397,7 +394,7 @@ impl ImageAlgorithm for Colocalization {
                         for (mut intersection, mut ids) in states {
                             ids.sort_by_key(|ObjectId(n)| *n);
                             if processed_combinations.insert(ids) {
-                                intersection.add_object_class(overlap_class);
+                                intersection.add_object_class(overlap_class, ctx.scope)?;
                                 // `Object::overlaps()` only derives geometry from the parent masks
                                 // and never sampled pixel data, and this object never passes
                                 // through `ExtractObjects` (the step that normally measures
@@ -505,6 +502,7 @@ impl Colocalization {
 
 #[cfg(test)]
 mod tests {
+    use crate::pipeline::scope::Scope;
     use std::path::PathBuf;
 
     use super::*;
@@ -580,14 +578,14 @@ mod tests {
             plane,
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 
-    const CLASS_A: ObjectClass = ObjectClass::Valid(1);
-    const CLASS_B: ObjectClass = ObjectClass::Valid(2);
-    const CLASS_C: ObjectClass = ObjectClass::Valid(3);
-    const CLASS_OVERLAP: ObjectClass = ObjectClass::Valid(99);
+    const CLASS_A: ObjectClass = ObjectClass::Global(1);
+    const CLASS_B: ObjectClass = ObjectClass::Global(2);
+    const CLASS_C: ObjectClass = ObjectClass::Global(3);
+    const CLASS_OVERLAP: ObjectClass = ObjectClass::Global(99);
 
     // object IDs are set far above the ObjectId::next() counter range so that
     // counter-generated IDs from overlaps() never collide with test IDs in parallel runs.
@@ -1137,7 +1135,7 @@ mod tests {
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         // object_b has CLASS_B and CLASS_C → passes filter
         let mut object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
-        object_b.add_object_class(CLASS_C);
+        object_b.add_object_class(CLASS_C, Scope::Global).unwrap();
         cache.object_cache.insert(object_a.id.clone(), object_a);
         cache.object_cache.insert(object_b.id.clone(), object_b);
 
@@ -1181,7 +1179,7 @@ mod tests {
         let overlap_object = cache
             .object_cache
             .values()
-            .find(|r| r.has_object_class(&CLASS_OVERLAP))
+            .find(|r| r.is_of(&CLASS_OVERLAP, Scope::Global))
             .expect("intersection object tagged with CLASS_OVERLAP not found");
         assert_eq!(overlap_object.bbox, [2, 2, 3, 3]);
         assert_eq!(overlap_object.area, 4);
@@ -1265,7 +1263,7 @@ mod tests {
         let overlap_object = cache
             .object_cache
             .values()
-            .find(|r| r.has_object_class(&CLASS_OVERLAP))
+            .find(|r| r.is_of(&CLASS_OVERLAP, Scope::Global))
             .expect("intersection object tagged with CLASS_OVERLAP not found");
         assert_eq!(overlap_object.area, 9);
         let intensity = overlap_object
@@ -1366,7 +1364,7 @@ mod tests {
         let overlap_objects: Vec<_> = cache
             .object_cache
             .values()
-            .filter(|r| r.has_object_class(&CLASS_OVERLAP))
+            .filter(|r| r.is_of(&CLASS_OVERLAP, Scope::Global))
             .collect();
         assert_eq!(
             overlap_objects.len(),
@@ -1501,7 +1499,7 @@ mod tests {
 
         // X belongs to both A and B.
         let mut x = make_filled_object(ID_X, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
-        x.add_object_class(CLASS_B);
+        x.add_object_class(CLASS_B, Scope::Global).unwrap();
         // W (class A) and Z (class B) each overlap X, so both of X's anchor
         // passes (as an A member and as a B member) find a partner for the
         // *other* target class and pass the "must overlap every other class"
@@ -2196,7 +2194,7 @@ mod tests {
             source_tile,
             ..Default::default()
         });
-        object.add_object_class(class);
+        object.add_object_class(class, Scope::Global).unwrap();
         object
     }
 
@@ -2282,7 +2280,7 @@ mod tests {
         let merged_a = cache
             .object_cache
             .values()
-            .find(|o| o.has_object_class(&CLASS_A))
+            .find(|o| o.is_of(&CLASS_A, Scope::Global))
             .expect("the two CLASS_A fragments must have merged into one object")
             .id
             .clone();

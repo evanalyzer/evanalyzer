@@ -105,6 +105,7 @@ bcrypt = "0.19.3"
 argon2 = "0.6.0"
 yescrypt = { version = "0.1.0", default-features = false, features = ["password-hash"] }
 rhai = "1.26.1"
+libc = "0.2.190"
 
 [profile.release]
 strip = true

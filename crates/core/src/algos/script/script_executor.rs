@@ -1,13 +1,15 @@
 use crate::algos::script::script_bridge::{
     ScriptHost, ScriptImage, check_referenced_commands, referenced_citations,
 };
+use crate::algos::script::script_params;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass};
+use evanalyzer_cfg::settings::components::ParamValue;
 use log::{debug, info};
 use macros::CommandsMeta;
 use rhai::{AST, Engine, EvalAltResult, Map, Position, Scope};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 /// Upper bound on the operations one script run may execute, so an endless
@@ -51,6 +53,13 @@ pub struct Script {
         default = String::from("print(`Hello world from a ${image_width}x${image_height} tile`);\n")
     )]
     pub source: String,
+
+    /// The values set for the script's `param`s, by name - only those that
+    /// differ from the default the script gives. The script declares its
+    /// params (`param max_rounds = 10;`); a value for a name it doesn't
+    /// declare is ignored.
+    #[cmdsmeta(optional, visibility = Hidden)]
+    pub values: BTreeMap<String, ParamValue>,
 }
 
 impl ImageAlgorithm for Script {
@@ -74,7 +83,10 @@ impl ImageAlgorithm for Script {
         scope.push_constant("tile_y", tile.offset_y as i64);
         scope.push_constant("image_bits", ctx.image_meta.nr_of_bits as i64);
 
-        let _lent = LentHost::lend(ctx, cache, &self.classes)?;
+        // A class param's class is added when its `param` line runs.
+        let classes = self.classes.clone();
+        let params = self.values.clone().into_iter().collect();
+        let _lent = LentHost::lend(ctx, cache, &classes, params)?;
         ENGINE
             .with(|engine| engine.run_ast_with_scope(&mut scope, &ast))
             .map_err(|e| script_error(&e))
@@ -106,6 +118,51 @@ impl ImageAlgorithm for Script {
     }
 }
 
+/// The `param` lines of `source` (see [`script_params`](crate::algos::script::script_params)).
+///
+/// # Errors
+/// The script doesn't parse, or a `param` line is wrong - with its line.
+pub fn declared_script_params(source: &str) -> Result<Vec<script_params::ParamDecl>, String> {
+    ENGINE.with(|engine| script_params::declared_params(engine, source))
+}
+
+/// `command`'s settings as the editor shows them: the generated ones, and
+/// for a Script step one per `param` of its script (`values.<name>`, see
+/// [`script_params`]). Component parameters bind to these too.
+pub fn command_parameters(
+    command: &evanalyzer_cfg::settings::pipeline_command::PipelineCommand,
+) -> Vec<evanalyzer_cfg::settings::parameter_def::ParameterDef> {
+    let mut parameters = command.to_parameters();
+    if let evanalyzer_cfg::settings::pipeline_command::PipelineCommand::Script(settings) = command
+        && let Ok(decls) = declared_script_params(&settings.source)
+    {
+        parameters.extend(script_params::script_parameters(&decls, &settings.values));
+    }
+    parameters
+}
+
+/// Sets setting `path` of `command` from `text`, as the editor reports it -
+/// [`command_parameters`]' counterpart (a Script step's `values.<name>`
+/// too). A value the setting doesn't take leaves it as it is.
+pub fn apply_command_param(
+    command: &mut evanalyzer_cfg::settings::pipeline_command::PipelineCommand,
+    path: &str,
+    text: &str,
+) {
+    if let evanalyzer_cfg::settings::pipeline_command::PipelineCommand::Script(settings) = command
+        && let Some(name) = path.strip_prefix("values.")
+    {
+        if let Ok(decls) = declared_script_params(&settings.source)
+            && let Err(e) =
+                script_params::set_script_value(&decls, &mut settings.values, name, text)
+        {
+            debug!("script param {name}: {e}");
+        }
+        return;
+    }
+    command.apply_param_change(path, text);
+}
+
 /// Compiled scripts kept per thread; a pipeline rarely has more than a few.
 const COMPILED_CACHE_SIZE: usize = 16;
 
@@ -124,6 +181,9 @@ fn compiled(source: &str) -> Result<Rc<AST>, InternalErrors> {
     if let Some(ast) = COMPILED.with_borrow(|c| c.get(source).cloned()) {
         return Ok(ast);
     }
+    // Checks the `param` lines too (names, defaults).
+    declared_script_params(source)
+        .map_err(|e| InternalErrors::Generic(format!("Script error: {e}")))?;
     let ast = ENGINE
         .with(|engine| engine.compile(source))
         .map_err(|e| script_error(&e.into()))?;
@@ -151,6 +211,7 @@ impl<'a> LentHost<'a> {
         ctx: &'a mut PipelineContext,
         cache: &'a mut GlobalPipelineCache,
         classes: &[ObjectClass],
+        params: HashMap<String, ParamValue>,
     ) -> Result<Self, InternalErrors> {
         HOST.with_borrow_mut(|host| {
             if host.is_some() {
@@ -162,6 +223,7 @@ impl<'a> LentHost<'a> {
                 ctx: ctx.take(),
                 cache: std::mem::take(cache),
                 classes: classes.to_vec(),
+                params,
             });
             Ok(())
         })?;
@@ -196,6 +258,19 @@ fn with_host<T>(f: impl FnOnce(&mut ScriptHost) -> Result<T, String>) -> ScriptR
 /// - on `Image`: `width`, `height`, `mean()`, `min()`, `max()`
 fn new_engine() -> Engine {
     let mut engine = Engine::new();
+    script_params::register(
+        &mut engine,
+        |name| HOST.with_borrow(|host| host.as_ref().and_then(|h| h.params.get(name).cloned())),
+        |class| {
+            HOST.with_borrow_mut(|host| {
+                if let Some(host) = host
+                    && !host.classes.contains(&class)
+                {
+                    host.classes.push(class);
+                }
+            })
+        },
+    );
     engine
         .set_max_operations(MAX_OPERATIONS)
         .set_max_call_levels(MAX_CALL_LEVELS)
@@ -263,6 +338,14 @@ mod tests {
     use kornia_image::{Image, ImageSize};
 
     fn run(source: &str) -> Result<(), InternalErrors> {
+        run_with(source, vec![])
+    }
+
+    fn param(name: &str, value: ParamValue) -> (String, ParamValue) {
+        (name.to_string(), value)
+    }
+
+    fn run_with(source: &str, values: Vec<(String, ParamValue)>) -> Result<(), InternalErrors> {
         let image = Image::<f32, 1>::from_size_slice(
             ImageSize {
                 width: 4,
@@ -276,8 +359,172 @@ mod tests {
         Script {
             classes: vec![],
             source: source.into(),
+            values: values.into_iter().collect(),
         }
         .execute(&mut ctx, &mut cache)
+    }
+
+    #[test]
+    fn param_lines_are_read_with_their_types_and_defaults() {
+        use crate::algos::{ParamDecl, ParamKind, ScriptValue};
+        use evanalyzer_cfg::core_types::ImageChannelIdx;
+        let decls = declared_script_params(
+            r#"
+            // param in_a_comment = 1;
+            param rounds = 10;
+            param start = 800.0;
+            param offset: decimal = -3;
+            param verbose = false;
+            param label = "Nuclei";
+            param nuclei: class = 4;
+            param input: channel = 2;
+            let plain = 5;
+            let text = "param not_one = 1;";
+        "#,
+        )
+        .unwrap();
+        let decl = |name: &str, kind, default| ParamDecl {
+            name: name.into(),
+            kind,
+            default,
+        };
+        assert_eq!(
+            decls,
+            [
+                decl("rounds", ParamKind::Number, ScriptValue::Number(10)),
+                decl("start", ParamKind::Decimal, ScriptValue::Decimal(800.0)),
+                decl("offset", ParamKind::Decimal, ScriptValue::Decimal(-3.0)),
+                decl("verbose", ParamKind::Bool, ScriptValue::Bool(false)),
+                decl("label", ParamKind::Text, ScriptValue::Text("Nuclei".into())),
+                decl(
+                    "nuclei",
+                    ParamKind::Class,
+                    ScriptValue::Class(ObjectClass::Global(4))
+                ),
+                decl(
+                    "input",
+                    ParamKind::Channel,
+                    ScriptValue::Channel(ImageChannelIdx(2))
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn wrong_param_lines_are_reported_with_their_line() {
+        let error = |source: &str| declared_script_params(source).unwrap_err();
+        let e = error("let a = 1;\nparam n = a * 2;");
+        assert!(e.contains("plain value") && e.contains("line 2"), "{e}");
+        let e = error("param n = 1 + 1;");
+        assert!(e.contains("followed by `;`"), "{e}");
+        let e = error("param n: size = 1;");
+        assert!(e.contains("unknown type `size`"), "{e}");
+        let e = error("param n: bool = 1;");
+        assert!(e.contains("`true` or `false`"), "{e}");
+        let e = error("param n = 1;\nparam n = 2;");
+        assert!(e.contains("declared twice"), "{e}");
+        let e = error("param image_width = 1;");
+        assert!(e.contains("taken"), "{e}");
+    }
+
+    #[test]
+    fn a_param_has_its_default_or_the_steps_value() {
+        let source = r#"
+            param rounds = 3;
+            let count = 0;
+            for i in 0..rounds { count += 1; }
+            if count != expected { throw `ran ${count} rounds`; }
+        "#;
+        run_with(&format!("const expected = 3;{source}"), vec![]).expect("the default");
+        run_with(
+            &format!("const expected = 5;{source}"),
+            vec![param("rounds", ParamValue::Int(5))],
+        )
+        .expect("the step's value");
+    }
+
+    /// The editor's settings come from the script; only changed values are
+    /// stored, by name.
+    #[test]
+    fn only_values_that_differ_from_the_default_are_stored() {
+        use crate::algos::script::script_params::{script_parameters, set_script_value};
+        let decls = declared_script_params("param rounds = 10;\nparam cell: class = 2;").unwrap();
+        let mut values = BTreeMap::new();
+        let shown = script_parameters(&decls, &values);
+        let names: Vec<&str> = shown.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["values.rounds", "values.cell"]);
+        assert_eq!(shown[0].value, "10");
+
+        set_script_value(&decls, &mut values, "rounds", "25").unwrap();
+        set_script_value(&decls, &mut values, "cell", "L1").unwrap();
+        assert_eq!(values["rounds"], ParamValue::Int(25));
+        assert_eq!(values["cell"], ParamValue::Text("L1".into()));
+        assert_eq!(script_parameters(&decls, &values)[0].value, "25");
+
+        set_script_value(&decls, &mut values, "rounds", "10").unwrap();
+        assert!(
+            !values.contains_key("rounds"),
+            "back at the default: not stored"
+        );
+        assert!(set_script_value(&decls, &mut values, "rounds", "many").is_err());
+        assert!(set_script_value(&decls, &mut values, "nothing", "1").is_err());
+    }
+
+    #[test]
+    fn params_are_constants() {
+        let err = run("param n = 1;\nn = 2;").unwrap_err().to_string();
+        assert!(err.contains("constant"), "{err}");
+    }
+
+    #[test]
+    fn a_class_param_is_a_number_or_a_components_class_and_may_be_used_by_commands() {
+        let check = r#"
+            param cell: class = 4;
+            if cell != expected { throw `got ${cell}`; }
+        "#;
+        run_with(&format!("const expected = 4;{check}"), vec![]).unwrap();
+        run_with(
+            &format!("const expected = \"L1\";{check}"),
+            vec![param("cell", ParamValue::Text("L1".into()))],
+        )
+        .unwrap();
+        // Not in `classes`, yet allowed: it's a param.
+        run(r#"
+            param seg: class = 4;
+            run("threshold", #{ "thresholds.0.segmentation_class": seg });
+        "#)
+        .expect("a class param counts as declared");
+    }
+
+    #[test]
+    fn a_components_own_class_from_a_param_reaches_a_command() {
+        // Save Image needs an output folder the test doesn't have - what
+        // matters is that the class got past the checks.
+        let result = run_with(
+            r#"
+            param cell: class = 1;
+            run("save_image", #{ "display_classes": [cell] });
+        "#,
+            vec![param("cell", ParamValue::Text("L1".into()))],
+        );
+        if let Err(e) = result {
+            let e = e.to_string();
+            assert!(
+                e.contains("No output path"),
+                "\"L1\" must be a class a command takes: {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_of_another_type_than_the_script_says_is_refused() {
+        let err = run_with(
+            "param n = 1;",
+            vec![param("n", ParamValue::Text("x".into()))],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("is no number"), "{err}");
     }
 
     #[test]
@@ -361,6 +608,7 @@ mod tests {
         let err = Script {
             classes: vec![],
             source: r#"run("gaussian_blur"); run("gausian_blur");"#.into(),
+            values: Default::default(),
         }
         .execute(&mut ctx, &mut GlobalPipelineCache::default())
         .unwrap_err()
@@ -377,6 +625,7 @@ mod tests {
         let script = Script {
             classes: vec![],
             source: r#"run("edge_detection_sobel");"#.into(),
+            values: Default::default(),
         };
         let keys: Vec<&str> = script.cite().iter().map(|c| c.cite_key).collect();
         assert!(keys.contains(&"danmayr2026"), "{keys:?}");
@@ -415,6 +664,7 @@ mod tests {
         let result = Script {
             classes: vec![],
             source: r#"run("gaussian_blur"); throw "stop";"#.into(),
+            values: Default::default(),
         }
         .execute(&mut ctx, &mut cache);
         assert!(result.is_err());

@@ -15,7 +15,7 @@ use crate::object::Object;
 use crate::pipeline::pipeline::PipelineImageMeta;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
-use crate::resources::MAX_TILE_SIZE;
+use crate::utils::resources::MAX_TILE_SIZE;
 use evanalyzer_cfg::core_types::TrainingProgressEvent;
 use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
 use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;

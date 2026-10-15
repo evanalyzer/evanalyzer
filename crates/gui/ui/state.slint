@@ -26,7 +26,13 @@ export enum DialogType {
     run_analysis_confirm,
     ai_learning,
     shortcuts_help,
-    script_editor }
+    script_editor,
+    create_component,
+    component_edit_choice,
+    expose_choice,
+    component_update,
+    component_settings,
+    step_settings }
 
 
 /// Where the work happens - this computer or a server. Shown in the status
@@ -71,7 +77,7 @@ export global GlobalAppState {
 
 // One distinct license text used by one or more third-party crates (grouped
 // by exact text, not just SPDX id - copyright lines differ crate to crate,
-// so e.g. "MIT" covers many distinct `text_paragraphs` groups).
+// so e.g. "MIT" covers many distinct `text_paragraphs` components).
 export struct ThirdPartyLicense {
         id: string,
         name: string,

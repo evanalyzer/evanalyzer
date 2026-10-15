@@ -90,7 +90,7 @@ fn open_sequence(backend: &LocalBackend, path: &PathBuf) -> (Arc<dyn ResultsSour
         db.get_object_list(&ListFilter {
             plane: plane(),
             images: None,
-            object_classes: Some(classes.iter().map(|c| c.id).collect()),
+            object_classes: Some(classes.iter().map(|c| c.global()).collect()),
             columns: vec![
                 Column::ObjectId,
                 Column::ImageName,

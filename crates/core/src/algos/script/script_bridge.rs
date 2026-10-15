@@ -89,6 +89,9 @@ pub(crate) struct ScriptHost {
     pub(crate) cache: GlobalPipelineCache,
     /// The script step's declared classes; commands may use only these.
     pub(crate) classes: Vec<ObjectClass>,
+    /// The step's values of the script's `param`s, by name.
+    pub(crate) params:
+        std::collections::HashMap<String, evanalyzer_cfg::settings::components::ParamValue>,
 }
 
 impl ScriptHost {
@@ -448,6 +451,8 @@ fn value_to_param_string(value: &Dynamic) -> Result<String, String> {
             .iter()
             .map(|item| match item.as_int() {
                 Ok(i) => Ok(i.to_string()),
+                // A component's own class from a class param ("L1").
+                Err(_) if item.is_string() => Ok(item.clone().into_string().unwrap_or_default()),
                 Err(_) => Err(format!(
                     "list entries must be integers, got {}",
                     item.type_name()
@@ -493,16 +498,23 @@ fn checked_value(def: &ParameterDef, value: &str) -> Result<String, String> {
                     )
                 })
         }
-        ParamType::ObjClass => match value.parse::<i64>() {
-            Ok(-1) => Ok(value.to_string()),
-            Ok(v) if u32::try_from(v).is_ok() => Ok(value.to_string()),
-            _ => Err(format!("expected a class id (or -1 for none), got `{value}`")),
-        },
+        // A number, -1 for none, or a component's own class ("L1" - a class
+        // param inside a component).
+        ParamType::ObjClass => ObjectClass::from_text(value)
+            .map(|_| value.to_string())
+            .ok_or_else(|| format!("expected a class id (or -1 for none), got `{value}`")),
         ParamType::SegClass | ParamType::ImageChannel => value
             .parse::<u32>()
             .map(|_| value.to_string())
             .map_err(|_| format!("expected a non-negative integer, got `{value}`")),
-        ParamType::MultiObjClass | ParamType::MultiSegClass => {
+        ParamType::MultiObjClass => {
+            for id in value.split(',').filter(|x| !x.is_empty()) {
+                ObjectClass::from_text(id.trim())
+                    .ok_or_else(|| format!("expected a list of class ids, got `{value}`"))?;
+            }
+            Ok(value.to_string())
+        }
+        ParamType::MultiSegClass => {
             for id in value.split(',').filter(|x| !x.is_empty()) {
                 id.trim()
                     .parse::<u32>()
@@ -535,6 +547,7 @@ fn normalize_label(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::algos::{GaussianBlur, ImageAlgorithm};
+    use crate::pipeline::scope::Scope;
     use kornia_image::{Image, ImageSize};
 
     fn map(entries: &[(&str, Dynamic)]) -> Map {
@@ -774,6 +787,7 @@ mod tests {
             ctx: PipelineContext::new_from_image_test(image).unwrap(),
             cache: GlobalPipelineCache::default(),
             classes: vec![],
+            params: Default::default(),
         }
     }
 
@@ -881,14 +895,63 @@ mod tests {
 
     #[test]
     fn commands_may_only_use_the_declared_classes() {
-        let params = map(&[("thresholds.0.object_class_id", Dynamic::from(4_i64))]);
+        let params = map(&[("thresholds.0.segmentation_class", Dynamic::from(4_i64))]);
         let mut undeclared = host();
         let err = undeclared.run_command("threshold", &params).unwrap_err();
         assert!(err.contains("class 4"), "{err}");
 
         let mut declared = host();
-        declared.classes = vec![ObjectClass::Valid(4)];
+        declared.classes = vec![ObjectClass::Global(4)];
         declared.run_command("threshold", &params).unwrap();
+    }
+
+    #[test]
+    fn save_image_takes_display_classes_and_opacity_from_the_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let params = map(&[
+            ("name", Dynamic::from("overlay".to_string())),
+            ("display_classes", Dynamic::from(vec![Dynamic::from(4_i64)])),
+            ("opacity", Dynamic::from(100_i64)),
+        ]);
+        let mut undeclared = host();
+        undeclared.ctx.output_path = Some(dir.path().to_path_buf());
+        let err = undeclared.run_command("save_image", &params).unwrap_err();
+        assert!(err.contains("class 4"), "{err}");
+
+        // A 3x3 object of class 4 around the host image's center pixel.
+        let mut object = crate::object::Object::new(crate::object::ObjectInit {
+            id: evanalyzer_cfg::core_types::ObjectId::next(),
+            bbox: [2, 2, 4, 4],
+            mask_data: bitvec::prelude::BitVec::repeat(true, 9),
+            area: 9,
+            ..Default::default()
+        });
+        object
+            .add_object_class(ObjectClass::Global(4), Scope::Global)
+            .unwrap();
+        let mut declared = host();
+        declared.ctx.output_path = Some(dir.path().to_path_buf());
+        declared.classes = vec![ObjectClass::Global(4)];
+        declared
+            .cache
+            .object_cache
+            .insert(object.id.clone(), object);
+        declared.cache.class_colors = std::sync::Arc::new(std::collections::HashMap::from([(
+            ObjectClass::Global(4),
+            0x00FF00,
+        )]));
+        declared.run_command("save_image", &params).unwrap();
+
+        let saved = image::open(dir.path().join("images/overlay_x000000_y000000.png"))
+            .unwrap()
+            .into_rgb8();
+        assert_eq!(
+            saved.get_pixel(3, 3).0,
+            [0, 255, 0],
+            "filled at opacity 100"
+        );
+        assert_eq!(saved.get_pixel(2, 2).0, [0, 255, 0], "contour");
+        assert_eq!(saved.get_pixel(0, 0).0, [0, 0, 0], "outside the object");
     }
 
     #[test]

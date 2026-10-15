@@ -121,7 +121,13 @@ impl Backend for LocalBackend {
 
     fn start_analysis(&self, req: AnalysisRequest) -> Result<RunningJob, InternalErrors> {
         self.check_project_paths(Some(&req.project_path), &req.settings)?;
-        super::job::start_analysis(req.settings, req.project_path, req.job_name, req.threads)
+        super::job::start_analysis(
+            req.settings,
+            req.project_path,
+            req.job_name,
+            req.threads,
+            req.base_results,
+        )
     }
 
     fn start_preview(&self, req: PreviewRequest) -> Result<RunningJob, StartPreviewError> {

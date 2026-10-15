@@ -66,8 +66,8 @@ export struct CommandDef {
     favorite: bool,
     recent: bool,
     default-params: [DefaultParamPreview],
-    // Pipeline template entries (negative ids).
-    is-template: bool,
+    // Component entries (ids from 1 000 000).
+    is-component: bool,
     authors: [CommandAuthor],
     creation-time: string,
 }
@@ -84,8 +84,10 @@ export global CommandPickerState {
     in property <[CommandDef]> shown-segment;
     in property <[CommandDef]> shown-object;
     in property <[CommandDef]> shown-classify;
+    in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-measure;
-    in property <[CommandDef]> shown-templates;
+    in property <[CommandDef]> shown-components;
+    in property <[CommandDef]> shown-library-components;
     in property <CommandDef> detail;
     in property <bool> has-detail;
     in property <int> total-shown;
@@ -93,8 +95,13 @@ export global CommandPickerState {
     in property <int> cat-count-seg;
     in property <int> cat-count-obj;
     in property <int> cat-count-cls;
+    in property <int> cat-count-dat;
     in property <int> cat-count-mea;
-    in property <int> cat-count-fav;
+    in property <int> cat-count-grp;
+    /// The project's components no pipeline uses ("Remove N unused").
+    in property <int> unused-component-count;
+    /// The selected entry is a project component no pipeline uses.
+    in property <bool> detail-removable;
     /// -1 = no context (empty pipeline); 0..4 = display_order of the last step's category.
     /// Used to auto-pre-select the filter chip for "what comes next".
     in property <int> context-category: -1;
@@ -109,12 +116,15 @@ export global CommandPickerState {
     in-out property <bool> fcat-obj: false;
     in-out property <bool> fcat-mea: false;
     in-out property <bool> fcat-cls: false;
-    in-out property <bool> filter-favorites: false;
+    in-out property <bool> fcat-dat: false;
+    in-out property <bool> filter-components: false;
     in-out property <int> selected-id: -1;
 
     callback query-changed(string);
     callback select(int);
     callback confirm(int);
+    callback remove-component(int);
+    callback remove-unused-components();
     callback cancel();
     callback import-bioimageio();
 }
@@ -141,14 +151,15 @@ global PickerStyle {
         if c == StepCategory.measure {
             return Theme.cat-measure;
         }
+        if c == StepCategory.dataset {
+            return Theme.cat-dataset;
+        }
+        if c == StepCategory.component {
+            return Theme.cat-component;
+        }
         return Theme.cat-classify;
     }
-    // Templates always use the accent color, regardless of the category of
-    // their first step.
     public pure function cmd-color(cmd: CommandDef) -> color {
-        if cmd.is-template {
-            return Theme.accent;
-        }
         return cat-color(cmd.category);
     }
     public pure function cat-name(c: StepCategory) -> string {
@@ -163,6 +174,12 @@ global PickerStyle {
         }
         if c == StepCategory.measure {
             return "Measure";
+        }
+        if c == StepCategory.dataset {
+            return "Dataset";
+        }
+        if c == StepCategory.component {
+            return "Component";
         }
         return "Object";
     }
@@ -304,7 +321,19 @@ component CommandRow inherits Rectangle {
             background: Theme.bg;
             border-width: 1px;
             border-color: Theme.border-soft;
-            Text {
+            // The component diamond is drawn: as a glyph, the font's metrics
+            // put it off centre.
+            if cmd.icon-glyph == "◆": Path {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 12px;
+                height: 12px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                commands: "M 6 0 L 12 6 L 6 12 L 0 6 Z";
+                fill: PickerStyle.cmd-color(cmd);
+            }
+            if cmd.icon-glyph != "◆": Text {
                 text: cmd.icon-glyph;
                 color: PickerStyle.cmd-color(cmd);
                 font-size: 14px;
@@ -391,6 +420,9 @@ component CommandRow inherits Rectangle {
 component DetailPane inherits Rectangle {
     in property <CommandDef> cmd;
     in property <bool> has-selection: false;
+    /// A project component no pipeline uses: "Remove from project".
+    in property <bool> removable: false;
+    callback remove();
 
     background: Theme.bg;
 
@@ -440,7 +472,7 @@ component DetailPane inherits Rectangle {
             }
 
             Text {
-                text: cmd.is-template ? "TEMPLATE" : PickerStyle.cat-name(cmd.category);
+                text: cmd.is-component ? "COMPONENT" : PickerStyle.cat-name(cmd.category);
                 color: PickerStyle.cmd-color(cmd);
                 font-size: 10px;
                 font-weight: 600;
@@ -521,9 +553,14 @@ component DetailPane inherits Rectangle {
             background: Theme.border-soft;
         }
 
+        // Footer metadata: as tall as its rows - the spacer above takes the
+        // rest (empty rows here used to stretch it apart).
         VerticalLayout {
             spacing: 4px;
-            if cmd.is-template && cmd.authors.length > 0: HorizontalLayout {
+            vertical-stretch: 0;
+            alignment: start;
+            // Components: who made it, and when.
+            if cmd.is-component && cmd.authors.length > 0: HorizontalLayout {
                 spacing: 8px;
                 alignment: space-between;
                 Text {
@@ -533,7 +570,7 @@ component DetailPane inherits Rectangle {
                 }
 
                 Text {
-                    text: cmd.authors[0].full-name + " (" + cmd.authors[0].organization + ")";
+                    text: cmd.authors[0].organization == "" ? cmd.authors[0].full-name : cmd.authors[0].full-name + " (" + cmd.authors[0].organization + ")";
                     color: Theme.text-dim;
                     font-size: 10.5px;
                     font-family: Theme.font-mono;
@@ -541,9 +578,11 @@ component DetailPane inherits Rectangle {
                 }
             }
 
-            if cmd.is-template: VerticalLayout {
+            if cmd.is-component && cmd.authors.length > 1: VerticalLayout {
                 spacing: 4px;
+                vertical-stretch: 0;
                 for author[index] in cmd.authors: HorizontalLayout {
+                    vertical-stretch: 0;
                     if index > 0: HorizontalLayout {
                         spacing: 8px;
                         alignment: space-between;
@@ -555,7 +594,7 @@ component DetailPane inherits Rectangle {
                         }
 
                         Text {
-                            text: author.full-name + " (" + author.organization + ")";
+                            text: author.organization == "" ? author.full-name : author.full-name + " (" + author.organization + ")";
                             color: Theme.text-dim;
                             font-size: 10.5px;
                             font-family: Theme.font-mono;
@@ -565,7 +604,7 @@ component DetailPane inherits Rectangle {
                 }
             }
 
-            if cmd.is-template && cmd.creation-time != "": HorizontalLayout {
+            if cmd.is-component && cmd.creation-time != "": HorizontalLayout {
                 spacing: 8px;
                 alignment: space-between;
                 Text {
@@ -583,7 +622,7 @@ component DetailPane inherits Rectangle {
                 }
             }
 
-            if !cmd.is-template: HorizontalLayout {
+            HorizontalLayout {
                 spacing: 8px;
                 alignment: space-between;
                 Text {
@@ -616,6 +655,17 @@ component DetailPane inherits Rectangle {
                     font-family: Theme.font-mono;
                 }
             }
+
+            if cmd.is-component && root.removable: HorizontalLayout {
+                alignment: start;
+                padding-top: 6px;
+                AppButton {
+                    text: "Remove from project";
+                    clicked => {
+                        root.remove();
+                    }
+                }
+            }
         }
     }
 }
@@ -639,7 +689,8 @@ export component CommandSelectionDialog inherits Rectangle {
     in-out property <bool> fcat-obj: false;
     in-out property <bool> fcat-mea: false;
     in-out property <bool> fcat-cls: false;
-    in-out property <bool> filter-favorites: false;
+    in-out property <bool> fcat-dat: false;
+    in-out property <bool> filter-components: false;
     in-out property <bool> filter-recents: false;
     in-out property <int> selected-id: -1;
 
@@ -651,8 +702,10 @@ export component CommandSelectionDialog inherits Rectangle {
     in property <[CommandDef]> shown-segment;
     in property <[CommandDef]> shown-object;
     in property <[CommandDef]> shown-classify;
+    in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-measure;
-    in property <[CommandDef]> shown-templates;
+    in property <[CommandDef]> shown-components;
+    in property <[CommandDef]> shown-library-components;
     in property <CommandDef> detail;            // command for selected-id (or default)
     in property <bool> has-detail;
     in property <int> total-shown;       // sum across the five categories
@@ -660,8 +713,13 @@ export component CommandSelectionDialog inherits Rectangle {
     in property <int> cat-count-seg;
     in property <int> cat-count-obj;
     in property <int> cat-count-cls;
+    in property <int> cat-count-dat;
     in property <int> cat-count-mea;
-    in property <int> cat-count-fav;
+    in property <int> cat-count-grp;
+    /// The project's components no pipeline uses ("Remove N unused").
+    in property <int> unused-component-count;
+    /// The selected entry is a project component no pipeline uses.
+    in property <bool> detail-removable;
     in property <int> cat-count-rec;
 
     // ---- Outbound callbacks ----
@@ -669,6 +727,8 @@ export component CommandSelectionDialog inherits Rectangle {
     callback select(int);            // by id
     callback toggle-favorite(int);
     callback confirm(int);           // commit: insert this id
+    callback remove-component(int);
+    callback remove-unused-components();
     callback cancel();
     callback import-bioimageio();    // open a bioimage.io rdf.yaml and insert the configured command
 
@@ -847,14 +907,15 @@ export component CommandSelectionDialog inherits Rectangle {
                         label: "All";
                         count: total-shown;
                         tinted: false;
-                        active: !fcat-pre && !fcat-seg && !fcat-obj && !fcat-mea && !fcat-cls && !filter-favorites && !filter-recents;
+                        active: !fcat-pre && !fcat-seg && !fcat-obj && !fcat-mea && !fcat-cls && !fcat-dat && !filter-components && !filter-recents;
                         clicked => {
                             root.fcat-pre = false;
                             root.fcat-seg = false;
                             root.fcat-obj = false;
                             root.fcat-mea = false;
                             root.fcat-cls = false;
-                            root.filter-favorites = false;
+                            root.fcat-dat = false;
+                            root.filter-components = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -867,7 +928,7 @@ export component CommandSelectionDialog inherits Rectangle {
                         active: fcat-pre;
                         clicked => {
                             root.fcat-pre = !fcat-pre;
-                            root.filter-favorites = false;
+                            root.filter-components = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -880,7 +941,7 @@ export component CommandSelectionDialog inherits Rectangle {
                         active: fcat-seg;
                         clicked => {
                             root.fcat-seg = !fcat-seg;
-                            root.filter-favorites = false;
+                            root.filter-components = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -893,7 +954,7 @@ export component CommandSelectionDialog inherits Rectangle {
                         active: fcat-obj;
                         clicked => {
                             root.fcat-obj = !fcat-obj;
-                            root.filter-favorites = false;
+                            root.filter-components = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -906,7 +967,7 @@ export component CommandSelectionDialog inherits Rectangle {
                         active: fcat-mea;
                         clicked => {
                             root.fcat-mea = !fcat-mea;
-                            root.filter-favorites = false;
+                            root.filter-components = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -919,7 +980,20 @@ export component CommandSelectionDialog inherits Rectangle {
                         active: fcat-cls;
                         clicked => {
                             root.fcat-cls = !fcat-cls;
-                            root.filter-favorites = false;
+                            root.filter-components = false;
+                            root.filter-recents = false;
+                            root.query-changed(query);
+                        }
+                    }
+
+                    FilterChip {
+                        label: "Dataset";
+                        count: cat-count-dat;
+                        tint: Theme.cat-dataset;
+                        active: fcat-dat;
+                        clicked => {
+                            root.fcat-dat = !fcat-dat;
+                            root.filter-components = false;
                             root.filter-recents = false;
                             root.query-changed(query);
                         }
@@ -940,24 +1014,24 @@ export component CommandSelectionDialog inherits Rectangle {
                    //     visible: false;
                    //     clicked => {
                    //         root.filter-recents = !filter-recents;
-                   //         root.filter-favorites = false;
                    //         root.filter-category = -1;
                    //     }
                    // }
 
                     FilterChip {
-                        label: "★ Templates";
-                        count: cat-count-fav;
-                        tinted: false;
-                        active: filter-favorites;
+                        label: "◆ Components";
+                        count: cat-count-grp;
+                        tint: Theme.cat-component;
+                        active: filter-components;
                         clicked => {
-                            root.filter-favorites = !filter-favorites;
+                            root.filter-components = !filter-components;
                             root.filter-recents = false;
                             root.fcat-pre = false;
                             root.fcat-seg = false;
                             root.fcat-obj = false;
                             root.fcat-mea = false;
                             root.fcat-cls = false;
+                            root.fcat-dat = false;
                             root.query-changed(query);
                         }
                     }
@@ -994,7 +1068,7 @@ export component CommandSelectionDialog inherits Rectangle {
                                 spacing: 0;
 
                                 // Empty state
-                            if total-shown == 0 && !filter-favorites: VerticalLayout {
+                            if total-shown == 0 && !filter-components: VerticalLayout {
                                     padding-top: 60px;
                                     spacing: 10px;
                                     Text {
@@ -1014,7 +1088,7 @@ export component CommandSelectionDialog inherits Rectangle {
                                 }
 
                                 // Preprocess
-                            if shown-preprocess.length > 0 && !filter-favorites: VerticalLayout {
+                            if shown-preprocess.length > 0 && !filter-components: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.preprocess;
@@ -1038,7 +1112,7 @@ export component CommandSelectionDialog inherits Rectangle {
                                 }
 
                                 // Segment
-                            if shown-segment.length > 0 && !filter-favorites: VerticalLayout {
+                            if shown-segment.length > 0 && !filter-components: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.segment;
@@ -1077,7 +1151,7 @@ export component CommandSelectionDialog inherits Rectangle {
                                 }
 
                                 // Instance Segmentation
-                            if shown-object.length > 0 && !filter-favorites: VerticalLayout {
+                            if shown-object.length > 0 && !filter-components: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.instance-segmentation;
@@ -1101,7 +1175,7 @@ export component CommandSelectionDialog inherits Rectangle {
                                 }
 
                                 // Measure
-                            if shown-measure.length > 0 && !filter-favorites: VerticalLayout {
+                            if shown-measure.length > 0 && !filter-components: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.measure;
@@ -1125,7 +1199,7 @@ export component CommandSelectionDialog inherits Rectangle {
                                 }
 
                                 // Object
-                            if shown-classify.length > 0 && !filter-favorites: VerticalLayout {
+                            if shown-classify.length > 0 && !filter-components: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
                                         category: StepCategory.object;
@@ -1148,22 +1222,87 @@ export component CommandSelectionDialog inherits Rectangle {
                                     }
                                 }
 
-                                // Templates
-                            if filter-favorites: VerticalLayout {
+                                // Dataset
+                            if shown-dataset.length > 0 && !filter-components: VerticalLayout {
+                                    spacing: 0;
+                                    SectionHeader {
+                                        category: StepCategory.dataset;
+                                        count: shown-dataset.length;
+                                    }
+
+                                    for c in shown-dataset: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+                                }
+
+                                // Components: the chip lists the project's components; without it,
+                                // a search lists the matching ones too.
+                            if (filter-components || query != "") : VerticalLayout {
                                     spacing: 0;
 
-                                    if shown-templates.length == 0: VerticalLayout {
+                                    if filter-components && unused-component-count > 0: Rectangle {
+                                        height: 30px;
+                                        HorizontalLayout {
+                                            padding-left: 14px;
+                                            padding-right: 14px;
+                                            spacing: 8px;
+                                            Text {
+                                                text: unused-component-count == 1 ? "1 component no pipeline uses" : "\{unused-component-count} components no pipeline uses";
+                                                color: Theme.text-mute;
+                                                font-size: 10.5px;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                            }
+
+                                            Rectangle {
+                                                width: 70px;
+                                                height: 22px;
+                                                y: (parent.height - 22px) / 2;
+                                                border-radius: 4px;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                background: remove-unused-ta.has-hover ? Theme.raised : transparent;
+                                                Text {
+                                                    text: "Remove";
+                                                    color: Theme.text-dim;
+                                                    font-size: 10.5px;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                remove-unused-ta := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        root.remove-unused-components();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if filter-components && shown-components.length == 0 && shown-library-components.length == 0: VerticalLayout {
                                         padding-top: 60px;
                                         spacing: 10px;
                                         Text {
-                                            text: "No templates found";
+                                            text: query == "" ? "No components in this project" : "No component matches";
                                             color: Theme.text-dim;
                                             font-size: 12px;
                                             horizontal-alignment: center;
                                         }
 
                                         Text {
-                                            text: "Save a pipeline as template to see it here";
+                                            text: "A component is a step made of other steps";
                                             color: Theme.text-mute;
                                             font-size: 10.5px;
                                             font-family: Theme.font-mono;
@@ -1171,7 +1310,7 @@ export component CommandSelectionDialog inherits Rectangle {
                                         }
                                     }
 
-                                    if shown-templates.length > 0: Rectangle {
+                                    if shown-components.length > 0: Rectangle {
                                         height: 28px;
                                         HorizontalLayout {
                                             padding-left: 14px;
@@ -1181,14 +1320,14 @@ export component CommandSelectionDialog inherits Rectangle {
                                             Rectangle {
                                                 width: 3px;
                                                 height: 10px;
-                                                background: Theme.accent;
+                                                background: Theme.cat-component;
                                                 border-radius: 1.5px;
                                                 y: (parent.height - 10px) / 2;
                                             }
 
                                             Text {
-                                                text: "TEMPLATES";
-                                                color: Theme.accent;
+                                                text: filter-components ? "IN THIS PROJECT" : "COMPONENTS";
+                                                color: Theme.cat-component;
                                                 font-size: 10px;
                                                 font-weight: 600;
                                                 letter-spacing: 0.6px;
@@ -1200,7 +1339,7 @@ export component CommandSelectionDialog inherits Rectangle {
                                             }
 
                                             Text {
-                                                text: "\{shown-templates.length}";
+                                                text: "\{shown-components.length}";
                                                 color: Theme.text-mute;
                                                 font-size: 10px;
                                                 font-family: Theme.font-mono;
@@ -1209,7 +1348,60 @@ export component CommandSelectionDialog inherits Rectangle {
                                         }
                                     }
 
-                                    for c in shown-templates: CommandRow {
+                                    for c in shown-components: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+
+                                    if shown-library-components.length > 0: Rectangle {
+                                        height: 28px;
+                                        HorizontalLayout {
+                                            padding-left: 14px;
+                                            padding-right: 14px;
+                                            spacing: 8px;
+                                            alignment: start;
+                                            Rectangle {
+                                                width: 3px;
+                                                height: 10px;
+                                                background: Theme.cat-component.with-alpha(0.6);
+                                                border-radius: 1.5px;
+                                                y: (parent.height - 10px) / 2;
+                                            }
+
+                                            Text {
+                                                text: "LIBRARY";
+                                                color: Theme.cat-component;
+                                                font-size: 10px;
+                                                font-weight: 600;
+                                                letter-spacing: 0.6px;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Rectangle {
+                                                horizontal-stretch: 1;
+                                            }
+
+                                            Text {
+                                                text: "\{shown-library-components.length}";
+                                                color: Theme.text-mute;
+                                                font-size: 10px;
+                                                font-family: Theme.font-mono;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    for c in shown-library-components: CommandRow {
                                         cmd: c;
                                         selected: c.id == selected-id;
                                         clicked => {
@@ -1239,6 +1431,10 @@ export component CommandSelectionDialog inherits Rectangle {
                         horizontal-stretch: 1;
                         cmd: root.detail;
                         has-selection: root.has-detail;
+                        removable: root.detail-removable;
+                        remove => {
+                            root.remove-component(root.detail.id);
+                        }
                     }
                 }
             }
@@ -1384,8 +1580,10 @@ export component CommandPickerModal inherits Rectangle {
     in property <[CommandDef]> shown-segment;
     in property <[CommandDef]> shown-object;
     in property <[CommandDef]> shown-classify;
+    in property <[CommandDef]> shown-dataset;
     in property <[CommandDef]> shown-measure;
-    in property <[CommandDef]> shown-templates;
+    in property <[CommandDef]> shown-components;
+    in property <[CommandDef]> shown-library-components;
     in property <CommandDef> detail;
     in property <bool> has-detail;
     in property <int> total-shown;
@@ -1393,8 +1591,13 @@ export component CommandPickerModal inherits Rectangle {
     in property <int> cat-count-seg;
     in property <int> cat-count-obj;
     in property <int> cat-count-cls;
+    in property <int> cat-count-dat;
     in property <int> cat-count-mea;
-    in property <int> cat-count-fav;
+    in property <int> cat-count-grp;
+    /// The project's components no pipeline uses ("Remove N unused").
+    in property <int> unused-component-count;
+    /// The selected entry is a project component no pipeline uses.
+    in property <bool> detail-removable;
     in property <int> cat-count-rec;
 
     in-out property <string> query: "";
@@ -1403,7 +1606,8 @@ export component CommandPickerModal inherits Rectangle {
     in-out property <bool> fcat-obj: false;
     in-out property <bool> fcat-mea: false;
     in-out property <bool> fcat-cls: false;
-    in-out property <bool> filter-favorites: false;
+    in-out property <bool> fcat-dat: false;
+    in-out property <bool> filter-components: false;
     in-out property <bool> filter-recents: false;
     in-out property <int> selected-id: -1;
 
@@ -1411,6 +1615,8 @@ export component CommandPickerModal inherits Rectangle {
     callback select(int);
     callback toggle-favorite(int);
     callback confirm(int);
+    callback remove-component(int);
+    callback remove-unused-components();
     callback cancel();
     callback import-bioimageio();
 
@@ -1434,8 +1640,10 @@ export component CommandPickerModal inherits Rectangle {
         shown-segment: root.shown-segment;
         shown-object: root.shown-object;
         shown-classify: root.shown-classify;
+        shown-dataset: root.shown-dataset;
         shown-measure: root.shown-measure;
-        shown-templates: root.shown-templates;
+        shown-components: root.shown-components;
+        shown-library-components: root.shown-library-components;
         detail: root.detail;
         has-detail: root.has-detail;
         total-shown: root.total-shown;
@@ -1443,8 +1651,11 @@ export component CommandPickerModal inherits Rectangle {
         cat-count-seg: root.cat-count-seg;
         cat-count-obj: root.cat-count-obj;
         cat-count-cls: root.cat-count-cls;
+        cat-count-dat: root.cat-count-dat;
         cat-count-mea: root.cat-count-mea;
-        cat-count-fav: root.cat-count-fav;
+        cat-count-grp: root.cat-count-grp;
+        unused-component-count: root.unused-component-count;
+        detail-removable: root.detail-removable;
         cat-count-rec: root.cat-count-rec;
         query <=> root.query;
         fcat-pre <=> root.fcat-pre;
@@ -1452,7 +1663,8 @@ export component CommandPickerModal inherits Rectangle {
         fcat-obj <=> root.fcat-obj;
         fcat-mea <=> root.fcat-mea;
         fcat-cls <=> root.fcat-cls;
-        filter-favorites <=> root.filter-favorites;
+        fcat-dat <=> root.fcat-dat;
+        filter-components <=> root.filter-components;
         filter-recents <=> root.filter-recents;
         selected-id <=> root.selected-id;
 
@@ -1470,6 +1682,12 @@ export component CommandPickerModal inherits Rectangle {
         }
         confirm(id) => {
             root.confirm(id);
+        }
+        remove-component(id) => {
+            root.remove-component(id);
+        }
+        remove-unused-components => {
+            root.remove-unused-components();
         }
         cancel => {
             root.cancel();

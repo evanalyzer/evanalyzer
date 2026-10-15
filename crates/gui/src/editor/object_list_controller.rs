@@ -639,7 +639,7 @@ mod tests {
     fn object_with_class(id: u128, seg_class: u32, has_class: bool) -> ObjectMetricSettings {
         let mut object_class = HashSet::new();
         if has_class {
-            object_class.insert(ObjectClass::Valid(1));
+            object_class.insert(ObjectClass::Global(1));
         }
         ObjectMetricSettings {
             id: evanalyzer_cfg::core_types::ObjectId(id),
@@ -720,7 +720,7 @@ mod tests {
         color: u32,
     ) -> evanalyzer_cfg::settings::classification_settings::Class {
         evanalyzer_cfg::settings::classification_settings::Class {
-            id: ObjectClass::Valid(id),
+            id,
             color,
             name: name.to_string(),
             notes: String::new(),
@@ -735,7 +735,7 @@ mod tests {
             .classes_mut()
             .push(class(1, "Nuclei", 0x112233));
         let mut object = ObjectMetricSettings::default();
-        object.object_class.insert(ObjectClass::Valid(1));
+        object.object_class.insert(ObjectClass::Global(1));
 
         let slint_obj = object_rust_to_object_slint(&object, &project, 3, true, 0, Some(16));
 
@@ -753,7 +753,7 @@ mod tests {
     fn object_rust_to_object_slint_falls_back_to_unclassified_for_an_unregistered_class() {
         let project = ProjectWithRuntime::default(); // no classes registered
         let mut object = ObjectMetricSettings::default();
-        object.object_class.insert(ObjectClass::Valid(99));
+        object.object_class.insert(ObjectClass::Global(99));
 
         let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 0, Some(16));
 
@@ -766,8 +766,8 @@ mod tests {
         project.classification.classes_mut().push(class(1, "A", 0));
         project.classification.classes_mut().push(class(2, "B", 0));
         let mut object = ObjectMetricSettings::default();
-        object.object_class.insert(ObjectClass::Valid(1));
-        object.object_class.insert(ObjectClass::Valid(2));
+        object.object_class.insert(ObjectClass::Global(1));
+        object.object_class.insert(ObjectClass::Global(2));
 
         let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 0, Some(16));
 
@@ -944,7 +944,13 @@ mod tests {
         project: ProjectWithRuntime,
     ) -> (Arc<UiState>, ObjectListController) {
         let ui_state = test_ui_state_with_project(project);
-        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_controller = Arc::new(ViewportController::new(
+            ui.clone(),
+            ui_state.clone(),
+            Arc::new(crate::editor::viewport_cache::ViewportCache::new(
+                ui_state.clone(),
+            )),
+        ));
         (
             ui_state.clone(),
             ObjectListController::new(ui, ui_state, viewport_controller),
