@@ -116,10 +116,56 @@
 ## Components – smaller gaps
 
 - [ ] **Breakpoints inside components.** Disabled inside an opened component; a breakpoint on the component card stops after the whole component. Needs a step path ("step 3, inside it step 2") instead of one `StepId` (`PipelineTask::breakpoint`, `expand_step`).
-- [ ] **Components inside components from an opened component.** "Component…" is only offered in the pipeline, not inside an opened component ([`pipelines_controller.rs`](crates/gui/src/editor/pipelines_controller.rs), "for now" comment).
+- [x] **Nested components (components inside components).** Done: open/edit/create/expand nested components in the editor, hand classes and memory slots inward, library fingerprint and insert/update with inner components.
+  - [x] 1. Open a nested component from an opened component: `open_component` is a stack of `OpenComponent` levels, the bar shows "Pipeline › ◆ Outer › ◆ Inner", "‹ Back" goes one level up ([`pipelines_controller.rs`](crates/gui/src/editor/pipelines_controller.rs)). Inside a viewed component nested ones are only viewed ("View" stays on their cards); "Edit" in the bar opens the first viewed level to edit. "Only this step" works inside a component (`clone_component_for_step` takes a `StepList`). "Expand" is hidden inside a component until 5. is done.
+  - [x] 2. Indirect cycles: `would_contain_itself` checks at any depth; inside an opened component the picker leaves out the components containing it, and inserting one anyway (e.g. through a library component's inner components) is refused with a message.
+  - [x] 3. "Create component" inside an opened component: `plan_component`/`create_component` take a `StepList`. The outer component's local classes / component memory only the moved steps use go into the new component (same numbers); used by its other steps too → refused (needs 4.). Outer parameters setting moved settings set them through new parameters of the inner component (same label, default, section). Only applied if the outer component still expands.
+  - [x] 4. Pass the outer component's local classes / memory slots into an inner one. Done differently than first proposed (no alias table): a nested use runs in the scope of the pipeline-level use around it, its own classes and component slots renumbered apart at expansion (`renumber` in [`components.rs`](crates/core/src/job/components.rs)); a handed-in "L1" / "component:1" is then just that number. Its end (`UseEnd::Nested`) removes objects with only its own classes, strips them from the outer one's objects, frees its own slots. Inside an opened component the class dropdowns offer its classes. "Create component" inside a component makes a class other steps use too a parameter (unset in the new component, the outer one's step hands it in). Behavior change: a nested component's "all objects" now also sees the outer one's objects.
+  - [x] 4b. "Create component" inside a component: a component memory slot other steps of the outer one use too becomes a parameter of the new one (bound to the image-address settings naming it, "none" on its own, the outer one's step hands "component:N" in). Refused only where a moved step uses the slot outside an address setting (a threshold's memory value source) - it can't be bound.
+  - [x] 5. "Expand" inside an opened component: the inner component's classes/slots become the outer one's (numbered after its own, via core `renumbered`), outer parameters setting its parameters set the settings behind them. In a pipeline, what an expanded component hands a component inside it becomes project classes / pipeline slots too (was left as "L1").
+  - [x] 6. `content_hash` covers the components used inside (unchanged for one using none). Insert/update from the library: an inner component the project has with the same key but other content (changed here, or unrelated) stays - the library's is added under its own key ("INNER_2").
+  - [x] 7. ◇/◆ on a component card inside an opened component: exposes its parameter on the outer component (`step_setting`), the card marks it, editing it sets the outer parameter's default.
 - [ ] **Shift-click step selection** for "Create component" - today a from/to range dialog (the step list has no multi-selection).
 - [ ] **"New empty component"** - not built; rarely needed since "Create component" exists.
 - [ ] **Run the component checks on save** - `check_components` runs on load ([`project_ext.rs`](crates/app/src/workspace/extensions/project_ext.rs)) and in the editor, not on save. Runs still refuse a broken component at expansion, so mostly cosmetic.
 - [ ] **LLM prompt doesn't know components** (`crates/llm`, unfinished anyway).
 - [ ] **Check the picker's component look on screen** (◆ Components chip, component colour, "used N×", Library section) - never looked at, no headless screenshot in the tests.
 - [ ] Optional, only if someone needs it: "don't merge this local class" at the tile merge - `classes_to_not_merge` only knows project classes, so local objects are always merged; would need a setting in the component definition.
+## AI plugin
+
+Load libtorch only on first AI use, from a plugin library (`cdylib`) next to the executable. Measured 2026-10-15 (Linux, release GUI): ~377 MB RSS right after start, of which libtorch is ~117 MB (CPU) and ~165 MB more with the CUDA libs (`libcublasLt` alone has an 81 MB `.bss` that is filled at load). Loading it takes ~0.2 s (CPU) / ~0.3 s (CUDA) with warm disk cache - likely seconds on a cold start. Today it is linked into the binary, so every user pays this at startup even without using AI. Same pattern as ONNX Runtime execution providers, ggml backends, Blender's GPU kernels.
+
+*Boundary:* all libtorch work already sits inside the four `run_with_model` calls ([`unet.rs:120`](crates/core/src/algos/ai_segmentation/unet.rs#L120), [`cellpose.rs:129`](crates/core/src/algos/ai_segmentation/cellpose.rs#L129), [`stardist.rs:92`](crates/core/src/algos/ai_segmentation/stardist.rs#L92), [`yolov5.rs:122`](crates/core/src/algos/ai_segmentation/yolov5.rs#L122)), which return only plain data. Their closure bodies + `TorchScheduler` move into the plugin; pre/post-processing stays in core.
+
+*Crates:*
+- `crates/ai_api` (new, no libtorch): `API_VERSION`, serde types `InferRequest`/`InferResponse` (one variant per model), `InitConfig` (devices, gpu_slots, cores), `DeviceInfo`, `#[repr(C)] Buf { ptr, len }`, the C function signatures.
+- `crates/ai_plugin` (new, `cdylib`, the only crate depending on `tch`): [`model_cache.rs`](crates/core/src/algos/ai_segmentation/model_cache.rs) scheduler (device slots, per-device model cache, OOM retry) + the four model inference functions + the torch tests (`test_support`, scheduler tests, `cellpose_sam_real_model.rs`). Built twice from the same source: `LIBTORCH=<cpu>` and `LIBTORCH=<cuda>`.
+- `crates/core`: no `tch` dependency. New `ai_runtime` module (`OnceLock<Result<Plugin, String>>`, `libloading`); each `run_with_model(...)` becomes `ai_runtime::infer(InferRequest::.., input)`. smartcore/burn classifiers stay in core.
+
+*C interface:*
+```c
+u32  eva_ai_api_version(void);
+i32  eva_ai_init(Buf init_config, LogFn log, Buf* out_err);       // once
+i32  eva_ai_devices(Buf* out_device_info, Buf* out_err);
+i32  eva_ai_infer(Buf request, const f32* input, usize input_len,
+                  Buf* out_response, Buf* out_err);               // thread-safe
+void eva_ai_free(Buf buf);                                        // plugin frees its own memory
+```
+Input images by pointer (no copy), params/results as postcard bytes, `catch_unwind` around every export, log callback forwarded into the app's `log`. `eva_ai_infer` is called from many rayon workers at once; the plugin's scheduler blocks as today.
+
+*Loading:* only from next to the executable (no system path - DLL hijacking). `--ai-devices cpu` → `ai/cpu` only (CUDA libs never loaded); `auto`/GPU list → `ai/cuda` if installed and a GPU is found, else `ai/cpu`. Separate folders are required (both ship a different `libtorch_cpu` under the same name). Linux: rpath `$ORIGIN`. Windows: `LoadLibraryExW` with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`. Check `api_version` before `init`. Missing/failed plugin → clean "AI support not installed / failed to load: …" error on the AI step, not a crash.
+
+*Watch out:*
+- The GUI's startup CUDA probe (`cuda_is_available` → [`gui/src/lib.rs:638`](crates/gui/src/lib.rs#L638), [`resources.rs:252`](crates/core/src/utils/resources.rs#L252)) must not go through the plugin, or libtorch is loaded at startup again. Replace with a driver probe (`libcuda.so.1`/`nvcuda.dll`: `cuInit` + `cuDeviceGetCount`) + "is `ai/cuda` installed".
+- The `torch_cuda` relink hack in [`bin/build.rs`](crates/bin/build.rs) should become unnecessary: the CUDA plugin loads `libtorch_cuda`/`torch_cuda.dll` by path in `eva_ai_init` before the first torch call. Unverified - check on Linux and Windows.
+- Once loaded, libtorch can't be unloaded - memory is deferred, not saved, for AI users.
+- No crash isolation: a libtorch segfault still takes down the app.
+- macOS: the plugin dylibs must be signed/notarized too.
+- Maybe later: the CUDA libtorch contains a full `libtorch_cpu`, so one plugin build might serve both variants (only the shipped libtorch differs). Untested - start with two builds.
+
+*Steps (each one testable):*
+- [ ] 1. Pure refactor in core: turn each `run_with_model` closure into a named function with plain input/output types; no behavior change.
+- [ ] 2. Create `ai_api` + `ai_plugin`, move those functions and `TorchScheduler` there; core links it as a normal Rust dependency first (tests the boundary types without dynamic loading).
+- [ ] 3. Switch to `cdylib` + `ai_runtime` loader; core tests find the plugin via `EVANALYZER_AI_PLUGIN`.
+- [ ] 4. Replace the CUDA probe with the driver probe; remove the `bin/build.rs` relink.
+- [ ] 5. Installers: base app + `ai/cpu` or `ai/cuda`; smoke test "no plugin", "CPU plugin", "CUDA plugin without GPU". Measure startup RSS/time before and after.

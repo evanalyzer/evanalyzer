@@ -9,7 +9,8 @@
 use chrono::Utc;
 use evanalyzer_cfg::{
     core_types::{
-        ComponentParamKey, InternalErrors, ObjectClass, PipelineId, SegmentationClass, StepId,
+        ComponentParamKey, ImageAddress, InternalErrors, MemoryId, ObjectClass, PipelineId,
+        SegmentationClass, StepId,
     },
     settings::{
         classification_settings::Class,
@@ -64,29 +65,66 @@ pub struct ComponentPlan {
     /// The pipeline's memory slots only these steps use: they become the
     /// component's own (each use of the component has its own).
     pub component_slots: BTreeSet<u32>,
+    /// In a component's steps: its memory slots its other steps use too -
+    /// each becomes a parameter of the new component, the outer one hands
+    /// the slot in.
+    pub handed_slots: BTreeSet<u32>,
 }
 
-/// The project classes steps `range` of pipeline `pipeline_id` use, each with
-/// a suggested role: used elsewhere too → [`ClassRole::Parameter`]; only
-/// here → [`ClassRole::Local`] - except a class the steps only know as a
+/// The project classes steps `range` of `list` use, each with a suggested
+/// role: used elsewhere too → [`ClassRole::Parameter`]; only here →
+/// [`ClassRole::Local`] - except a class the steps only know as a
 /// segmentation class with no Extract Objects among them to turn it into
 /// objects ([`ClassRole::Fixed`]: making it local would change nothing).
+///
+/// In a component's steps (a component inside a component), the outer
+/// component's own classes and memory slots the steps use go into the new
+/// one - refused if other steps of the outer component use them too: the
+/// new component can't be handed them (yet). Settings the outer component's
+/// parameters set stay set by them, through new parameters of the new one.
 pub fn plan_component(
     project: &ProjectSettings,
-    pipeline_id: PipelineId,
+    list: impl Into<StepList>,
     range: RangeInclusive<usize>,
 ) -> Result<ComponentPlan, InternalErrors> {
-    let steps = selected_steps(project, pipeline_id, &range)?;
-    let elsewhere = classes_used_elsewhere(project, pipeline_id, &range);
+    let list = list.into();
+    let steps = selected_steps(project, &list, &range)?;
+    let bound = bound_settings(project, &list, steps);
+    let elsewhere = classes_used_elsewhere(project, &list, &range);
     let extracts = steps
         .iter()
         .filter_map(|s| s.command())
         .any(|c| matches!(c, PipelineCommand::ExtractObjects(_)));
 
+    // Classes in settings the outer component's parameters set: set from
+    // outside, so they're parameters of the new component.
+    let mut set_from_outside: BTreeSet<ObjectClass> = BTreeSet::new();
     let mut used: BTreeSet<ObjectClass> = BTreeSet::new();
     for step in steps {
         match &step.content {
-            StepContent::Command(command) => used.extend(command.object_classes()),
+            StepContent::Command(command) => {
+                // The outer component's own classes too, inside a component.
+                let mut classes = command.object_classes();
+                if matches!(list, StepList::Component(_)) {
+                    classes.extend(command.local_classes());
+                }
+                for class in classes {
+                    let paths = class_paths(command, class);
+                    if paths
+                        .iter()
+                        .any(|(path, _)| bound.contains(&(step.id, path.clone())))
+                    {
+                        set_from_outside.insert(class);
+                    }
+                    if paths.is_empty()
+                        || paths
+                            .iter()
+                            .any(|(path, _)| !bound.contains(&(step.id, path.clone())))
+                    {
+                        used.insert(class);
+                    }
+                }
+            }
             // A nested component's classes are written inside its own
             // definition - they can't be rewritten here.
             StepContent::Component(_) => {}
@@ -99,10 +137,67 @@ pub fn plan_component(
         .flat_map(|c| c.object_classes())
         .collect();
 
+    // The outer component's classes its other steps use too: handed to the new
+    // component (a parameter), not moved into it.
+    let mut used_by_others: BTreeSet<ObjectClass> = BTreeSet::new();
+    let mut handed_slots: BTreeSet<u32> = BTreeSet::new();
+    if let StepList::Component(key) = &list {
+        let outer = definition(project, key)?;
+        let others = || {
+            outer
+                .steps
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !range.contains(index))
+                .filter_map(|(_, step)| step.command())
+        };
+        for (_, step) in outer
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !range.contains(index))
+        {
+            match &step.content {
+                StepContent::Command(command) => used_by_others.extend(command.local_classes()),
+                StepContent::Component(instance) => {
+                    used_by_others.extend(instance.values.values().filter_map(local_class_of))
+                }
+            }
+        }
+        let moved_slots: BTreeSet<u32> = steps
+            .iter()
+            .filter_map(|s| s.command())
+            .flat_map(component_slots)
+            .collect();
+        let other_slots: BTreeSet<u32> = others().flat_map(component_slots).collect();
+        for slot in moved_slots.intersection(&other_slots) {
+            // Handed in through a setting the slot is written in - where a step
+            // uses it otherwise (e.g. a threshold's value source), it can't be.
+            let fixed = steps.iter().find(|step| {
+                step.command().is_some_and(|command| {
+                    memory_slots(command, "componentContext").contains(slot)
+                        && slot_paths(command, *slot).len() < slot_uses(command, *slot)
+                })
+            });
+            if let Some(step) = fixed {
+                return Err(InternalErrors::InvalidArgument(format!(
+                    "component memory slot {slot} is also used by other steps of \"{}\", and \
+                     step {} uses it in a way that can't be handed to a component inside it - \
+                     take those steps too",
+                    outer.meta.name, step.id
+                )));
+            }
+            handed_slots.insert(*slot);
+        }
+    }
+
     let classes = used
         .into_iter()
         .map(|class| {
-            let used_elsewhere = elsewhere.contains(&class) || nested.contains(&class);
+            let used_elsewhere = elsewhere.contains(&class)
+                || nested.contains(&class)
+                || set_from_outside.contains(&class)
+                || used_by_others.contains(&class);
             let only_segmentation = steps.iter().filter_map(|s| s.command()).all(|c| {
                 class_paths(c, class)
                     .iter()
@@ -117,7 +212,14 @@ pub fn plan_component(
             };
             ComponentPlanClass {
                 class,
-                name: class_name(project, class),
+                name: match &list {
+                    StepList::Component(key) if matches!(class, ObjectClass::Local(_)) => {
+                        definition(project, key)
+                            .map(|outer| local_class_name(outer, class))
+                            .unwrap_or_else(|_| class.to_text())
+                    }
+                    _ => class_name(project, class),
+                },
                 used_elsewhere,
                 suggested,
             }
@@ -126,6 +228,7 @@ pub fn plan_component(
 
     let channels = steps
         .iter()
+        .filter(|s| !bound.contains(&(s.id, "channel".to_string())))
         .filter_map(|s| s.command())
         .filter_map(|c| match c {
             PipelineCommand::LoadChannel(s) => Some(s.channel.0),
@@ -135,56 +238,306 @@ pub fn plan_component(
     Ok(ComponentPlan {
         classes,
         channels,
-        component_slots: slots_only_used_by(project, pipeline_id, &range),
+        component_slots: match list {
+            StepList::Pipeline(pipeline_id) => slots_only_used_by(project, pipeline_id, &range),
+            // An outer component's slots go with the steps as they are.
+            StepList::Component(_) => BTreeSet::new(),
+        },
+        handed_slots,
     })
 }
 
-/// Turns steps `range` of pipeline `pipeline_id` into a component named
-/// `name`: a new definition in the project and one step using it in their
-/// place. `roles` says what each class of [`plan_component`] becomes (a class
-/// left out stays [`ClassRole::Fixed`]); loaded channels become parameters.
-/// Returns the new definition's key.
+/// Turns steps `range` of `list` into a component named `name`: a new
+/// definition in the project and one step using it in their place. `roles`
+/// says what each class of [`plan_component`] becomes (a class left out stays
+/// [`ClassRole::Fixed`]); loaded channels become parameters. Returns the new
+/// definition's key.
+///
+/// In a component's steps, the outer component's classes the steps use
+/// become the new one's (only [`ClassRole::Local`] - see [`plan_component`]),
+/// and its parameters setting the steps' settings set them through new
+/// parameters of the new component. The outer component runs exactly what
+/// it ran before.
 pub fn create_component(
     project: &mut ProjectSettings,
-    pipeline_id: PipelineId,
+    list: impl Into<StepList>,
     range: RangeInclusive<usize>,
     name: &str,
     roles: &[(ObjectClass, ClassRole)],
 ) -> Result<String, InternalErrors> {
-    selected_steps(project, pipeline_id, &range)?;
+    let list = list.into();
+    selected_steps(project, &list, &range)?;
     let name = name.trim();
     if name.is_empty() {
         return Err(InternalErrors::InvalidArgument(
             "a component needs a name".into(),
         ));
     }
+    match list {
+        StepList::Pipeline(pipeline_id) => {
+            create_in_pipeline(project, pipeline_id, range, name, roles)
+        }
+        StepList::Component(outer) => create_in_component(project, &outer, range, name, roles),
+    }
+}
+
+fn create_in_pipeline(
+    project: &mut ProjectSettings,
+    pipeline_id: PipelineId,
+    range: RangeInclusive<usize>,
+    name: &str,
+    roles: &[(ObjectClass, ClassRole)],
+) -> Result<String, InternalErrors> {
     let key = unique_key(project, name);
     let component_slots = slots_only_used_by(project, pipeline_id, &range);
-    let names: Vec<(ObjectClass, String, u32)> = roles
-        .iter()
-        .map(|(class, _)| {
-            let color = match class {
-                ObjectClass::Global(n) => project
-                    .classification
-                    .classes()
-                    .iter()
-                    .find(|c| c.id == *n)
-                    .map_or(0x808080, |c| c.color),
-                _ => 0x808080,
-            };
-            (*class, class_name(project, *class), color)
-        })
-        .collect();
+    let names = class_names(project, None, roles);
 
     let pipeline = project
         .pipelines
         .iter_mut()
         .find(|p| p.id == pipeline_id)
         .expect("checked by selected_steps");
-    let mut steps: Vec<PipelineStepSettings> = pipeline.steps.drain(range.clone()).collect();
+    let steps: Vec<PipelineStepSettings> = pipeline.steps.drain(range.clone()).collect();
+    let mut definition = component_of_steps(
+        &key,
+        name,
+        steps,
+        roles,
+        &names,
+        &BTreeSet::new(),
+        &mut Vec::new(),
+    )?;
 
+    // The pipeline's slots only these steps use become the component's own.
+    for step in &mut definition.steps {
+        if let StepContent::Command(command) = &mut step.content {
+            *command = slots_to_component(command, &component_slots)?;
+        }
+    }
+
+    let start = *range.start();
+    pipeline.steps.insert(start, component_step(&key));
+    assign_step_ids(&mut pipeline.steps);
+    project.components.push(definition);
+    Ok(key)
+}
+
+fn create_in_component(
+    project: &mut ProjectSettings,
+    outer_key: &str,
+    range: RangeInclusive<usize>,
+    name: &str,
+    roles: &[(ObjectClass, ClassRole)],
+) -> Result<String, InternalErrors> {
+    // Refuses what can't go into the new component.
+    let plan = plan_component(
+        project,
+        StepList::Component(outer_key.to_string()),
+        range.clone(),
+    )?;
+    // The outer component's classes only these steps use, made the new one's:
+    // they move.
+    let moved_classes: BTreeSet<u32> = plan
+        .classes
+        .iter()
+        .filter(|c| !c.used_elsewhere && roles.contains(&(c.class, ClassRole::Local)))
+        .filter_map(|c| match c.class {
+            ObjectClass::Local(n) => Some(n),
+            _ => None,
+        })
+        .collect();
+    let key = unique_key(project, name);
+    let names = class_names(project, Some(definition(project, outer_key)?), roles);
+    let bound = {
+        let steps = selected_steps(project, &StepList::Component(outer_key.into()), &range)?;
+        bound_settings(project, &StepList::Component(outer_key.into()), steps)
+    };
+
+    // Built on a copy - only taken if the outer component still runs.
+    let mut components = project.components.clone();
+    let outer = components
+        .iter_mut()
+        .find(|d| d.key == outer_key)
+        .expect("checked by selected_steps");
+    let steps: Vec<PipelineStepSettings> = outer.steps.drain(range.clone()).collect();
+    let moved: BTreeSet<StepId> = steps.iter().map(|s| s.id).collect();
+    let mut handed_in = Vec::new();
+    let mut definition =
+        component_of_steps(&key, name, steps, roles, &names, &bound, &mut handed_in)?;
+    // A slot the outer component's other steps use too: a parameter, empty in
+    // the new component, the outer one's step hands its slot in.
+    for slot in &plan.handed_slots {
+        let mut bindings = Vec::new();
+        for step in &mut definition.steps {
+            let id = step.id;
+            if let Some(command) = step.command_mut() {
+                for path in slot_paths(command, *slot) {
+                    if bound.contains(&(id, path.clone())) {
+                        continue;
+                    }
+                    evanalyzer_core::apply_command_param(
+                        command,
+                        &path,
+                        &ImageAddress::None.to_param_value(),
+                    );
+                    bindings.push(ParamBinding {
+                        step: id,
+                        param: path,
+                    });
+                }
+            }
+        }
+        if bindings.is_empty() {
+            continue;
+        }
+        let label = format!("Memory slot {slot}");
+        let parameter = new_parameter_key(&definition, &label);
+        definition.parameters.push(ComponentParameterDef {
+            key: parameter.clone(),
+            label,
+            description: String::new(),
+            section: String::new(),
+            default: ParamValue::Text(ImageAddress::None.to_param_value()),
+            bindings,
+        });
+        handed_in.push((
+            parameter,
+            ParamValue::Text(
+                ImageAddress::Memory(MemoryId::ComponentContext(*slot)).to_param_value(),
+            ),
+        ));
+    }
+    // Its classes went with the steps.
+    outer.classes.retain(|c| !moved_classes.contains(&c.id));
+
+    let start = *range.start();
+    let mut uses_new = component_step(&key);
+    if let StepContent::Component(instance) = &mut uses_new.content {
+        instance.values = handed_in.into_iter().collect();
+    }
+    outer.steps.insert(start, uses_new);
+    crate::workspace::extensions::utils::assign_component_step_ids(outer)?;
+    let step = outer.steps[start].id;
+
+    // A parameter of the outer component setting moved settings sets them
+    // through a parameter of the new one, with its label and default.
+    for parameter in &mut outer.parameters {
+        if !parameter.bindings.iter().any(|b| moved.contains(&b.step)) {
+            continue;
+        }
+        let inner_key = new_parameter_key(&definition, &parameter.label);
+        let (inside, outside): (Vec<ParamBinding>, Vec<ParamBinding>) = parameter
+            .bindings
+            .iter()
+            .cloned()
+            .partition(|b| moved.contains(&b.step));
+        definition.parameters.push(ComponentParameterDef {
+            key: inner_key.clone(),
+            label: parameter.label.clone(),
+            description: parameter.description.clone(),
+            section: parameter.section.clone(),
+            default: parameter.default.clone(),
+            bindings: inside,
+        });
+        let through = ParamBinding {
+            step,
+            param: inner_key.to_string(),
+        };
+        // Where the first moved one was: the first binding gives the card's
+        // control.
+        let first_inside = parameter
+            .bindings
+            .iter()
+            .position(|b| moved.contains(&b.step))
+            .expect("checked above");
+        let before = parameter.bindings[..first_inside]
+            .iter()
+            .filter(|b| !moved.contains(&b.step))
+            .count();
+        let mut bindings = outside;
+        bindings.insert(before, through);
+        parameter.bindings = bindings;
+    }
+    components.push(definition);
+
+    // The outer component must run as before - e.g. a value of its own class
+    // can't be handed to the new component.
+    let probe = component_step(outer_key);
+    let runs = |definitions: &[ComponentDefinition]| {
+        expand_step(&probe, definitions, &mut ScopeCounter::default()).map(|_| ())
+    };
+    if runs(&project.components).is_ok()
+        && let Err(e) = runs(&components)
+    {
+        return Err(InternalErrors::InvalidArgument(format!(
+            "these steps can't become a component: {e}"
+        )));
+    }
+    project.components = components;
+    Ok(key)
+}
+
+/// A step using component `key` at its defaults - to be numbered.
+fn component_step(key: &str) -> PipelineStepSettings {
+    PipelineStepSettings {
+        id: StepId::UNASSIGNED,
+        enabled: true,
+        content: StepContent::Component(ComponentInstance {
+            key: key.to_string(),
+            values: Default::default(),
+        }),
+    }
+}
+
+/// Each class of `roles` with its name and colour - a local class of
+/// `outer` (the component the steps are in) as `outer` has it.
+fn class_names(
+    project: &ProjectSettings,
+    outer: Option<&ComponentDefinition>,
+    roles: &[(ObjectClass, ClassRole)],
+) -> Vec<(ObjectClass, String, u32)> {
+    roles
+        .iter()
+        .map(|(class, _)| match (class, outer) {
+            (ObjectClass::Global(n), _) => (
+                *class,
+                class_name(project, *class),
+                project
+                    .classification
+                    .classes()
+                    .iter()
+                    .find(|c| c.id == *n)
+                    .map_or(0x808080, |c| c.color),
+            ),
+            (ObjectClass::Local(n), Some(outer)) => (
+                *class,
+                local_class_name(outer, *class),
+                outer
+                    .classes
+                    .iter()
+                    .find(|c| c.id == *n)
+                    .map_or(0x808080, |c| c.color),
+            ),
+            _ => (*class, class.to_text(), 0x808080),
+        })
+        .collect()
+}
+
+/// The component named `name` made of `steps`, with `roles` applied to their
+/// classes and the loaded channels as parameters - the settings in `bound`
+/// (step, path) left alone: a parameter of the component the steps came
+/// from sets them.
+fn component_of_steps(
+    key: &str,
+    name: &str,
+    mut steps: Vec<PipelineStepSettings>,
+    roles: &[(ObjectClass, ClassRole)],
+    names: &[(ObjectClass, String, u32)],
+    bound: &BTreeSet<(StepId, String)>,
+    handed_in: &mut Vec<(ComponentParamKey, ParamValue)>,
+) -> Result<ComponentDefinition, InternalErrors> {
     let mut definition = ComponentDefinition {
-        key: key.clone(),
+        key: key.to_string(),
         meta: MetaData {
             name: name.to_string(),
             creation_time: Utc::now(),
@@ -196,13 +549,44 @@ pub fn create_component(
         origin: None,
     };
 
-    let mut next_local = 1;
-    for ((class, role), (_, class_name, color)) in roles.iter().zip(&names) {
+    // An outer component's classes made the new one's keep their numbers -
+    // the project's classes made local get the free ones.
+    let kept: BTreeSet<u32> = roles
+        .iter()
+        .filter_map(|(class, role)| match (class, role) {
+            (ObjectClass::Local(n), ClassRole::Local) => Some(*n),
+            _ => None,
+        })
+        .collect();
+    let mut free = (1..).filter(|n| !kept.contains(n));
+
+    for ((class, role), (_, class_name, color)) in roles.iter().zip(names) {
+        if let ObjectClass::Local(n) = class {
+            match role {
+                // In the new component it would be a class it doesn't have.
+                ClassRole::Fixed => {
+                    return Err(InternalErrors::InvalidArgument(format!(
+                        "the component class {class_name} can't stay as it is - make it a \
+                         parameter or a class of the new component"
+                    )));
+                }
+                ClassRole::Local => {
+                    definition.classes.push(Class {
+                        id: *n,
+                        color: *color,
+                        name: class_name.clone(),
+                        notes: String::new(),
+                    });
+                    continue;
+                }
+                // Handed in, like a project class.
+                ClassRole::Parameter => {}
+            }
+        }
         match role {
             ClassRole::Fixed => {}
             ClassRole::Local => {
-                let local = ObjectClass::Local(next_local);
-                next_local += 1;
+                let local = ObjectClass::Local(free.next().expect("some number is free"));
                 // Made by a segmentation step of these: Extract Objects maps it.
                 let segmented_here = steps.iter().filter_map(|s| s.command()).any(|c| {
                     class_paths(c, *class)
@@ -210,8 +594,11 @@ pub fn create_component(
                         .any(|(_, kind)| *kind == PathKind::Segmentation)
                 });
                 for step in &mut steps {
+                    let id = step.id;
                     if let StepContent::Command(command) = &mut step.content {
-                        make_local(command, *class, local, segmented_here)?;
+                        make_local(command, *class, local, segmented_here, |path| {
+                            bound.contains(&(id, path.to_string()))
+                        })?;
                     }
                 }
                 definition.classes.push(Class {
@@ -232,6 +619,7 @@ pub fn create_component(
                         class_paths(command, *class)
                             .into_iter()
                             .filter(|(_, kind)| *kind == PathKind::Single)
+                            .filter(move |(param, _)| !bound.contains(&(id, param.clone())))
                             .map(move |(param, _)| {
                                 let list = setting_at(command, &param)
                                     .is_some_and(|(s, _)| s.param_type == ParamType::MultiObjClass);
@@ -248,12 +636,34 @@ pub fn create_component(
                     continue;
                 }
                 let key = new_parameter_key(&definition, class_name);
+                let default = if matches!(class, ObjectClass::Local(_)) {
+                    // The outer component's class means nothing in the new one
+                    // on its own: unset there, the outer one's step using it
+                    // hands it in.
+                    for binding in &bindings {
+                        if let Some(command) = steps
+                            .iter_mut()
+                            .find(|s| s.id == binding.step)
+                            .and_then(|s| s.command_mut())
+                        {
+                            evanalyzer_core::apply_command_param(
+                                command,
+                                &binding.param,
+                                &ObjectClass::Unset.to_text(),
+                            );
+                        }
+                    }
+                    handed_in.push((key.clone(), ParamValue::Text(class.to_text())));
+                    ParamValue::Text(ObjectClass::Unset.to_text())
+                } else {
+                    ParamValue::Text(class.to_text())
+                };
                 definition.parameters.push(ComponentParameterDef {
                     key,
                     label: class_name.clone(),
                     description: String::new(),
                     section: String::new(),
-                    default: ParamValue::Text(class.to_text()),
+                    default,
                     bindings,
                 });
             }
@@ -263,6 +673,9 @@ pub fn create_component(
     // Each channel loaded becomes a parameter, bound to every step loading it.
     let mut channels: Vec<(u32, Vec<StepId>)> = Vec::new();
     for step in &steps {
+        if bound.contains(&(step.id, "channel".to_string())) {
+            continue;
+        }
         if let Some(PipelineCommand::LoadChannel(s)) = step.command() {
             match channels.iter_mut().find(|(c, _)| *c == s.channel.0) {
                 Some((_, ids)) => ids.push(step.id),
@@ -294,29 +707,65 @@ pub fn create_component(
         });
     }
 
-    // The pipeline's slots only these steps use become the component's own.
-    for step in &mut steps {
-        if let StepContent::Command(command) = &mut step.content {
-            *command = slots_to_component(command, &component_slots)?;
-        }
-    }
-
     definition.steps = steps;
-    let start = *range.start();
-    pipeline.steps.insert(
-        start,
-        PipelineStepSettings {
-            id: StepId::UNASSIGNED,
-            enabled: true,
-            content: StepContent::Component(ComponentInstance {
-                key: key.clone(),
-                values: Default::default(),
-            }),
-        },
-    );
-    assign_step_ids(&mut pipeline.steps);
-    project.components.push(definition);
-    Ok(key)
+    Ok(definition)
+}
+
+/// The settings (step id, path) of `steps` that parameters of the component
+/// `list` is set - none for a pipeline's steps.
+fn bound_settings(
+    project: &ProjectSettings,
+    list: &StepList,
+    steps: &[PipelineStepSettings],
+) -> BTreeSet<(StepId, String)> {
+    let StepList::Component(key) = list else {
+        return BTreeSet::new();
+    };
+    let Ok(outer) = definition(project, key) else {
+        return BTreeSet::new();
+    };
+    outer
+        .parameters
+        .iter()
+        .flat_map(|p| p.bindings.iter())
+        .filter(|b| steps.iter().any(|s| s.id == b.step))
+        .map(|b| (b.step, b.param.clone()))
+        .collect()
+}
+
+fn definition<'a>(
+    project: &'a ProjectSettings,
+    key: &str,
+) -> Result<&'a ComponentDefinition, InternalErrors> {
+    project
+        .components
+        .iter()
+        .find(|d| d.key == key)
+        .ok_or_else(|| InternalErrors::InvalidArgument(format!("no component {key}")))
+}
+
+/// The component class (`"L1"`) a parameter value names, if it names one.
+fn local_class_of(value: &ParamValue) -> Option<ObjectClass> {
+    match value {
+        ParamValue::Text(text) => {
+            ObjectClass::from_text(text).filter(|c| matches!(c, ObjectClass::Local(_)))
+        }
+        _ => None,
+    }
+}
+
+/// A local class's name as component `outer` has it ("L2" if it has none).
+fn local_class_name(outer: &ComponentDefinition, class: ObjectClass) -> String {
+    match class {
+        ObjectClass::Local(n) => outer
+            .classes
+            .iter()
+            .find(|c| c.id == n)
+            .map(|c| c.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| class.to_text()),
+        other => other.to_text(),
+    }
 }
 
 /// Drops the values component steps hold for parameters their component no longer
@@ -369,6 +818,34 @@ pub fn component_uses(project: &ProjectSettings, key: &str) -> usize {
         .count()
 }
 
+/// Whether a step using component `inserted` would make component `container`
+/// contain itself: `inserted` is `container`, or contains it - at any depth.
+/// Such a component can't run ("contains itself"), so it isn't offered.
+pub fn would_contain_itself(project: &ProjectSettings, container: &str, inserted: &str) -> bool {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut next = vec![inserted];
+    while let Some(key) = next.pop() {
+        if key == container {
+            return true;
+        }
+        if !seen.insert(key) {
+            continue;
+        }
+        if let Some(definition) = project.components.iter().find(|d| d.key == key) {
+            next.extend(
+                definition
+                    .steps
+                    .iter()
+                    .filter_map(|step| match &step.content {
+                        StepContent::Component(instance) => Some(instance.key.as_str()),
+                        StepContent::Command(_) => None,
+                    }),
+            );
+        }
+    }
+    false
+}
+
 /// The keys of the components no pipeline uses - not even through another
 /// component (a component only an unused component uses is unused too).
 pub fn unused_components(project: &ProjectSettings) -> Vec<String> {
@@ -414,15 +891,78 @@ pub fn remove_unused_components(project: &mut ProjectSettings) -> Vec<String> {
     unused
 }
 
-/// "Only this step": gives step `step_index` of pipeline `pipeline_id` (a
-/// component step) a copy of its component - "Name (2)" with a key of its own - so
-/// changes to it don't affect the component's other uses. Returns the copy's key.
+/// A list of steps: a pipeline's, or a component definition's (a component
+/// nested in it is one of its steps).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepList {
+    Pipeline(PipelineId),
+    /// The steps of the component with this key.
+    Component(String),
+}
+
+impl From<PipelineId> for StepList {
+    fn from(id: PipelineId) -> Self {
+        StepList::Pipeline(id)
+    }
+}
+
+impl StepList {
+    fn steps_mut<'a>(
+        &self,
+        project: &'a mut ProjectSettings,
+    ) -> Option<&'a mut Vec<PipelineStepSettings>> {
+        match self {
+            StepList::Pipeline(id) => project
+                .pipelines
+                .iter_mut()
+                .find(|p| p.id == *id)
+                .map(|p| &mut p.steps),
+            StepList::Component(key) => project
+                .components
+                .iter_mut()
+                .find(|d| &d.key == key)
+                .map(|d| &mut d.steps),
+        }
+    }
+
+    fn step_mut<'a>(
+        &self,
+        project: &'a mut ProjectSettings,
+        step_index: usize,
+    ) -> Result<&'a mut PipelineStepSettings, InternalErrors> {
+        self.steps_mut(project)
+            .and_then(|steps| steps.get_mut(step_index))
+            .ok_or_else(|| {
+                InternalErrors::InvalidArgument(match self {
+                    StepList::Pipeline(id) => {
+                        format!("pipeline {id} has no step {}", step_index + 1)
+                    }
+                    StepList::Component(key) => {
+                        format!("component {key} has no step {}", step_index + 1)
+                    }
+                })
+            })
+    }
+}
+
+/// "Only this step": gives step `step_index` of `list` (a component step) a
+/// copy of its component - "Name (2)" with a key of its own - so changes to it
+/// don't affect the component's other uses. Returns the copy's key. In a
+/// component's steps that's a change of that component - so of all its uses.
 pub fn clone_component_for_step(
     project: &mut ProjectSettings,
-    pipeline_id: PipelineId,
+    list: &StepList,
     step_index: usize,
 ) -> Result<String, InternalErrors> {
-    let key = component_key_of(project, pipeline_id, step_index)?;
+    let key = match &list.step_mut(project, step_index)?.content {
+        StepContent::Component(instance) => instance.key.clone(),
+        StepContent::Command(_) => {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "step {} isn't a component",
+                step_index + 1
+            )));
+        }
+    };
     let mut copy = project
         .components
         .iter()
@@ -441,37 +981,50 @@ pub fn clone_component_for_step(
     copy.origin = None;
     let new_key = copy.key.clone();
     project.components.push(copy);
-    if let StepContent::Component(instance) =
-        &mut step_mut(project, pipeline_id, step_index)?.content
-    {
+    if let StepContent::Component(instance) = &mut list.step_mut(project, step_index)?.content {
         instance.key = new_key.clone();
     }
     Ok(new_key)
 }
 
-/// "Expand component": replaces step `step_index` of pipeline `pipeline_id` (a component
-/// step) by its component's steps, with the step's values applied. The component's
-/// own classes become new project classes (same name and colour) and its
-/// memory slots pipeline slots - both only exist inside a component. The
-/// definition stays in the project.
+/// "Expand component": replaces step `step_index` of `list` (a component step) by
+/// its component's steps, with the step's values applied. The definition
+/// stays in the project.
+///
+/// In a pipeline, the component's own classes become new project classes
+/// (same name and colour) and its memory slots pipeline slots - both only
+/// exist inside a component. In a component's steps they become that
+/// component's (numbered after its own), and its parameters setting the
+/// expanded component's parameters set the settings those set.
 pub fn expand_component(
+    project: &mut ProjectSettings,
+    list: impl Into<StepList>,
+    step_index: usize,
+) -> Result<(), InternalErrors> {
+    let list = list.into();
+    let StepContent::Component(instance) = &list.step_mut(project, step_index)?.content else {
+        return Err(InternalErrors::InvalidArgument(format!(
+            "step {} isn't a component",
+            step_index + 1
+        )));
+    };
+    let instance = instance.clone();
+    match list {
+        StepList::Pipeline(pipeline_id) => {
+            expand_in_pipeline(project, pipeline_id, step_index, &instance)
+        }
+        StepList::Component(outer) => expand_in_component(project, &outer, step_index, &instance),
+    }
+}
+
+fn expand_in_pipeline(
     project: &mut ProjectSettings,
     pipeline_id: PipelineId,
     step_index: usize,
+    instance: &ComponentInstance,
 ) -> Result<(), InternalErrors> {
-    let key = component_key_of(project, pipeline_id, step_index)?;
-    let StepContent::Component(instance) = &step_mut(project, pipeline_id, step_index)?.content
-    else {
-        unreachable!("checked by component_key_of");
-    };
-    let instance = instance.clone();
-    let steps = evanalyzer_core::component_steps_with_values(&instance, &project.components)?;
-    let definition = project
-        .components
-        .iter()
-        .find(|d| d.key == key)
-        .expect("expanded above")
-        .clone();
+    let steps = evanalyzer_core::component_steps_with_values(instance, &project.components)?;
+    let definition = definition(project, &instance.key)?.clone();
 
     // Each local class → a new project class.
     let mut next_id = project
@@ -498,8 +1051,16 @@ pub fn expand_component(
         .into_iter()
         .map(|mut step| {
             step.id = StepId::UNASSIGNED;
-            if let StepContent::Command(command) = &mut step.content {
-                *command = outside_the_component(command, &to_global)?;
+            match &mut step.content {
+                StepContent::Command(command) => {
+                    *command = outside_the_component(command, &to_global)?;
+                }
+                // What it hands a component inside it too.
+                StepContent::Component(inner) => {
+                    for value in inner.values.values_mut() {
+                        value_outside_the_component(value, &to_global);
+                    }
+                }
             }
             Ok(step)
         })
@@ -508,12 +1069,144 @@ pub fn expand_component(
         .pipelines
         .iter_mut()
         .find(|p| p.id == pipeline_id)
-        .expect("checked by component_key_of");
+        .expect("checked by expand_component");
     pipeline
         .steps
         .splice(step_index..=step_index, steps.drain(..));
     assign_step_ids(&mut pipeline.steps);
     Ok(())
+}
+
+fn expand_in_component(
+    project: &mut ProjectSettings,
+    outer_key: &str,
+    step_index: usize,
+    instance: &ComponentInstance,
+) -> Result<(), InternalErrors> {
+    let inner = definition(project, &instance.key)?.clone();
+    let outer = definition(project, outer_key)?;
+
+    // The inner component's classes and slots, numbered after the outer one's.
+    let (outer_classes, outer_slots) = evanalyzer_core::own_numbers(outer);
+    let (inner_classes, inner_slots) = evanalyzer_core::own_numbers(&inner);
+    let renumber = |own: Vec<u32>, taken: &[u32]| -> std::collections::BTreeMap<u32, u32> {
+        let first = taken.iter().max().map_or(1, |n| n + 1);
+        own.into_iter().zip(first..).collect()
+    };
+    let classes = renumber(inner_classes, &outer_classes);
+    let slots = renumber(inner_slots, &outer_slots);
+    // Renumbered before the step's values go in - those are the outer one's.
+    let mut definitions = project.components.clone();
+    for definition in &mut definitions {
+        if definition.key == inner.key {
+            *definition = evanalyzer_core::renumbered(&inner, &classes, &slots);
+        }
+    }
+    let steps = evanalyzer_core::component_steps_with_values(instance, &definitions)?;
+    let old_ids: Vec<StepId> = steps.iter().map(|s| s.id).collect();
+
+    let mut components = project.components.clone();
+    let outer = components
+        .iter_mut()
+        .find(|d| d.key == outer_key)
+        .expect("found above");
+    outer
+        .classes
+        .extend(inner.classes.iter().map(|class| Class {
+            id: classes[&class.id],
+            ..class.clone()
+        }));
+    let expanded = outer.steps[step_index].id;
+    let count = steps.len();
+    outer.steps.splice(
+        step_index..=step_index,
+        steps.into_iter().map(|mut step| {
+            step.id = StepId::UNASSIGNED;
+            step
+        }),
+    );
+    crate::workspace::extensions::utils::assign_component_step_ids(outer)?;
+    let new_id: std::collections::BTreeMap<StepId, StepId> = old_ids
+        .into_iter()
+        .zip(
+            outer.steps[step_index..step_index + count]
+                .iter()
+                .map(|s| s.id),
+        )
+        .collect();
+
+    // A parameter setting the expanded component's parameter sets what that set.
+    for parameter in &mut outer.parameters {
+        parameter.bindings = parameter
+            .bindings
+            .iter()
+            .flat_map(|binding| {
+                if binding.step != expanded {
+                    return vec![binding.clone()];
+                }
+                inner
+                    .parameters
+                    .iter()
+                    .find(|p| p.key.to_string() == binding.param)
+                    .map(|p| {
+                        p.bindings
+                            .iter()
+                            .filter_map(|b| {
+                                Some(ParamBinding {
+                                    step: *new_id.get(&b.step)?,
+                                    param: b.param.clone(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+    }
+    outer.parameters.retain(|p| !p.bindings.is_empty());
+
+    // The outer component must run as before.
+    let probe = component_step(outer_key);
+    let runs = |definitions: &[ComponentDefinition]| {
+        expand_step(&probe, definitions, &mut ScopeCounter::default()).map(|_| ())
+    };
+    if runs(&project.components).is_ok()
+        && let Err(e) = runs(&components)
+    {
+        return Err(InternalErrors::InvalidArgument(format!(
+            "the component can't be expanded here: {e}"
+        )));
+    }
+    project.components = components;
+    Ok(())
+}
+
+/// A value a component's step hands a component inside it, as it reads outside
+/// the component: its class a project class (see [`outside_the_component`]),
+/// its memory slot a pipeline slot.
+fn value_outside_the_component(
+    value: &mut ParamValue,
+    to_global: &std::collections::BTreeMap<u32, u32>,
+) {
+    match value {
+        ParamValue::Text(text) => {
+            if let Some(ObjectClass::Local(n)) = ObjectClass::from_text(text) {
+                *text = ObjectClass::Global(to_global.get(&n).copied().unwrap_or(n)).to_text();
+            } else if let Some(evanalyzer_cfg::core_types::ImageAddress::Memory(
+                evanalyzer_cfg::core_types::MemoryId::ComponentContext(slot),
+            )) = evanalyzer_cfg::core_types::ImageAddress::from_param_value(text)
+            {
+                *text = evanalyzer_cfg::core_types::ImageAddress::Memory(
+                    evanalyzer_cfg::core_types::MemoryId::PipelineContext(slot),
+                )
+                .to_param_value();
+            }
+        }
+        ParamValue::List(items) => items
+            .iter_mut()
+            .for_each(|v| value_outside_the_component(v, to_global)),
+        _ => {}
+    }
 }
 
 /// `command` as it reads outside its component: its local classes the project
@@ -720,6 +1413,33 @@ pub fn setting_at(command: &PipelineCommand, path: &str) -> Option<(ParameterDef
     find(&evanalyzer_core::command_parameters(command), path)
 }
 
+/// The setting at `path` of `step` and a label for it, as [`setting_at`] - for
+/// a component step, its component parameter `path` (as its card shows it,
+/// components looked up in `definitions`).
+pub fn step_setting(
+    definitions: &[ComponentDefinition],
+    step: &PipelineStepSettings,
+    path: &str,
+) -> Option<(ParameterDef, String)> {
+    match &step.content {
+        StepContent::Command(command) => setting_at(command, path),
+        StepContent::Component(instance) => {
+            evanalyzer_core::component_parameters(instance, definitions)
+                .ok()?
+                .into_iter()
+                .find(|p| p.name == path)
+                .map(|p| {
+                    let label = if p.display_name.is_empty() {
+                        p.name.clone()
+                    } else {
+                        p.display_name.clone()
+                    };
+                    (p, label)
+                })
+        }
+    }
+}
+
 /// The parameters of component `key` a setting like `setting` could be added
 /// to: those with the same control - type, and a dropdown's options.
 pub fn compatible_parameters(
@@ -811,6 +1531,7 @@ pub fn apply_defaults(definition: &ComponentDefinition) -> Vec<PipelineStepSetti
 /// it. Returns whether a parameter sets it.
 pub fn bound_setting_edited(
     definition: &mut ComponentDefinition,
+    definitions: &[ComponentDefinition],
     step_id: StepId,
     path: &str,
 ) -> bool {
@@ -821,8 +1542,7 @@ pub fn bound_setting_edited(
         .steps
         .iter()
         .find(|s| s.id == step_id)
-        .and_then(|s| s.command())
-        .and_then(|command| setting_at(command, path))
+        .and_then(|step| step_setting(definitions, step, path))
         .map(|(setting, _)| setting.value)
     else {
         return false;
@@ -891,39 +1611,6 @@ pub fn remove_component_step(definition: &mut ComponentDefinition, index: usize)
         parameter.bindings.retain(|b| b.step != removed);
     }
     definition.parameters.retain(|p| !p.bindings.is_empty());
-}
-
-fn step_mut(
-    project: &mut ProjectSettings,
-    pipeline_id: PipelineId,
-    step_index: usize,
-) -> Result<&mut PipelineStepSettings, InternalErrors> {
-    project
-        .pipelines
-        .iter_mut()
-        .find(|p| p.id == pipeline_id)
-        .and_then(|p| p.steps.get_mut(step_index))
-        .ok_or_else(|| {
-            InternalErrors::InvalidArgument(format!(
-                "pipeline {pipeline_id} has no step {}",
-                step_index + 1
-            ))
-        })
-}
-
-/// The key of the component step `step_index` of pipeline `pipeline_id` uses.
-fn component_key_of(
-    project: &mut ProjectSettings,
-    pipeline_id: PipelineId,
-    step_index: usize,
-) -> Result<String, InternalErrors> {
-    match &step_mut(project, pipeline_id, step_index)?.content {
-        StepContent::Component(instance) => Ok(instance.key.clone()),
-        StepContent::Command(_) => Err(InternalErrors::InvalidArgument(format!(
-            "step {} isn't a component",
-            step_index + 1
-        ))),
-    }
 }
 
 /// How a setting refers to a class.
@@ -1003,13 +1690,18 @@ fn class_paths(command: &PipelineCommand, class: ObjectClass) -> Vec<(String, Pa
 /// component's class `local`. If `segmented_here` (a step going into the component makes the
 /// segmentation class with the class's number), an Extract Objects maps that
 /// segmentation class to `local`, so its objects get the component's class.
+/// Settings `skip` (by path) says are left alone.
 fn make_local(
     command: &mut PipelineCommand,
     class: ObjectClass,
     local: ObjectClass,
     segmented_here: bool,
+    skip: impl Fn(&str) -> bool,
 ) -> Result<(), InternalErrors> {
     for (path, kind) in class_paths(command, class) {
+        if skip(&path) {
+            continue;
+        }
         let value = match kind {
             PathKind::Segmentation => continue,
             PathKind::Single => local.to_text(),
@@ -1078,22 +1770,32 @@ fn local_number(class: ObjectClass) -> u32 {
     }
 }
 
-/// Steps `range` of the pipeline - an error if the pipeline or the steps
-/// don't exist.
+/// Steps `range` of `list` - an error if the list or the steps don't exist.
 fn selected_steps<'a>(
     project: &'a ProjectSettings,
-    pipeline_id: PipelineId,
+    list: &StepList,
     range: &RangeInclusive<usize>,
 ) -> Result<&'a [PipelineStepSettings], InternalErrors> {
-    let pipeline = project
-        .pipelines
-        .iter()
-        .find(|p| p.id == pipeline_id)
-        .ok_or_else(|| InternalErrors::InvalidArgument(format!("no pipeline {pipeline_id}")))?;
-    pipeline.steps.get(range.clone()).ok_or_else(|| {
+    let (steps, name) = match list {
+        StepList::Pipeline(id) => {
+            let pipeline = project
+                .pipelines
+                .iter()
+                .find(|p| p.id == *id)
+                .ok_or_else(|| InternalErrors::InvalidArgument(format!("no pipeline {id}")))?;
+            (&pipeline.steps, format!("pipeline \"{}\"", pipeline.name))
+        }
+        StepList::Component(key) => {
+            let definition = definition(project, key)?;
+            (
+                &definition.steps,
+                format!("component \"{}\"", definition.meta.name),
+            )
+        }
+    };
+    steps.get(range.clone()).ok_or_else(|| {
         InternalErrors::InvalidArgument(format!(
-            "pipeline \"{}\" has no steps {} to {}",
-            pipeline.name,
+            "{name} has no steps {} to {}",
             range.start() + 1,
             range.end() + 1
         ))
@@ -1103,7 +1805,15 @@ fn selected_steps<'a>(
 /// The commands `step` runs (a component's with its values) - none if it can't
 /// be expanded.
 fn commands_of(project: &ProjectSettings, step: &PipelineStepSettings) -> Vec<PipelineCommand> {
-    expand_step(step, &project.components, &mut ScopeCounter::default())
+    commands_with(&project.components, step)
+}
+
+/// [`commands_of`] with these component definitions.
+fn commands_with(
+    definitions: &[ComponentDefinition],
+    step: &PipelineStepSettings,
+) -> Vec<PipelineCommand> {
+    expand_step(step, definitions, &mut ScopeCounter::default())
         .map(|commands| {
             commands
                 .into_iter()
@@ -1116,24 +1826,84 @@ fn commands_of(project: &ProjectSettings, step: &PipelineStepSettings) -> Vec<Pi
 /// The pipeline memory slots (`MemoryId::PipelineContext`) `command` reads
 /// or writes.
 fn pipeline_slots(command: &PipelineCommand) -> BTreeSet<u32> {
-    fn walk(value: &serde_json::Value, out: &mut BTreeSet<u32>) {
+    memory_slots(command, "pipelineContext")
+}
+
+/// Where `command`'s settings name component memory slot `slot` as an
+/// image address (`"component:2"`): their paths, as [`class_paths`] gives
+/// them.
+fn slot_paths(command: &PipelineCommand, slot: u32) -> Vec<String> {
+    fn walk(params: &[ParameterDef], prefix: &str, text: &str, out: &mut Vec<String>) {
+        for param in params {
+            let path = format!("{prefix}{}", param.name);
+            match param.param_type {
+                ParamType::ImageAddress if param.value.trim() == text => out.push(path),
+                ParamType::Group => {
+                    for (index, entry) in param.groups.iter().enumerate() {
+                        walk(entry, &format!("{path}.{index}."), text, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let text = ImageAddress::Memory(MemoryId::ComponentContext(slot)).to_param_value();
+    let mut out = Vec::new();
+    walk(
+        &evanalyzer_core::command_parameters(command),
+        "",
+        &text,
+        &mut out,
+    );
+    out
+}
+
+/// How often `command` names component memory slot `slot` - in any setting.
+fn slot_uses(command: &PipelineCommand, slot: u32) -> usize {
+    fn count(value: &serde_json::Value, slot: u64) -> usize {
         match value {
             serde_json::Value::Object(map) => {
                 if map.len() == 1
-                    && let Some(slot) = map.get("pipelineContext").and_then(|v| v.as_u64())
+                    && map.get("componentContext").and_then(|v| v.as_u64()) == Some(slot)
+                {
+                    return 1;
+                }
+                map.values().map(|v| count(v, slot)).sum()
+            }
+            serde_json::Value::Array(items) => items.iter().map(|v| count(v, slot)).sum(),
+            _ => 0,
+        }
+    }
+    serde_json::to_value(command).map_or(0, |value| count(&value, slot as u64))
+}
+
+/// The component memory slots (`MemoryId::ComponentContext`) `command` reads
+/// or writes.
+fn component_slots(command: &PipelineCommand) -> BTreeSet<u32> {
+    memory_slots(command, "componentContext")
+}
+
+/// The memory slots of kind `kind` (`MemoryId`'s serialized name) `command`
+/// reads or writes.
+fn memory_slots(command: &PipelineCommand, kind: &str) -> BTreeSet<u32> {
+    fn walk(value: &serde_json::Value, kind: &str, out: &mut BTreeSet<u32>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map.len() == 1
+                    && let Some(slot) = map.get(kind).and_then(|v| v.as_u64())
                 {
                     out.insert(slot as u32);
                     return;
                 }
-                map.values().for_each(|v| walk(v, out));
+                map.values().for_each(|v| walk(v, kind, out));
             }
-            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, kind, out)),
             _ => {}
         }
     }
     let mut out = BTreeSet::new();
     if let Ok(value) = serde_json::to_value(command) {
-        walk(&value, &mut out);
+        walk(&value, kind, &mut out);
     }
     out
 }
@@ -1193,21 +1963,45 @@ fn slots_to_component(
     serde_json::from_value(value).map_err(|e| InternalErrors::Internal(e.to_string()))
 }
 
-/// The classes the project uses outside steps `range` of pipeline
-/// `pipeline_id`: in other steps and pipelines (inside components too), in hand
-/// annotations, in the tile merge settings.
+/// The classes the project uses outside steps `range` of `list`: in other
+/// steps and pipelines (inside components too), in hand annotations, in the
+/// tile merge settings.
 fn classes_used_elsewhere(
     project: &ProjectSettings,
-    pipeline_id: PipelineId,
+    list: &StepList,
     range: &RangeInclusive<usize>,
 ) -> BTreeSet<ObjectClass> {
+    // A component's steps: every use of the component, without them (nor the
+    // bindings to them).
+    let without: Option<Vec<ComponentDefinition>> = match list {
+        StepList::Pipeline(_) => None,
+        StepList::Component(key) => {
+            let mut definitions = project.components.clone();
+            if let Some(outer) = definitions.iter_mut().find(|d| &d.key == key) {
+                let removed: BTreeSet<StepId> = outer
+                    .steps
+                    .get(range.clone())
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|s| s.id)
+                    .collect();
+                outer.steps.retain(|s| !removed.contains(&s.id));
+                for parameter in &mut outer.parameters {
+                    parameter.bindings.retain(|b| !removed.contains(&b.step));
+                }
+                outer.parameters.retain(|p| !p.bindings.is_empty());
+            }
+            Some(definitions)
+        }
+    };
+    let definitions = without.as_deref().unwrap_or(&project.components);
     let mut classes = BTreeSet::new();
     for pipeline in &project.pipelines {
         for (index, step) in pipeline.steps.iter().enumerate() {
-            if pipeline.id == pipeline_id && range.contains(&index) {
+            if *list == StepList::Pipeline(pipeline.id) && range.contains(&index) {
                 continue;
             }
-            for command in commands_of(project, step) {
+            for command in commands_with(definitions, step) {
                 classes.extend(command.object_classes());
             }
         }
@@ -1678,7 +2472,8 @@ mod tests {
         project.pipelines[1].steps.push(second_use);
         assert_eq!(component_uses(&project, "CELL_RECONSTRUCTION"), 2);
 
-        let key = clone_component_for_step(&mut project, PipelineId(2), 1).unwrap();
+        let key =
+            clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(2)), 1).unwrap();
         assert_eq!(key, "CELL_RECONSTRUCTION_2");
         assert_eq!(project.components[1].meta.name, "Cell reconstruction (2)");
         assert_eq!(
@@ -1687,6 +2482,492 @@ mod tests {
             "the other use keeps it"
         );
         assert_eq!(component_uses(&project, &key), 1);
+    }
+
+    /// Pipeline 1 made the component "Outer": local Nuclei (L1, extracted in
+    /// step 3) and Seeds (L2), the parameter "Cells" sets the Voronoi's
+    /// output class (step 5).
+    fn with_outer_component() -> ProjectSettings {
+        let mut project = project();
+        let plan = plan_component(&project, PipelineId(1), 0..=4).unwrap();
+        create_component(&mut project, PipelineId(1), 0..=4, "Outer", &roles(&plan)).unwrap();
+        project
+    }
+
+    /// What a step using component `key` with `values` runs, as JSON - scopes
+    /// left out.
+    fn runs(
+        project: &ProjectSettings,
+        key: &str,
+        values: &[(&str, ParamValue)],
+    ) -> Vec<serde_json::Value> {
+        let mut step = component_step(key);
+        if let StepContent::Component(instance) = &mut step.content {
+            instance.values = values
+                .iter()
+                .map(|(k, v)| (ComponentParamKey::from(*k), v.clone()))
+                .collect();
+        }
+        expand_step(&step, &project.components, &mut ScopeCounter::default())
+            .unwrap()
+            .into_iter()
+            .map(|c| serde_json::to_value(c.command).unwrap())
+            .collect()
+    }
+
+    fn outer(project: &ProjectSettings) -> &ComponentDefinition {
+        project
+            .components
+            .iter()
+            .find(|d| d.key == "OUTER")
+            .unwrap()
+    }
+
+    #[test]
+    fn a_component_made_inside_a_component_runs_what_its_steps_ran() {
+        let mut project = with_outer_component();
+        let before = runs(
+            &project,
+            "OUTER",
+            &[("cells", ParamValue::Text("4".into()))],
+        );
+        let list = StepList::Component("OUTER".into());
+
+        let plan = plan_component(&project, list.clone(), 2..=4).unwrap();
+        let planned: Vec<(ObjectClass, ClassRole)> = roles(&plan);
+        // Segmentation class 1 comes from the Threshold staying outside (only a
+        // segmentation class here: no parameter comes of it). Cells is set by
+        // the outer parameter - not a class of the steps' own.
+        assert_eq!(
+            planned,
+            [
+                (ObjectClass::Global(1), ClassRole::Parameter),
+                (ObjectClass::Local(1), ClassRole::Local),
+                (ObjectClass::Local(2), ClassRole::Local)
+            ],
+        );
+        let names: Vec<&str> = plan.classes.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Nuclei", "Nuclei", "Seeds"]);
+
+        let key = create_component(&mut project, list, 2..=4, "Inner", &planned).unwrap();
+        let inner = project.components.iter().find(|d| d.key == key).unwrap();
+        assert_eq!(inner.steps.len(), 3);
+        let inner_classes: Vec<(u32, &str)> = inner
+            .classes
+            .iter()
+            .map(|c| (c.id, c.name.as_str()))
+            .collect();
+        assert_eq!(inner_classes, [(1, "Nuclei"), (2, "Seeds")], "same numbers");
+        assert_eq!(inner.parameters.len(), 1);
+        assert_eq!(inner.parameters[0].label, "Cells");
+        assert_eq!(
+            inner.parameters[0].bindings,
+            [ParamBinding {
+                step: StepId(5),
+                param: "output_class".into()
+            }]
+        );
+
+        let outer = outer(&project);
+        assert!(outer.classes.is_empty(), "the classes went with the steps");
+        assert_eq!(outer.steps.len(), 3);
+        let StepContent::Component(instance) = &outer.steps[2].content else {
+            panic!("a step using the new component");
+        };
+        assert_eq!(instance.key, key);
+        assert_eq!(
+            outer.parameters[0].bindings,
+            [ParamBinding {
+                step: outer.steps[2].id,
+                param: inner.parameters[0].key.to_string()
+            }],
+            "the outer parameter sets the new one's"
+        );
+
+        assert_eq!(
+            runs(
+                &project,
+                "OUTER",
+                &[("cells", ParamValue::Text("4".into()))]
+            ),
+            before,
+            "the outer component runs what it ran"
+        );
+    }
+
+    #[test]
+    fn an_outer_parameter_on_any_setting_of_the_steps_still_sets_it() {
+        let mut project = with_outer_component();
+        let outer_definition = project
+            .components
+            .iter_mut()
+            .find(|d| d.key == "OUTER")
+            .unwrap();
+        // Step 4 (classify) min_area as "Min size", next to "Cells".
+        assert!(toggle_exposed(
+            outer_definition,
+            StepId(4),
+            "min_area",
+            "Min size",
+            "50"
+        ));
+        let min_size = outer_definition.parameters[1].key.to_string();
+        let values = [(min_size.as_str(), ParamValue::Float(99.0))];
+        let before = runs(&project, "OUTER", &values);
+
+        let list = StepList::Component("OUTER".into());
+        let plan = plan_component(&project, list.clone(), 2..=4).unwrap();
+        create_component(&mut project, list, 2..=4, "Inner", &roles(&plan)).unwrap();
+
+        let after = runs(&project, "OUTER", &values);
+        assert_eq!(after, before);
+        assert!(
+            after.iter().any(|c| c["minArea"] == 99.0),
+            "the value reaches the classify step: {after:?}"
+        );
+        let outer = outer(&project);
+        let labels: Vec<&str> = outer.parameters.iter().map(|p| p.label.as_str()).collect();
+        assert_eq!(labels, ["Cells", "Min size"], "the card stays the same");
+    }
+
+    #[test]
+    fn an_outer_components_class_its_other_steps_use_too_is_handed_in() {
+        let mut project = with_outer_component();
+        let before = runs(
+            &project,
+            "OUTER",
+            &[("cells", ParamValue::Text("4".into()))],
+        );
+        let list = StepList::Component("OUTER".into());
+        // Nuclei (L1) comes from step 3, which stays in "Outer"; Seeds (L2)
+        // only these steps use.
+        let plan = plan_component(&project, list.clone(), 3..=4).unwrap();
+        assert_eq!(
+            roles(&plan),
+            [
+                (ObjectClass::Local(1), ClassRole::Parameter),
+                (ObjectClass::Local(2), ClassRole::Local)
+            ]
+        );
+
+        let key = create_component(&mut project, list, 3..=4, "Inner", &roles(&plan)).unwrap();
+        let inner = project.components.iter().find(|d| d.key == key).unwrap();
+        let inner_classes: Vec<u32> = inner.classes.iter().map(|c| c.id).collect();
+        assert_eq!(inner_classes, [2], "Seeds moved");
+        let nuclei = inner
+            .parameters
+            .iter()
+            .find(|p| p.label == "Nuclei")
+            .unwrap();
+        assert_eq!(
+            nuclei.default,
+            ParamValue::Text("-1".into()),
+            "unset on its own"
+        );
+        let StepContent::Component(uses_inner) = &outer(&project).steps[3].content else {
+            panic!("the step using the new component")
+        };
+        assert_eq!(
+            uses_inner.values[&nuclei.key],
+            ParamValue::Text("L1".into()),
+            "the outer component hands its class in"
+        );
+        let outer_classes: Vec<u32> = outer(&project).classes.iter().map(|c| c.id).collect();
+        assert_eq!(outer_classes, [1], "Nuclei stays the outer one's");
+
+        assert_eq!(
+            runs(
+                &project,
+                "OUTER",
+                &[("cells", ParamValue::Text("4".into()))]
+            ),
+            before.iter().cloned().collect::<Vec<_>>(),
+            "the outer component runs what it ran"
+        );
+    }
+
+    #[test]
+    fn expanding_a_component_inside_a_component_runs_what_it_ran() {
+        let mut project = with_outer_component();
+        let values = [("cells", ParamValue::Text("4".into()))];
+        let before = runs(&project, "OUTER", &values);
+        let list = StepList::Component("OUTER".into());
+        // Seeds (L2) moves into "Inner", Nuclei (L1) is handed in.
+        let plan = plan_component(&project, list.clone(), 3..=4).unwrap();
+        create_component(&mut project, list.clone(), 3..=4, "Inner", &roles(&plan)).unwrap();
+        assert_eq!(outer(&project).steps.len(), 4);
+
+        expand_component(&mut project, list, 3).unwrap();
+        let outer_definition = outer(&project);
+        assert_eq!(outer_definition.steps.len(), 5, "the steps back in place");
+        let classes: Vec<(u32, &str)> = outer_definition
+            .classes
+            .iter()
+            .map(|c| (c.id, c.name.as_str()))
+            .collect();
+        assert_eq!(
+            classes,
+            [(1, "Nuclei"), (2, "Seeds")],
+            "Inner's Seeds, numbered after the outer one's own"
+        );
+        assert_eq!(
+            outer_definition.parameters[0].bindings,
+            [ParamBinding {
+                step: outer_definition.steps[4].id,
+                param: "output_class".into()
+            }],
+            "\"Cells\" sets the Voronoi's class again"
+        );
+        assert_eq!(runs(&project, "OUTER", &values), before);
+    }
+
+    #[test]
+    fn expanding_a_component_into_the_pipeline_makes_what_it_hands_in_project_classes() {
+        let mut project = with_outer_component();
+        let list = StepList::Component("OUTER".into());
+        let plan = plan_component(&project, list.clone(), 3..=4).unwrap();
+        create_component(&mut project, list, 3..=4, "Inner", &roles(&plan)).unwrap();
+
+        expand_component(&mut project, PipelineId(1), 0).unwrap();
+        let nuclei = project
+            .classification
+            .classes()
+            .iter()
+            .find(|c| c.name == "Nuclei" && c.id != 1)
+            .map(|c| c.id)
+            .expect("Outer's Nuclei, a project class now");
+        let pipeline = &project.pipelines[0];
+        let StepContent::Component(uses_inner) = &pipeline.steps[3].content else {
+            panic!("the step using Inner")
+        };
+        let handed: Vec<&ParamValue> = uses_inner.values.values().collect();
+        assert!(
+            handed.contains(&&ParamValue::Text(nuclei.to_string())),
+            "{handed:?}"
+        );
+        assert!(
+            handed.iter().all(|v| local_class_of(v).is_none()),
+            "no component class left in the pipeline: {handed:?}"
+        );
+        for step in &pipeline.steps {
+            expand_step(step, &project.components, &mut ScopeCounter::default())
+                .expect("every step runs in the pipeline");
+        }
+    }
+
+    fn image_cache(
+        mode: evanalyzer_cfg::settings::pipeline_command_settings::MathImageCacheImageCacheModeSettings,
+        slot: u32,
+    ) -> PipelineCommand {
+        PipelineCommand::ImageCache(
+            evanalyzer_cfg::settings::pipeline_command_settings::ImageCacheSettings {
+                mode,
+                address: ImageAddress::Memory(MemoryId::ComponentContext(slot)),
+            },
+        )
+    }
+
+    /// "Slots": stores in its slot 1, blurs, loads slot 1 back.
+    fn with_slots_component(last: PipelineCommand) -> ProjectSettings {
+        use evanalyzer_cfg::settings::pipeline_command_settings::MathImageCacheImageCacheModeSettings as Mode;
+        let mut project = project();
+        project.components.push(ComponentDefinition {
+            key: "SLOTS".into(),
+            meta: MetaData::default(),
+            classes: vec![],
+            steps: vec![
+                step(1, image_cache(Mode::Store, 1)),
+                step(2, PipelineCommand::Blur(Default::default())),
+                step(3, last),
+            ],
+            parameters: vec![],
+            origin: None,
+        });
+        project
+    }
+
+    #[test]
+    fn an_outer_components_memory_slot_its_other_steps_use_too_is_handed_in() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::MathImageCacheImageCacheModeSettings as Mode;
+        let mut project = with_slots_component(image_cache(Mode::Load, 1));
+        let before = runs(&project, "SLOTS", &[]);
+        let list = StepList::Component("SLOTS".into());
+        let plan = plan_component(&project, list.clone(), 2..=2).unwrap();
+        assert_eq!(plan.handed_slots, BTreeSet::from([1]));
+
+        let key = create_component(&mut project, list, 2..=2, "Load", &roles(&plan)).unwrap();
+        let inner = project.components.iter().find(|d| d.key == key).unwrap();
+        assert_eq!(inner.parameters.len(), 1);
+        let slot = &inner.parameters[0];
+        assert_eq!(slot.label, "Memory slot 1");
+        assert_eq!(
+            slot.default,
+            ParamValue::Text("none".into()),
+            "empty on its own"
+        );
+        assert_eq!(
+            slot.bindings,
+            [ParamBinding {
+                step: StepId(3),
+                param: "address".into()
+            }]
+        );
+        let outer = project
+            .components
+            .iter()
+            .find(|d| d.key == "SLOTS")
+            .unwrap();
+        let StepContent::Component(uses_inner) = &outer.steps[2].content else {
+            panic!("the step using the new component")
+        };
+        assert_eq!(
+            uses_inner.values[&slot.key],
+            ParamValue::Text("component:1".into()),
+            "the outer component hands its slot in"
+        );
+        assert_eq!(
+            runs(&project, "SLOTS", &[]),
+            before,
+            "the outer component runs what it ran"
+        );
+    }
+
+    #[test]
+    fn a_shared_slot_a_step_uses_other_than_as_an_address_is_refused() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            SegmentationThresholdThresholdValueSourceSettings, ThresholdEntrySettings,
+            ThresholdSettings,
+        };
+        let threshold = PipelineCommand::Threshold(ThresholdSettings {
+            thresholds: vec![ThresholdEntrySettings {
+                value_source: SegmentationThresholdThresholdValueSourceSettings::Memory(
+                    MemoryId::ComponentContext(1),
+                ),
+                ..Default::default()
+            }],
+        });
+        let project = with_slots_component(threshold);
+        let error = plan_component(&project, StepList::Component("SLOTS".into()), 2..=2)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("step 3 uses it in a way that can't be handed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_outer_components_class_cant_stay_as_it_is_in_the_new_one() {
+        let mut project = with_outer_component();
+        let list = StepList::Component("OUTER".into());
+        let error = create_component(
+            &mut project,
+            list,
+            2..=4,
+            "Inner",
+            &[
+                (ObjectClass::Local(1), ClassRole::Fixed),
+                (ObjectClass::Local(2), ClassRole::Local),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("Nuclei can't stay as it is"), "{error}");
+        assert_eq!(outer(&project).steps.len(), 5, "nothing changed");
+    }
+
+    #[test]
+    fn an_outer_class_with_the_number_a_new_local_class_gets_stays() {
+        let mut project = with_outer_component();
+        // Seeds (L2) comes from step 4, which stays: steps 5 only uses Cells
+        // (set by the outer parameter) - and a project class, made local in
+        // the new component as L1.
+        let outer_definition = project
+            .components
+            .iter_mut()
+            .find(|d| d.key == "OUTER")
+            .unwrap();
+        outer_definition.steps.push(step(
+            6,
+            classify(ObjectClass::Global(3), ObjectClass::Global(9)),
+        ));
+        let list = StepList::Component("OUTER".into());
+        let plan = plan_component(&project, list.clone(), 5..=5).unwrap();
+        let roles: Vec<(ObjectClass, ClassRole)> = plan
+            .classes
+            .iter()
+            .map(|c| (c.class, ClassRole::Local))
+            .collect();
+        let key = create_component(&mut project, list, 5..=5, "Inner", &roles).unwrap();
+        let inner = project.components.iter().find(|d| d.key == key).unwrap();
+        assert!(inner.classes.iter().any(|c| c.id == 1));
+        let outer_classes: Vec<u32> = outer(&project).classes.iter().map(|c| c.id).collect();
+        assert_eq!(
+            outer_classes,
+            [1, 2],
+            "the outer one's own L1 isn't the new one's"
+        );
+    }
+
+    #[test]
+    fn a_component_containing_another_at_any_depth_would_contain_itself_in_it() {
+        let mut project = with_component();
+        let uses = |key: &str| PipelineStepSettings {
+            id: StepId(1),
+            enabled: true,
+            content: StepContent::Component(ComponentInstance {
+                key: key.into(),
+                values: Default::default(),
+            }),
+        };
+        let mut middle = project.components[0].clone();
+        middle.key = "MIDDLE".into();
+        middle.steps = vec![uses("CELL_RECONSTRUCTION")];
+        let mut top = project.components[0].clone();
+        top.key = "TOP".into();
+        top.steps = vec![uses("MIDDLE")];
+        project.components.extend([middle, top]);
+
+        let contains = |container, inserted| would_contain_itself(&project, container, inserted);
+        assert!(contains("CELL_RECONSTRUCTION", "CELL_RECONSTRUCTION"));
+        assert!(contains("CELL_RECONSTRUCTION", "MIDDLE"));
+        assert!(contains("CELL_RECONSTRUCTION", "TOP"), "two levels down");
+        assert!(!contains("TOP", "CELL_RECONSTRUCTION"));
+        assert!(!contains("TOP", "MIDDLE"));
+        assert!(!contains("TOP", "UNKNOWN"));
+    }
+
+    #[test]
+    fn a_component_nested_in_another_gets_a_copy_for_its_step_there() {
+        let mut project = with_component();
+        // "Outer" uses the component; the pipeline does too.
+        let mut outer = project.components[0].clone();
+        outer.key = "OUTER".into();
+        outer.meta.name = "Outer".into();
+        outer.classes.clear();
+        outer.parameters.clear();
+        outer.steps = vec![project.pipelines[0].steps[2].clone()];
+        project.components.push(outer);
+        assert_eq!(component_uses(&project, "CELL_RECONSTRUCTION"), 2);
+
+        let key = clone_component_for_step(&mut project, &StepList::Component("OUTER".into()), 0)
+            .unwrap();
+        let outer = project
+            .components
+            .iter()
+            .find(|d| d.key == "OUTER")
+            .unwrap();
+        assert!(matches!(&outer.steps[0].content, StepContent::Component(i) if i.key == key));
+        assert_eq!(
+            component_uses(&project, "CELL_RECONSTRUCTION"),
+            1,
+            "the pipeline keeps it"
+        );
+
+        let error = clone_component_for_step(&mut project, &StepList::Component("OUTER".into()), 5)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("component OUTER has no step 6"), "{error}");
     }
 
     #[test]
@@ -1892,7 +3173,7 @@ mod tests {
             .unwrap()
             .apply_param_change("min_area", "80");
 
-        assert!(bound_setting_edited(definition, StepId(4), "min_area"));
+        assert!(bound_setting_edited(definition, &[], StepId(4), "min_area"));
         let parameter = definition.parameters.iter().find(|p| p.key == id).unwrap();
         assert_eq!(parameter.default, ParamValue::Int(80));
         // What runs for a use without values of its own.
@@ -1912,7 +3193,7 @@ mod tests {
         assert_eq!(c.min_area, 80.0);
 
         assert!(
-            !bound_setting_edited(definition, StepId(4), "max_area"),
+            !bound_setting_edited(definition, &[], StepId(4), "max_area"),
             "not set by a parameter"
         );
     }

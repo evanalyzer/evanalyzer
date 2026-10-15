@@ -5,7 +5,7 @@ use crate::{
     image::PixelSizes,
     job::{
         algos_from_config::into_pipeline_step,
-        components::{ExpandedCommand, ScopeCounter, expand_step},
+        components::{ExpandedCommand, ScopeCounter, UseId, expand_step},
         job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
         pipeline_step::PipelineStep,
     },
@@ -29,7 +29,7 @@ use evanalyzer_cfg::{
 };
 use log::{error, info, warn};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -569,11 +569,15 @@ fn generate_job_from_project_settings_intenal(
 
         // A pipeline without an image source must load one first.
         let mut needs_image = pipeline_setting.image_source == ImageAddress::None;
+        // Each component use's last command, per phase (index in that list).
+        let mut last_tile: BTreeMap<UseId, usize> = BTreeMap::new();
+        let mut last_whole_image: BTreeMap<UseId, usize> = BTreeMap::new();
         for step in pipeline_setting.steps.iter().filter(|s| s.enabled) {
             // A component runs as its commands.
             for ExpandedCommand {
                 step_id,
                 scope,
+                uses,
                 command,
             } in step_commands(
                 &pipeline_setting.name,
@@ -595,10 +599,14 @@ fn generate_job_from_project_settings_intenal(
                                 )));
                             }
                             needs_image = false;
-                            pipeline_pre_process.add_step(step_id, scope, algo)
+                            pipeline_pre_process.add_step(step_id, scope, algo);
+                            let index = pipeline_pre_process.commands.len() - 1;
+                            last_tile.extend(uses.iter().map(|id| (*id, index)));
                         }
                         ExecutionScope::WholeImage => {
-                            pipeline_post_process.add_step(step_id, scope, algo)
+                            pipeline_post_process.add_step(step_id, scope, algo);
+                            let index = pipeline_post_process.commands.len() - 1;
+                            last_whole_image.extend(uses.iter().map(|id| (*id, index)));
                         }
                     },
                     // Runs once after every image, whatever its place in the pipeline.
@@ -607,7 +615,13 @@ fn generate_job_from_project_settings_intenal(
             }
         }
 
-        end_scopes(&mut pipeline_pre_process, &mut pipeline_post_process);
+        end_uses(
+            &mut pipeline_pre_process,
+            &mut pipeline_post_process,
+            &last_tile,
+            &last_whole_image,
+            &scopes,
+        );
         job.add_pre_process_pipeline(pipeline_pre_process);
         job.add_post_process_pipeline(pipeline_post_process);
     }
@@ -615,44 +629,45 @@ fn generate_job_from_project_settings_intenal(
     Ok(job)
 }
 
-/// Adds an [`EndScope`] right after each component instance's last command
-/// across both phases: in the whole-image list if the instance has a
-/// command there (it runs after every tile command), else in the tile list -
-/// where it frees the instance's objects tile by tile, before they're ever
-/// merged into the whole image.
-fn end_scopes(tile: &mut Pipeline, whole_image: &mut Pipeline) {
-    let last_commands = |pipeline: &Pipeline| {
-        let mut last: Vec<(Scope, usize)> = Vec::new();
-        for (index, (_, scope, _)) in pipeline.commands.iter().enumerate() {
-            if *scope == Scope::Global {
-                continue;
-            }
-            match last.iter_mut().find(|(s, _)| s == scope) {
-                Some(entry) => entry.1 = index,
-                None => last.push((*scope, index)),
-            }
-        }
-        last
-    };
-    let in_whole_image = last_commands(whole_image);
-    let in_tiles: Vec<(Scope, usize)> = last_commands(tile)
-        .into_iter()
-        .filter(|(scope, _)| !in_whole_image.iter().any(|(s, _)| s == scope))
+/// Adds an [`EndScope`] right after each component use's last command
+/// across both phases: in the whole-image list if the use has a command
+/// there (it runs after every tile command), else in the tile list - where
+/// it frees the use's objects tile by tile, before they're ever merged into
+/// the whole image. A use nested in another ends before the one around it.
+fn end_uses(
+    tile: &mut Pipeline,
+    whole_image: &mut Pipeline,
+    last_tile: &BTreeMap<UseId, usize>,
+    last_whole_image: &BTreeMap<UseId, usize>,
+    scopes: &ScopeCounter,
+) {
+    let in_tiles: BTreeMap<UseId, usize> = last_tile
+        .iter()
+        .filter(|(id, _)| !last_whole_image.contains_key(id))
+        .map(|(id, index)| (*id, *index))
         .collect();
-
-    for (pipeline, mut ends, phase) in [
-        (tile, in_tiles, ExecutionScope::Tile),
-        (whole_image, in_whole_image, ExecutionScope::WholeImage),
+    for (pipeline, ends, phase) in [
+        (tile, &in_tiles, ExecutionScope::Tile),
+        (whole_image, last_whole_image, ExecutionScope::WholeImage),
     ] {
-        // Back to front, so the earlier positions stay valid.
-        ends.sort_by_key(|(_, index)| std::cmp::Reverse(*index));
-        for (scope, index) in ends {
+        let mut ends: Vec<(UseId, usize)> = ends.iter().map(|(id, i)| (*id, *i)).collect();
+        // Back to front, so the earlier positions stay valid; at one position
+        // the outer use (numbered first) first - the nested one then goes in
+        // before it.
+        ends.sort_by_key(|(id, index)| (std::cmp::Reverse(*index), *id));
+        for (id, index) in ends {
+            let Some(end) = scopes.end_of(id) else {
+                continue;
+            };
             pipeline.commands.insert(
                 index + 1,
                 (
                     StepId::UNASSIGNED,
                     Scope::Global,
-                    Box::new(EndScope { scope, phase }),
+                    Box::new(EndScope {
+                        end: end.clone(),
+                        phase,
+                    }),
                 ),
             );
         }
@@ -1814,6 +1829,129 @@ mod tests {
                 object.object_class,
                 std::collections::HashSet::from([ObjectClass::Global(7)]),
                 "reclassified into the instance's class, nothing local left"
+            );
+        }
+    }
+
+    /// An outer component hands its own classes into a component nested in
+    /// it: the inner one moves the outer one's L1 objects into a class of
+    /// its own, then into the outer one's L2 - which survive the inner one's
+    /// end and leave the outer one reclassified into the project class.
+    #[test]
+    fn an_outer_components_classes_go_into_a_nested_component_and_back() {
+        use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
+            ObjectClassifyObjectsClassifyMatchHandlingSettings, ThresholdEntrySettings,
+            ThresholdSettings,
+        };
+        use serde_json::json;
+        let command = |command: PipelineCommand| serde_json::to_value(command).unwrap();
+        let reclassify = |from: ObjectClass, to: ObjectClass| {
+            command(PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                input_classes: vec![from],
+                match_handling:
+                    ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch,
+                output_class: to,
+                ..Default::default()
+            }))
+        };
+        let threshold = command(PipelineCommand::Threshold(ThresholdSettings {
+            thresholds: vec![ThresholdEntrySettings {
+                segmentation_class: SegmentationClass(1),
+                ..Default::default()
+            }],
+        }));
+        let components = command(PipelineCommand::ConnectedComponents(Default::default()));
+        let extract = command(PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+            class_mapping: vec![ExtractClassMappingSettings {
+                segmentation_class: SegmentationClass(1),
+                object_class: ObjectClass::Local(1),
+            }],
+            ..Default::default()
+        }));
+
+        let mut project = project_with(
+            Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests"))),
+            vec![],
+        );
+        let image = evanalyzer_cfg::settings::images_settings::ImageEntry {
+            rel_path: PathBuf::from("multi-channel-4D-series.ome.tif"),
+            series: std::collections::BTreeMap::from([(0, Default::default())]),
+            ..Default::default()
+        };
+        project.images.list.insert(image.rel_path.clone(), image);
+        let mut raw = serde_json::to_value(&project).unwrap();
+        raw["schemaVersion"] = json!(evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION);
+        let meta =
+            serde_json::to_value(evanalyzer_cfg::settings::meta_data::MetaData::default()).unwrap();
+        raw["pipelines"] = json!([{
+            "id": 1, "name": "Cells", "imageSource": {"channel": 0}, "enabled": true,
+            "steps": [
+                {"enabled": true, "command": threshold},
+                {"enabled": true, "command": components},
+                {"enabled": true, "component": {"key": "OUTER", "values": {"cell_class": 7}}}
+            ]
+        }]);
+        raw["components"] = json!([
+            {
+                "key": "OUTER", "meta": meta,
+                "classes": [
+                    {"id": 1, "color": "#FF0000", "name": "Candidates", "notes": ""},
+                    {"id": 2, "color": "#00FF00", "name": "Kept", "notes": ""}
+                ],
+                "steps": [
+                    {"id": 1, "enabled": true, "command": extract},
+                    {"id": 2, "enabled": true, "component": {"key": "PASS_THROUGH"}},
+                    {"id": 3, "enabled": true,
+                     "command": reclassify(ObjectClass::Local(2), ObjectClass::Global(5))}
+                ],
+                "parameters": [
+                    {"key": "from", "label": "From", "default": "L1",
+                     "bindings": [{"step": 2, "param": "from"}]},
+                    {"key": "to", "label": "To", "default": "L2",
+                     "bindings": [{"step": 2, "param": "to"}]},
+                    {"key": "cell_class", "label": "Cell class", "default": 5,
+                     "bindings": [{"step": 3, "param": "output_class"}]}
+                ]
+            },
+            {
+                "key": "PASS_THROUGH", "meta": meta,
+                "classes": [{"id": 1, "color": "#0000FF", "name": "Between", "notes": ""}],
+                "steps": [
+                    {"id": 1, "enabled": true,
+                     "command": reclassify(ObjectClass::Global(5), ObjectClass::Local(1))},
+                    {"id": 2, "enabled": true,
+                     "command": reclassify(ObjectClass::Local(1), ObjectClass::Global(6))}
+                ],
+                "parameters": [
+                    {"key": "from", "label": "From", "default": 5,
+                     "bindings": [{"step": 1, "param": "input_classes"}]},
+                    {"key": "to", "label": "To", "default": 6,
+                     "bindings": [{"step": 2, "param": "output_class"}]}
+                ]
+            }
+        ]);
+
+        let loaded =
+            evanalyzer_cfg::load_project_settings(raw).expect("the hand-written project loads");
+        let project_dir = tempfile::tempdir().unwrap();
+        let (job, out_objects) =
+            generate_preview_job_from_project_settings(loaded, project_dir.path().into()).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        job.run(1, tx, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+            .unwrap();
+
+        let objects = out_objects.lock().unwrap();
+        assert!(
+            !objects.is_empty(),
+            "the objects survive the nested component's end"
+        );
+        for object in objects.iter() {
+            assert_eq!(
+                object.object_class,
+                std::collections::HashSet::from([ObjectClass::Global(7)]),
+                "through the nested component and back, nothing local left"
             );
         }
     }

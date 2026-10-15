@@ -88,7 +88,7 @@ pub use self::object::transform_objects::TransformFunction;
 pub use self::object::transform_objects::TransformObjects;
 pub use self::object::voronoi::Voronoi;
 pub use self::script::script_executor::{
-    Script, apply_command_param, command_parameters, declared_script_params,
+    Script, apply_command_param, command_parameters, declared_script_params, script_syntax_error,
 };
 pub use self::script::script_params::{ParamDecl, ParamKind, ScriptValue};
 pub use self::segmentation::connected_components::ConnectedComponents;

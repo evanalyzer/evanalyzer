@@ -1,0 +1,118 @@
+// picker_field.slint
+// The look every "pick one" dropdown of the step settings shares (channel,
+// class, ...): the closed field and the rows of its popup list. What each
+// entry is called comes in `label` (in the mono font, e.g. "Channel 2",
+// "Obj. class 03"); what's known about it - a color swatch and a name, see
+// `SwatchName` - comes as children.
+
+import { Theme } from "../style.slint";
+
+// A color swatch and a name, after a picker's label.
+export component SwatchName inherits HorizontalLayout {
+    in property <color> color;
+    in property <string> name;
+    in property <length> font-size: 11px;
+
+    spacing: 5px;
+    padding-left: 8px;
+
+    VerticalLayout {
+        alignment: center;
+        Rectangle {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            background: root.color;
+        }
+    }
+
+    Text {
+        text: root.name;
+        font-size: root.font-size;
+        color: Theme.text-dim;
+        vertical-alignment: center;
+        overflow: elide;
+        horizontal-stretch: 1;
+    }
+}
+
+// The closed field: `label`, the children (a `SwatchName`), the arrow.
+export component PickerField inherits Rectangle {
+    in property <string> label;
+    in property <length> font-size: 11px;
+    // A label that isn't a numbered entry ("Unset", "Background"): not mono.
+    in property <bool> mono: true;
+    callback clicked;
+
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: Theme.border-soft;
+    background: ta.has-hover ? Theme.raised : Theme.bg;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+        spacing: 0px;
+        Text {
+            text: root.label;
+            font-size: root.font-size;
+            font-family: root.mono ? Theme.font-mono : "";
+            color: Theme.text;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            @children
+        }
+
+        Text {
+            text: "↓";
+            font-size: 9px;
+            color: Theme.text-mute;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// One entry of the popup list: `label`, the children (a `SwatchName`); the
+// chosen one highlighted.
+export component PickerRow inherits TouchArea {
+    in property <string> label;
+    in property <bool> selected;
+    in property <length> font-size: 11px;
+    in property <bool> mono: true;
+    in property <color> label-color: Theme.text;
+
+    height: 28px;
+    mouse-cursor: pointer;
+
+    Rectangle {
+        border-radius: 3px;
+        background: root.selected ? Theme.accent.with-alpha(0.12) : (root.has-hover ? Theme.raised : transparent);
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 0px;
+            Text {
+                text: root.label;
+                font-size: root.font-size;
+                font-family: root.mono ? Theme.font-mono : "";
+                color: root.label-color;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                @children
+            }
+        }
+    }
+}

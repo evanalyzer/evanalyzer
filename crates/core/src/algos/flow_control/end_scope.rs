@@ -1,6 +1,8 @@
-//! Ends a component instance's scope.
+//! Ends a component use: its scope, or - nested in another component - its
+//! own classes and memory slots in that one's scope.
 
 use crate::algos::{ExecutionScope, ImageAlgorithm};
+use crate::job::components::UseEnd;
 use crate::object::Object;
 use crate::pipeline::{
     object_cache::ObjectCache,
@@ -8,20 +10,20 @@ use crate::pipeline::{
     pipeline_context::PipelineContext,
     scope::Scope,
 };
-use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectId};
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass, ObjectId};
 
-/// Ends a component instance's scope - added by the job generator right
-/// after the instance's last command, in the phase that command runs in (its
-/// tile commands run before every whole-image command). Frees the scope's
-/// objects and the references to them, and its memory slots
-/// (`MemoryId::ComponentContext`), so nothing internal reaches the results and the
-/// memory is free for the rest of the run.
+/// Ends a component use - added by the job generator right after the use's
+/// last command, in the phase that command runs in (its tile commands run
+/// before every whole-image command). Frees what [`UseEnd`] says - objects
+/// and the references to them, memory slots (`MemoryId::ComponentContext`) -
+/// so nothing internal reaches the results and the memory is free for the
+/// rest of the run.
 ///
 /// `pub(crate)` - internal for now: a fully `pub` command here would become a
 /// pipeline command the user can add.
 pub(crate) struct EndScope {
-    pub scope: Scope,
-    /// The phase of the instance's last command.
+    pub end: UseEnd,
+    /// The phase of the use's last command.
     pub phase: ExecutionScope,
 }
 
@@ -31,13 +33,31 @@ impl ImageAlgorithm for EndScope {
         _ctx: &mut PipelineContext,
         cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        let removed = remove_scope(&mut cache.object_cache, self.scope);
-        if let Scope::Scoped(scope_id) = self.scope {
-            cache.image_cache.retain(
-                |address| !matches!(address, CacheAddress::ComponentMemory(id, _) if *id == scope_id),
-            );
+        match &self.end {
+            UseEnd::Scope(scope) => {
+                let removed = remove_scope(&mut cache.object_cache, *scope);
+                if let Scope::Scoped(scope_id) = scope {
+                    cache.image_cache.retain(|address| {
+                        !matches!(address, CacheAddress::ComponentMemory(id, _) if id == scope_id)
+                    });
+                }
+                log::debug!("End of {scope:?}: {removed} objects removed");
+            }
+            UseEnd::Nested {
+                scope,
+                classes,
+                slots,
+            } => {
+                let removed = remove_classes(&mut cache.object_cache, *scope, classes);
+                if let Scope::Scoped(scope_id) = scope {
+                    cache.image_cache.retain(|address| {
+                        !matches!(address, CacheAddress::ComponentMemory(id, slot)
+                            if id == scope_id && slots.contains(slot))
+                    });
+                }
+                log::debug!("End of a nested use of {scope:?}: {removed} objects removed");
+            }
         }
-        log::debug!("End of {:?}: {removed} objects removed", self.scope);
         Ok(())
     }
 
@@ -68,16 +88,42 @@ impl ImageAlgorithm for EndScope {
 /// object. The removed ids come out of the (ordered) cache sorted, so
 /// looking one up is a binary search - no hashing.
 fn remove_scope(cache: &mut ObjectCache, scope: Scope) -> usize {
-    let to_remove = cache
-        .values()
-        .filter(|object| object.scope() == scope)
-        .count();
+    remove_where(cache, |object| object.scope() == scope)
+}
+
+/// Ends a nested component use's classes `classes` in `scope`: objects with
+/// only those classes are removed (see [`remove_scope`]), the others - the
+/// component around it's, given one of them too - lose them. Returns how many
+/// objects were removed.
+fn remove_classes(cache: &mut ObjectCache, scope: Scope, classes: &[ObjectClass]) -> usize {
+    let own = |class: &ObjectClass| classes.contains(class);
+    for object in cache.values_mut() {
+        if object.scope() == scope
+            && object.object_classes().iter().any(own)
+            && !object.object_classes().iter().all(own)
+        {
+            for class in classes {
+                object.remove_object_class(class, scope);
+            }
+        }
+    }
+    remove_where(cache, |object| {
+        object.scope() == scope
+            && !object.object_classes().is_empty()
+            && object.object_classes().iter().all(own)
+    })
+}
+
+/// Removes the objects `remove` picks from `cache` and every reference the
+/// remaining objects hold to them. Returns how many objects were removed.
+fn remove_where(cache: &mut ObjectCache, remove: impl Fn(&Object) -> bool) -> usize {
+    let to_remove = cache.values().filter(|object| remove(object)).count();
     if to_remove == 0 {
         return 0;
     }
     let mut removed_ids: Vec<ObjectId> = Vec::with_capacity(to_remove);
     let mut keep = |id: &ObjectId, object: &Object| {
-        let keep = object.scope() != scope;
+        let keep = !remove(object);
         if !keep {
             removed_ids.push(id.clone());
         }
@@ -334,7 +380,7 @@ mod tests {
         .unwrap();
 
         EndScope {
-            scope: COMPONENT,
+            end: UseEnd::Scope(COMPONENT),
             phase: ExecutionScope::Tile,
         }
         .execute(&mut ctx, &mut cache)
@@ -343,5 +389,60 @@ mod tests {
         assert!(!cache.image_cache.contains_key(&own));
         assert!(cache.image_cache.contains_key(&other), "another instance's");
         assert!(cache.image_cache.contains_key(&pipeline_slot));
+
+        // A nested use: only its own slots of the scope.
+        let nested_own = CacheAddress::ComponentMemory(ScopeId(2), 5);
+        cache.image_cache.insert(nested_own, image());
+        EndScope {
+            end: UseEnd::Nested {
+                scope: OTHER_COMPONENT,
+                classes: vec![],
+                slots: vec![5],
+            },
+            phase: ExecutionScope::Tile,
+        }
+        .execute(&mut ctx, &mut cache)
+        .unwrap();
+        assert!(!cache.image_cache.contains_key(&nested_own));
+        assert!(
+            cache.image_cache.contains_key(&other),
+            "the component around it's slot"
+        );
+    }
+
+    #[test]
+    fn ending_a_nested_use_removes_only_its_own_classes() {
+        let inner = ObjectClass::Local(5);
+        let mut both = object(3, ObjectClass::Local(1), COMPONENT);
+        both.add_object_class(inner, COMPONENT).unwrap();
+        let mut seed = object(1, inner, COMPONENT);
+        seed.parent_id = Some(ObjectId(2));
+        let mut outer = object(2, ObjectClass::Local(1), COMPONENT);
+        outer.children = vec![ObjectId(1)];
+        let mut cache = cache(vec![
+            seed,
+            outer,
+            both,
+            object(4, inner, OTHER_COMPONENT),
+            object(5, ObjectClass::Global(1), Scope::Global),
+        ]);
+
+        assert_eq!(remove_classes(&mut cache, COMPONENT, &[inner]), 1);
+        assert!(
+            cache.get(&ObjectId(1)).is_none(),
+            "only the nested use's class"
+        );
+        assert!(
+            cache.get(&ObjectId(2)).unwrap().children.is_empty(),
+            "references to it go too"
+        );
+        let both = cache.get(&ObjectId(3)).unwrap();
+        assert_eq!(
+            both.object_classes().iter().copied().collect::<Vec<_>>(),
+            [ObjectClass::Local(1)],
+            "the outer component's object keeps its own class"
+        );
+        assert!(cache.get(&ObjectId(4)).is_some(), "another use's scope");
+        assert!(cache.get(&ObjectId(5)).is_some(), "the project's");
     }
 }

@@ -70,15 +70,36 @@ pub fn merge_component_definitions(
     }
 }
 
-/// A fingerprint of what `definition` does - its steps, parameters and
-/// classes, not its name or where it came from. Stable across runs and
-/// versions (FNV-1a over the file form), as it's saved in the project.
-pub fn content_hash(definition: &ComponentDefinition) -> String {
-    let content = serde_json::json!({
+/// What `definition` does - its steps, parameters and classes, not its name
+/// or where it came from.
+fn content_of(definition: &ComponentDefinition) -> serde_json::Value {
+    serde_json::json!({
         "steps": definition.steps,
         "parameters": definition.parameters,
         "classes": definition.classes,
-    });
+    })
+}
+
+/// A fingerprint of what `definition` does - its steps, parameters and
+/// classes, and those of the components it uses inside (found in
+/// `definitions`), at any depth; not names or where they came from. Stable
+/// across runs and versions (FNV-1a over the file form), as it's saved in the
+/// project. A component using none has the fingerprint it always had.
+pub fn content_hash(
+    definition: &ComponentDefinition,
+    definitions: &[ComponentDefinition],
+) -> String {
+    let mut content = content_of(definition);
+    let mut keys = Vec::new();
+    used_keys(definitions, &definition.steps, &mut keys);
+    let uses: Vec<serde_json::Value> = keys
+        .iter()
+        .filter_map(|key| definitions.iter().find(|d| &d.key == key))
+        .map(content_of)
+        .collect();
+    if !uses.is_empty() {
+        content["uses"] = serde_json::Value::Array(uses);
+    }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in content.to_string().bytes() {
         hash ^= byte as u64;
@@ -88,13 +109,85 @@ pub fn content_hash(definition: &ComponentDefinition) -> String {
 }
 
 /// Whether the project changed `definition` since it was inserted from the
-/// library - an update would replace those changes. `false` for a component not
-/// from the library.
-pub fn modified_since_inserted(definition: &ComponentDefinition) -> bool {
+/// library - also a component it uses inside (in `definitions`). An update
+/// would replace those changes. `false` for a component not from the library.
+pub fn modified_since_inserted(
+    definition: &ComponentDefinition,
+    definitions: &[ComponentDefinition],
+) -> bool {
+    definition.origin.as_ref().is_some_and(|o| {
+        !o.content_hash.is_empty() && o.content_hash != content_hash(definition, definitions)
+    })
+}
+
+/// Adds the components a library component uses inside (`uses`) so it runs
+/// exactly the library's: one the project has with the same key and the same
+/// content is shared; one with the same key but other content (changed in the
+/// project, or unrelated) stays as it is - the library's is added under a key
+/// of its own. Returns those new keys (library key → project key), already
+/// used in what was added; see [`with_keys`].
+fn add_used(
+    project: &mut ProjectSettings,
+    uses: &[ComponentDefinition],
+) -> std::collections::BTreeMap<String, String> {
+    let mut renamed: std::collections::BTreeMap<String, String> = Default::default();
+    // A rename changes what uses the renamed one - again until nothing changes.
+    loop {
+        let mut changed = false;
+        for definition in uses {
+            if renamed.contains_key(&definition.key) {
+                continue;
+            }
+            let wanted = with_keys(definition, &renamed);
+            let clash = project
+                .components
+                .iter()
+                .find(|d| d.key == definition.key)
+                .is_some_and(|ours| content_of(ours) != content_of(&wanted));
+            if clash {
+                let key = (2..)
+                    .map(|n| format!("{}_{n}", definition.key))
+                    .find(|key| {
+                        !project.components.iter().any(|d| &d.key == key)
+                            && !renamed.values().any(|k| k == key)
+                            && !uses.iter().any(|d| &d.key == key)
+                    })
+                    .expect("some number is free");
+                renamed.insert(definition.key.clone(), key);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for definition in uses {
+        let mut added = with_keys(definition, &renamed);
+        if let Some(key) = renamed.get(&definition.key) {
+            added.key = key.clone();
+        }
+        if !project.components.iter().any(|d| d.key == added.key) {
+            project.components.push(added);
+        }
+    }
+    renamed
+}
+
+/// `definition` with the components it uses inside renamed as `renamed` says
+/// (old key → new key).
+fn with_keys(
+    definition: &ComponentDefinition,
+    renamed: &std::collections::BTreeMap<String, String>,
+) -> ComponentDefinition {
+    let mut definition = definition.clone();
+    for step in &mut definition.steps {
+        if let StepContent::Component(instance) = &mut step.content
+            && let Some(key) = renamed.get(&instance.key)
+        {
+            instance.key = key.clone();
+        }
+    }
     definition
-        .origin
-        .as_ref()
-        .is_some_and(|o| !o.content_hash.is_empty() && o.content_hash != content_hash(definition))
 }
 
 /// The library file name of `path` ("cells.evacomp") - what `origin`
@@ -118,16 +211,19 @@ fn comes_from(
         .is_some_and(|o| o.library == library && o.origin_component_key == template.component.key)
 }
 
+/// Where `definition` (in the project with `definitions`) came from: library
+/// component `template` of file `library`.
 fn origin_of(
     template: &ComponentTemplate,
     library: &str,
     definition: &ComponentDefinition,
+    definitions: &[ComponentDefinition],
 ) -> ComponentOrigin {
     ComponentOrigin {
         origin_component_key: template.component.key.clone(),
         library: library.to_string(),
         version: template.component.meta.version.unwrap_or(1),
-        content_hash: content_hash(definition),
+        content_hash: content_hash(definition, definitions),
     }
 }
 
@@ -198,9 +294,10 @@ pub fn save_component_template(
     files.write_file(&path, json.as_bytes())?;
 
     let library = library_name(&path);
+    let definitions = project.components.clone();
     if let Some(definition) = project.components.iter_mut().find(|d| d.key == key) {
         definition.meta.version = template.component.meta.version;
-        definition.origin = Some(origin_of(&template, &library, definition));
+        definition.origin = Some(origin_of(&template, &library, definition, &definitions));
     }
     Ok(())
 }
@@ -246,8 +343,9 @@ pub fn save_pipeline_as_component(
 }
 
 /// Inserts library component `template` (from file `library`) into the project:
-/// a copy, with the components it uses the project doesn't have. A copy already
-/// in the project is used as it is. Returns the key to use the component by.
+/// a copy, with the components it uses inside (see [`add_used`]). A copy
+/// already in the project is used as it is. Returns the key to use the
+/// component by.
 pub fn insert_component_template(
     project: &mut ProjectSettings,
     template: &ComponentTemplate,
@@ -256,8 +354,8 @@ pub fn insert_component_template(
     if let Some(existing) = project_copy(project, template, library) {
         return Ok(existing.key.clone());
     }
-    merge_component_definitions(project, &template.uses);
-    let mut copy = template.component.clone();
+    let renamed = add_used(project, &template.uses);
+    let mut copy = with_keys(&template.component, &renamed);
     copy.meta.creation_time = Utc::now();
     if project.components.iter().any(|d| d.key == copy.key) {
         // The project has an unrelated component with that key.
@@ -266,7 +364,7 @@ pub fn insert_component_template(
             .find(|key| !project.components.iter().any(|d| &d.key == key))
             .expect("some number is free");
     }
-    copy.origin = Some(origin_of(template, library, &copy));
+    copy.origin = Some(origin_of(template, library, &copy, &project.components));
     let key = copy.key.clone();
     project.components.push(copy);
     Ok(key)
@@ -274,24 +372,27 @@ pub fn insert_component_template(
 
 /// Replaces component `key` by library component `template` (a newer version from
 /// file `library`): steps, parameters, classes, description. The key stays,
-/// so the steps using it keep their values (by parameter id). Components the new
-/// version uses inside and the project lacks are added.
+/// so the steps using it keep their values (by parameter id). The components the
+/// new version uses inside come along (see [`add_used`]) - one the project
+/// changed, or uses elsewhere differently, isn't touched.
 pub fn update_from_library(
     project: &mut ProjectSettings,
     key: &str,
     template: &ComponentTemplate,
     library: &str,
 ) -> Result<(), InternalErrors> {
-    merge_component_definitions(project, &template.uses);
-    let definition = project
-        .components
-        .iter_mut()
-        .find(|d| d.key == key)
-        .ok_or_else(|| InternalErrors::InvalidArgument(format!("no component {key}")))?;
-    let mut updated = template.component.clone();
+    if !project.components.iter().any(|d| d.key == key) {
+        return Err(InternalErrors::InvalidArgument(format!(
+            "no component {key}"
+        )));
+    }
+    let renamed = add_used(project, &template.uses);
+    let mut updated = with_keys(&template.component, &renamed);
     updated.key = key.to_string();
-    updated.origin = Some(origin_of(template, library, &updated));
-    *definition = updated;
+    updated.origin = Some(origin_of(template, library, &updated, &project.components));
+    if let Some(definition) = project.components.iter_mut().find(|d| d.key == key) {
+        *definition = updated;
+    }
     Ok(())
 }
 
@@ -413,7 +514,10 @@ mod tests {
             (origin.library.as_str(), origin.version),
             ("smooth.evacomp", 2)
         );
-        assert!(!modified_since_inserted(&project.components[0]));
+        assert!(!modified_since_inserted(
+            &project.components[0],
+            &project.components
+        ));
     }
 
     fn saved_pipeline(
@@ -565,7 +669,10 @@ mod tests {
             .find(|d| d.key == key)
             .unwrap()
             .steps[0] = blur(1, 7);
-        assert!(modified_since_inserted(&copy_of(&project)));
+        assert!(modified_since_inserted(
+            &copy_of(&project),
+            &project.components
+        ));
 
         update_from_library(&mut project, &key, &v2, &library).unwrap();
         let updated = copy_of(&project);
@@ -575,8 +682,111 @@ mod tests {
         };
         assert_eq!(b.kernel_size, 9);
         assert_eq!(updated.origin.as_ref().unwrap().version, 2);
-        assert!(!modified_since_inserted(&updated));
+        assert!(!modified_since_inserted(&updated, &project.components));
         assert_eq!(update_available(&updated, &files), None);
+    }
+
+    /// SMOOTH v1 from the library in a fresh project.
+    fn inserted(dir: &Path) -> (ProjectSettings, ComponentTemplate, String) {
+        let (path, template) = saved(&mut project(), dir, 1);
+        let library = library_name(&path);
+        let mut project = ProjectSettings::default();
+        insert_component_template(&mut project, &template, &library).unwrap();
+        (project, template, library)
+    }
+
+    fn component<'a>(project: &'a ProjectSettings, key: &str) -> &'a ComponentDefinition {
+        project.components.iter().find(|d| d.key == key).unwrap()
+    }
+
+    fn inner_kernel(project: &ProjectSettings, key: &str) -> usize {
+        let StepContent::Command(PipelineCommand::Blur(b)) =
+            &component(project, key).steps[0].content
+        else {
+            panic!("blur")
+        };
+        b.kernel_size
+    }
+
+    #[test]
+    fn a_change_to_a_component_used_inside_counts_as_a_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut project, _, _) = inserted(dir.path());
+        let smooth = component(&project, "SMOOTH").clone();
+        assert!(!modified_since_inserted(&smooth, &project.components));
+
+        project
+            .components
+            .iter_mut()
+            .find(|d| d.key == "INNER")
+            .unwrap()
+            .steps[0] = blur(1, 11);
+        assert!(modified_since_inserted(&smooth, &project.components));
+    }
+
+    #[test]
+    fn an_update_leaves_a_changed_inner_component_alone_and_brings_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut project, v1, library) = inserted(dir.path());
+        // INNER changed here; v2 changes INNER too.
+        project
+            .components
+            .iter_mut()
+            .find(|d| d.key == "INNER")
+            .unwrap()
+            .steps[0] = blur(1, 11);
+        let mut v2 = v1.clone();
+        v2.component.meta.version = Some(2);
+        v2.uses[0].steps[0] = blur(1, 21);
+
+        update_from_library(&mut project, "SMOOTH", &v2, &library).unwrap();
+
+        assert_eq!(
+            inner_kernel(&project, "INNER"),
+            11,
+            "the project's change stays"
+        );
+        let smooth = component(&project, "SMOOTH");
+        let StepContent::Component(uses_inner) = &smooth.steps[1].content else {
+            panic!("the step using the inner component")
+        };
+        assert_eq!(uses_inner.key, "INNER_2");
+        assert_eq!(
+            inner_kernel(&project, "INNER_2"),
+            21,
+            "the library's version"
+        );
+        assert!(!modified_since_inserted(smooth, &project.components));
+    }
+
+    #[test]
+    fn an_unchanged_inner_component_is_shared_on_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut project, v1, library) = inserted(dir.path());
+        let mut v2 = v1.clone();
+        v2.component.meta.version = Some(2);
+        v2.component.steps[0] = blur(1, 9);
+        update_from_library(&mut project, "SMOOTH", &v2, &library).unwrap();
+        let keys: Vec<&str> = project.components.iter().map(|d| d.key.as_str()).collect();
+        assert_eq!(keys, ["INNER", "SMOOTH"], "no copy of an identical INNER");
+    }
+
+    #[test]
+    fn inserting_next_to_an_unrelated_component_with_an_inner_ones_key_adds_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, template) = saved(&mut project(), dir.path(), 1);
+        let mut other = ProjectSettings::default();
+        other
+            .components
+            .push(definition("INNER", vec![blur(1, 99)]));
+
+        let key = insert_component_template(&mut other, &template, &library_name(&path)).unwrap();
+        assert_eq!(inner_kernel(&other, "INNER"), 99, "the project's own stays");
+        let StepContent::Component(uses_inner) = &component(&other, &key).steps[1].content else {
+            panic!("the step using the inner component")
+        };
+        assert_eq!(uses_inner.key, "INNER_2");
+        assert_eq!(inner_kernel(&other, "INNER_2"), 5);
     }
 
     #[test]
