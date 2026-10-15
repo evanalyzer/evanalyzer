@@ -87,7 +87,8 @@ pub(crate) use self::object::tile_merge::{Connectivity, TileMerge, touches_tile_
 pub use self::object::transform_objects::TransformFunction;
 pub use self::object::transform_objects::TransformObjects;
 pub use self::object::voronoi::Voronoi;
-pub use self::script::script_executor::Script;
+pub use self::script::script_executor::{Script, ScriptParam, ScriptValue, declared_script_params};
+pub use self::script::script_params::{ParamDecl, ParamKind};
 pub use self::segmentation::connected_components::ConnectedComponents;
 pub use self::segmentation::threshold::Averaging;
 pub use self::segmentation::threshold::OtsuClasses;

@@ -242,6 +242,14 @@ fn collect_used_type_names(
     for cmd in commands {
         for field in &cmd.fields {
             used_type_names.insert(field.ty.clone());
+            // A list's entry type counts too (`Vec<ScriptParam>`).
+            if let Some(inner) = field
+                .ty
+                .strip_prefix("Vec<")
+                .and_then(|t| t.strip_suffix('>'))
+            {
+                used_type_names.insert(inner.trim().to_string());
+            }
         }
     }
     for e in enums {
@@ -291,6 +299,12 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
         for doc in &enum_info.doc_comments {
             out.push_str(&format!("/// {}\n", doc));
         }
+        // `#[default]` only fits a unit variant: a first variant carrying a value
+        // (`Number(i64)`) gets a hand-rolled Default below.
+        let first_carries_value = enum_info
+            .variants
+            .first()
+            .is_some_and(|v| v.data_type.is_some());
         if is_rich {
             // Internally tagged: each variant's own fields sit alongside the discriminant,
             // which schemars renders as `oneOf` + a `const`-valued "type" property — the
@@ -300,6 +314,11 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                 "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]\n",
             );
             out.push_str("#[serde(tag = \"type\", rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
+        } else if first_carries_value {
+            out.push_str(
+                "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]\n",
+            );
+            out.push_str("#[serde(rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
         } else {
             out.push_str(
                 "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]\n",
@@ -311,7 +330,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
             for doc in &variant.doc_comments {
                 out.push_str(&format!("    /// {}\n", doc));
             }
-            if !is_rich && vi == 0 {
+            if !is_rich && !first_carries_value && vi == 0 {
                 out.push_str("    #[default]\n");
             }
             if variant.is_rich() {
@@ -356,6 +375,13 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
         // Rich enums opt out of #[derive(Default)] (the field defaults would otherwise be each
         // field type's zero value, ignoring any #[cmdsmeta(default = ...)] override), so they
         // need a hand-rolled Default impl — same idea as a command struct's Default impl below.
+        if !is_rich && first_carries_value {
+            let first = &enum_info.variants[0];
+            out.push_str(&format!(
+                "impl Default for {settings_name} {{\n    fn default() -> Self {{\n        Self::{}(Default::default())\n    }}\n}}\n\n",
+                first.name
+            ));
+        }
         if is_rich {
             if let Some(first) = enum_info.variants.first() {
                 out.push_str(&format!("impl Default for {} {{\n", settings_name));
@@ -756,6 +782,11 @@ struct FieldMetadata {
     /// `#[cmdsmeta(script)]` on a `String` field: a Rhai script, edited in
     /// the script editor (`ParamType::Script`) instead of a text field.
     script: bool,
+    /// `#[cmdsmeta(read_only)]`: shown, not editable (`ParamType::Label`) -
+    /// e.g. a value that comes from elsewhere. On a data-carrying enum it's
+    /// the variant choice that's fixed; the variant's own value stays
+    /// editable.
+    read_only: bool,
 }
 
 /// `#[cmdsmeta(visibility = ...)]` of a setting or a dropdown option.
@@ -809,6 +840,7 @@ impl Default for FieldMetadata {
             visibility: Visibility::Default,
             file_extensions: None,
             script: false,
+            read_only: false,
         }
     }
 }
@@ -1422,6 +1454,8 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                 } else if meta.path.is_ident("file_extensions") {
                     let value: syn::LitStr = meta.value()?.parse()?;
                     metadata.file_extensions = Some(value.value());
+                } else if meta.path.is_ident("read_only") {
+                    metadata.read_only = true;
                 } else if meta.path.is_ident("script") {
                     metadata.script = true;
                     if let Ok(stream) = meta.value() {
@@ -2344,6 +2378,11 @@ fn field_to_param_def(
                 Some(&field_default_expr(field, enums, commands)),
             )
             .expect("enum dropdown literal is always Some");
+            let dropdown = if meta.read_only {
+                as_label(&dropdown)
+            } else {
+                dropdown
+            };
             let variant_fields = enum_variant_param_defs(enum_info, &access, &routing_name, enums);
             return vec![format!("vec![{dropdown}]"), variant_fields];
         }
@@ -2359,9 +2398,27 @@ fn field_to_param_def(
         enums,
         Some(&field_default_expr(field, enums, commands)),
     ) {
+        Some(literal) if meta.read_only => vec![format!("vec![{}]", as_label(&literal))],
         Some(literal) => vec![format!("vec![{literal}]")],
         None => vec![],
     }
+}
+
+/// A `ParameterDef` literal shown as a read-only label instead of its
+/// control (`#[cmdsmeta(read_only)]`).
+fn as_label(literal: &str) -> String {
+    let start = literal
+        .find("param_type: ")
+        .expect("a ParameterDef literal names its param_type");
+    let end = start
+        + literal[start..]
+            .find(',')
+            .expect("param_type is followed by more fields");
+    format!(
+        "{}param_type: ParamType::Label{}",
+        &literal[..start],
+        &literal[end..]
+    )
 }
 
 /// Returns (label, value_expr) pairs for fields with `summary = true`.

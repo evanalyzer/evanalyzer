@@ -540,8 +540,11 @@ export global GroupSettingsState {
     callback long-description-edited(string);
     /// name, organization
     callback author-edited(string, string);
-    /// id, name, help text
-    callback parameter-edited(int, string, string);
+    /// id, name - the help text stays (the rows aren't refreshed while
+    /// typing, so passing both would undo the other field's edit).
+    callback parameter-name-edited(int, string);
+    /// id, help text
+    callback parameter-help-edited(int, string);
     /// id, -1 up / +1 down
     callback parameter-moved(int, int);
     /// id: back to the bound setting's own help text.
@@ -748,7 +751,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                                     placeholder-text: "Name on the group card";
                                     accessible-label: "Parameter name";
                                     edited(t) => {
-                                        GroupSettingsState.parameter-edited(param.id, t, param.description);
+                                        GroupSettingsState.parameter-name-edited(param.id, t);
                                     }
                                 }
 
@@ -830,8 +833,9 @@ export component GroupSettingsDialog inherits Rectangle {
                                 text: param.description;
                                             wrap: word-wrap;
                                 placeholder-text: "Help text, shown as ? next to the parameter";
+                                accessible-label: "Parameter help text";
                                 edited(t) => {
-                                    GroupSettingsState.parameter-edited(param.id, param.label, t);
+                                    GroupSettingsState.parameter-help-edited(param.id, t);
                                 }
                             }
 

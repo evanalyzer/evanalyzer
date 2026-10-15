@@ -261,6 +261,19 @@ impl From<FiltersRankFilterRankFilterTypeSettings> for RankFilterType {
     }
 }
 
+impl From<ScriptScriptExecutorScriptValueSettings> for ScriptValue {
+    fn from(_s: ScriptScriptExecutorScriptValueSettings) -> Self {
+        match _s {
+            ScriptScriptExecutorScriptValueSettings::Number(v) => ScriptValue::Number(v),
+            ScriptScriptExecutorScriptValueSettings::Decimal(v) => ScriptValue::Decimal(v),
+            ScriptScriptExecutorScriptValueSettings::Bool(v) => ScriptValue::Bool(v),
+            ScriptScriptExecutorScriptValueSettings::Text(v) => ScriptValue::Text(v),
+            ScriptScriptExecutorScriptValueSettings::Class(v) => ScriptValue::Class(v),
+            ScriptScriptExecutorScriptValueSettings::Channel(v) => ScriptValue::Channel(v),
+        }
+    }
+}
+
 impl From<SegmentationWatershedSeedSourceSettings> for SeedSource {
     fn from(_s: SegmentationWatershedSeedSourceSettings) -> Self {
         match _s {
@@ -799,6 +812,16 @@ impl From<ScriptSettings> for Script {
         Script {
             classes: _s.classes.into_iter().map(|v| v.into()).collect(),
             source: _s.source,
+            params: _s.params.into_iter().map(|v| v.into()).collect(),
+        }
+    }
+}
+
+impl From<ScriptParamSettings> for ScriptParam {
+    fn from(_s: ScriptParamSettings) -> Self {
+        ScriptParam {
+            name: _s.name,
+            value: ScriptValue::from(_s.value),
         }
     }
 }

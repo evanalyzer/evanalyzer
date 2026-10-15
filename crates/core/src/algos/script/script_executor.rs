@@ -1,8 +1,9 @@
 use crate::algos::script::script_bridge::{
     ScriptHost, ScriptImage, check_referenced_commands, referenced_citations,
 };
+use crate::algos::script::script_params;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
-use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass};
+use evanalyzer_cfg::core_types::{CitationMetadata, ImageChannelIdx, InternalErrors, ObjectClass};
 use log::{debug, info};
 use macros::CommandsMeta;
 use rhai::{AST, Engine, EvalAltResult, Map, Position, Scope};
@@ -51,6 +52,38 @@ pub struct Script {
         default = String::from("print(`Hello world from a ${image_width}x${image_height} tile`);\n")
     )]
     pub source: String,
+
+    /// The values of the script's `param`s. The script declares them
+    /// (`param max_rounds = 10;`); this list follows it when the script is
+    /// edited or the project loaded - a `param` without an entry runs with
+    /// its default.
+    #[cmdsmeta(optional, display_name = "Parameters")]
+    pub params: Vec<ScriptParam>,
+}
+
+/// A `param` of a script: a value the script gets from its step's settings
+/// (or a group parameter) instead of from its code.
+#[derive(CommandsMeta)]
+pub struct ScriptParam {
+    /// The name the script declares it with.
+    #[cmdsmeta(read_only)]
+    pub name: String,
+
+    /// Its value. The type comes from the script's `param` line.
+    #[cmdsmeta(default = ScriptValue::Number(0), read_only)]
+    pub value: ScriptValue,
+}
+
+/// A script `param`'s value and type.
+#[derive(CommandsMeta, Debug, Clone, PartialEq)]
+pub enum ScriptValue {
+    Number(i64),
+    Decimal(f64),
+    #[cmdsmeta(display_name = "On/off")]
+    Bool(bool),
+    Text(String),
+    Class(ObjectClass),
+    Channel(ImageChannelIdx),
 }
 
 impl ImageAlgorithm for Script {
@@ -74,7 +107,14 @@ impl ImageAlgorithm for Script {
         scope.push_constant("tile_y", tile.offset_y as i64);
         scope.push_constant("image_bits", ctx.image_meta.nr_of_bits as i64);
 
-        let _lent = LentHost::lend(ctx, cache, &self.classes)?;
+        // A class param's class is added when its `param` line runs.
+        let classes = self.classes.clone();
+        let params = self
+            .params
+            .iter()
+            .map(|p| (p.name.clone(), p.value.clone()))
+            .collect();
+        let _lent = LentHost::lend(ctx, cache, &classes, params)?;
         ENGINE
             .with(|engine| engine.run_ast_with_scope(&mut scope, &ast))
             .map_err(|e| script_error(&e))
@@ -106,6 +146,14 @@ impl ImageAlgorithm for Script {
     }
 }
 
+/// The `param` lines of `source` (see [`script_params`](crate::algos::script::script_params)).
+///
+/// # Errors
+/// The script doesn't parse, or a `param` line is wrong - with its line.
+pub fn declared_script_params(source: &str) -> Result<Vec<script_params::ParamDecl>, String> {
+    ENGINE.with(|engine| script_params::declared_params(engine, source))
+}
+
 /// Compiled scripts kept per thread; a pipeline rarely has more than a few.
 const COMPILED_CACHE_SIZE: usize = 16;
 
@@ -124,6 +172,9 @@ fn compiled(source: &str) -> Result<Rc<AST>, InternalErrors> {
     if let Some(ast) = COMPILED.with_borrow(|c| c.get(source).cloned()) {
         return Ok(ast);
     }
+    // Checks the `param` lines too (names, defaults).
+    declared_script_params(source)
+        .map_err(|e| InternalErrors::Generic(format!("Script error: {e}")))?;
     let ast = ENGINE
         .with(|engine| engine.compile(source))
         .map_err(|e| script_error(&e.into()))?;
@@ -151,6 +202,7 @@ impl<'a> LentHost<'a> {
         ctx: &'a mut PipelineContext,
         cache: &'a mut GlobalPipelineCache,
         classes: &[ObjectClass],
+        params: HashMap<String, ScriptValue>,
     ) -> Result<Self, InternalErrors> {
         HOST.with_borrow_mut(|host| {
             if host.is_some() {
@@ -162,6 +214,7 @@ impl<'a> LentHost<'a> {
                 ctx: ctx.take(),
                 cache: std::mem::take(cache),
                 classes: classes.to_vec(),
+                params,
             });
             Ok(())
         })?;
@@ -196,6 +249,19 @@ fn with_host<T>(f: impl FnOnce(&mut ScriptHost) -> Result<T, String>) -> ScriptR
 /// - on `Image`: `width`, `height`, `mean()`, `min()`, `max()`
 fn new_engine() -> Engine {
     let mut engine = Engine::new();
+    script_params::register(
+        &mut engine,
+        |name| HOST.with_borrow(|host| host.as_ref().and_then(|h| h.params.get(name).cloned())),
+        |class| {
+            HOST.with_borrow_mut(|host| {
+                if let Some(host) = host
+                    && !host.classes.contains(&class)
+                {
+                    host.classes.push(class);
+                }
+            })
+        },
+    );
     engine
         .set_max_operations(MAX_OPERATIONS)
         .set_max_call_levels(MAX_CALL_LEVELS)
@@ -263,6 +329,17 @@ mod tests {
     use kornia_image::{Image, ImageSize};
 
     fn run(source: &str) -> Result<(), InternalErrors> {
+        run_with(source, vec![])
+    }
+
+    fn param(name: &str, value: ScriptValue) -> ScriptParam {
+        ScriptParam {
+            name: name.into(),
+            value,
+        }
+    }
+
+    fn run_with(source: &str, params: Vec<ScriptParam>) -> Result<(), InternalErrors> {
         let image = Image::<f32, 1>::from_size_slice(
             ImageSize {
                 width: 4,
@@ -276,8 +353,144 @@ mod tests {
         Script {
             classes: vec![],
             source: source.into(),
+            params,
         }
         .execute(&mut ctx, &mut cache)
+    }
+
+    #[test]
+    fn param_lines_are_read_with_their_types_and_defaults() {
+        use crate::algos::{ParamDecl, ParamKind};
+        let decls = declared_script_params(
+            r#"
+            // param in_a_comment = 1;
+            param rounds = 10;
+            param start = 800.0;
+            param offset: decimal = -3;
+            param verbose = false;
+            param label = "Nuclei";
+            param nuclei: class = 4;
+            param input: channel = 2;
+            let plain = 5;
+            let text = "param not_one = 1;";
+        "#,
+        )
+        .unwrap();
+        let decl = |name: &str, kind, default| ParamDecl {
+            name: name.into(),
+            kind,
+            default,
+        };
+        assert_eq!(
+            decls,
+            [
+                decl("rounds", ParamKind::Number, ScriptValue::Number(10)),
+                decl("start", ParamKind::Decimal, ScriptValue::Decimal(800.0)),
+                decl("offset", ParamKind::Decimal, ScriptValue::Decimal(-3.0)),
+                decl("verbose", ParamKind::Bool, ScriptValue::Bool(false)),
+                decl("label", ParamKind::Text, ScriptValue::Text("Nuclei".into())),
+                decl(
+                    "nuclei",
+                    ParamKind::Class,
+                    ScriptValue::Class(ObjectClass::Global(4))
+                ),
+                decl(
+                    "input",
+                    ParamKind::Channel,
+                    ScriptValue::Channel(ImageChannelIdx(2))
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn wrong_param_lines_are_reported_with_their_line() {
+        let error = |source: &str| declared_script_params(source).unwrap_err();
+        let e = error("let a = 1;\nparam n = a * 2;");
+        assert!(e.contains("plain value") && e.contains("line 2"), "{e}");
+        let e = error("param n = 1 + 1;");
+        assert!(e.contains("followed by `;`"), "{e}");
+        let e = error("param n: size = 1;");
+        assert!(e.contains("unknown type `size`"), "{e}");
+        let e = error("param n: bool = 1;");
+        assert!(e.contains("`true` or `false`"), "{e}");
+        let e = error("param n = 1;\nparam n = 2;");
+        assert!(e.contains("declared twice"), "{e}");
+        let e = error("param image_width = 1;");
+        assert!(e.contains("taken"), "{e}");
+    }
+
+    #[test]
+    fn a_param_has_its_default_or_the_steps_value() {
+        let source = r#"
+            param rounds = 3;
+            let count = 0;
+            for i in 0..rounds { count += 1; }
+            if count != expected { throw `ran ${count} rounds`; }
+        "#;
+        run_with(&format!("const expected = 3;{source}"), vec![]).expect("the default");
+        run_with(
+            &format!("const expected = 5;{source}"),
+            vec![param("rounds", ScriptValue::Number(5))],
+        )
+        .expect("the step's value");
+    }
+
+    #[test]
+    fn params_are_constants() {
+        let err = run("param n = 1;\nn = 2;").unwrap_err().to_string();
+        assert!(err.contains("constant"), "{err}");
+    }
+
+    #[test]
+    fn a_class_param_is_a_number_or_a_groups_class_and_may_be_used_by_commands() {
+        let check = r#"
+            param cell: class = 4;
+            if cell != expected { throw `got ${cell}`; }
+        "#;
+        run_with(&format!("const expected = 4;{check}"), vec![]).unwrap();
+        run_with(
+            &format!("const expected = \"L1\";{check}"),
+            vec![param("cell", ScriptValue::Class(ObjectClass::Local(1)))],
+        )
+        .unwrap();
+        // Not in `classes`, yet allowed: it's a param.
+        run(r#"
+            param seg: class = 4;
+            run("threshold", #{ "thresholds.0.segmentation_class": seg });
+        "#)
+        .expect("a class param counts as declared");
+    }
+
+    #[test]
+    fn a_groups_own_class_from_a_param_reaches_a_command() {
+        // Save Image needs an output folder the test doesn't have - what
+        // matters is that the class got past the checks.
+        let result = run_with(
+            r#"
+            param cell: class = 1;
+            run("save_image", #{ "display_classes": [cell] });
+        "#,
+            vec![param("cell", ScriptValue::Class(ObjectClass::Local(1)))],
+        );
+        if let Err(e) = result {
+            let e = e.to_string();
+            assert!(
+                e.contains("No output path"),
+                "\"L1\" must be a class a command takes: {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_of_another_type_than_the_script_says_is_refused() {
+        let err = run_with(
+            "param n = 1;",
+            vec![param("n", ScriptValue::Text("x".into()))],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("edit the script"), "{err}");
     }
 
     #[test]
@@ -361,6 +574,7 @@ mod tests {
         let err = Script {
             classes: vec![],
             source: r#"run("gaussian_blur"); run("gausian_blur");"#.into(),
+            params: vec![],
         }
         .execute(&mut ctx, &mut GlobalPipelineCache::default())
         .unwrap_err()
@@ -377,6 +591,7 @@ mod tests {
         let script = Script {
             classes: vec![],
             source: r#"run("edge_detection_sobel");"#.into(),
+            params: vec![],
         };
         let keys: Vec<&str> = script.cite().iter().map(|c| c.cite_key).collect();
         assert!(keys.contains(&"danmayr2026"), "{keys:?}");
@@ -415,6 +630,7 @@ mod tests {
         let result = Script {
             classes: vec![],
             source: r#"run("gaussian_blur"); throw "stop";"#.into(),
+            params: vec![],
         }
         .execute(&mut ctx, &mut cache);
         assert!(result.is_err());

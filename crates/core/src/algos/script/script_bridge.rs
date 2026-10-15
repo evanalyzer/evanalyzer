@@ -89,6 +89,8 @@ pub(crate) struct ScriptHost {
     pub(crate) cache: GlobalPipelineCache,
     /// The script step's declared classes; commands may use only these.
     pub(crate) classes: Vec<ObjectClass>,
+    /// The step's values of the script's `param`s, by name.
+    pub(crate) params: std::collections::HashMap<String, crate::algos::ScriptValue>,
 }
 
 impl ScriptHost {
@@ -448,6 +450,8 @@ fn value_to_param_string(value: &Dynamic) -> Result<String, String> {
             .iter()
             .map(|item| match item.as_int() {
                 Ok(i) => Ok(i.to_string()),
+                // A group's own class from a class param ("L1").
+                Err(_) if item.is_string() => Ok(item.clone().into_string().unwrap_or_default()),
                 Err(_) => Err(format!(
                     "list entries must be integers, got {}",
                     item.type_name()
@@ -493,16 +497,23 @@ fn checked_value(def: &ParameterDef, value: &str) -> Result<String, String> {
                     )
                 })
         }
-        ParamType::ObjClass => match value.parse::<i64>() {
-            Ok(-1) => Ok(value.to_string()),
-            Ok(v) if u32::try_from(v).is_ok() => Ok(value.to_string()),
-            _ => Err(format!("expected a class id (or -1 for none), got `{value}`")),
-        },
+        // A number, -1 for none, or a group's own class ("L1" - a class
+        // param inside a group).
+        ParamType::ObjClass => ObjectClass::from_text(value)
+            .map(|_| value.to_string())
+            .ok_or_else(|| format!("expected a class id (or -1 for none), got `{value}`")),
         ParamType::SegClass | ParamType::ImageChannel => value
             .parse::<u32>()
             .map(|_| value.to_string())
             .map_err(|_| format!("expected a non-negative integer, got `{value}`")),
-        ParamType::MultiObjClass | ParamType::MultiSegClass => {
+        ParamType::MultiObjClass => {
+            for id in value.split(',').filter(|x| !x.is_empty()) {
+                ObjectClass::from_text(id.trim())
+                    .ok_or_else(|| format!("expected a list of class ids, got `{value}`"))?;
+            }
+            Ok(value.to_string())
+        }
+        ParamType::MultiSegClass => {
             for id in value.split(',').filter(|x| !x.is_empty()) {
                 id.trim()
                     .parse::<u32>()
@@ -775,6 +786,7 @@ mod tests {
             ctx: PipelineContext::new_from_image_test(image).unwrap(),
             cache: GlobalPipelineCache::default(),
             classes: vec![],
+            params: Default::default(),
         }
     }
 

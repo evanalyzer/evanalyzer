@@ -21,6 +21,13 @@ pub mod ai {
     pub use evanalyzer_core::ai_devices::parse_gpu_slots;
 }
 
+/// Script steps: their settings follow the script's `param` lines.
+pub mod scripts {
+    pub use crate::workspace::script_params::{
+        Moved, rebind_script_params, sync_project_script_params, sync_script_params,
+    };
+}
+
 /// Command groups in the editor: group cards, grouping steps, the library,
 /// checks.
 pub mod groups {
@@ -40,6 +47,7 @@ pub mod groups {
         toggle_exposed, ungroup, unused_groups,
     };
     pub use evanalyzer_core::group_parameters;
+    pub use evanalyzer_core::group_steps_with_values;
     pub use evanalyzer_core::set_group_parameter;
 }
 

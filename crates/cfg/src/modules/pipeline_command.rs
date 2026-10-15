@@ -986,7 +986,7 @@ impl PipelineCommand {
             Self::RankFilter(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The circular radius of the neighborhood to consider.\n\nA radius of 1.0 roughly corresponds to a 3x3 square, while larger\nvalues increase the effect's strength and computational cost.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f64::default())), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "filter_type".to_string(), display_name: "Filter Type".to_string(), description: "The specific ranking algorithm to apply to the neighborhood.".to_string(), value: match _s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, param_type: ParamType::Dropdown, options: vec!["Median".to_string(), "Min".to_string(), "Max".to_string(), "Mean".to_string(), "Outliers".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersRankFilterRankFilterTypeSettings::default()) { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false] }], match &_s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => vec![], FiltersRankFilterRankFilterTypeSettings::Min => vec![], FiltersRankFilterRankFilterTypeSettings::Max => vec![], FiltersRankFilterRankFilterTypeSettings::Mean => vec![], FiltersRankFilterRankFilterTypeSettings::Outliers(__inner) => vec![ParameterDef { name: "filter_type.0".to_string(), display_name: "Outliers".to_string(), description: "Replaces a pixel only if it deviates from the neighborhood median\nby more than the specified threshold.".to_string(), value: format!("{}", __inner), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![] }] }].concat(),
             Self::RollingBall(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the ball or paraboloid in pixels.\n\nThis should be at least as large as the radius of the largest\nobject in the image that is not part of the background.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 64.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (4.0f64)), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "ball_type".to_string(), display_name: "Ball Type".to_string(), description: "The geometric shape of the rolling structural element.".to_string(), value: match _s.ball_type { FiltersRollingBallBallTypeSettings::Ball => "Ball".to_string(), FiltersRollingBallBallTypeSettings::Paraboloid => "Paraboloid".to_string() }, param_type: ParamType::Dropdown, options: vec!["Ball".to_string(), "Paraboloid".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersRollingBallBallTypeSettings::default()) { FiltersRollingBallBallTypeSettings::Ball => "Ball".to_string(), FiltersRollingBallBallTypeSettings::Paraboloid => "Paraboloid".to_string() }, advanced: false, option_advanced: vec![false, false] }], vec![ParameterDef { name: "pre_smooth".to_string(), display_name: "Pre Smooth".to_string(), description: "".to_string(), value: format!("{}", _s.pre_smooth), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (bool::default())), advanced: true, option_advanced: vec![] }]].concat(),
             Self::SaveImage(_s) => [vec![ParameterDef { name: "name".to_string(), display_name: "Name".to_string(), description: "Name the image should be stord under".to_string(), value: _s.name.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "display_classes".to_string(), display_name: "Display Classes".to_string(), description: "Shows the selected classes in the image".to_string(), value: _s.display_classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.display_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Which image from the pipeline should be stored".to_string(), value: match _s.source { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "Instance Map".to_string(), "Segmentation Mask".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (MathSaveImageImageSourceSettings :: Image) { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, advanced: true, option_advanced: vec![false, false, false] }], vec![ParameterDef { name: "opacity".to_string(), display_name: "Opacity".to_string(), description: "Opacity in percent of the filled `display_classes` objects (0 = only\nthe contours, 100 = solid). Contours are always drawn opaque.".to_string(), value: format!("{}", _s.opacity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100.0f32, step: 5.0000f32, groups: vec![], default_value: format!("{}", (50u32)), advanced: true, option_advanced: vec![] }]].concat(),
-            Self::Script(_s) => [vec![ParameterDef { name: "classes".to_string(), display_name: "Classes".to_string(), description: "Object classes the script creates or uses. Commands the script runs\nmay only use these classes, so the pipeline knows them without\nrunning the script.".to_string(), value: _s.classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Script source code".to_string(), value: _s.source.clone(), param_type: ParamType::Script, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String :: from ("print(`Hello world from a ${image_width}x${image_height} tile`);\n")).clone(), advanced: false, option_advanced: vec![] }]].concat(),
+            Self::Script(_s) => [vec![ParameterDef { name: "classes".to_string(), display_name: "Classes".to_string(), description: "Object classes the script creates or uses. Commands the script runs\nmay only use these classes, so the pipeline knows them without\nrunning the script.".to_string(), value: _s.classes.iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (Vec::<ObjectClass>::new()).iter().filter(|c| **c != ObjectClass::Unset).map(|c| c.to_text()).collect::<Vec<_>>().join(","), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Script source code".to_string(), value: _s.source.clone(), param_type: ParamType::Script, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String :: from ("print(`Hello world from a ${image_width}x${image_height} tile`);\n")).clone(), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "params".to_string(), display_name: "Parameters".to_string(), description: "The values of the script's `param`s. The script declares them\n(`param max_rounds = 10;`); this list follows it when the script is\nedited or the project loaded - a `param` without an entry runs with\nits default.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.params.iter().map(|__item| [vec![ParameterDef { name: "name".to_string(), display_name: "Name".to_string(), description: "The name the script declares it with.".to_string(), value: __item.name.clone(), param_type: ParamType::Label, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (String::default()).clone(), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "value".to_string(), display_name: "Value".to_string(), description: "Its value. The type comes from the script's `param` line.".to_string(), value: match __item.value { ScriptScriptExecutorScriptValueSettings::Number(_) => "Number".to_string(), ScriptScriptExecutorScriptValueSettings::Decimal(_) => "Decimal".to_string(), ScriptScriptExecutorScriptValueSettings::Bool(_) => "On/off".to_string(), ScriptScriptExecutorScriptValueSettings::Text(_) => "Text".to_string(), ScriptScriptExecutorScriptValueSettings::Class(_) => "Class".to_string(), ScriptScriptExecutorScriptValueSettings::Channel(_) => "Channel".to_string() }, param_type: ParamType::Label, options: vec!["Number".to_string(), "Decimal".to_string(), "On/off".to_string(), "Text".to_string(), "Class".to_string(), "Channel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (ScriptScriptExecutorScriptValueSettings :: Number (0)) { ScriptScriptExecutorScriptValueSettings::Number(_) => "Number".to_string(), ScriptScriptExecutorScriptValueSettings::Decimal(_) => "Decimal".to_string(), ScriptScriptExecutorScriptValueSettings::Bool(_) => "On/off".to_string(), ScriptScriptExecutorScriptValueSettings::Text(_) => "Text".to_string(), ScriptScriptExecutorScriptValueSettings::Class(_) => "Class".to_string(), ScriptScriptExecutorScriptValueSettings::Channel(_) => "Channel".to_string() }, advanced: false, option_advanced: vec![false, false, false, false, false, false] }], match &__item.value { ScriptScriptExecutorScriptValueSettings::Number(__inner) => vec![ParameterDef { name: "value.0".to_string(), display_name: "Number".to_string(), description: "".to_string(), value: format!("{}", __inner), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![] }], ScriptScriptExecutorScriptValueSettings::Decimal(__inner) => vec![ParameterDef { name: "value.0".to_string(), display_name: "Decimal".to_string(), description: "".to_string(), value: format!("{}", __inner), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![] }], ScriptScriptExecutorScriptValueSettings::Bool(__inner) => vec![ParameterDef { name: "value.0".to_string(), display_name: "On/off".to_string(), description: "".to_string(), value: format!("{}", __inner), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![] }], ScriptScriptExecutorScriptValueSettings::Text(__inner) => vec![ParameterDef { name: "value.0".to_string(), display_name: "Text".to_string(), description: "".to_string(), value: __inner.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![] }], ScriptScriptExecutorScriptValueSettings::Class(__inner) => vec![ParameterDef { name: "value.0".to_string(), display_name: "Class".to_string(), description: "".to_string(), value: __inner.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![] }], ScriptScriptExecutorScriptValueSettings::Channel(__inner) => vec![ParameterDef { name: "value.0".to_string(), display_name: "Channel".to_string(), description: "".to_string(), value: __inner.to_string(), param_type: ParamType::ImageChannel, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: String::new(), advanced: false, option_advanced: vec![] }] }].concat()).collect(), default_value: String::new(), advanced: false, option_advanced: vec![] }]].concat(),
             Self::SimpleTracker(_s) => [vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "Object class to track.".to_string(), value: _s.object_class.to_text(), param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (ObjectClass::default()).to_text(), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit in which `max_distance` is expressed (e.g. pixels, nm).".to_string(), value: match _s.unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (SizeUnits::default()) { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "max_distance".to_string(), display_name: "Max Distance".to_string(), description: "How far an object may move from one frame to the next.\n\nFarther apart, it starts a new track.".to_string(), value: format!("{}", _s.max_distance), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 0.0f32, step: 100.0000f32, groups: vec![], default_value: format!("{}", (10000.0f32)), advanced: false, option_advanced: vec![] }]].concat(),
             Self::Stardist(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: (PathBuf::default()).display().to_string(), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (SegmentationClass (1)).as_u32()), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Probability above which a grid cell is considered a candidate object center.".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.5f32)), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "nms_threshold".to_string(), display_name: "Nms Threshold".to_string(), description: "Pixel-overlap ratio (intersection / union) above which a lower-scoring\ncandidate polygon is suppressed in favor of an overlapping higher-scoring one.".to_string(), value: format!("{}", _s.nms_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![], default_value: format!("{}", (0.3f32)), advanced: true, option_advanced: vec![] }]].concat(),
             Self::StructureTensor(_s) => [vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "The mathematical output to be produced by the algorithm.".to_string(), value: match _s.mode { FiltersStructureTensorTensorModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersStructureTensorTensorModeSettings::EigenvaluesY => "Eigenvalues Y".to_string(), FiltersStructureTensorTensorModeSettings::Coherence => "Coherence".to_string() }, param_type: ParamType::Dropdown, options: vec!["Eigenvalues X".to_string(), "Eigenvalues Y".to_string(), "Coherence".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: match (FiltersStructureTensorTensorModeSettings::default()) { FiltersStructureTensorTensorModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersStructureTensorTensorModeSettings::EigenvaluesY => "Eigenvalues Y".to_string(), FiltersStructureTensorTensorModeSettings::Coherence => "Coherence".to_string() }, advanced: false, option_advanced: vec![false, false, false] }], vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the integration window used to average the local gradients.\n\nLarger windows provide more stability against noise but reduce\nspatial resolution.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (usize::default())), advanced: false, option_advanced: vec![] }], vec![ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The standard deviation for the Gaussian weighting of the integration window.\n\nControls the spatial \"reach\" of the neighborhood analysis.".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: format!("{}", (f32::default())), advanced: true, option_advanced: vec![] }]].concat(),
@@ -1199,6 +1199,15 @@ impl PipelineCommand {
             }
             Self::Script(s) => {
                 classes.extend(s.classes.iter().copied());
+                for item0 in s.params.iter() {
+                    #[allow(unreachable_patterns)]
+                    match &item0.value {
+                        ScriptScriptExecutorScriptValueSettings::Class(payload1) => {
+                            classes.push(*payload1);
+                        }
+                        _ => {}
+                    }
+                }
             }
             Self::SimpleTracker(s) => {
                 classes.push(s.object_class);
@@ -2148,6 +2157,104 @@ impl PipelineCommand {
                 if param_name == "source" {
                     s.source = value.to_string();
                 }
+                if param_name.starts_with("params.") {
+                    let rest = &param_name[7..];
+                    let mut _p = rest.splitn(2, '.');
+                    if let (Some(_i), Some(nested_name)) = (_p.next(), _p.next()) {
+                        if let Ok(_idx) = _i.parse::<usize>() {
+                            if let Some(item) = s.params.get_mut(_idx) {
+                                if nested_name == "name" {
+                                    item.name = value.to_string();
+                                }
+                                if nested_name == "value" {
+                                    item.value = match value {
+                                        "Number" => {
+                                            ScriptScriptExecutorScriptValueSettings::Number(
+                                                i64::default(),
+                                            )
+                                        }
+                                        "Decimal" => {
+                                            ScriptScriptExecutorScriptValueSettings::Decimal(
+                                                f64::default(),
+                                            )
+                                        }
+                                        "On/off" => ScriptScriptExecutorScriptValueSettings::Bool(
+                                            bool::default(),
+                                        ),
+                                        "Text" => ScriptScriptExecutorScriptValueSettings::Text(
+                                            String::default(),
+                                        ),
+                                        "Class" => ScriptScriptExecutorScriptValueSettings::Class(
+                                            ObjectClass::default(),
+                                        ),
+                                        "Channel" => {
+                                            ScriptScriptExecutorScriptValueSettings::Channel(
+                                                ImageChannelIdx::default(),
+                                            )
+                                        }
+                                        _ => (item.value).clone(),
+                                    };
+                                }
+                                if let ScriptScriptExecutorScriptValueSettings::Number(
+                                    ref mut __inner,
+                                ) = item.value
+                                {
+                                    if nested_name == "value.0" {
+                                        if let Ok(v) = value.parse::<i64>() {
+                                            *__inner = v;
+                                        }
+                                    }
+                                }
+                                if let ScriptScriptExecutorScriptValueSettings::Decimal(
+                                    ref mut __inner,
+                                ) = item.value
+                                {
+                                    if nested_name == "value.0" {
+                                        if let Ok(v) = value.parse::<f64>() {
+                                            *__inner = v;
+                                        }
+                                    }
+                                }
+                                if let ScriptScriptExecutorScriptValueSettings::Bool(
+                                    ref mut __inner,
+                                ) = item.value
+                                {
+                                    if nested_name == "value.0" {
+                                        *__inner = value == "true";
+                                    }
+                                }
+                                if let ScriptScriptExecutorScriptValueSettings::Text(
+                                    ref mut __inner,
+                                ) = item.value
+                                {
+                                    if nested_name == "value.0" {
+                                        *__inner = value.to_string();
+                                    }
+                                }
+                                if let ScriptScriptExecutorScriptValueSettings::Class(
+                                    ref mut __inner,
+                                ) = item.value
+                                {
+                                    if nested_name == "value.0" {
+                                        if let Some(v) = ObjectClass::from_text(value) {
+                                            *__inner = v;
+                                        }
+                                    }
+                                }
+                                if let ScriptScriptExecutorScriptValueSettings::Channel(
+                                    ref mut __inner,
+                                ) = item.value
+                                {
+                                    if nested_name == "value.0" {
+                                        if let Ok(v) = value.parse::<u32>() {
+                                            *__inner = ImageChannelIdx(v);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Self::SimpleTracker(s) => {
                 if param_name == "object_class" {
@@ -2690,7 +2797,15 @@ impl PipelineCommand {
             Self::RankFilter(_) => {}
             Self::RollingBall(_) => {}
             Self::SaveImage(_) => {}
-            Self::Script(_) => {}
+            Self::Script(s) => {
+                if param_name == "params" {
+                    if let Some(last) = s.params.last().cloned() {
+                        s.params.push(last);
+                    } else {
+                        s.params.push(ScriptParamSettings::default());
+                    }
+                }
+            }
             Self::SimpleTracker(_) => {}
             Self::Stardist(_) => {}
             Self::StructureTensor(_) => {}
@@ -2768,7 +2883,11 @@ impl PipelineCommand {
             Self::RankFilter(_) => {}
             Self::RollingBall(_) => {}
             Self::SaveImage(_) => {}
-            Self::Script(_) => {}
+            Self::Script(s) => {
+                if param_name == "params" && idx < s.params.len() {
+                    s.params.remove(idx);
+                }
+            }
             Self::SimpleTracker(_) => {}
             Self::Stardist(_) => {}
             Self::StructureTensor(_) => {}

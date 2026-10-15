@@ -1843,6 +1843,12 @@ pub fn load_project(
         );
     }
 
+    // Script steps' settings follow their scripts' `param` lines (a script
+    // may have been edited by hand).
+    for problem in crate::workspace::script_params::sync_project_script_params(&mut inner) {
+        warn!("{problem}");
+    }
+
     // Group mistakes show in the editor too; here they're logged.
     for problem in crate::workspace::group_checks::check_groups(&inner) {
         warn!("{}", problem.message);

@@ -14,6 +14,7 @@ pub mod group_library;
 pub mod grouping;
 pub mod images;
 pub(crate) mod project_owner;
+pub mod script_params;
 pub mod settings;
 pub mod templates;
 

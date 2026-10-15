@@ -3257,6 +3257,103 @@
         }
       }
     },
+    "ScriptParamSettings": {
+      "description": "A `param` of a script: a value the script gets from its step's settings\n(or a group parameter) instead of from its code.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The name the script declares it with.",
+          "type": "string",
+          "default": ""
+        },
+        "value": {
+          "description": "Its value. The type comes from the script's `param` line.",
+          "$ref": "#/$defs/ScriptScriptExecutorScriptValueSettings",
+          "default": {
+            "NUMBER": 0
+          }
+        }
+      }
+    },
+    "ScriptScriptExecutorScriptValueSettings": {
+      "description": "A script `param`'s value and type.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "NUMBER": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "NUMBER"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "DECIMAL": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "DECIMAL"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "BOOL": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "BOOL"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "TEXT": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "TEXT"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "CLASS": {
+              "$ref": "#/$defs/ObjectClass"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "CLASS"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "CHANNEL": {
+              "$ref": "#/$defs/ImageChannelIdx"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "CHANNEL"
+          ]
+        }
+      ]
+    },
     "ScriptSettings": {
       "description": "Runs a user-written [Rhai](https://rhai.rs) script as a pipeline step.\n\nThe script sees the current tile as read-only constants:\n`image_width`, `image_height`, `tile_x`, `tile_y` and `image_bits`.\n`print(...)` writes to the log. `run(command, #{ params })` runs a\npipeline command on the current image, with the parameter names of the\nstep settings.\n\n# Examples\n\n```rhai\nprint(`Hello world from a ${image_width}x${image_height} tile`);\nrun(\"gaussian_blur\", #{ kernel_size: 5 });\n```",
       "type": "object",
@@ -3267,6 +3364,14 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "params": {
+          "description": "The values of the script's `param`s. The script declares them\n(`param max_rounds = 10;`); this list follows it when the script is\nedited or the project loaded - a `param` without an entry runs with\nits default.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ScriptParamSettings"
           }
         },
         "source": {

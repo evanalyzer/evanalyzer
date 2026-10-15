@@ -639,12 +639,12 @@ mod tests {
         assert_eq!(&edit_options[..2], ["1", "2"]);
         assert_eq!(dialog.get_id_index(), 0);
 
-        // Choosing 5 and pressing "Apply Settings".
+        // Choosing 5 and pressing "Apply".
         let index = edit_options.iter().position(|o| o == "5").unwrap();
         dialog.set_id_index(index as i32);
         ui.global::<crate::GlobalAppState>()
             .set_active_dialog(crate::DialogType::ClassificationEditClassDialog);
-        i_slint_backend_testing::ElementHandle::find_by_accessible_label(&ui, "Apply Settings")
+        i_slint_backend_testing::ElementHandle::find_by_accessible_label(&ui, "Apply")
             .next()
             .expect("the dialog's apply button")
             .invoke_accessible_default_action();

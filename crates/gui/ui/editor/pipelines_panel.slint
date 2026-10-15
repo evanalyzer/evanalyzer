@@ -1176,7 +1176,7 @@ component LeafParamRow inherits VerticalLayout {
             alignment: start;
             // Inside an opened group: ◆ exposes the setting as a group
             // parameter (filled) or hides it again.
-            if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only: Rectangle {
+            if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.param-type != ParamType.label: Rectangle {
                 width: 14px;
                 height: 14px;
                 border-radius: 3px;
@@ -1485,7 +1485,7 @@ component ParamRow inherits VerticalLayout {
             alignment: start;
             // Inside an opened group: ◆ exposes the setting as a group
             // parameter (filled) or hides it again.
-            if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.param-type != ParamType.group: Rectangle {
+            if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.param-type != ParamType.group && p.param-type != ParamType.label: Rectangle {
                 width: 16px;
                 height: 16px;
                 border-radius: 3px;

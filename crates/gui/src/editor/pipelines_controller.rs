@@ -1280,14 +1280,34 @@ impl PipelinesController {
             // A parameter renamed or its help text edited - no refill either.
             let manager = self.clone();
             ui.global::<GroupSettingsState>()
-                .on_parameter_edited(move |id, label, description| {
+                .on_parameter_name_edited(move |id, label| {
                     manager.edit_open_group_definition(|definition| {
-                        evanalyzer_app::groups::edit_parameter(
-                            definition,
-                            GroupParamId(id as u32),
-                            &label,
-                            &description,
-                        )
+                        let id = GroupParamId(id as u32);
+                        let Some(description) = definition
+                            .parameters
+                            .iter()
+                            .find(|p| p.id == id)
+                            .map(|p| p.description.clone())
+                        else {
+                            return false;
+                        };
+                        evanalyzer_app::groups::edit_parameter(definition, id, &label, &description)
+                    });
+                });
+            let manager = self.clone();
+            ui.global::<GroupSettingsState>()
+                .on_parameter_help_edited(move |id, description| {
+                    manager.edit_open_group_definition(|definition| {
+                        let id = GroupParamId(id as u32);
+                        let Some(label) = definition
+                            .parameters
+                            .iter()
+                            .find(|p| p.id == id)
+                            .map(|p| p.label.clone())
+                        else {
+                            return false;
+                        };
+                        evanalyzer_app::groups::edit_parameter(definition, id, &label, &description)
                     });
                 });
 
@@ -1998,6 +2018,8 @@ impl PipelinesController {
                         }
                     };
 
+                    // A Script step's `param` lines that don't parse.
+                    let mut script_problem: Option<String> = None;
                     let (new_summary, params_now, needs_full_resync) = {
                         let mut project = manager.app_state.get_project_write();
                         let definitions = project.command_groups.clone();
@@ -2064,11 +2086,33 @@ impl PipelinesController {
                             }
                         }
 
+                        // A script's settings follow its `param` lines.
+                        let mut script_moved = None;
+                        if param_name == "source"
+                            && let PipelineCommand::Script(settings) = command
+                        {
+                            match evanalyzer_app::scripts::sync_script_params(settings) {
+                                Ok(moved) => {
+                                    script_moved = Some(moved);
+                                    needs_full_resync = true;
+                                }
+                                Err(e) => script_problem = Some(e),
+                            }
+                        }
                         let mut result = (
                             command.to_summary(),
                             command.to_parameters(),
                             needs_full_resync,
                         );
+                        if let Some(moved) = &script_moved
+                            && let Some(key) = manager.open_group_key(pipeline_id)
+                            && let Some(definition) =
+                                project.command_groups.iter_mut().find(|d| d.key == key)
+                        {
+                            evanalyzer_app::scripts::rebind_script_params(
+                                definition, step_id, moved,
+                            );
+                        }
                         // A setting of the opened group a parameter sets: the
                         // new value becomes the parameter's default (else it
                         // would never run), and the other settings it sets
@@ -2086,6 +2130,15 @@ impl PipelinesController {
                         }
                         result
                     }; // write lock dropped here
+
+                    if let Some(problem) = script_problem {
+                        manager.show_warning_titled(
+                            "Script parameters",
+                            &format!(
+                                "The script's param lines have a problem, so its settings weren't updated:\n{problem}"
+                            ),
+                        );
+                    }
 
                     if needs_full_resync {
                         manager.sync_steps_of_selected_pipeline_to_slint(
@@ -2804,13 +2857,18 @@ impl PipelinesController {
     /// Used at the early-return guard points in the pipeline trigger functions so
     /// the user gets visible feedback instead of a silent log-only `warn!`.
     fn show_warning(&self, message: &str) {
+        self.show_warning_titled("Cannot start analysis", message);
+    }
+
+    fn show_warning_titled(&self, title: &str, message: &str) {
+        let title = title.to_owned();
         let message = message.to_owned();
         let ui_weak = self.ui.clone();
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let warning = ui.global::<WarningState>();
                 warning.set_info(false);
-                warning.set_title("Cannot start analysis".into());
+                warning.set_title(title.into());
                 warning.set_message(message.into());
                 ui.global::<GlobalAppState>()
                     .set_active_dialog(DialogType::Warning);
@@ -6584,6 +6642,89 @@ mod tests {
         assert_eq!(shown.options.row_data(0).unwrap(), "group");
     }
 
+    /// A Script step in a group: editing its script makes the `param`s its
+    /// settings; one exposed on the group card runs with the card's value.
+    #[test]
+    fn a_scripts_param_is_a_setting_and_can_go_on_the_group_card() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::ScriptScriptExecutorScriptValueSettings as Value;
+        let (ui, ui_state, controller) = selected(vec![step("Script")]);
+        {
+            let mut project = ui_state.get_project_write();
+            evanalyzer_app::groups::group_steps(&mut project, PipelineId(1), 0..=0, "Run", &[])
+                .unwrap();
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_group(0);
+        drain_ui_queue();
+
+        panel.invoke_param_changed(
+            0,
+            "source".into(),
+            "param rounds = 10;\nparam start = 800.0;".into(),
+        );
+        drain_ui_queue();
+        let params = ui_param(&ui, 0, "params");
+        assert_eq!(params.group_items.row_count(), 2, "one entry per param");
+
+        panel.invoke_toggle_exposed(0, "params.0.value.0".into());
+        drain_ui_queue();
+        {
+            let project = ui_state.get_project();
+            let parameters = &project.command_groups[0].parameters;
+            assert_eq!(parameters.len(), 1);
+            assert_eq!(parameters[0].bindings[0].param, "params.0.value.0");
+        }
+
+        // A new param in front: the binding moves with "rounds".
+        panel.invoke_param_changed(
+            0,
+            "source".into(),
+            "param verbose = true;\nparam rounds = 10;\nparam start = 800.0;".into(),
+        );
+        drain_ui_queue();
+        assert_eq!(
+            ui_state.get_project().command_groups[0].parameters[0].bindings[0].param,
+            "params.1.value.0"
+        );
+
+        // On the card: 42 - what the script gets.
+        panel.invoke_close_group();
+        drain_ui_queue();
+        let id = ui_state.get_project().command_groups[0].parameters[0].id;
+        panel.invoke_param_changed(0, id.0.to_string().into(), "42".into());
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        let StepContent::Group(instance) = &project.pipelines[0].steps[0].content else {
+            panic!("group step")
+        };
+        let steps =
+            evanalyzer_app::groups::group_steps_with_values(instance, &project.command_groups)
+                .unwrap();
+        let Some(PipelineCommand::Script(script)) = steps[0].command() else {
+            panic!("script")
+        };
+        assert_eq!(script.params[1].name, "rounds");
+        assert_eq!(script.params[1].value, Value::Number(42));
+    }
+
+    #[test]
+    fn a_script_with_a_wrong_param_line_says_so_and_keeps_its_settings() {
+        let (ui, ui_state, _controller) = selected(vec![step("Script")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_param_changed(0, "source".into(), "param n = 1;".into());
+        drain_ui_queue();
+        panel.invoke_param_changed(0, "source".into(), "param n = 1 + 1;".into());
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::Warning);
+        let project = ui_state.get_project();
+        let Some(PipelineCommand::Script(script)) = project.pipelines[0].steps[0].command() else {
+            panic!("script")
+        };
+        assert_eq!(script.params.len(), 1, "the list stays");
+    }
+
     #[test]
     fn a_second_blur_can_join_the_first_ones_parameter() {
         let (ui, ui_state, _controller) = with_a_group();
@@ -7019,7 +7160,8 @@ mod tests {
         dialog.invoke_name_edited("Smoothing".into());
         dialog.invoke_name_edited("  ".into());
         dialog.invoke_description_edited("Blurs twice".into());
-        dialog.invoke_parameter_edited(first, "Radius".into(), "How strong".into());
+        dialog.invoke_parameter_name_edited(first, "Radius".into());
+        dialog.invoke_parameter_help_edited(first, "How strong".into());
         drain_ui_queue();
         {
             let project = ui_state.get_project();
@@ -7048,6 +7190,37 @@ mod tests {
         assert_eq!(
             ui.global::<PipelinesPanelState>().get_open_group_name(),
             "Smoothing"
+        );
+    }
+
+    /// Typing a name and then a help text keeps both - the help text's
+    /// field used to send the name as the dialog opened, undoing the edit.
+    #[test]
+    fn a_name_and_a_help_text_typed_one_after_the_other_both_stay() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, ui_state, _controller) = with_two_parameters();
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 800.0));
+        ui.global::<PipelinesPanelState>()
+            .invoke_open_group_settings();
+        drain_ui_queue();
+        let field = |label: &str| {
+            ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label:?} not found"))
+        };
+
+        field("Parameter name").set_accessible_value("Radius");
+        drain_ui_queue();
+        field("Parameter help text").set_accessible_value("How strong");
+        drain_ui_queue();
+        field("Parameter name").set_accessible_value("Blur radius");
+        drain_ui_queue();
+
+        let project = ui_state.get_project();
+        let parameter = &project.command_groups[0].parameters[0];
+        assert_eq!(
+            (parameter.label.as_str(), parameter.description.as_str()),
+            ("Blur radius", "How strong")
         );
     }
 
@@ -7157,7 +7330,7 @@ mod tests {
         );
 
         dialog.invoke_long_description_edited("Two blurs.\nUse for noisy images.".into());
-        dialog.invoke_parameter_edited(row.id, row.label.clone(), "Own help".into());
+        dialog.invoke_parameter_help_edited(row.id, "Own help".into());
         drain_ui_queue();
         assert_eq!(
             ui_state.get_project().command_groups[0].meta.description,
