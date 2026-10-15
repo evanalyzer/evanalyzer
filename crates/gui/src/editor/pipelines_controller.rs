@@ -7,10 +7,10 @@ use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
-    ClassItemData, CommandDef, CommandParameter, CommandPickerState, ComponentClassRow,
-    ComponentClassesState, ComponentEditChoiceState, ComponentParamRow, ComponentSettingsState,
-    ComponentUpdateState, CreateComponentState, DefaultParamPreview, ExposeChoiceState,
-    GlobalAppState, GroupItem, LeafParam, ParamType, Pipeline,
+    ClassItemData, CommandDef, CommandParameter, CommandPickerState, ComponentBindingRow,
+    ComponentClassRow, ComponentClassesState, ComponentEditChoiceState, ComponentParamRow,
+    ComponentSettingsState, ComponentUpdateState, CreateComponentState, DefaultParamPreview,
+    ExposeChoiceState, GlobalAppState, GroupItem, LeafParam, ParamType, Pipeline,
     PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, RunAnalysisState,
     StepCategory, UiState, WarningState,
 };
@@ -1391,6 +1391,57 @@ impl PipelinesController {
                     }
                 });
 
+            // ✕ next to what a parameter sets: it no longer sets it.
+            let manager = self.clone();
+            ui.global::<ComponentSettingsState>()
+                .on_binding_removed(move |id, step_id, path| {
+                    if manager.edit_open_component_definition(|definition| {
+                        evanalyzer_app::components::remove_binding(
+                            definition,
+                            &ComponentParamKey::from(id.as_str()),
+                            evanalyzer_cfg::core_types::StepId(step_id as u32),
+                            &path,
+                        )
+                    }) {
+                        manager.pipeline_settings_changed();
+                        manager.fill_component_settings(manager.editing_parameter(&id));
+                    }
+                });
+
+            // "Also set…": the parameter sets that setting too.
+            let manager = self.clone();
+            ui.global::<ComponentSettingsState>()
+                .on_binding_added(move |id, index| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    let Some(key) = manager.open_component_key(pipeline_id) else {
+                        return;
+                    };
+                    let parameter = ComponentParamKey::from(id.as_str());
+                    let target = evanalyzer_app::components::bindable_settings(
+                        &manager.app_state.get_project().components,
+                        &key,
+                        &parameter,
+                    )
+                    .into_iter()
+                    .nth(index as usize);
+                    let Some((step_id, path, _)) = target else {
+                        return;
+                    };
+                    if manager.edit_open_component_definition(|definition| {
+                        evanalyzer_app::components::add_binding(
+                            definition, &parameter, step_id, &path,
+                        )
+                        .is_ok()
+                    }) {
+                        manager.pipeline_settings_changed();
+                        manager.fill_component_settings(manager.editing_parameter(&id));
+                    }
+                });
+
             // Close: the panel shows the new name and ◆/◇.
             let manager = self.clone();
             ui.global::<ComponentSettingsState>().on_close(move || {
@@ -1521,17 +1572,22 @@ impl PipelinesController {
                         Some((label, candidates)) => {
                             // Each with what it sets already - parameters of equal
                             // steps are often named alike.
-                            let choices: Vec<slint::SharedString> = {
+                            let (choices, details): (
+                                Vec<slint::SharedString>,
+                                Vec<slint::SharedString>,
+                            ) = {
                                 let project = manager.app_state.get_project();
-                                std::iter::once("New parameter".to_string())
-                                    .chain(candidates.iter().map(|(id, l)| match parameter_target(
-                                        &project, &key, id,
-                                    ) {
-                                        Some(target) => format!("Add to “{l}” · {target}"),
-                                        None => format!("Add to “{l}”"),
+                                std::iter::once(("New parameter".to_string(), String::new()))
+                                    .chain(candidates.iter().map(|(id, l)| {
+                                        (
+                                            format!("Add to “{l}”"),
+                                            parameter_target(&project, &key, id)
+                                                .map(|target| format!("sets {target}"))
+                                                .unwrap_or_default(),
+                                        )
                                     }))
-                                    .map(Into::into)
-                                    .collect()
+                                    .map(|(choice, detail)| (choice.into(), detail.into()))
+                                    .unzip()
                             };
                             *manager.pending_expose.lock().expect("Poisoned") = Some((
                                 pipeline_id,
@@ -1542,6 +1598,7 @@ impl PipelinesController {
                             let choice = ui.global::<ExposeChoiceState>();
                             choice.set_setting_name(label.into());
                             choice.set_choices(ModelRc::new(VecModel::from(choices)));
+                            choice.set_details(ModelRc::new(VecModel::from(details)));
                             ui.global::<GlobalAppState>()
                                 .set_active_dialog(DialogType::ExposeChoice);
                         }
@@ -3235,11 +3292,70 @@ impl PipelinesController {
                     .collect::<Vec<_>>()
                     .join(", ")
                     .into(),
+                bindings: ModelRc::new(VecModel::from(
+                    parameter
+                        .bindings
+                        .iter()
+                        .filter_map(|binding| {
+                            let step = definition.steps.iter().find(|s| s.id == binding.step)?;
+                            let (_, label) = evanalyzer_app::components::step_setting(
+                                &project.components,
+                                step,
+                                &binding.param,
+                            )?;
+                            Some(ComponentBindingRow {
+                                text: format!("{} › {label}", step_ref(&project, step)).into(),
+                                step_id: binding.step.0 as i32,
+                                path: binding.param.clone().into(),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+                addable: {
+                    let addable = evanalyzer_app::components::bindable_settings(
+                        &project.components,
+                        &key,
+                        &parameter.key,
+                    );
+                    let labels: Vec<SharedString> = addable
+                        .iter()
+                        .filter_map(|(step_id, _, label)| {
+                            let step = definition.steps.iter().find(|s| s.id == *step_id)?;
+                            Some(format!("{} › {label}", step_ref(&project, step)).into())
+                        })
+                        .collect();
+                    // "Also set…" first, as the choice's prompt.
+                    let all: Vec<SharedString> = if labels.is_empty() {
+                        Vec::new()
+                    } else {
+                        std::iter::once("Also set…".into()).chain(labels).collect()
+                    };
+                    ModelRc::new(VecModel::from(all))
+                },
             })
             .collect();
         let state = ui.global::<ComponentSettingsState>();
         state.set_focus_index(focus_index);
         state.set_parameters(ModelRc::new(VecModel::from(rows)));
+    }
+
+    /// The row of the opened component's parameter `key` in the settings
+    /// dialog, or -1 - to keep it open after a change refills the rows.
+    fn editing_parameter(&self, key: &str) -> i32 {
+        let Some(ui) = self.ui.upgrade() else {
+            return -1;
+        };
+        let pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+        let Some(open) = self.open_component_key(pipeline_id) else {
+            return -1;
+        };
+        self.app_state
+            .get_project()
+            .components
+            .iter()
+            .find(|d| d.key == open)
+            .and_then(|d| d.parameters.iter().position(|p| p.key.to_string() == key))
+            .map_or(-1, |i| i as i32)
     }
 
     /// Applies `edit` to the opened component's definition - not while it's only
@@ -7494,14 +7610,14 @@ mod tests {
         panel.invoke_toggle_exposed(1, "kernel_size".into());
         drain_ui_queue();
         assert_eq!(active_dialog(&ui), DialogType::ExposeChoice);
-        let choice = ui
+        let detail = ui
             .global::<ExposeChoiceState>()
-            .get_choices()
+            .get_details()
             .row_data(1)
             .unwrap();
         assert!(
-            choice.contains(&format!("· #{} Blur ›", ids[0])),
-            "{choice}"
+            detail.starts_with(&format!("sets #{} Blur ›", ids[0])),
+            "{detail}"
         );
         ui.global::<ExposeChoiceState>().invoke_chosen(1);
         drain_ui_queue();
@@ -8220,6 +8336,68 @@ mod tests {
         );
     }
 
+    /// What a parameter sets is edited in the settings dialog: "Also set…"
+    /// offers the settings with its control, ✕ takes one away again.
+    #[test]
+    fn the_settings_dialog_edits_what_a_parameter_sets() {
+        let (ui, ui_state, _controller) = with_a_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(1);
+        drain_ui_queue();
+        panel.invoke_toggle_exposed(0, "kernel_size".into());
+        drain_ui_queue();
+        let second_blur = panel
+            .get_active_commands()
+            .row_data(1)
+            .unwrap()
+            .step_id
+            .to_string();
+        panel.invoke_open_component_settings();
+        drain_ui_queue();
+        let dialog = ui.global::<ComponentSettingsState>();
+        let row = |ui: &AppWindow| {
+            ui.global::<ComponentSettingsState>()
+                .get_parameters()
+                .row_data(0)
+                .unwrap()
+        };
+        assert_eq!(row(&ui).bindings.row_count(), 1);
+        let addable: Vec<String> = (0..row(&ui).addable.row_count())
+            .map(|i| row(&ui).addable.row_data(i).unwrap().to_string())
+            .collect();
+        assert_eq!(addable[0], "Also set…");
+        let index = addable
+            .iter()
+            .position(|a| a.starts_with(&format!("#{second_blur} Blur › Kernel")))
+            .unwrap_or_else(|| panic!("the other blur's kernel size: {addable:?}"));
+
+        dialog.invoke_binding_added(row(&ui).key, index as i32 - 1);
+        drain_ui_queue();
+        assert_eq!(row(&ui).bindings.row_count(), 2);
+        assert_eq!(
+            ui_state.get_project().components[0].parameters[0]
+                .bindings
+                .len(),
+            2
+        );
+
+        let added = row(&ui).bindings.row_data(1).unwrap();
+        assert!(
+            added.text.starts_with(&format!("#{second_blur} Blur")),
+            "{}",
+            added.text
+        );
+        dialog.invoke_binding_removed(row(&ui).key, added.step_id, added.path);
+        drain_ui_queue();
+        assert_eq!(row(&ui).bindings.row_count(), 1);
+        assert_eq!(
+            ui_state.get_project().components[0].parameters[0]
+                .bindings
+                .len(),
+            1
+        );
+    }
+
     /// Typing a name and then a help text keeps both - the help text's
     /// field used to send the name as the dialog opened, undoing the edit.
     #[test]
@@ -8227,9 +8405,12 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         let (ui, ui_state, _controller) = with_two_parameters();
         ui.window().set_size(slint::LogicalSize::new(1280.0, 800.0));
+        // ✎ next to the first exposed setting: the dialog with its parameter
+        // opened to edit.
         ui.global::<PipelinesPanelState>()
-            .invoke_open_component_settings();
+            .invoke_edit_exposed(0, "kernel_size".into());
         drain_ui_queue();
+        assert_eq!(ui.global::<ComponentSettingsState>().get_focus_index(), 0);
         let field = |label: &str| {
             ElementHandle::find_by_accessible_label(&ui, label)
                 .next()
