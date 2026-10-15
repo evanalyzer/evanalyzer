@@ -16,6 +16,7 @@ import {
     ImageAddressPicker,
     ChannelPicker,
 } from "../components/channel_picker.slint";
+import { PickerField, PickerRow, SwatchName } from "../components/picker_field.slint";
 import { ClassificationState, ClassItemData } from "classification_panel.slint";
 import { PipelineFocusState, FocusModeButton } from "pipeline_focus.slint";
 import { ScriptEditorState, ScriptFont } from "script_editor_panel.slint";
@@ -539,12 +540,18 @@ component PipelineTab inherits Rectangle {
 // ----------------------------------------------------------
 // Class-dropdown helpers
 
+/// The classes of the component opened in the pipelines panel ("L1", ...) -
+/// its class dropdowns offer them besides the project's.
+export global ComponentClassesState {
+    in property <[ClassItemData]> classes: [];
+}
+
 global ClassHelper {
         pure public function zeropad2(n: int) -> string {
             n < 10 ? "0\{n}" : "\{n}"
         }
         pure public function label(val: string, prefix: string) -> string {
-            val == "-1" ? "Unset" : val == "4294967295" ? "Manual annotation" : val == "0" ? "Background" : prefix + " class " + ClassHelper.zeropad2(round(val.to-float()))
+            val == "-1" ? "Unset" : val == "4294967295" ? "Manual annotation" : val == "0" ? "Background" : !val.is-float() ? "◆ Component class " + val : prefix + " class " + ClassHelper.zeropad2(round(val.to-float()))
         }
     }
 
@@ -554,74 +561,37 @@ global ClassHelper {
 component ClassDropdown inherits Rectangle {
         in property <bool> is-seg: false;
         in-out property <string> value: "0";
+        /// Also offer the opened component's classes (`ComponentClassesState`).
+        in property <bool> component-classes: false;
         callback changed(string);
 
         property <string> prefix: root.is-seg ? "Seg." : "Obj.";
+        // "Unset", "Background", ... aren't numbered entries.
+        property <bool> numbered: root.value.is-float() && root.value != "-1" && root.value != "0" && root.value != "4294967295";
 
-        height: 26px;
-        border-radius: 4px;
+        height: 24px;
 
-        trigger-ta := TouchArea {
-            mouse-cursor: pointer;
+        function pick(value: string) {
+            root.value = value;
+            root.changed(value);
+            popup.close();
+        }
+
+        PickerField {
+            label: ClassHelper.label(root.value, root.prefix);
+            mono: root.numbered || !root.value.is-float();
             clicked => {
                 popup.show();
             }
-
-            Rectangle {
-                border-radius: 4px;
-                border-width: 1px;
-                border-color: Theme.border-soft;
-                background: trigger-ta.has-hover ? Theme.raised : Theme.bg;
-
-                HorizontalLayout {
-                    padding-left: 8px;
-                    padding-right: 6px;
-                    spacing: 0px;
-                    Text {
-                        text: ClassHelper.label(root.value, root.prefix);
-                        font-size: 11px;
-                        color: Theme.text;
-                        vertical-alignment: center;
-                    }
-
-                    Rectangle {
-                // Single wrapper per class - color + name together, only the matching one is visible
-                for cls in ClassificationState.classes_list: HorizontalLayout {
-                            property <bool> is-selected: cls.id == round(root.value.to-float()) && root.value != "0" && root.value != "4294967295";
-                            visible: is-selected;
-                            spacing: is-selected ? 4px : 0px;
-                            padding-left: is-selected ? 6px : 0px;
-                            VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    width: 10px;
-                                    height: 10px;
-                                    border-radius: 2px;
-                                    background: cls.color;
-                                }
-                            }
-
-                            Text {
-                                text: "(" + cls.name + ")";
-                                font-size: 11px;
-                                color: Theme.text-dim;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-
-                    Text {
-                        text: "▾";
-                        font-size: 9px;
-                        color: Theme.text-mute;
-                        vertical-alignment: center;
-                    }
-                }
+            for cls in ClassificationState.classes_list: SwatchName {
+                visible: root.numbered && cls.id == round(root.value.to-float());
+                color: cls.color;
+                name: cls.name;
+            }
+            for cls in ComponentClassesState.classes: SwatchName {
+                visible: root.value == "L\{cls.id}";
+                color: cls.color;
+                name: cls.name;
             }
         }
 
@@ -637,149 +607,84 @@ component ClassDropdown inherits Rectangle {
                 border-color: Theme.border;
                 border-radius: 6px;
                 drop-shadow-blur: 12px;
-                drop-shadow-color: #000000.with-alpha(0.4);
+                drop-shadow-color: Theme.shadow;
                 clip: true;
 
                 ScrollView {
+                    x: 4px;
+                    y: 4px;
+                    width: parent.width - 8px;
+                    height: parent.height - 8px;
+
                     VerticalLayout {
-                        padding: 4px;
-                        spacing: 1px;
+                        spacing: 0px;
 
-                        // Unset (-1)
-                    unset-ta := TouchArea {
-                            height: 26px;
+                        PickerRow {
+                            label: "Unset";
+                            mono: false;
+                            label-color: Theme.text-mute;
+                            selected: root.value == "-1";
                             clicked => {
-                                root.value = "-1";
-                                root.changed("-1");
-                                popup.close();
-                            }
-                            Rectangle {
-                                border-radius: 3px;
-                                background: unset-ta.has-hover ? Theme.raised : transparent;
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    Text {
-                                        text: "Unset";
-                                        font-size: 11px;
-                                        color: Theme.text-mute;
-                                        vertical-alignment: center;
-                                    }
-                                }
+                                root.pick("-1");
                             }
                         }
 
-                        // Separator
-                    Rectangle {
+                        PickerRow {
+                            label: "Manual annotation";
+                            mono: false;
+                            selected: root.value == "4294967295";
+                            clicked => {
+                                root.pick("4294967295");
+                            }
+                        }
+
+                        PickerRow {
+                            label: "Background";
+                            mono: false;
+                            selected: root.value == "0";
+                            clicked => {
+                                root.pick("0");
+                            }
+                        }
+
+                        Rectangle {
                             height: 1px;
                             background: Theme.border-soft;
                         }
 
-                        // Manual annotation (0xFFFFFFFF = 4294967295)
-                    manual-ta := TouchArea {
-                            height: 26px;
+                        // The opened component's own classes.
+                        for cls in ComponentClassesState.classes: PickerRow {
+                            height: root.component-classes && !root.is-seg ? 28px : 0px;
+                            visible: root.component-classes && !root.is-seg;
+                            label: "◆ L\{cls.id}";
+                            label-color: Theme.cat-component;
+                            selected: root.value == "L\{cls.id}";
                             clicked => {
-                                root.value = "4294967295";
-                                root.changed("4294967295");
-                                popup.close();
+                                root.pick("L\{cls.id}");
                             }
-                            Rectangle {
-                                border-radius: 3px;
-                                background: manual-ta.has-hover ? Theme.raised : transparent;
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    Text {
-                                        text: "Manual annotation";
-                                        font-size: 11px;
-                                        color: Theme.text;
-                                        vertical-alignment: center;
-                                    }
-                                }
+                            SwatchName {
+                                color: cls.color;
+                                name: cls.name;
                             }
                         }
 
-                        // Separator
-                    Rectangle {
+                        if root.component-classes && !root.is-seg && ComponentClassesState.classes.length > 0: Rectangle {
                             height: 1px;
                             background: Theme.border-soft;
                         }
 
-                        // Background (0)
-                    bg-ta := TouchArea {
-                            height: 26px;
+                        // Fixed 32 numbered entries; color and name for a class the
+                        // project defines.
+                        for i in 32: PickerRow {
+                            label: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
+                            selected: root.numbered && round(root.value.to-float()) == i + 1;
                             clicked => {
-                                root.value = "0";
-                                root.changed("0");
-                                popup.close();
+                                root.pick("\{i + 1}");
                             }
-                            Rectangle {
-                                border-radius: 3px;
-                                background: bg-ta.has-hover ? Theme.raised : transparent;
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    Text {
-                                        text: "Background";
-                                        font-size: 11px;
-                                        color: Theme.text;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Separator
-                    Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
-
-                        // Fixed 32 numbered entries; color/name appear only when a class is defined for that id
-                    for i in 32: num-ta := TouchArea {
-                            height: 26px;
-                            clicked => {
-                                root.value = "\{i + 1}";
-                                root.changed("\{i + 1}");
-                                popup.close();
-                            }
-                            Rectangle {
-                                border-radius: 3px;
-                                background: num-ta.has-hover ? Theme.raised : transparent;
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    padding-right: 8px;
-                                    spacing: 0px;
-                                    Text {
-                                        text: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
-                                        font-size: 11px;
-                                        color: Theme.text;
-                                        vertical-alignment: center;
-                                    }
-
-                                    Rectangle {
-                                // Single wrapper per class: color + name together
-                                for cls in ClassificationState.classes-list: HorizontalLayout {
-                                            visible: cls.id == i + 1;
-                                            spacing: cls.id == i + 1 ? 5px : 0px;
-                                            padding-left: cls.id == i + 1 ? 8px : 0px;
-                                            VerticalLayout {
-                                                alignment: center;
-                                                Rectangle {
-                                                    width: 10px;
-                                                    height: 10px;
-                                                    border-radius: 2px;
-                                                    background: cls.color;
-                                                }
-                                            }
-
-                                            Text {
-                                                text: "(" + cls.name + ")";
-                                                font-size: 11px;
-                                                color: Theme.text-dim;
-                                                vertical-alignment: center;
-                                                overflow: elide;
-                                            }
-                                        }
-                                    }
-                                }
+                            for cls in ClassificationState.classes-list: SwatchName {
+                                visible: cls.id == i + 1;
+                                color: cls.color;
+                                name: cls.name;
                             }
                         }
                     }
@@ -797,7 +702,11 @@ component ClassDropdown inherits Rectangle {
 export component MultiClassDropdown inherits Rectangle {
         in property <bool> is-seg: false;
         in-out property <string> value: "";
+        /// flags[0..33] the project's classes; with `component-classes`,
+        /// flags[33 + k] the opened component's class k (`ComponentClassesState`).
         in property <[string]> selection-flags: [];
+        /// Also offer the opened component's classes.
+        in property <bool> component-classes: false;
         callback changed(string);
 
         property <string> prefix: root.is-seg ? "Seg." : "Obj.";
@@ -824,7 +733,9 @@ export component MultiClassDropdown inherits Rectangle {
                     padding-bottom: 4px;
                 // spacing: 0px - gap between chips is baked into each slot's 46px width
                 spacing: 0px;
-                    alignment: start;
+                    // Not `alignment: start`: that packs every item at its
+                    // preferred width, so the chip area (0px preferred) would
+                    // get no room and only show the "+N" badge.
 
                     // Placeholder when nothing is selected
                 if root.value == "": Text {
@@ -835,92 +746,164 @@ export component MultiClassDropdown inherits Rectangle {
                         horizontal-stretch: 1;
                     }
 
-                    // i=0 → BG (flags[0]), i=1..32 → class i (flags[i]).
-                // width:0px collapses unselected slots; clip:true prevents overflow.
-                // Each selected slot is 46px: 43px chip + 3px trailing gap.
- 
-                    for i in 33: Rectangle {
-                        width: root.selection-flags[i] == "1" ? 46px : 0px;
+                    // The selected classes, as many as fit; a "+N" badge counts the
+                    // rest. The area takes the width the step gives it - the chips
+                    // must not widen the field (and with it the step card and popup).
+                    chip-area := Rectangle {
+                        horizontal-stretch: 1;
+                        min-width: 0px;
+                        preferred-width: 0px;
                         height: 18px;
-                        clip: true;
+
+                        // Every selected chip takes a 46px slot (see below).
+                        property <int> selected: round(chips.preferred-width / 46px);
+                        property <int> fitting: floor(self.width / 46px);
+                        property <int> shown: self.selected <= self.fitting
+                            ? self.selected
+                            : max(0, floor((self.width - 28px) / 46px));
 
                         Rectangle {
                             x: 0px;
-                            y: 0px;
-                            width: 43px;
-                            height: 18px;
-                            border-radius: 3px;
-                            background: Theme.accent.with-alpha(0.12);
-                            border-width: 1px;
-                            border-color: Theme.accent.with-alpha(0.35);
+                            width: chip-area.shown * 46px;
+                            clip: true;
 
-                            property <bool> has-custom-name: false;
+                            // i=0 → BG (flags[0]), i=1..32 → class i (flags[i]).
+                            // width:0px collapses unselected slots; clip:true prevents overflow.
+                            // Each selected slot is 46px: 43px chip + 3px trailing gap.
+                            chips := HorizontalLayout {
+                                x: 0px;
+                                width: self.preferred-width;
+                                spacing: 0px;
+                                for i in 33: Rectangle {
+                                    width: root.selection-flags[i] == "1" ? 46px : 0px;
+                                    height: 18px;
+                                    clip: true;
 
-                            HorizontalLayout {
-                                alignment: center;
-                                spacing: 3px;
-                                padding-left: 4px;
-                                padding-right: 4px;
+                                    Rectangle {
+                                        x: 0px;
+                                        y: 0px;
+                                        width: 43px;
+                                        height: 18px;
+                                        border-radius: 3px;
+                                        background: Theme.accent.with-alpha(0.12);
+                                        border-width: 1px;
+                                        border-color: Theme.accent.with-alpha(0.35);
 
-                                if i == 0: Text {
-                                    text: "BG";
-                                    font-size: 9px;
-                                    font-family: Theme.font-mono;
-                                    color: Theme.text;
-                                    vertical-alignment: center;
-                                }
+                                        property <bool> has-custom-name: false;
 
-                                if i != 0 && !parent.has-custom-name: Text {
-                                    text: ClassHelper.zeropad2(i);
-                                    font-size: 9px;
-                                    color: Theme.text;
-                                    vertical-alignment: center;
-                                }
-                            }
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            spacing: 3px;
+                                            padding-left: 4px;
+                                            padding-right: 4px;
 
-                            for cls in ClassificationState.classes-list: Rectangle {
-                                visible: cls.id == i && cls.name != "";
+                                            if i == 0: Text {
+                                                text: "BG";
+                                                font-size: 9px;
+                                                font-family: Theme.font-mono;
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                            }
 
-                                init => {
-                                    if (cls.id == i && cls.name != "") {
-                                        has-custom-name = true;
-                                    }
-                                }
+                                            if i != 0 && !parent.has-custom-name: Text {
+                                                text: ClassHelper.zeropad2(i);
+                                                font-size: 9px;
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                            }
+                                        }
 
-                                width: parent.width;
-                                height: parent.height;
-                                background: Theme.accent.with-alpha(0.12);
+                                        for cls in ClassificationState.classes-list: Rectangle {
+                                            visible: cls.id == i && cls.name != "";
 
-                                HorizontalLayout {
-                                    alignment: center;
-                                    spacing: 3px;
-                                    padding-left: 4px;
-                                    padding-right: 4px;
+                                            init => {
+                                                if (cls.id == i && cls.name != "") {
+                                                    has-custom-name = true;
+                                                }
+                                            }
 
-                                    VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            width: 6px;
-                                            height: 6px;
-                                            border-radius: 2px;
-                                            background: cls.color;
+                                            width: parent.width;
+                                            height: parent.height;
+                                            background: Theme.accent.with-alpha(0.12);
+
+                                            HorizontalLayout {
+                                                alignment: center;
+                                                spacing: 3px;
+                                                padding-left: 4px;
+                                                padding-right: 4px;
+
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    Rectangle {
+                                                        width: 6px;
+                                                        height: 6px;
+                                                        border-radius: 2px;
+                                                        background: cls.color;
+                                                    }
+                                                }
+
+                                                Text {
+                                                    text: cls.name;
+                                                    font-size: 9px;
+                                                    color: Theme.text;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
+                                            }
                                         }
                                     }
+                                }
 
-                                    Text {
-                                        text: cls.name;
-                                        font-size: 9px;
-                                        color: Theme.text;
-                                        vertical-alignment: center;
-                                        overflow: elide;
+                                // The opened component's classes selected.
+                            for cls[k] in ComponentClassesState.classes: Rectangle {
+                                    width: root.component-classes && root.selection-flags[33 + k] == "1" ? 46px : 0px;
+                                    height: 18px;
+                                    clip: true;
+                                    Rectangle {
+                                        x: 0px;
+                                        y: 0px;
+                                        width: 43px;
+                                        height: 18px;
+                                        border-radius: 3px;
+                                        background: Theme.cat-component.with-alpha(0.12);
+                                        border-width: 1px;
+                                        border-color: Theme.cat-component.with-alpha(0.35);
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            spacing: 3px;
+                                            padding-left: 4px;
+                                            padding-right: 4px;
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 6px;
+                                                    height: 6px;
+                                                    border-radius: 2px;
+                                                    background: cls.color;
+                                                }
+                                            }
+
+                                            Text {
+                                                text: cls.name != "" ? cls.name : "L\{cls.id}";
+                                                font-size: 9px;
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    Rectangle {
-                        horizontal-stretch: 1;
+                        if chip-area.selected > chip-area.shown: Text {
+                            x: chip-area.shown * 46px;
+                            height: 18px;
+                            text: "+\{chip-area.selected - chip-area.shown}";
+                            font-size: 9px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
                     }
 
                     Text {
@@ -998,6 +981,67 @@ export component MultiClassDropdown inherits Rectangle {
                                 background: Theme.border-soft;
                             }
 
+                            // The opened component's classes - flags[33 + k].
+                        for cls[k] in ComponentClassesState.classes: local-ta := TouchArea {
+                                height: root.component-classes && !root.is-seg ? 26px : 0px;
+                                visible: root.component-classes && !root.is-seg;
+                                clicked => {
+                                    root.changed("toggle:L\{cls.id}");
+                                }
+                                Rectangle {
+                                    border-radius: 3px;
+                                    background: local-ta.has-hover ? Theme.raised : transparent;
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 6px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 12px;
+                                                height: 12px;
+                                                border-radius: 3px;
+                                                background: root.selection-flags[33 + k] == "1" ? Theme.accent : transparent;
+                                                border-width: root.selection-flags[33 + k] == "1" ? 0px : 1.5px;
+                                                border-color: Theme.border;
+                                            }
+                                        }
+
+                                        Text {
+                                            width: 96px;
+                                            text: "◆ L\{cls.id}";
+                                            font-size: 11px;
+                                            color: Theme.cat-component;
+                                            vertical-alignment: center;
+                                        }
+
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 8px;
+                                                height: 8px;
+                                                border-radius: 2px;
+                                                background: cls.color;
+                                            }
+                                        }
+
+                                        Text {
+                                            text: "(" + cls.name + ")";
+                                            font-size: 11px;
+                                            color: Theme.text-dim;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if root.component-classes && !root.is-seg && ComponentClassesState.classes.length > 0: Rectangle {
+                                height: 1px;
+                                background: Theme.border-soft;
+                            }
+
                             // Classes 1–32 - flags[i+1] (i is 0-based loop index)
                         for i in 32: num-ta := TouchArea {
                                 height: 26px;
@@ -1023,15 +1067,18 @@ export component MultiClassDropdown inherits Rectangle {
                                             }
                                         }
 
+                                        // A fixed column, so the colors and names line up
+                                        // at the same place however wide the popup is.
                                         Text {
+                                            width: 96px;
                                             text: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
                                             font-size: 11px;
                                             color: Theme.text;
                                             vertical-alignment: center;
-                                            horizontal-stretch: 1;
                                         }
 
                                         Rectangle {
+                                            horizontal-stretch: 1;
                                             for cls in ClassificationState.classes-list: HorizontalLayout {
                                                 visible: cls.id == i + 1;
                                                 spacing: 4px;
@@ -1417,6 +1464,7 @@ component LeafParamRow inherits VerticalLayout {
         if p.param-type == ParamType.obj-class:
     ClassDropdown {
             is-seg: false;
+            component-classes: true;
             value: p.value;
             changed(v) => {
                 root.changed(v);
@@ -1435,6 +1483,7 @@ component LeafParamRow inherits VerticalLayout {
         if p.param-type == ParamType.multi-obj-class:
     MultiClassDropdown {
             is-seg: false;
+            component-classes: true;
             value: p.value;
             selection-flags: p.options;
             changed(v) => {
@@ -1852,6 +1901,7 @@ component ParamControls inherits Rectangle {
             if p.param-type == ParamType.obj-class:
         ClassDropdown {
                 is-seg: false;
+                component-classes: true;
                 value: p.value;
                 changed(v) => {
                     root.changed(v);
@@ -1870,6 +1920,7 @@ component ParamControls inherits Rectangle {
             if p.param-type == ParamType.multi-obj-class:
         MultiClassDropdown {
                 is-seg: false;
+                component-classes: true;
                 value: p.value;
                 selection-flags: p.options;
                 changed(v) => {
@@ -2252,15 +2303,18 @@ component StepRow inherits Rectangle {
                 VerticalLayout {
                         alignment: center;
                         padding-right: 8px;
+                        // The step's id - what "#2 EV Detection" elsewhere refers to
+                        // (equal steps are told apart by it; it stays when steps
+                        // are added, moved or removed).
                         Rectangle {
-                            width: 20px;
+                            width: max(20px, step-number.preferred-width + 8px);
                             height: 18px;
                             border-radius: 4px;
                             background: Theme.bg;
                             border-width: 1px;
                             border-color: Theme.border-soft;
-                            Text {
-                                text: idx + 1;
+                            step-number := Text {
+                                text: root.step.step-id;
                                 color: Theme.text-dim;
                                 font-size: 10px;
                                 font-weight: 600;
@@ -2514,8 +2568,9 @@ component StepRow inherits Rectangle {
                     }
 
                     // A component's own actions, in a row of their own - with
-                    // the step actions they'd be wider than the card.
-                    if root.step.category == StepCategory.component && !PipelinesPanelState.open-component-read-only: HorizontalLayout {
+                    // the step actions they'd be wider than the card. While
+                    // viewing, only "View" (a nested component).
+                    if root.step.category == StepCategory.component: HorizontalLayout {
                         spacing: 6px;
                         padding-top: 2px;
                         alignment: start;
@@ -2546,12 +2601,12 @@ component StepRow inherits Rectangle {
                             }
                         }
 
-                        if root.step.category == StepCategory.component: Rectangle {
+                        if !PipelinesPanelState.open-component-read-only: Rectangle {
                             height: 26px;
                             border-radius: 4px;
                             border-width: 1px;
                             border-color: Theme.border;
-                            background: view-ta.has-hover ? Theme.raised : transparent;
+                            background: open-ta.has-hover ? Theme.raised : transparent;
                             HorizontalLayout {
                                 padding-left: 10px;
                                 padding-right: 10px;
@@ -2572,7 +2627,7 @@ component StepRow inherits Rectangle {
                             }
                         }
 
-                        if root.step.category == StepCategory.component: Rectangle {
+                        if !PipelinesPanelState.open-component-read-only: Rectangle {
                             height: 26px;
                             border-radius: 4px;
                             border-width: 1px;
@@ -2594,6 +2649,33 @@ component StepRow inherits Rectangle {
                                 mouse-cursor: pointer;
                                 clicked => {
                                     root.expand-component();
+                                }
+                            }
+                        }
+
+                        // Into a new component that contains this one (nested).
+                        if !PipelinesPanelState.open-component-read-only: Rectangle {
+                            height: 26px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            background: bundle-component-ta.has-hover ? Theme.raised : transparent;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                alignment: center;
+                                Text {
+                                    text: "Bundle";
+                                    font-size: 11px;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            bundle-component-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.create-component();
                                 }
                             }
                         }
@@ -2691,7 +2773,8 @@ component StepRow inherits Rectangle {
                             }
                         }
 
-                        if root.step.category != StepCategory.component && PipelinesPanelState.open-component-name == "": Rectangle {
+                        // A component card has it in its own row (no room here).
+                        if root.step.category != StepCategory.component: Rectangle {
                             height: 26px;
                             border-radius: 4px;
                             border-width: 1px;
@@ -3314,6 +3397,10 @@ export component PipelinesPanel inherits Rectangle {
 
                 ScrollView {
                     VerticalLayout {
+                        // Steps at their own height - with a short pipeline the
+                        // stretchable parts of an expanded card (a section
+                        // header, the card's bottom) would fill the panel.
+                        alignment: start;
                         padding-left: 12px;
                         padding-right: 12px;
                         padding-bottom: 4px;

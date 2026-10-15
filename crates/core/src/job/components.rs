@@ -8,7 +8,7 @@
 
 use crate::pipeline::scope::{Scope, ScopeId};
 use evanalyzer_cfg::{
-    core_types::{ComponentParamKey, InternalErrors, ObjectClass, StepId},
+    core_types::{ComponentParamKey, InternalErrors, MemorySlot, ObjectClass, StepId},
     settings::{
         components::{
             ComponentDefinition, ComponentInstance, ComponentParameterDef, ParamBinding, ParamValue,
@@ -22,6 +22,7 @@ use evanalyzer_cfg::{
         pipeline_settings::{PipelineStepSettings, StepContent},
     },
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 /// How deep components may nest - deeper is almost certainly a mistake.
 const MAX_COMPONENT_DEPTH: usize = 8;
@@ -33,27 +34,83 @@ pub struct ExpandedCommand {
     pub step_id: StepId,
     /// The scope the command runs in: its component instance's, else `Global`.
     pub scope: Scope,
+    /// The component uses the command belongs to, outermost first - each
+    /// ends after its last command (see [`ScopeCounter::end_of`]).
+    pub uses: Vec<UseId>,
     pub command: PipelineCommand,
 }
 
-/// Hands out a new [`ScopeId`] per component instance - one counter per job, so
-/// no two instances share a scope.
+/// One use of a component in a job, numbered at expansion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct UseId(pub u32);
+
+/// What goes when a component use ends.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UseEnd {
+    /// A use in a pipeline: its scope - its objects and memory slots.
+    Scope(Scope),
+    /// A use inside another component: it runs in the scope of the use in the
+    /// pipeline around it (so it can work on that one's classes), with
+    /// classes and memory slots of its own numbered apart - those go.
+    Nested {
+        scope: Scope,
+        classes: Vec<ObjectClass>,
+        slots: Vec<MemorySlot>,
+    },
+}
+
+/// Numbers the component uses of a job - one counter per job, so no two
+/// uses in pipelines share a scope - and remembers what ends with each.
 #[derive(Debug, Default)]
-pub struct ScopeCounter(u32);
+pub struct ScopeCounter {
+    last: u32,
+    ends: BTreeMap<UseId, UseEnd>,
+}
 
 impl ScopeCounter {
-    fn next(&mut self) -> Scope {
-        self.0 += 1;
-        Scope::Scoped(ScopeId(self.0))
+    fn next(&mut self, end: impl FnOnce(UseId) -> UseEnd) -> UseId {
+        self.last += 1;
+        let id = UseId(self.last);
+        self.ends.insert(id, end(id));
+        id
+    }
+
+    /// What goes when use `id` ends.
+    pub fn end_of(&self, id: UseId) -> Option<&UseEnd> {
+        self.ends.get(&id)
+    }
+}
+
+/// The classes and memory slots a use in a pipeline hands out to the
+/// components nested in it: they run in its scope, so each gets numbers no
+/// other class or slot of the scope has.
+struct Frame {
+    scope: Scope,
+    next_class: u32,
+    next_slot: MemorySlot,
+}
+
+impl Frame {
+    /// For a use of `definition` in a pipeline, in `scope`: the numbers after
+    /// its own.
+    fn new(scope: Scope, definition: &ComponentDefinition) -> Self {
+        let (classes, slots) = own_numbers(definition);
+        Self {
+            scope,
+            next_class: classes.last().map_or(1, |n| n + 1),
+            next_slot: slots.last().map_or(1, |n| n + 1),
+        }
     }
 }
 
 /// The commands `step` runs, in order, each with the id a breakpoint
-/// targets and the scope it runs in: a command step is itself, in the
-/// global scope; a component is its definition's enabled commands with the
-/// instance's values applied, in a new scope from `scopes` (a nested component
-/// in one of its own) - the last one carries the component step's id (a
-/// breakpoint on a component stops after the whole component), the others
+/// targets, the scope it runs in and the component uses it belongs to: a
+/// command step is itself, in the global scope; a component is its
+/// definition's enabled commands with the instance's values applied, in a
+/// new scope from `scopes` - a component nested in it in that scope too, its
+/// own classes and memory slots numbered apart (see [`UseEnd::Nested`]).
+/// The last command carries the component step's id (a breakpoint on a
+/// component stops after the whole component), the others
 /// [`StepId::UNASSIGNED`] (inner steps can't be targeted).
 pub fn expand_step(
     step: &PipelineStepSettings,
@@ -63,35 +120,48 @@ pub fn expand_step(
     match &step.content {
         StepContent::Command(command) => {
             if let Some(class) = command.local_classes().first() {
-                return Err(InternalErrors::InvalidArgument(format!(
-                    "uses the component class {}, which only exists inside a component",
-                    class.to_text()
-                )));
+                return Err(only_inside_class(*class));
             }
             if let Some(slot) = component_memory_slots(command).first() {
-                return Err(InternalErrors::InvalidArgument(format!(
-                    "uses the component memory slot {slot}, which only exists inside a component"
-                )));
+                return Err(only_inside_slot(*slot));
             }
             Ok(vec![ExpandedCommand {
                 step_id: step.id,
                 scope: Scope::Global,
+                uses: Vec::new(),
                 command: command.clone(),
             }])
         }
         StepContent::Component(instance) => {
-            let commands = expand_instance(instance, definitions, scopes, &mut Vec::new())?;
+            // A pipeline has no component classes or memory to hand in.
+            for value in instance.values.values() {
+                if let Some(class) = local_class_in(value) {
+                    return Err(only_inside_class(class));
+                }
+                if let Some(slot) = component_slot_in(value) {
+                    return Err(only_inside_slot(slot as u64));
+                }
+            }
+            let commands = expand_instance(
+                instance,
+                definitions,
+                scopes,
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )?;
             let last = commands.len().saturating_sub(1);
             Ok(commands
                 .into_iter()
                 .enumerate()
-                .map(|(i, (scope, command))| ExpandedCommand {
+                .map(|(i, (scope, uses, command))| ExpandedCommand {
                     step_id: if i == last {
                         step.id
                     } else {
                         StepId::UNASSIGNED
                     },
                     scope,
+                    uses,
                     command,
                 })
                 .collect())
@@ -99,19 +169,33 @@ pub fn expand_step(
     }
 }
 
+fn only_inside_class(class: ObjectClass) -> InternalErrors {
+    InternalErrors::InvalidArgument(format!(
+        "uses the component class {}, which only exists inside a component",
+        class.to_text()
+    ))
+}
+
+fn only_inside_slot(slot: u64) -> InternalErrors {
+    InternalErrors::InvalidArgument(format!(
+        "uses the component memory slot {slot}, which only exists inside a component"
+    ))
+}
+
 /// The commands of `instance`'s definition with its values applied, each
-/// with the scope it runs in - the instance's own, new one from `scopes`.
-/// `open` holds the keys of the components being expanded around this one.
+/// with the scope it runs in and the uses it belongs to. `around` is the
+/// frame of the use in the pipeline this one is nested in - `None` for that
+/// use itself, which gets a new scope from `scopes`. `open` holds the keys
+/// of the components being expanded around this one, `uses` their uses.
 fn expand_instance(
     instance: &ComponentInstance,
     definitions: &[ComponentDefinition],
     scopes: &mut ScopeCounter,
+    around: Option<&mut Frame>,
     open: &mut Vec<String>,
-) -> Result<Vec<(Scope, PipelineCommand)>, InternalErrors> {
-    let definition = definitions
-        .iter()
-        .find(|d| d.key == instance.key)
-        .ok_or_else(|| component_error(&instance.key, "isn't defined in this project".into()))?;
+    uses: &mut Vec<UseId>,
+) -> Result<Vec<(Scope, Vec<UseId>, PipelineCommand)>, InternalErrors> {
+    let raw = definition_of(instance, definitions)?;
     if open.contains(&instance.key) {
         return Err(component_error(&instance.key, "contains itself".into()));
     }
@@ -121,29 +205,39 @@ fn expand_instance(
             format!("is nested deeper than {MAX_COMPONENT_DEPTH} components"),
         ));
     }
+    check_own_classes(raw)?;
 
-    let steps = steps_with_values(instance, definition)?;
+    // In a pipeline: a scope of its own. Nested: the scope around it, its
+    // classes and slots numbered apart - the values it's given are in the
+    // numbers of the scope already.
+    let mut own_frame;
+    let (frame, definition) = match around {
+        None => {
+            let id = scopes.next(|id| UseEnd::Scope(Scope::Scoped(ScopeId(id.0))));
+            own_frame = Frame::new(Scope::Scoped(ScopeId(id.0)), raw);
+            uses.push(id);
+            (&mut own_frame, std::borrow::Cow::Borrowed(raw))
+        }
+        Some(frame) => {
+            let (renumbered, classes, slots) = renumber(raw, frame);
+            let scope = frame.scope;
+            let id = scopes.next(|_| UseEnd::Nested {
+                scope,
+                classes,
+                slots,
+            });
+            uses.push(id);
+            (frame, std::borrow::Cow::Owned(renumbered))
+        }
+    };
 
-    let scope = scopes.next();
+    let steps = steps_with_values(instance, &definition)?;
+
     open.push(instance.key.clone());
     let mut commands = Vec::new();
     for step in steps.iter().filter(|s| s.enabled) {
         match &step.content {
             StepContent::Command(command) => {
-                let undeclared = command
-                    .local_classes()
-                    .into_iter()
-                    .find(|class| !definition.classes.iter().any(|c| c.local() == *class));
-                if let Some(class) = undeclared {
-                    return Err(component_error(
-                        &definition.key,
-                        format!(
-                            "step {} uses the component class {}, which the component doesn't define",
-                            step.id,
-                            class.to_text()
-                        ),
-                    ));
-                }
                 if matches!(command.category(), CommandCategory::Dataset) {
                     if let Some(class) = command.local_classes().first() {
                         return Err(component_error(
@@ -163,15 +257,212 @@ fn expand_instance(
                         format!("step {} {why}", step.id),
                     ));
                 }
-                commands.push((scope, command.clone()))
+                commands.push((frame.scope, uses.clone(), command.clone()))
             }
-            StepContent::Component(inner) => {
-                commands.extend(expand_instance(inner, definitions, scopes, open)?)
-            }
+            StepContent::Component(inner) => commands.extend(expand_instance(
+                inner,
+                definitions,
+                scopes,
+                Some(&mut *frame),
+                open,
+                uses,
+            )?),
         }
     }
     open.pop();
+    uses.pop();
     Ok(commands)
+}
+
+/// Refuses a component class `definition` uses without defining it - in a
+/// command, a value it gives a component inside it, or a parameter's default.
+fn check_own_classes(definition: &ComponentDefinition) -> Result<(), InternalErrors> {
+    let defined = |class: &ObjectClass| definition.classes.iter().any(|c| c.local() == *class);
+    for step in &definition.steps {
+        let used: Vec<ObjectClass> = match &step.content {
+            StepContent::Command(command) => command.local_classes(),
+            StepContent::Component(inner) => {
+                inner.values.values().filter_map(local_class_in).collect()
+            }
+        };
+        if let Some(class) = used.into_iter().find(|c| !defined(c)) {
+            return Err(component_error(
+                &definition.key,
+                format!(
+                    "step {} uses the component class {}, which the component doesn't define",
+                    step.id,
+                    class.to_text()
+                ),
+            ));
+        }
+    }
+    for parameter in &definition.parameters {
+        if let Some(class) = local_class_in(&parameter.default).filter(|c| !defined(c)) {
+            return Err(component_error(
+                &definition.key,
+                format!(
+                    "parameter \"{}\" starts with the component class {}, which the component \
+                     doesn't define",
+                    parameter.label,
+                    class.to_text()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The component classes (their numbers) and memory slots `definition` has:
+/// the classes it defines, the slots its steps and parameters use - sorted.
+pub fn own_numbers(definition: &ComponentDefinition) -> (Vec<u32>, Vec<MemorySlot>) {
+    let classes: BTreeSet<u32> = definition.classes.iter().map(|c| c.id).collect();
+    let mut slots: BTreeSet<MemorySlot> = BTreeSet::new();
+    for step in &definition.steps {
+        match &step.content {
+            StepContent::Command(command) => slots.extend(
+                component_memory_slots(command)
+                    .into_iter()
+                    .map(|s| s as MemorySlot),
+            ),
+            StepContent::Component(inner) => {
+                slots.extend(inner.values.values().filter_map(component_slot_in))
+            }
+        }
+    }
+    slots.extend(
+        definition
+            .parameters
+            .iter()
+            .filter_map(|p| component_slot_in(&p.default)),
+    );
+    (classes.into_iter().collect(), slots.into_iter().collect())
+}
+
+/// `definition` with its classes and memory slots numbered from `frame`'s
+/// next free ones - and the classes and slots they became.
+fn renumber(
+    definition: &ComponentDefinition,
+    frame: &mut Frame,
+) -> (ComponentDefinition, Vec<ObjectClass>, Vec<MemorySlot>) {
+    let (own_classes, own_slots) = own_numbers(definition);
+    let classes: BTreeMap<u32, u32> = own_classes
+        .into_iter()
+        .map(|n| {
+            frame.next_class += 1;
+            (n, frame.next_class - 1)
+        })
+        .collect();
+    let slots: BTreeMap<MemorySlot, MemorySlot> = own_slots
+        .into_iter()
+        .map(|n| {
+            frame.next_slot += 1;
+            (n, frame.next_slot - 1)
+        })
+        .collect();
+
+    let renumbered = renumbered(definition, &classes, &slots);
+    (
+        renumbered,
+        classes.values().map(|n| ObjectClass::Local(*n)).collect(),
+        slots.values().copied().collect(),
+    )
+}
+
+/// `definition` with its component classes and memory slots renumbered as
+/// `classes` and `slots` say (old → new) - wherever they're written: its
+/// classes, commands, the values it gives components inside it, its
+/// parameters' defaults.
+pub fn renumbered(
+    definition: &ComponentDefinition,
+    classes: &BTreeMap<u32, u32>,
+    slots: &BTreeMap<MemorySlot, MemorySlot>,
+) -> ComponentDefinition {
+    let mut renumbered = definition.clone();
+    for class in &mut renumbered.classes {
+        if let Some(new) = classes.get(&class.id) {
+            class.id = *new;
+        }
+    }
+    for step in &mut renumbered.steps {
+        match &mut step.content {
+            StepContent::Command(command) => {
+                if let Ok(mut value) = serde_json::to_value(&*command) {
+                    renumber_json(&mut value, classes, slots);
+                    if let Ok(done) = serde_json::from_value(value) {
+                        *command = done;
+                    }
+                }
+            }
+            StepContent::Component(inner) => {
+                for value in inner.values.values_mut() {
+                    renumber_value(value, classes, slots);
+                }
+            }
+        }
+    }
+    for parameter in &mut renumbered.parameters {
+        renumber_value(&mut parameter.default, classes, slots);
+    }
+    renumbered
+}
+
+/// Renumbers the component classes (`{"LOCAL": n}`) and memory slots
+/// (`{"componentContext": n}`) of a command in its file form.
+fn renumber_json(
+    value: &mut serde_json::Value,
+    classes: &BTreeMap<u32, u32>,
+    slots: &BTreeMap<MemorySlot, MemorySlot>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.len() == 1 {
+                let (key, number) = map.iter_mut().next().expect("one entry");
+                let table = match key.as_str() {
+                    "LOCAL" => Some(classes),
+                    "componentContext" => Some(slots),
+                    _ => None,
+                };
+                if let (Some(table), Some(n)) = (table, number.as_u64())
+                    && let Some(new) = table.get(&(n as u32))
+                {
+                    *number = serde_json::Value::from(*new);
+                    return;
+                }
+            }
+            map.values_mut()
+                .for_each(|v| renumber_json(v, classes, slots));
+        }
+        serde_json::Value::Array(items) => items
+            .iter_mut()
+            .for_each(|v| renumber_json(v, classes, slots)),
+        _ => {}
+    }
+}
+
+/// Renumbers the component classes ("L1") and memory slots ("component:1")
+/// of a component parameter's value.
+fn renumber_value(
+    value: &mut ParamValue,
+    classes: &BTreeMap<u32, u32>,
+    slots: &BTreeMap<MemorySlot, MemorySlot>,
+) {
+    match value {
+        ParamValue::Text(text) => {
+            if let Some(ObjectClass::Local(n)) = ObjectClass::from_text(text)
+                && let Some(new) = classes.get(&n)
+            {
+                *text = ObjectClass::Local(*new).to_text();
+            } else if let Some(n) = component_slot_text(text)
+                && let Some(new) = slots.get(&n)
+            {
+                *text = format!("component:{new}");
+            }
+        }
+        ParamValue::List(items) => items
+            .iter_mut()
+            .for_each(|v| renumber_value(v, classes, slots)),
+        _ => {}
+    }
 }
 
 /// `definition`'s steps with `instance`'s values written into what they're
@@ -463,20 +754,9 @@ fn set_bound_value(
             }
         }
         StepContent::Component(inner) => {
+            // A component class or memory slot too: the nested component
+            // runs in this one's scope (see `UseEnd::Nested`).
             let key = ComponentParamKey::from(param);
-            // The inner component would read it as one of its own local classes.
-            if let Some(local) = local_class_in(value) {
-                return Err(format!(
-                    "the component class {} can't be passed into a nested component",
-                    local.to_text()
-                ));
-            }
-            if component_memory_in(value) {
-                return Err(
-                    "a component memory slot can't be passed into a nested component - it has its own"
-                        .into(),
-                );
-            }
             inner.values.insert(key, value.clone());
             Ok(())
         }
@@ -511,13 +791,19 @@ fn component_memory_slots(command: &PipelineCommand) -> Vec<u64> {
     slots
 }
 
-/// Whether `value` holds a component memory slot in its text form (`"component:2"`).
-fn component_memory_in(value: &ParamValue) -> bool {
+/// The first component memory slot in `value`, in its text form
+/// (`"component:2"`), if any.
+fn component_slot_in(value: &ParamValue) -> Option<MemorySlot> {
     match value {
-        ParamValue::Text(text) => text.starts_with("component:"),
-        ParamValue::List(items) => items.iter().any(component_memory_in),
-        _ => false,
+        ParamValue::Text(text) => component_slot_text(text),
+        ParamValue::List(items) => items.iter().find_map(component_slot_in),
+        _ => None,
     }
+}
+
+/// The slot of a component memory slot's text form (`"component:2"`).
+fn component_slot_text(text: &str) -> Option<MemorySlot> {
+    text.trim().strip_prefix("component:")?.trim().parse().ok()
 }
 
 /// The first local class (`"L1"`) in `value`, if any.
@@ -889,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn a_nested_component_has_its_own_scope() {
+    fn a_nested_component_runs_in_the_scope_of_the_use_around_it() {
         let outer = definition(
             "OUTER",
             vec![
@@ -898,34 +1184,125 @@ mod tests {
             ],
             vec![],
         );
-        let commands = expand(
+        let mut scopes = ScopeCounter::default();
+        let commands = expand_step(
             &component_step(4, "OUTER", &[]),
             &[cell_reconstruction(), outer],
+            &mut scopes,
         )
         .unwrap();
-        let scopes: Vec<Scope> = commands.iter().map(|c| c.scope).collect();
-        assert_eq!(scopes, [scope(2), scope(2), scope(1)]);
+        let scopes_used: Vec<Scope> = commands.iter().map(|c| c.scope).collect();
+        assert_eq!(scopes_used, [scope(1), scope(1), scope(1)]);
+        let uses: Vec<Vec<UseId>> = commands.iter().map(|c| c.uses.clone()).collect();
+        assert_eq!(
+            uses,
+            [
+                vec![UseId(1), UseId(2)],
+                vec![UseId(1), UseId(2)],
+                vec![UseId(1)]
+            ]
+        );
+        assert_eq!(scopes.end_of(UseId(1)), Some(&UseEnd::Scope(scope(1))));
+        assert_eq!(
+            scopes.end_of(UseId(2)),
+            Some(&UseEnd::Nested {
+                scope: scope(1),
+                classes: vec![],
+                slots: vec![],
+            })
+        );
     }
 
     #[test]
-    fn a_local_class_cant_be_passed_into_a_nested_component() {
+    fn a_local_class_is_passed_into_a_nested_component_whose_own_are_numbered_apart() {
+        // "Centers" is a parameter; L1 is the inner component's own class.
+        let mut inner = definition(
+            "INNER",
+            vec![command_step(
+                1,
+                PipelineCommand::Voronoi(VoronoiSettings {
+                    output_class: ObjectClass::Local(1),
+                    ..Default::default()
+                }),
+            )],
+            vec![parameter(1, ParamValue::Int(1), &[(1, "centers")])],
+        );
+        inner.classes = vec![local_class(1)];
+        // The outer component's L1 as the inner "Centers"; L2 its own too.
         let mut outer = definition(
             "OUTER",
-            vec![component_step(1, "CELL_RECONSTRUCTION", &[])],
-            // The outer component's local class 1 into the inner "Cell class".
-            vec![parameter(1, ParamValue::Text("L1".into()), &[(1, "2")])],
+            vec![
+                component_step(1, "INNER", &[]),
+                command_step(2, voronoi_with_center(ObjectClass::Local(2))),
+            ],
+            vec![parameter(1, ParamValue::Text("L1".into()), &[(1, "1")])],
         );
-        outer.classes = vec![local_class(1)];
-        let error = expand(
+        outer.classes = vec![local_class(1), local_class(2)];
+
+        let mut scopes = ScopeCounter::default();
+        let commands = expand_step(
             &component_step(4, "OUTER", &[]),
-            &[cell_reconstruction(), outer],
+            &[inner, outer],
+            &mut scopes,
+        )
+        .unwrap();
+        let nested = voronoi(&commands[0].command);
+        assert_eq!(nested.centers, ObjectClass::Local(1), "the outer one's L1");
+        assert_eq!(
+            nested.output_class,
+            ObjectClass::Local(3),
+            "the inner one's own L1, after the outer one's classes"
+        );
+        assert_eq!(voronoi(&commands[1].command).centers, ObjectClass::Local(2));
+        assert!(commands.iter().all(|c| c.scope == scope(1)));
+        assert_eq!(
+            scopes.end_of(UseId(2)),
+            Some(&UseEnd::Nested {
+                scope: scope(1),
+                classes: vec![ObjectClass::Local(3)],
+                slots: vec![],
+            }),
+            "ending the nested use removes only its own class"
+        );
+    }
+
+    #[test]
+    fn two_uses_of_a_nested_component_get_classes_of_their_own() {
+        let mut inner = definition(
+            "INNER",
+            vec![command_step(1, voronoi_with_center(ObjectClass::Local(1)))],
+            vec![],
+        );
+        inner.classes = vec![local_class(1)];
+        let outer = definition(
+            "OUTER",
+            vec![
+                component_step(1, "INNER", &[]),
+                component_step(2, "INNER", &[]),
+            ],
+            vec![],
+        );
+        let commands = expand(&component_step(4, "OUTER", &[]), &[inner, outer]).unwrap();
+        let centers: Vec<ObjectClass> = commands
+            .iter()
+            .map(|c| voronoi(&c.command).centers)
+            .collect();
+        assert_eq!(centers, [ObjectClass::Local(1), ObjectClass::Local(2)]);
+    }
+
+    #[test]
+    fn a_component_class_a_pipeline_hands_in_is_refused() {
+        let error = expand(
+            &component_step(
+                1,
+                "CELL_RECONSTRUCTION",
+                &[(2, ParamValue::Text("L1".into()))],
+            ),
+            &[cell_reconstruction()],
         )
         .unwrap_err()
         .to_string();
-        assert!(
-            error.contains("can't be passed into a nested component"),
-            "{error}"
-        );
+        assert!(error.contains("component class L1"), "{error}");
     }
 
     #[test]
@@ -1083,13 +1460,20 @@ mod tests {
     }
 
     #[test]
-    fn a_component_memory_slot_cant_be_passed_into_a_nested_component() {
+    fn a_component_memory_slot_is_passed_into_a_nested_component() {
+        // Stores in its "address"; slot 1 also its own.
         let inner = definition(
             "INNER",
-            vec![command_step(
-                1,
-                store_in(ImageAddress::Memory(MemoryId::PipelineContext(1))),
-            )],
+            vec![
+                command_step(
+                    1,
+                    store_in(ImageAddress::Memory(MemoryId::PipelineContext(1))),
+                ),
+                command_step(
+                    2,
+                    store_in(ImageAddress::Memory(MemoryId::ComponentContext(1))),
+                ),
+            ],
             vec![parameter(
                 1,
                 ParamValue::Text("memory:1".into()),
@@ -1105,12 +1489,34 @@ mod tests {
                 &[(1, "1")],
             )],
         );
-        let error = expand(&component_step(4, "OUTER", &[]), &[inner, outer])
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("memory slot can't be passed into a nested component"),
-            "{error}"
+        let mut scopes = ScopeCounter::default();
+        let commands = expand_step(
+            &component_step(4, "OUTER", &[]),
+            &[inner, outer],
+            &mut scopes,
+        )
+        .unwrap();
+        let address = |command: &PipelineCommand| match command {
+            PipelineCommand::ImageCache(settings) => settings.address,
+            _ => panic!("image cache"),
+        };
+        assert_eq!(
+            address(&commands[0].command),
+            ImageAddress::Memory(MemoryId::ComponentContext(1)),
+            "the outer one's slot"
+        );
+        assert_eq!(
+            address(&commands[1].command),
+            ImageAddress::Memory(MemoryId::ComponentContext(2)),
+            "the inner one's own, after the outer one's"
+        );
+        assert_eq!(
+            scopes.end_of(UseId(2)),
+            Some(&UseEnd::Nested {
+                scope: scope(1),
+                classes: vec![],
+                slots: vec![2],
+            })
         );
     }
 

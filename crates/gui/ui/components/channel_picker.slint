@@ -6,6 +6,7 @@ import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ChannelState } from "../state.slint";
 import { ImageMetaData } from "../editor/image_meta_panel.slint";
+import { PickerField, PickerRow, SwatchName } from "picker_field.slint";
 
 // Color swatch + name of channel `idx`; collapses to nothing for a channel
 // the open image doesn't define.
@@ -13,28 +14,11 @@ component ChannelLabel inherits Rectangle {
     in property <int> idx;
     in property <length> font-size: 12px;
 
-    for ch in ChannelState.channels: HorizontalLayout {
+    for ch in ChannelState.channels: SwatchName {
         visible: ch.idx == root.idx;
-        spacing: ch.idx == root.idx ? 5px : 0px;
-        padding-left: ch.idx == root.idx ? 8px : 0px;
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 10px;
-                height: 10px;
-                border-radius: 2px;
-                background: ch.color;
-            }
-        }
-
-        Text {
-            text: ch.name;
-            font-size: root.font-size;
-            color: Theme.text-dim;
-            vertical-alignment: center;
-            overflow: elide;
-            horizontal-stretch: 1;
-        }
+        color: ch.color;
+        name: ch.name;
+        font-size: root.font-size;
     }
 }
 
@@ -55,42 +39,15 @@ export component ChannelPicker inherits Rectangle {
 
     height: 30px;
 
-    trigger-ta := TouchArea {
-        mouse-cursor: pointer;
+    PickerField {
+        label: "Channel " + root.value;
+        font-size: root.font-size;
         clicked => {
             popup.show();
         }
-
-        Rectangle {
-            border-radius: 4px;
-            border-width: 1px;
-            border-color: Theme.border-soft;
-            background: trigger-ta.has-hover ? Theme.raised : Theme.bg;
-
-            HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 6px;
-                spacing: 0px;
-                Text {
-                    text: "Channel " + root.value;
-                    font-size: root.font-size;
-                    font-family: Theme.font-mono;
-                    color: Theme.text;
-                    vertical-alignment: center;
-                }
-
-                ChannelLabel {
-                    idx: root.value;
-                    font-size: root.font-size;
-                }
-
-                Text {
-                    text: "↓";
-                    font-size: 9px;
-                    color: Theme.text-mute;
-                    vertical-alignment: center;
-                }
-            }
+        ChannelLabel {
+            idx: root.value;
+            font-size: root.font-size;
         }
     }
 
@@ -117,33 +74,18 @@ export component ChannelPicker inherits Rectangle {
 
                 VerticalLayout {
                     spacing: 0px;
-                    for index in root.channel-count: ch-ta := TouchArea {
+                    for index in root.channel-count: PickerRow {
                         height: root.row-height;
+                        label: "Channel " + index;
+                        selected: index == root.value;
                         clicked => {
                             root.value = index;
                             root.changed(index);
                             popup.close();
                         }
-                        Rectangle {
-                            border-radius: 3px;
-                            background: index == root.value ? Theme.accent.with-alpha(0.12) : (ch-ta.has-hover ? Theme.raised : transparent);
-                            HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
-                                spacing: 0px;
-                                Text {
-                                    text: "Channel " + index;
-                                    font-size: 11px;
-                                    font-family: Theme.font-mono;
-                                    color: Theme.text;
-                                    vertical-alignment: center;
-                                }
-
-                                ChannelLabel {
-                                    idx: index;
-                                    font-size: 11px;
-                                }
-                            }
+                        ChannelLabel {
+                            idx: index;
+                            font-size: 11px;
                         }
                     }
                 }

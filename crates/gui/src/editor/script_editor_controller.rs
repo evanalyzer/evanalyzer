@@ -336,24 +336,22 @@ impl From<Diagnostic> for ScriptDiagnostic {
     }
 }
 
-/// Parses the script without running it. Unknown functions are not errors
-/// here - Rhai resolves calls at run time.
+/// Parses the script without running it, with the engine that runs it (so
+/// `param` lines are known). Unknown functions are not errors here - Rhai
+/// resolves calls at run time.
 fn check_syntax(src: &str) -> Diagnostic {
-    thread_local! {
-        static ENGINE: rhai::Engine = rhai::Engine::new();
-    }
-    ENGINE.with(|engine| match engine.compile(src) {
-        Ok(_) => Diagnostic {
+    match evanalyzer_app::settings_of::script_syntax_error(src) {
+        None => Diagnostic {
             ok: true,
             line: 0,
             message: String::new(),
         },
-        Err(err) => Diagnostic {
+        Some((line, message)) => Diagnostic {
             ok: false,
-            line: err.position().line().unwrap_or(0) as i32,
-            message: err.err_type().to_string(),
+            line: line.unwrap_or(0) as i32,
+            message,
         },
-    })
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -818,6 +816,15 @@ mod tests {
         assert!(!d.ok);
         assert_eq!(d.line, 2);
         assert!(!d.message.is_empty());
+    }
+
+    #[test]
+    fn check_knows_param_lines() {
+        assert!(check_syntax("param start = 100;\nparam end = 1000;\nlet a = start;").ok);
+        let d = check_syntax("param start = 100;\nparam n = 1 + 1;");
+        assert!(!d.ok);
+        assert_eq!(d.line, 2);
+        assert!(d.message.contains("followed by `;`"), "{}", d.message);
     }
 
     #[test]

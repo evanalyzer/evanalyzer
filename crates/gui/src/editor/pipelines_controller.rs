@@ -7,11 +7,12 @@ use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
-    CommandDef, CommandParameter, CommandPickerState, ComponentClassRow, ComponentEditChoiceState,
-    ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState,
-    DefaultParamPreview, ExposeChoiceState, GlobalAppState, GroupItem, LeafParam, ParamType,
-    Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState,
-    RunAnalysisState, StepCategory, UiState, WarningState,
+    ClassItemData, CommandDef, CommandParameter, CommandPickerState, ComponentClassRow,
+    ComponentClassesState, ComponentEditChoiceState, ComponentParamRow, ComponentSettingsState,
+    ComponentUpdateState, CreateComponentState, DefaultParamPreview, ExposeChoiceState,
+    GlobalAppState, GroupItem, LeafParam, ParamType, Pipeline,
+    PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, RunAnalysisState,
+    StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use crate::{ResultItemData, ResultsListState};
@@ -104,15 +105,17 @@ pub struct PipelinesController {
     /// `pipeline_settings_changed`).
     pub(crate) focus_controller: Arc<FocusController>,
 
-    /// The component opened in the panel ("Open" on a component card):
-    /// (pipeline id, component key). The panel shows and edits its steps - its
-    /// definition, so every use of the component - instead of the pipeline's.
-    open_component: Mutex<Option<(u32, String)>>,
+    /// The components opened in the panel ("Edit"/"View" on a component card):
+    /// (pipeline id, the path from the component opened from the pipeline to
+    /// the one shown - a component opened inside an opened one goes on top).
+    /// The panel shows and edits the last one's steps - its definition, so
+    /// every use of the component - instead of the pipeline's; "‹ Back" goes
+    /// one level up.
+    open_component: Mutex<Option<(u32, Vec<OpenComponent>)>>,
 
-    /// The opened component is only looked at ("View" on a component card): the step
-    /// index of the card it was opened from, for "Edit" in the bar. Nothing
-    /// can be changed meanwhile.
-    viewing_from: Mutex<Option<usize>>,
+    /// While "Edit for all / Only this step" asks: the opened components the
+    /// asked-about card's step index refers to (see [`Self::edit_component`]).
+    pending_edit_base: Mutex<Option<Vec<OpenComponent>>>,
 
     /// A setting waiting for "Expose setting": (pipeline id, step index,
     /// setting path, the parameters it could be added to).
@@ -124,6 +127,16 @@ pub struct PipelinesController {
 
     /// A component waiting for "Update": (its key, index into `component_library`).
     pending_update: Mutex<Option<(String, usize)>>,
+}
+
+/// One level of [`PipelinesController::open_component`].
+#[derive(Debug, Clone)]
+struct OpenComponent {
+    key: String,
+    /// Only looked at ("View" on a component card): the index of the card it was
+    /// opened from in the level below, for "Edit" in the bar. Nothing can be
+    /// changed meanwhile - also not in components opened inside it.
+    viewing_from: Option<usize>,
 }
 
 impl PipelinesController {
@@ -148,7 +161,7 @@ impl PipelinesController {
             auto_preview_enabled: Mutex::new(false),
             focus_controller,
             open_component: Mutex::new(None),
-            viewing_from: Mutex::new(None),
+            pending_edit_base: Mutex::new(None),
             pending_expose: Mutex::new(None),
             component_library: Mutex::new(Vec::new()),
             pending_update: Mutex::new(None),
@@ -940,66 +953,72 @@ impl PipelinesController {
                         return;
                     }
 
-                    let new_steps: Vec<PipelineStepSettings> = if command_id
-                        >= LIBRARY_COMPONENT_PICKER_ID_BASE
-                    {
-                        // A library component: copied into the project, then used.
-                        let idx = (command_id - LIBRARY_COMPONENT_PICKER_ID_BASE) as usize;
-                        let Some((path, template)) =
-                            manager.component_library.lock().expect("Poisoned").get(idx).cloned()
-                        else {
-                            warn!("picker confirm: unknown library component id {}", command_id);
-                            return;
-                        };
-                        let inserted = {
-                            let mut project = manager.app_state.get_project_write();
-                            evanalyzer_app::components::insert_component_template(
-                                &mut project,
-                                &template,
-                                &evanalyzer_app::components::library_name(&path),
-                            )
-                        };
-                        let key = match inserted {
-                            Ok(key) => key,
-                            Err(e) => {
-                                warn!("Could not insert the library component: {e}");
+                    let new_steps: Vec<PipelineStepSettings> =
+                        if command_id >= LIBRARY_COMPONENT_PICKER_ID_BASE {
+                            // A library component: copied into the project, then used.
+                            let idx = (command_id - LIBRARY_COMPONENT_PICKER_ID_BASE) as usize;
+                            let Some((path, template)) = manager
+                                .component_library
+                                .lock()
+                                .expect("Poisoned")
+                                .get(idx)
+                                .cloned()
+                            else {
+                                warn!(
+                                    "picker confirm: unknown library component id {}",
+                                    command_id
+                                );
                                 return;
-                            }
-                        };
-                        vec![PipelineStepSettings {
-                            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                            enabled: true,
-                            content: StepContent::Component(
-                                evanalyzer_cfg::settings::components::ComponentInstance {
-                                    key,
-                                    values: Default::default(),
-                                },
-                            ),
-                        }]
-                    } else if command_id >= COMPONENT_PICKER_ID_BASE {
-                        // A component: one step using it, at its defaults.
-                        let project = manager.app_state.get_project();
-                        let idx = (command_id - COMPONENT_PICKER_ID_BASE) as usize;
-                        let Some(definition) = project.components.get(idx) else {
-                            warn!("picker confirm: unknown component id {}", command_id);
-                            return;
-                        };
-                        vec![PipelineStepSettings {
-                            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-                            enabled: true,
-                            content: StepContent::Component(
-                                evanalyzer_cfg::settings::components::ComponentInstance {
-                                    key: definition.key.clone(),
-                                    values: Default::default(),
-                                },
-                            ),
-                        }]
-                    } else {
-                        let Some(cmd) = default_command(command_id) else {
-                            warn!("picker confirm: unknown command id {}", command_id);
-                            return;
-                        };
-                        vec![PipelineStepSettings {
+                            };
+                            let inserted = {
+                                let mut project = manager.app_state.get_project_write();
+                                evanalyzer_app::components::insert_component_template(
+                                    &mut project,
+                                    &template,
+                                    &evanalyzer_app::components::library_name(&path),
+                                )
+                            };
+                            let key = match inserted {
+                                Ok(key) => key,
+                                Err(e) => {
+                                    warn!("Could not insert the library component: {e}");
+                                    return;
+                                }
+                            };
+                            vec![PipelineStepSettings {
+                                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                                enabled: true,
+                                content: StepContent::Component(
+                                    evanalyzer_cfg::settings::components::ComponentInstance {
+                                        key,
+                                        values: Default::default(),
+                                    },
+                                ),
+                            }]
+                        } else if command_id >= COMPONENT_PICKER_ID_BASE {
+                            // A component: one step using it, at its defaults.
+                            let project = manager.app_state.get_project();
+                            let idx = (command_id - COMPONENT_PICKER_ID_BASE) as usize;
+                            let Some(definition) = project.components.get(idx) else {
+                                warn!("picker confirm: unknown component id {}", command_id);
+                                return;
+                            };
+                            vec![PipelineStepSettings {
+                                id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
+                                enabled: true,
+                                content: StepContent::Component(
+                                    evanalyzer_cfg::settings::components::ComponentInstance {
+                                        key: definition.key.clone(),
+                                        values: Default::default(),
+                                    },
+                                ),
+                            }]
+                        } else {
+                            let Some(cmd) = default_command(command_id) else {
+                                warn!("picker confirm: unknown command id {}", command_id);
+                                return;
+                            };
+                            vec![PipelineStepSettings {
                             id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
                             enabled: true,
                             content:
@@ -1007,15 +1026,40 @@ impl PipelinesController {
                                     cmd,
                                 ),
                         }]
-                    };
+                        };
 
-                    // A component can't contain itself.
-                    let open_key = manager.open_component_key(pipeline_id);
-                    if new_steps.iter().any(|s| {
-                        matches!(&s.content, StepContent::Component(g) if Some(&g.key) == open_key.as_ref())
-                    }) {
-                        warn!("picker confirm: a component can't contain itself");
-                        return;
+                    // A component can't contain itself - also not through the
+                    // components it contains (e.g. a library component's).
+                    if let Some(open_key) = manager.open_component_key(pipeline_id) {
+                        let project = manager.app_state.get_project();
+                        let cycle = new_steps.iter().find_map(|s| match &s.content {
+                            StepContent::Component(instance)
+                                if evanalyzer_app::components::would_contain_itself(
+                                    &project,
+                                    &open_key,
+                                    &instance.key,
+                                ) =>
+                            {
+                                Some(step_label(&project, s))
+                            }
+                            _ => None,
+                        });
+                        drop(project);
+                        if let Some(name) = cycle {
+                            let warning = ui.global::<WarningState>();
+                            warning.set_info(false);
+                            warning.set_title("Cannot insert the component".into());
+                            warning.set_message(
+                                format!(
+                                    "\"{name}\" contains the component it would be inserted \
+                                     into - a component can't contain itself."
+                                )
+                                .into(),
+                            );
+                            ui.global::<GlobalAppState>()
+                                .set_active_dialog(DialogType::Warning);
+                            return;
+                        }
                     }
                     {
                         let mut project = manager.app_state.get_project_write();
@@ -1046,41 +1090,11 @@ impl PipelinesController {
                     };
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
-                    let (name, uses) = {
-                        let project = manager.app_state.get_project();
-                        let Some(StepContent::Component(instance)) = project
-                            .pipelines
-                            .iter()
-                            .find(|p| p.id.0 == pipeline_id)
-                            .and_then(|p| p.steps.get(step_idx as usize))
-                            .map(|s| &s.content)
-                        else {
-                            return;
-                        };
-                        (
-                            step_label(
-                                &project,
-                                &project
-                                    .pipelines
-                                    .iter()
-                                    .find(|p| p.id.0 == pipeline_id)
-                                    .unwrap()
-                                    .steps[step_idx as usize],
-                            ),
-                            evanalyzer_app::components::component_uses(&project, &instance.key),
-                        )
-                    };
-                    if uses > 1 {
-                        let choice = ui.global::<ComponentEditChoiceState>();
-                        choice.set_pipeline_id(pipeline_id as i32);
-                        choice.set_step_idx(step_idx);
-                        choice.set_component_name(name.into());
-                        choice.set_uses(uses as i32);
-                        ui.global::<GlobalAppState>()
-                            .set_active_dialog(DialogType::ComponentEditChoice);
-                    } else {
-                        manager.open_component_in_panel(pipeline_id, step_idx as usize, false);
+                    if manager.viewing(pipeline_id) {
+                        return;
                     }
+                    let shown = manager.open_component_path(pipeline_id);
+                    manager.edit_component(&ui, pipeline_id, shown, step_idx as usize);
                 });
 
             // "Edit for all": the component itself.
@@ -1091,10 +1105,12 @@ impl PipelinesController {
                         return;
                     };
                     let choice = ui.global::<ComponentEditChoiceState>();
+                    let pipeline_id = choice.get_pipeline_id() as u32;
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::None);
+                    manager.take_pending_edit_base(pipeline_id);
                     manager.open_component_in_panel(
-                        choice.get_pipeline_id() as u32,
+                        pipeline_id,
                         choice.get_step_idx() as usize,
                         false,
                     );
@@ -1112,11 +1128,12 @@ impl PipelinesController {
                     let step_idx = choice.get_step_idx() as usize;
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::None);
+                    manager.take_pending_edit_base(pipeline_id);
                     let copied = {
                         let mut project = manager.app_state.get_project_write();
                         evanalyzer_app::components::clone_component_for_step(
                             &mut project,
-                            PipelineId(pipeline_id),
+                            &manager.shown_list(pipeline_id),
                             step_idx,
                         )
                     };
@@ -1132,19 +1149,21 @@ impl PipelinesController {
             let manager = self.clone();
             ui.global::<ComponentEditChoiceState>().on_cancel(move || {
                 if let Some(ui) = manager.ui.upgrade() {
+                    *manager.pending_edit_base.lock().expect("Poisoned") = None;
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::None);
                 }
             });
 
-            // "‹ Back" from an opened component: the pipeline's steps again.
+            // "‹ Back" from an opened component: the steps it was opened from
+            // again - the component's it's nested in, or the pipeline's.
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_close_component(move || {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
-                    manager.close_open_component();
+                    manager.close_component_level();
                     let pipeline_id =
                         ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
                     manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), true);
@@ -1162,18 +1181,28 @@ impl PipelinesController {
                     manager.open_component_in_panel(pipeline_id, step_idx as usize, true);
                 });
 
-            // "Edit" in the bar of a viewed component: as "Edit" on its card.
+            // "Edit" in the bar of a viewed component: as "Edit" on its card. In
+            // a component opened inside a viewed one, the first viewed one is
+            // opened to edit - the ones inside it can then be opened to edit.
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_edit_open_component(move || {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
-                    let viewed_from = *manager.viewing_from.lock().expect("Poisoned");
-                    if let Some(step_idx) = viewed_from {
-                        ui.global::<PipelinesPanelState>()
-                            .invoke_open_component(step_idx as i32);
-                    }
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    let mut path = manager.open_component_path(pipeline_id);
+                    let Some(first_viewed) =
+                        path.iter().position(|level| level.viewing_from.is_some())
+                    else {
+                        return;
+                    };
+                    let Some(step_idx) = path[first_viewed].viewing_from else {
+                        return;
+                    };
+                    path.truncate(first_viewed);
+                    manager.edit_component(&ui, pipeline_id, path, step_idx);
                 });
 
             // "Settings…" in the opened component's bar: the component settings dialog.
@@ -1395,7 +1424,7 @@ impl PipelinesController {
                         let mut project = manager.app_state.get_project_write();
                         evanalyzer_app::components::expand_component(
                             &mut project,
-                            PipelineId(pipeline_id),
+                            manager.shown_list(pipeline_id),
                             step_idx as usize,
                         )
                     };
@@ -1444,10 +1473,13 @@ impl PipelinesController {
                         };
                         let Some((step_id, (setting, label))) =
                             definition.steps.get(step_idx).and_then(|step| {
-                                let command = step.command()?;
                                 Some((
                                     step.id,
-                                    evanalyzer_app::components::setting_at(command, &path)?,
+                                    evanalyzer_app::components::step_setting(
+                                        &definitions,
+                                        step,
+                                        &path,
+                                    )?,
                                 ))
                             })
                         else {
@@ -1487,11 +1519,20 @@ impl PipelinesController {
                             );
                         }
                         Some((label, candidates)) => {
-                            let choices: Vec<slint::SharedString> =
+                            // Each with what it sets already - parameters of equal
+                            // steps are often named alike.
+                            let choices: Vec<slint::SharedString> = {
+                                let project = manager.app_state.get_project();
                                 std::iter::once("New parameter".to_string())
-                                    .chain(candidates.iter().map(|(_, l)| format!("Add to “{l}”")))
+                                    .chain(candidates.iter().map(|(id, l)| match parameter_target(
+                                        &project, &key, id,
+                                    ) {
+                                        Some(target) => format!("Add to “{l}” · {target}"),
+                                        None => format!("Add to “{l}”"),
+                                    }))
                                     .map(Into::into)
-                                    .collect();
+                                    .collect()
+                            };
                             *manager.pending_expose.lock().expect("Poisoned") = Some((
                                 pipeline_id,
                                 step_idx,
@@ -1525,16 +1566,20 @@ impl PipelinesController {
                 };
                 {
                     let mut project = manager.app_state.get_project_write();
+                    let definitions = project.components.clone();
                     let Some(definition) = project.components.iter_mut().find(|d| d.key == key)
                     else {
                         return;
                     };
                     let Some((step_id, (setting, label))) =
                         definition.steps.get(step_idx).and_then(|step| {
-                            let command = step.command()?;
                             Some((
                                 step.id,
-                                evanalyzer_app::components::setting_at(command, &path)?,
+                                evanalyzer_app::components::step_setting(
+                                    &definitions,
+                                    step,
+                                    &path,
+                                )?,
                             ))
                         })
                     else {
@@ -1590,11 +1635,9 @@ impl PipelinesController {
                     }
                     let found = {
                         let project = manager.app_state.get_project();
-                        project
-                            .pipelines
-                            .iter()
-                            .find(|p| p.id.0 == pipeline_id)
-                            .and_then(|p| p.steps.get(step_idx as usize))
+                        manager
+                            .shown_steps(&project, pipeline_id)
+                            .and_then(|steps| steps.get(step_idx as usize))
                             .and_then(|step| match &step.content {
                                 StepContent::Component(instance) => project
                                     .components
@@ -1631,11 +1674,9 @@ impl PipelinesController {
                     let found = {
                         let project = manager.app_state.get_project();
                         let library = manager.component_library.lock().expect("Poisoned");
-                        project
-                            .pipelines
-                            .iter()
-                            .find(|p| p.id.0 == pipeline_id)
-                            .and_then(|p| p.steps.get(step_idx as usize))
+                        manager
+                            .shown_steps(&project, pipeline_id)
+                            .and_then(|steps| steps.get(step_idx as usize))
                             .and_then(|step| match &step.content {
                                 StepContent::Component(instance) => {
                                     project.components.iter().find(|d| d.key == instance.key)
@@ -1652,7 +1693,10 @@ impl PipelinesController {
                                     definition.meta.name.clone(),
                                     definition.origin.as_ref().map_or(0, |o| o.version),
                                     version,
-                                    evanalyzer_app::components::modified_since_inserted(definition),
+                                    evanalyzer_app::components::modified_since_inserted(
+                                        definition,
+                                        &project.components,
+                                    ),
                                     index,
                                 ))
                             })
@@ -1733,24 +1777,16 @@ impl PipelinesController {
                         );
                         return;
                     }
-                    if manager.open_component_key(pipeline_id).is_some() {
-                        // Components inside components: from the pipeline, for now.
-                        return;
-                    }
+                    // The steps shown: the pipeline's or an opened component's.
                     let names: Vec<slint::SharedString> = {
                         let project = manager.app_state.get_project();
-                        let Some(pipeline) =
-                            project.pipelines.iter().find(|p| p.id.0 == pipeline_id)
-                        else {
+                        let Some(steps) = manager.shown_steps(&project, pipeline_id) else {
                             return;
                         };
-                        pipeline
-                            .steps
+                        // As the cards show them: by their ids.
+                        steps
                             .iter()
-                            .enumerate()
-                            .map(|(i, step)| {
-                                format!("{} · {}", i + 1, step_label(&project, step)).into()
-                            })
+                            .map(|step| step_ref(&project, step).into())
                             .collect()
                     };
                     let state = ui.global::<CreateComponentState>();
@@ -1808,7 +1844,7 @@ impl PipelinesController {
                     let mut project = manager.app_state.get_project_write();
                     evanalyzer_app::components::create_component(
                         &mut project,
-                        pipeline_id,
+                        manager.shown_list(pipeline_id.0),
                         range,
                         state.get_name().as_str(),
                         &roles,
@@ -2062,6 +2098,7 @@ impl PipelinesController {
                             return;
                         };
                         // A component: its parameter is named by its key.
+                        let step_id = step.id;
                         if let StepContent::Component(instance) = &mut step.content {
                             if let Err(e) = evanalyzer_app::components::set_component_parameter(
                                 instance,
@@ -2071,6 +2108,19 @@ impl PipelinesController {
                             ) {
                                 warn!("Component parameter {param_name}: {e}");
                             }
+                            // Inside an opened component, a parameter of it may
+                            // set this one: the value becomes its default.
+                            if let Some(key) = manager.open_component_key(pipeline_id)
+                                && let Some(definition) =
+                                    project.components.iter_mut().find(|d| d.key == key)
+                            {
+                                evanalyzer_app::components::bound_setting_edited(
+                                    definition,
+                                    &definitions,
+                                    step_id,
+                                    &param_name,
+                                );
+                            }
                             drop(project);
                             manager.sync_steps_of_selected_pipeline_to_slint(
                                 PipelineId(pipeline_id),
@@ -2079,7 +2129,6 @@ impl PipelinesController {
                             manager.pipeline_settings_changed();
                             return;
                         }
-                        let step_id = step.id;
                         let Some(command) = step.command_mut() else {
                             return;
                         };
@@ -2142,6 +2191,7 @@ impl PipelinesController {
                                 project.components.iter_mut().find(|d| d.key == key)
                             && evanalyzer_app::components::bound_setting_edited(
                                 definition,
+                                &definitions,
                                 step_id,
                                 &param_name,
                             )
@@ -2297,14 +2347,24 @@ impl PipelinesController {
                                                     .split(',')
                                                     .filter_map(|s| s.trim().parse::<u32>().ok())
                                                     .collect();
+                                            let selected_local: Vec<&str> =
+                                                new_param_value.split(',').map(str::trim).collect();
                                             let new_flags: Vec<SharedString> = (0u32..33u32)
-                                                .map(|idx| {
-                                                    if selected.contains(&idx) {
-                                                        "1".into()
-                                                    } else {
-                                                        "0".into()
-                                                    }
-                                                })
+                                                .map(|idx| selected.contains(&idx))
+                                                // Then the opened component's classes.
+                                                .chain(
+                                                    manager
+                                                        .open_component_class_ids(pipeline_id)
+                                                        .into_iter()
+                                                        .map(|id| {
+                                                            selected_local.contains(
+                                                                &ObjectClass::Local(id)
+                                                                    .to_text()
+                                                                    .as_str(),
+                                                            )
+                                                        }),
+                                                )
+                                                .map(|on| if on { "1" } else { "0" }.into())
                                                 .collect();
                                             p.options = ModelRc::new(VecModel::from(new_flags));
                                         }
@@ -2949,26 +3009,127 @@ impl PipelinesController {
     /// step's `model_path` and shows its metadata via the shared warning/info
     /// dialog - see `pipelines_controller`'s module doc comment on why this
     /// reuses that dialog instead of a bespoke one.
-    /// The key of the component opened in pipeline `pipeline_id`'s panel, if any.
-    fn open_component_key(&self, pipeline_id: u32) -> Option<String> {
+    /// The components opened in pipeline `pipeline_id`'s panel, outermost
+    /// first; empty if none.
+    fn open_component_path(&self, pipeline_id: u32) -> Vec<OpenComponent> {
         self.open_component
             .lock()
             .expect("Poisoned")
             .as_ref()
             .filter(|(pipeline, _)| *pipeline == pipeline_id)
-            .map(|(_, key)| key.clone())
+            .map(|(_, path)| path.clone())
+            .unwrap_or_default()
+    }
+
+    /// The key of the component shown in pipeline `pipeline_id`'s panel, if any.
+    fn open_component_key(&self, pipeline_id: u32) -> Option<String> {
+        self.open_component_path(pipeline_id)
+            .pop()
+            .map(|level| level.key)
     }
 
     /// Whether pipeline `pipeline_id`'s panel shows a component only to look at.
     fn viewing(&self, pipeline_id: u32) -> bool {
-        self.open_component_key(pipeline_id).is_some()
-            && self.viewing_from.lock().expect("Poisoned").is_some()
+        self.open_component_path(pipeline_id)
+            .iter()
+            .any(|level| level.viewing_from.is_some())
     }
 
-    /// Closes the opened component, if any.
+    /// The steps shown in pipeline `pipeline_id`'s panel, as a
+    /// [`StepList`](evanalyzer_app::components::StepList).
+    fn shown_list(&self, pipeline_id: u32) -> evanalyzer_app::components::StepList {
+        match self.open_component_key(pipeline_id) {
+            Some(key) => evanalyzer_app::components::StepList::Component(key),
+            None => evanalyzer_app::components::StepList::Pipeline(PipelineId(pipeline_id)),
+        }
+    }
+
+    /// The classes (their numbers) of the component shown in pipeline
+    /// `pipeline_id`'s panel - none in a pipeline.
+    fn open_component_class_ids(&self, pipeline_id: u32) -> Vec<u32> {
+        let Some(key) = self.open_component_key(pipeline_id) else {
+            return Vec::new();
+        };
+        self.app_state
+            .get_project()
+            .components
+            .iter()
+            .find(|d| d.key == key)
+            .map(|d| d.classes.iter().map(|c| c.id).collect())
+            .unwrap_or_default()
+    }
+
+    /// Closes every opened component, if any.
     fn close_open_component(&self) {
         *self.open_component.lock().expect("Poisoned") = None;
-        *self.viewing_from.lock().expect("Poisoned") = None;
+    }
+
+    /// Opens exactly the components `path` (outermost first; empty: none).
+    fn set_open_path(&self, pipeline_id: u32, path: Vec<OpenComponent>) {
+        *self.open_component.lock().expect("Poisoned") =
+            (!path.is_empty()).then_some((pipeline_id, path));
+    }
+
+    /// "Edit" on component card `step_idx` of the steps shown with the
+    /// components `base` opened (empty: the pipeline's): opens it to edit -
+    /// asking first if other steps use the component too. Until that's
+    /// answered the panel stays as it is.
+    fn edit_component(
+        self: &Arc<Self>,
+        ui: &AppWindow,
+        pipeline_id: u32,
+        base: Vec<OpenComponent>,
+        step_idx: usize,
+    ) {
+        let shown = self.open_component_path(pipeline_id);
+        self.set_open_path(pipeline_id, base.clone());
+        let found = {
+            let project = self.app_state.get_project();
+            self.shown_steps(&project, pipeline_id)
+                .and_then(|steps| steps.get(step_idx))
+                .and_then(|step| match &step.content {
+                    StepContent::Component(instance) => Some((
+                        step_label(&project, step),
+                        evanalyzer_app::components::component_uses(&project, &instance.key),
+                    )),
+                    StepContent::Command(_) => None,
+                })
+        };
+        match found {
+            Some((name, uses)) if uses > 1 => {
+                self.set_open_path(pipeline_id, shown);
+                *self.pending_edit_base.lock().expect("Poisoned") = Some(base);
+                let choice = ui.global::<ComponentEditChoiceState>();
+                choice.set_pipeline_id(pipeline_id as i32);
+                choice.set_step_idx(step_idx as i32);
+                choice.set_component_name(name.into());
+                choice.set_uses(uses as i32);
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::ComponentEditChoice);
+            }
+            Some(_) => self.open_component_in_panel(pipeline_id, step_idx, false),
+            None => self.set_open_path(pipeline_id, shown),
+        }
+    }
+
+    /// "Edit for all"/"Only this step" answered: the opened components the
+    /// card was shown with (see [`Self::edit_component`]).
+    fn take_pending_edit_base(&self, pipeline_id: u32) {
+        if let Some(base) = self.pending_edit_base.lock().expect("Poisoned").take() {
+            self.set_open_path(pipeline_id, base);
+        }
+    }
+
+    /// "‹ Back": closes the shown component - the one it was opened in, or the
+    /// pipeline, is shown again.
+    fn close_component_level(&self) {
+        let mut open = self.open_component.lock().expect("Poisoned");
+        if let Some((_, path)) = open.as_mut() {
+            path.pop();
+            if path.is_empty() {
+                *open = None;
+            }
+        }
     }
 
     /// Opens the component settings dialog for the opened component - read only
@@ -3043,8 +3204,9 @@ impl PipelinesController {
                     .first()
                     .and_then(|binding| {
                         let step = definition.steps.iter().find(|s| s.id == binding.step)?;
-                        let (setting, _) = evanalyzer_app::components::setting_at(
-                            step.command()?,
+                        let (setting, _) = evanalyzer_app::components::step_setting(
+                            &project.components,
+                            step,
                             &binding.param,
                         )?;
                         // One line, shortened in the dialog.
@@ -3063,11 +3225,12 @@ impl PipelinesController {
                     .iter()
                     .filter_map(|binding| {
                         let step = definition.steps.iter().find(|s| s.id == binding.step)?;
-                        let (_, label) = evanalyzer_app::components::setting_at(
-                            step.command()?,
+                        let (_, label) = evanalyzer_app::components::step_setting(
+                            &project.components,
+                            step,
                             &binding.param,
                         )?;
-                        Some(format!("{} › {label}", step_label(&project, step)))
+                        Some(format!("{} › {label}", step_ref(&project, step)))
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -3154,8 +3317,10 @@ impl PipelinesController {
         }
     }
 
-    /// Opens component step `step_idx` of pipeline `pipeline_id` in the panel -
-    /// to edit, or with `read_only` only to look at.
+    /// Opens component step `step_idx` of the steps pipeline `pipeline_id`'s
+    /// panel shows (the pipeline's or an opened component's) in the panel - to
+    /// edit, or with `read_only` only to look at. Inside a component opened
+    /// only to look at, the nested one is only looked at too.
     fn open_component_in_panel(
         self: &Arc<Self>,
         pipeline_id: u32,
@@ -3164,19 +3329,22 @@ impl PipelinesController {
     ) {
         let key = {
             let project = self.app_state.get_project();
-            let Some(StepContent::Component(instance)) = project
-                .pipelines
-                .iter()
-                .find(|p| p.id.0 == pipeline_id)
-                .and_then(|p| p.steps.get(step_idx))
+            let Some(StepContent::Component(instance)) = self
+                .shown_steps(&project, pipeline_id)
+                .and_then(|steps| steps.get(step_idx))
                 .map(|s| &s.content)
             else {
                 return;
             };
             instance.key.clone()
         };
-        *self.open_component.lock().expect("Poisoned") = Some((pipeline_id, key));
-        *self.viewing_from.lock().expect("Poisoned") = read_only.then_some(step_idx);
+        let read_only = read_only || self.viewing(pipeline_id);
+        let mut path = self.open_component_path(pipeline_id);
+        path.push(OpenComponent {
+            key,
+            viewing_from: read_only.then_some(step_idx),
+        });
+        *self.open_component.lock().expect("Poisoned") = Some((pipeline_id, path));
         self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), true);
     }
 
@@ -3350,7 +3518,7 @@ impl PipelinesController {
             let project = self.app_state.get_project();
             evanalyzer_app::components::plan_component(
                 &project,
-                pipeline_id,
+                self.shown_list(pipeline_id.0),
                 from.max(0) as usize..=to.max(0) as usize,
             )
         };
@@ -3378,6 +3546,7 @@ impl PipelinesController {
                 let channels: Vec<String> = plan.channels.iter().map(|c| c.to_string()).collect();
                 let slots: Vec<String> =
                     plan.component_slots.iter().map(|s| s.to_string()).collect();
+                let handed: Vec<String> = plan.handed_slots.iter().map(|s| s.to_string()).collect();
                 let lines: Vec<String> = [
                     match channels.len() {
                         0 => String::new(),
@@ -3393,6 +3562,17 @@ impl PipelinesController {
                         _ => format!(
                             "Memory slots {} are only used by these steps: they become component memory, each use of the component has its own.",
                             slots.join(", ")
+                        ),
+                    },
+                    match handed.len() {
+                        0 => String::new(),
+                        1 => format!(
+                            "Component memory slot {} is also used by other steps: the new component gets it as a parameter.",
+                            handed[0]
+                        ),
+                        _ => format!(
+                            "Component memory slots {} are also used by other steps: the new component gets them as parameters.",
+                            handed.join(", ")
                         ),
                     },
                 ]
@@ -3503,12 +3683,19 @@ impl PipelinesController {
         // Components: all of the project's with the Components chip, else only when
         // searching (they don't crowd the category lists).
         let filter_components = picker_state.get_filter_components();
+        // Inside an opened component: not the ones that would contain it.
+        let open_key = self.open_component_key(picker_state.get_pipeline_id() as u32);
         let matching_components: Vec<CommandDef> = {
             let project = self.app_state.get_project();
             project
                 .components
                 .iter()
                 .enumerate()
+                .filter(|(_, d)| {
+                    open_key.as_ref().is_none_or(|open| {
+                        !evanalyzer_app::components::would_contain_itself(&project, open, &d.key)
+                    })
+                })
                 .filter(|(_, d)| {
                     q.is_empty()
                         || d.meta.name.to_ascii_lowercase().contains(&q)
@@ -3729,19 +3916,19 @@ impl PipelinesController {
             help: String,
         }
         // The opened component's name, or empty. A component that's gone (e.g. undone)
-        // is closed.
-        let mut open_component = self.open_component_key(pipeline_id.0);
-        if let Some(key) = &open_component
-            && !self
-                .app_state
-                .get_project()
-                .components
-                .iter()
-                .any(|d| &d.key == key)
-        {
-            self.close_open_component();
-            open_component = None;
+        // is closed - and the ones opened inside it.
+        let mut path = self.open_component_path(pipeline_id.0);
+        let still_there = {
+            let project = self.app_state.get_project();
+            path.iter()
+                .take_while(|level| project.components.iter().any(|d| d.key == level.key))
+                .count()
+        };
+        if still_there < path.len() {
+            path.truncate(still_there);
+            self.set_open_path(pipeline_id.0, path.clone());
         }
+        let open_component = path.last().map(|level| level.key.clone());
         let open_component_problem: String = open_component
             .as_ref()
             .and_then(|key| {
@@ -3752,17 +3939,56 @@ impl PipelinesController {
             .map(|problem| problem.message)
             .unwrap_or_default();
         let read_only = open_component.is_some() && self.viewing(pipeline_id.0);
-        let open_component_name: String = open_component
-            .as_ref()
-            .map(|key| {
-                let project = self.app_state.get_project();
-                project
-                    .components
-                    .iter()
-                    .find(|d| &d.key == key)
-                    .map_or_else(|| key.clone(), |d| d.meta.name.clone())
-            })
-            .unwrap_or_default();
+        // "Outer › ◆ Inner" for a component opened inside another.
+        let open_component_name: String = {
+            let project = self.app_state.get_project();
+            path.iter()
+                .map(|level| {
+                    project
+                        .components
+                        .iter()
+                        .find(|d| d.key == level.key)
+                        .map_or_else(|| level.key.clone(), |d| d.meta.name.clone())
+                })
+                .collect::<Vec<_>>()
+                .join(" › ◆ ")
+        };
+        // The opened component's own classes - its class settings may take them.
+        let component_classes: Vec<evanalyzer_cfg::settings::classification_settings::Class> =
+            open_component
+                .as_ref()
+                .and_then(|key| {
+                    self.app_state
+                        .get_project()
+                        .components
+                        .iter()
+                        .find(|d| &d.key == key)
+                        .map(|d| d.classes.clone())
+                })
+                .unwrap_or_default();
+        let component_class_items = component_classes.clone();
+        // A class list's flags: the project's 33 (see `MultiClassDropdown`),
+        // then one per class of the opened component.
+        let with_component_flags = move |param_type: &CfgParamType,
+                                         value: &str,
+                                         mut options: Vec<String>|
+              -> Vec<String> {
+            if *param_type != CfgParamType::MultiObjClass || component_classes.is_empty() {
+                return options;
+            }
+            options.resize(33, "0".into());
+            let selected: Vec<&str> = value.split(',').map(str::trim).collect();
+            options.extend(component_classes.iter().map(|class| {
+                let text = ObjectClass::Local(class.id).to_text();
+                if selected.contains(&text.as_str()) {
+                    "1"
+                } else {
+                    "0"
+                }
+                .to_string()
+            }));
+            options
+        };
 
         let (
             pipeline_name,
@@ -3861,7 +4087,13 @@ impl PipelinesController {
                                 category: StepCategory::Component,
                                 enabled: step.enabled,
                                 parameters,
-                                exposed: Vec::new(),
+                                // Inside an opened component: its parameters
+                                // that are the opened one's.
+                                exposed: open_definition
+                                    .map(|d| {
+                                        evanalyzer_app::components::exposed_settings(d, step.id)
+                                    })
+                                    .unwrap_or_default(),
                                 update_version: project
                                     .components
                                     .iter()
@@ -4061,9 +4293,13 @@ impl PipelinesController {
                                                         model_class_name_options.clone(),
                                                     ),
                                                     None => (
-                                                        map_cfg_param_type(lp.param_type),
+                                                        map_cfg_param_type(lp.param_type.clone()),
                                                         lp.value.clone(),
-                                                        lp.options.clone(),
+                                                        with_component_flags(
+                                                            &lp.param_type,
+                                                            &lp.value,
+                                                            lp.options.clone(),
+                                                        ),
                                                     ),
                                                 };
                                                 LeafParam {
@@ -4095,10 +4331,10 @@ impl PipelinesController {
                                 name: p.name.into(),
                                 display_name: p.display_name.into(),
                                 description: p.description.into(),
-                                value: p.value.into(),
-                                param_type: map_cfg_param_type(p.param_type),
+                                value: p.value.clone().into(),
+                                param_type: map_cfg_param_type(p.param_type.clone()),
                                 options: ModelRc::new(VecModel::from(
-                                    p.options
+                                    with_component_flags(&p.param_type, &p.value, p.options)
                                         .into_iter()
                                         .map(SharedString::from)
                                         .collect::<Vec<_>>(),
@@ -4170,6 +4406,23 @@ impl PipelinesController {
                     .collect();
                 state.set_active_pipeline_name(pipeline_name.into());
                 state.set_open_component_name(open_component_name.into());
+                ui.global::<ComponentClassesState>()
+                    .set_classes(ModelRc::new(VecModel::from(
+                        component_class_items
+                            .iter()
+                            .map(|class| ClassItemData {
+                                id: class.id as i32,
+                                name: class.name.clone().into(),
+                                color: slint::Color::from_rgb_u8(
+                                    ((class.color >> 16) & 0xff) as u8,
+                                    ((class.color >> 8) & 0xff) as u8,
+                                    (class.color & 0xff) as u8,
+                                ),
+                                visible: true,
+                                count: 0,
+                            })
+                            .collect::<Vec<_>>(),
+                    )));
                 state.set_open_component_problem(open_component_problem.into());
                 state.set_open_component_read_only(read_only);
                 state.set_active_pipeline_image_source(pipeline_image_source.into());
@@ -4269,6 +4522,32 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
 }
 
 /// A step's name as lists show it: the command's, or the component's.
+/// A step as the card shows it: its id (the card's number) and name -
+/// "#2 EV Detection". Tells equal steps apart.
+fn step_ref(project: &ProjectSettings, step: &PipelineStepSettings) -> String {
+    format!("#{} {}", step.id, step_label(project, step))
+}
+
+/// What parameter `key` of component `component` sets first - "#2 EV
+/// Detection › Output class".
+fn parameter_target(
+    project: &ProjectSettings,
+    component: &str,
+    key: &ComponentParamKey,
+) -> Option<String> {
+    let definition = project.components.iter().find(|d| d.key == component)?;
+    let binding = definition
+        .parameters
+        .iter()
+        .find(|p| &p.key == key)?
+        .bindings
+        .first()?;
+    let step = definition.steps.iter().find(|s| s.id == binding.step)?;
+    let (_, label) =
+        evanalyzer_app::components::step_setting(&project.components, step, &binding.param)?;
+    Some(format!("{} › {label}", step_ref(project, step)))
+}
+
 fn step_label(project: &ProjectSettings, step: &PipelineStepSettings) -> String {
     match &step.content {
         StepContent::Command(command) => command.name().to_string(),
@@ -6587,7 +6866,7 @@ mod tests {
         let state = ui.global::<CreateComponentState>();
         assert_eq!((state.get_from_step(), state.get_to_step()), (1, 1));
         assert_eq!(state.get_step_names().row_count(), 4);
-        assert_eq!(state.get_step_names().row_data(1).unwrap(), "2 · Blur");
+        assert_eq!(state.get_step_names().row_data(1).unwrap(), "#2 Blur");
 
         state.invoke_range_changed(2, 1); // either order
         assert_eq!((state.get_from_step(), state.get_to_step()), (1, 2));
@@ -6644,6 +6923,621 @@ mod tests {
         (0..model.row_count())
             .map(|i| model.row_data(i).unwrap().name.to_string())
             .collect()
+    }
+
+    /// A channel and a single class are picked with the same field (label, swatch
+    /// and name, "↓") - only a class list has its own (chips).
+    #[test]
+    fn channel_and_class_pickers_share_one_design() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _ui_state, _controller) =
+            selected(vec![step("LoadChannel"), step("ClassifyObjects")]);
+        ui.window()
+            .set_size(slint::LogicalSize::new(1280.0, 1400.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        for index in 0..2 {
+            let mut card = commands.row_data(index).unwrap();
+            card.expanded = true;
+            commands.set_row_data(index, card);
+        }
+        let count = |label: &str| ElementHandle::find_by_accessible_label(&ui, label).count();
+        assert_eq!(count("↓"), 2, "the channel and the output class field");
+        assert_eq!(count("▾"), 1, "only the input class list");
+    }
+
+    /// A class list shows its selected classes as chips while they fit - not
+    /// only a "+N" badge.
+    #[test]
+    fn a_class_lists_selected_classes_show_as_chips() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut classify = step("ClassifyObjects");
+        if let StepContent::Command(PipelineCommand::ClassifyObjects(settings)) =
+            &mut classify.content
+        {
+            settings.input_classes = vec![
+                ObjectClass::Global(1),
+                ObjectClass::Global(2),
+                ObjectClass::Global(3),
+            ];
+        }
+        let (ui, _ui_state, _controller) = selected(vec![classify]);
+        ui.window()
+            .set_size(slint::LogicalSize::new(1280.0, 1400.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = commands.row_data(0).unwrap();
+        card.expanded = true;
+        commands.set_row_data(0, card);
+
+        // The badge only exists while chips are left out.
+        let badge = ElementHandle::find_by_accessible_label(&ui, "+3").count();
+        assert_eq!(badge, 0, "the three chips fit - no \"+3\" instead");
+    }
+
+    /// A short pipeline doesn't stretch an expanded card to fill the panel -
+    /// that used to put a big gap under a section header and at the card's
+    /// bottom.
+    #[test]
+    fn an_expanded_card_in_a_short_pipeline_keeps_its_own_height() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, ui_state, controller) = with_a_component();
+        ui.window()
+            .set_size(slint::LogicalSize::new(1280.0, 1400.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        {
+            let mut project = ui_state.get_project_write();
+            let definition = &mut project.components[0];
+            let step = definition.steps[0].id;
+            evanalyzer_app::components::toggle_exposed(
+                definition,
+                step,
+                "kernel_size",
+                "Kernel",
+                "3",
+            );
+            let key = definition.parameters[0].key.clone();
+            evanalyzer_app::components::set_parameter_section(definition, &key, "Staining 1");
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = commands.row_data(1).unwrap();
+        card.expanded = true;
+        commands.set_row_data(1, card);
+
+        let text = |label: &str| {
+            let e = ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label:?} not found"));
+            (e.absolute_position().y, e.size().height)
+        };
+        let (header_y, header_height) = text("Staining 1");
+        let (setting_y, _) = text("Kernel");
+        assert!(header_height < 30.0, "header {header_height}px high");
+        assert!(
+            setting_y - header_y < 40.0,
+            "the setting is {}px below its section header",
+            setting_y - header_y
+        );
+    }
+
+    /// "Outer" (a threshold and "Smooth", two blurs) as the pipeline's only
+    /// step - "Smooth" nested in "Outer".
+    fn with_a_nested_component() -> (AppWindow, Arc<UiState>, Arc<PipelinesController>) {
+        let (ui, ui_state, controller) = with_a_component();
+        {
+            let mut project = ui_state.get_project_write();
+            evanalyzer_app::components::create_component(
+                &mut project,
+                PipelineId(1),
+                0..=1,
+                "Outer",
+                &[],
+            )
+            .unwrap();
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        (ui, ui_state, controller)
+    }
+
+    fn smooth_kernel_size(ui_state: &UiState, key: &str) -> i32 {
+        let project = ui_state.get_project();
+        let definition = project.components.iter().find(|d| d.key == key).unwrap();
+        let PipelineCommand::Blur(blur) = definition.steps[0].command().unwrap() else {
+            panic!("blur")
+        };
+        blur.kernel_size as i32
+    }
+
+    #[test]
+    fn a_component_opens_inside_an_opened_component_and_back_goes_one_level_up() {
+        let (ui, ui_state, _controller) = with_a_nested_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        assert_eq!(card_names(&ui), ["Outer"]);
+
+        panel.invoke_open_component(0);
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer");
+        assert_eq!(card_names(&ui), ["Threshold", "Smooth"]);
+
+        panel.invoke_open_component(1);
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer › ◆ Smooth");
+        assert_eq!(card_names(&ui), ["Blur", "Blur"]);
+
+        // Edits go to the nested component's definition.
+        panel.invoke_param_changed(0, "kernel_size".into(), "7".into());
+        drain_ui_queue();
+        assert_eq!(smooth_kernel_size(&ui_state, "SMOOTH"), 7);
+
+        panel.invoke_close_component();
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer");
+        assert_eq!(card_names(&ui), ["Threshold", "Smooth"]);
+
+        panel.invoke_close_component();
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "");
+        assert_eq!(card_names(&ui), ["Outer"]);
+    }
+
+    #[test]
+    fn inside_a_viewed_component_a_nested_one_is_only_viewed_and_edit_opens_the_viewed_one() {
+        let (ui, _ui_state, _controller) = with_a_nested_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_view_component(0);
+        drain_ui_queue();
+        assert!(panel.get_open_component_read_only());
+
+        // "Edit" on a card isn't offered while viewing - and does nothing.
+        panel.invoke_open_component(1);
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer");
+
+        panel.invoke_view_component(1);
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer › ◆ Smooth");
+        assert!(panel.get_open_component_read_only());
+
+        // "Edit" in the bar: the first viewed component, to edit.
+        panel.invoke_edit_open_component();
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer");
+        assert!(!panel.get_open_component_read_only());
+        assert_eq!(card_names(&ui), ["Threshold", "Smooth"]);
+    }
+
+    #[test]
+    fn only_this_step_inside_an_opened_component_gives_its_step_a_copy() {
+        let (ui, ui_state, controller) = with_a_nested_component();
+        // "Smooth" is used in the pipeline too.
+        {
+            let mut project = ui_state.get_project_write();
+            let mut smooth = project
+                .components
+                .iter()
+                .find(|d| d.key == "OUTER")
+                .unwrap()
+                .steps[1]
+                .clone();
+            smooth.id = evanalyzer_cfg::core_types::StepId::UNASSIGNED;
+            project.pipelines[0].steps.push(smooth);
+            evanalyzer_app::utils::assign_step_ids(&mut project.pipelines[0].steps);
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(0);
+        drain_ui_queue();
+
+        // Asked - cancelling leaves the panel as it was.
+        panel.invoke_open_component(1);
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::ComponentEditChoice);
+        ui.global::<ComponentEditChoiceState>().invoke_cancel();
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer");
+
+        panel.invoke_open_component(1);
+        drain_ui_queue();
+        ui.global::<ComponentEditChoiceState>().invoke_only_this();
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer › ◆ Smooth (2)");
+        panel.invoke_param_changed(0, "kernel_size".into(), "9".into());
+        drain_ui_queue();
+        assert_eq!(smooth_kernel_size(&ui_state, "SMOOTH_2"), 9);
+        assert_ne!(
+            smooth_kernel_size(&ui_state, "SMOOTH"),
+            9,
+            "the pipeline's use keeps the original"
+        );
+        let project = ui_state.get_project();
+        let outer = project
+            .components
+            .iter()
+            .find(|d| d.key == "OUTER")
+            .unwrap();
+        assert!(
+            matches!(&outer.steps[1].content, StepContent::Component(i) if i.key == "SMOOTH_2")
+        );
+    }
+
+    #[test]
+    fn edit_from_the_bar_asks_and_cancelling_keeps_viewing() {
+        let (ui, ui_state, controller) = with_a_nested_component();
+        // "Outer" used twice: "Edit" asks.
+        {
+            let mut project = ui_state.get_project_write();
+            let mut outer = project.pipelines[0].steps[0].clone();
+            outer.id = evanalyzer_cfg::core_types::StepId::UNASSIGNED;
+            project.pipelines[0].steps.push(outer);
+            evanalyzer_app::utils::assign_step_ids(&mut project.pipelines[0].steps);
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_view_component(0);
+        panel.invoke_view_component(1);
+        drain_ui_queue();
+
+        panel.invoke_edit_open_component();
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::ComponentEditChoice);
+        ui.global::<ComponentEditChoiceState>().invoke_cancel();
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer › ◆ Smooth");
+        assert!(panel.get_open_component_read_only());
+
+        panel.invoke_edit_open_component();
+        drain_ui_queue();
+        ui.global::<ComponentEditChoiceState>().invoke_edit_all();
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer");
+        assert!(!panel.get_open_component_read_only());
+    }
+
+    #[test]
+    fn inside_an_opened_component_the_picker_leaves_out_the_components_containing_it() {
+        let (ui, ui_state, controller) = with_a_nested_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        let picker = ui.global::<CommandPickerState>();
+        let shown = |controller: &Arc<PipelinesController>| {
+            picker.set_pipeline_id(1);
+            picker.set_filter_components(true);
+            controller.apply_picker_filter(&ui, "");
+            let model = picker.get_shown_components();
+            (0..model.row_count())
+                .map(|i| model.row_data(i).unwrap().name.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shown(&controller), ["Smooth", "Outer"]);
+
+        panel.invoke_open_component(0);
+        drain_ui_queue();
+        assert_eq!(shown(&controller), ["Smooth"], "Outer would contain itself");
+
+        panel.invoke_open_component(1);
+        drain_ui_queue();
+        assert!(
+            shown(&controller).is_empty(),
+            "Outer contains Smooth through itself"
+        );
+
+        // Picked anyway (e.g. a stale list): refused, with a message.
+        let outer = ui_state
+            .get_project()
+            .components
+            .iter()
+            .position(|d| d.key == "OUTER")
+            .unwrap() as i32;
+        picker.set_insert_after_idx(0);
+        picker.invoke_confirm(COMPONENT_PICKER_ID_BASE + outer);
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::Warning);
+        assert!(
+            ui.global::<WarningState>()
+                .get_message()
+                .contains("can't contain itself")
+        );
+        let project = ui_state.get_project();
+        let smooth = project
+            .components
+            .iter()
+            .find(|d| d.key == "SMOOTH")
+            .unwrap();
+        assert_eq!(smooth.steps.len(), 2, "nothing inserted");
+    }
+
+    #[test]
+    fn create_component_inside_an_opened_component_nests_the_new_one() {
+        let (ui, ui_state, _controller) = with_a_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(1);
+        drain_ui_queue();
+        // The first blur's kernel size is a parameter of "Smooth".
+        panel.invoke_toggle_exposed(0, "kernel_size".into());
+        drain_ui_queue();
+
+        panel.invoke_create_component(0);
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::CreateComponent);
+        let state = ui.global::<CreateComponentState>();
+        assert_eq!(
+            state.get_step_names().row_count(),
+            2,
+            "the component's steps"
+        );
+        assert_eq!(
+            state.get_step_names().row_data(0).unwrap(),
+            "#2 Blur",
+            "by its id, as its card shows it"
+        );
+        state.set_name("Soften".into());
+        state.invoke_confirm();
+        drain_ui_queue();
+        assert_eq!(
+            active_dialog(&ui),
+            DialogType::None,
+            "{}",
+            state.get_error()
+        );
+
+        assert_eq!(panel.get_open_component_name(), "Smooth");
+        assert_eq!(card_names(&ui), ["Soften", "Blur"]);
+        {
+            let project = ui_state.get_project();
+            let soften = project
+                .components
+                .iter()
+                .find(|d| d.key == "SOFTEN")
+                .unwrap();
+            assert_eq!(soften.steps.len(), 1);
+            assert_eq!(soften.parameters.len(), 1, "the exposed setting");
+        }
+
+        // The pipeline's card still shows - and sets - the kernel size.
+        panel.invoke_close_component();
+        drain_ui_queue();
+        let card = panel.get_active_commands().row_data(1).unwrap();
+        assert_eq!(card.parameters.row_count(), 1);
+        let name = card.parameters.row_data(0).unwrap().name.to_string();
+        panel.invoke_param_changed(1, name.into(), "9".into());
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        let with_values = |step: &PipelineStepSettings| {
+            let StepContent::Component(instance) = &step.content else {
+                panic!("a component step")
+            };
+            evanalyzer_app::components::component_steps_with_values(instance, &project.components)
+                .unwrap()
+        };
+        let smooth = with_values(&project.pipelines[0].steps[1]);
+        let soften = with_values(&smooth[0]);
+        let Some(PipelineCommand::Blur(blur)) = soften[0].command() else {
+            panic!("blur")
+        };
+        assert_eq!(blur.kernel_size, 9);
+    }
+
+    #[test]
+    fn inside_an_opened_component_class_settings_offer_its_own_classes() {
+        let (ui, ui_state, controller) = with_a_nested_component();
+        {
+            let mut project = ui_state.get_project_write();
+            let outer = project
+                .components
+                .iter_mut()
+                .find(|d| d.key == "OUTER")
+                .unwrap();
+            outer
+                .classes
+                .push(evanalyzer_cfg::settings::classification_settings::Class {
+                    id: 1,
+                    name: "Vesicles".into(),
+                    color: 0x00FF00,
+                    notes: String::new(),
+                });
+            let mut classify = step("ClassifyObjects");
+            classify.id = evanalyzer_cfg::core_types::StepId(9);
+            outer.steps.push(classify);
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        let offered = || ui.global::<ComponentClassesState>().get_classes();
+        assert_eq!(offered().row_count(), 0, "in the pipeline: none");
+
+        panel.invoke_open_component(0);
+        drain_ui_queue();
+        assert_eq!(offered().row_count(), 1);
+        assert_eq!(offered().row_data(0).unwrap().name, "Vesicles");
+
+        panel.invoke_param_changed(2, "input_classes".into(), "toggle:L1".into());
+        drain_ui_queue();
+        {
+            let project = ui_state.get_project();
+            let outer = project
+                .components
+                .iter()
+                .find(|d| d.key == "OUTER")
+                .unwrap();
+            let Some(PipelineCommand::ClassifyObjects(classify)) = outer.steps[2].command() else {
+                panic!("classify")
+            };
+            assert_eq!(classify.input_classes, [ObjectClass::Local(1)]);
+        }
+        let flags = ui_param(&ui, 2, "input_classes").options;
+        assert_eq!(flags.row_count(), 34, "the project's 33, then Vesicles");
+        assert_eq!(flags.row_data(33).unwrap(), "1", "Vesicles is selected");
+
+        // Back in the pipeline: none offered again.
+        panel.invoke_close_component();
+        drain_ui_queue();
+        assert_eq!(offered().row_count(), 0);
+    }
+
+    #[test]
+    fn expand_inside_an_opened_component_puts_the_nested_steps_there() {
+        let (ui, ui_state, _controller) = with_a_nested_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(0);
+        drain_ui_queue();
+        assert_eq!(card_names(&ui), ["Threshold", "Smooth"]);
+
+        panel.invoke_expand_component(1);
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::None);
+        assert_eq!(panel.get_open_component_name(), "Outer");
+        assert_eq!(card_names(&ui), ["Threshold", "Blur", "Blur"]);
+        let project = ui_state.get_project();
+        let outer = project
+            .components
+            .iter()
+            .find(|d| d.key == "OUTER")
+            .unwrap();
+        assert_eq!(outer.steps.len(), 3);
+        assert_eq!(card_names(&ui).len(), 3);
+        assert_eq!(
+            project.pipelines[0].steps.len(),
+            1,
+            "the pipeline unchanged"
+        );
+    }
+
+    #[test]
+    fn a_nested_components_parameter_is_exposed_on_the_component_around_it() {
+        let (ui, ui_state, controller) = with_a_nested_component();
+        // "Smooth" shows its first blur's kernel size as "Kernel".
+        {
+            let mut project = ui_state.get_project_write();
+            let smooth = project
+                .components
+                .iter_mut()
+                .find(|d| d.key == "SMOOTH")
+                .unwrap();
+            let blur = smooth.steps[0].id;
+            evanalyzer_app::components::toggle_exposed(smooth, blur, "kernel_size", "Kernel", "3");
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(0);
+        drain_ui_queue();
+        let kernel = || ui_param(&ui, 1, "kernel");
+        assert!(!kernel().exposed);
+
+        panel.invoke_toggle_exposed(1, "kernel".into());
+        drain_ui_queue();
+        assert!(kernel().exposed, "the card marks it");
+        {
+            let project = ui_state.get_project();
+            let outer = project
+                .components
+                .iter()
+                .find(|d| d.key == "OUTER")
+                .unwrap();
+            assert_eq!(outer.parameters.len(), 1);
+            assert_eq!(outer.parameters[0].label, "Kernel");
+            assert_eq!(outer.parameters[0].bindings[0].param, "kernel");
+        }
+
+        // A new value on the card becomes the parameter's default - and runs.
+        panel.invoke_param_changed(1, "kernel".into(), "9".into());
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        let outer = project
+            .components
+            .iter()
+            .find(|d| d.key == "OUTER")
+            .unwrap();
+        assert_eq!(outer.parameters[0].default, ParamValue::Int(9));
+        let with_values = |step: &PipelineStepSettings| {
+            let StepContent::Component(instance) = &step.content else {
+                panic!("a component step")
+            };
+            evanalyzer_app::components::component_steps_with_values(instance, &project.components)
+                .unwrap()
+        };
+        let outer_steps = with_values(&project.pipelines[0].steps[0]);
+        let smooth = with_values(&outer_steps[1]);
+        let Some(PipelineCommand::Blur(blur)) = smooth[0].command() else {
+            panic!("blur")
+        };
+        assert_eq!(blur.kernel_size, 9);
+    }
+
+    /// Equal steps are told apart by their id - the number on their card - where
+    /// a parameter names what it sets.
+    #[test]
+    fn what_a_parameter_sets_names_the_step_by_its_id() {
+        let (ui, _ui_state, _controller) = with_a_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(1);
+        drain_ui_queue();
+        let ids: Vec<String> = (0..2)
+            .map(|i| {
+                panel
+                    .get_active_commands()
+                    .row_data(i)
+                    .unwrap()
+                    .step_id
+                    .to_string()
+            })
+            .collect();
+        // The first blur's kernel size is a parameter.
+        panel.invoke_toggle_exposed(0, "kernel_size".into());
+        drain_ui_queue();
+
+        // The second blur's: "add to" says which blur the parameter sets.
+        panel.invoke_toggle_exposed(1, "kernel_size".into());
+        drain_ui_queue();
+        assert_eq!(active_dialog(&ui), DialogType::ExposeChoice);
+        let choice = ui
+            .global::<ExposeChoiceState>()
+            .get_choices()
+            .row_data(1)
+            .unwrap();
+        assert!(
+            choice.contains(&format!("· #{} Blur ›", ids[0])),
+            "{choice}"
+        );
+        ui.global::<ExposeChoiceState>().invoke_chosen(1);
+        drain_ui_queue();
+
+        // The settings dialog lists both blurs, apart.
+        panel.invoke_open_component_settings();
+        drain_ui_queue();
+        let sets = ui
+            .global::<ComponentSettingsState>()
+            .get_parameters()
+            .row_data(0)
+            .unwrap()
+            .sets
+            .to_string();
+        assert!(
+            sets.contains(&format!("#{} Blur", ids[0]))
+                && sets.contains(&format!("#{} Blur", ids[1])),
+            "{sets}"
+        );
+    }
+
+    #[test]
+    fn a_nested_component_that_is_gone_is_closed_and_its_outer_one_shown() {
+        let (ui, ui_state, controller) = with_a_nested_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(0);
+        panel.invoke_open_component(1);
+        drain_ui_queue();
+        // E.g. undone.
+        ui_state
+            .get_project_write()
+            .components
+            .retain(|d| d.key != "SMOOTH");
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), false);
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "Outer");
     }
 
     #[test]
@@ -7127,7 +8021,9 @@ mod tests {
     fn component_buttons_and_the_opened_components_bar_fit_the_panel() {
         use i_slint_backend_testing::ElementHandle;
         let (ui, _ui_state, _controller) = with_a_component();
-        ui.window().set_size(slint::LogicalSize::new(1280.0, 800.0));
+        // Tall enough for the whole card - only the width matters here.
+        ui.window()
+            .set_size(slint::LogicalSize::new(1280.0, 1400.0));
         ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
         let model = ui.global::<PipelinesPanelState>().get_active_commands();
         let mut card = model.row_data(1).unwrap();
@@ -7157,6 +8053,8 @@ mod tests {
             "Expand",
             "Save as",
             "Duplicate",
+            "Bundle",
+            "Remove",
             "About Threshold",
         ] {
             fits(label);

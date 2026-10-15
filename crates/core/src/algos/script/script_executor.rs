@@ -126,6 +126,17 @@ pub fn declared_script_params(source: &str) -> Result<Vec<script_params::ParamDe
     ENGINE.with(|engine| script_params::declared_params(engine, source))
 }
 
+/// Why `source` isn't a valid script, as the script editor shows it: the
+/// line (1-based, if known) and the message - checked by the engine that
+/// runs it, so `param` lines are known syntax. `None` when it's fine.
+pub fn script_syntax_error(source: &str) -> Option<(Option<usize>, String)> {
+    if let Err(e) = ENGINE.with(|engine| engine.compile(source)) {
+        return Some((e.position().line(), e.err_type().to_string()));
+    }
+    // Names taken or declared twice: no line to point at.
+    declared_script_params(source).err().map(|e| (None, e))
+}
+
 /// `command`'s settings as the editor shows them: the generated ones, and
 /// for a Script step one per `param` of its script (`values.<name>`, see
 /// [`script_params`]). Component parameters bind to these too.

@@ -24,7 +24,9 @@ pub mod ai {
 /// A step's settings as the editor shows and changes them - the generated
 /// ones, and a Script step's `param`s (declared in its script).
 pub mod settings_of {
-    pub use evanalyzer_core::{apply_command_param, command_parameters, declared_script_params};
+    pub use evanalyzer_core::{
+        apply_command_param, command_parameters, declared_script_params, script_syntax_error,
+    };
 }
 
 /// Components in the editor: component cards, creating and expanding components, the library,
@@ -34,13 +36,13 @@ pub mod components {
         ComponentProblem, Severity, check_component, check_components, step_problem,
     };
     pub use crate::workspace::component_editing::{
-        ClassRole, ComponentPlan, ComponentPlanClass, add_binding, apply_defaults,
+        ClassRole, ComponentPlan, ComponentPlanClass, StepList, add_binding, apply_defaults,
         bound_setting_edited, clone_component_for_step, compatible_parameters, component_uses,
         create_component, edit_parameter, expand_component, exposed_settings, list_entry_removed,
         move_parameter, new_parameter_key, parameter_for_setting, plan_component,
         prune_component_values, remove_component, remove_component_step, remove_parameter,
-        remove_unused_components, set_parameter_section, setting_at, toggle_exposed,
-        unused_components,
+        remove_unused_components, set_parameter_section, setting_at, step_setting, toggle_exposed,
+        unused_components, would_contain_itself,
     };
     pub use crate::workspace::component_library::{
         components_used_by, content_hash, insert_component_template, library_name,
