@@ -111,7 +111,7 @@ import {
     ProjectTemplateDef,
     ProjectAuthor,
 } from "dialogs/project_template_dialog.slint";
-import { PipelinesPanelState } from "editor/pipelines_panel.slint";
+import { PipelinesPanelState, StepSettingsDialog } from "editor/pipelines_panel.slint";
 import {
     ScriptEditorPanel,
     ScriptEditorState,
@@ -486,6 +486,13 @@ export component AppWindow inherits Window {
             if (GlobalAppState.active_dialog == DialogType.group-settings): GroupSettingsDialog {
                 width: 100%;
                 height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.step-settings): StepSettingsDialog {
+                width: 100%;
+                height: 100%;
+                close => {
+                    GlobalAppState.active_dialog = DialogType.none;
+                }
             }
             if (GlobalAppState.active_dialog == DialogType.pipeline-delete-confirm): PipelineDeleteConfirmDialog {
                 width: 100%;

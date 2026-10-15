@@ -82,6 +82,17 @@ export struct CommandParameter {
         has-model-info: bool,
         // Inside an opened command group: this setting is a group parameter.
         exposed: bool,
+        // The header shown above the setting where its section (`#[cmdsmeta(section)]`
+        // or a group parameter's) starts. Empty otherwise - also for the
+        // settings without a section, which come first.
+        section-header: string,
+        // The setting's section; empty: none.
+        section: string,
+        // The first paragraph of `description`, on one line - shown in the
+        // settings dialog, with "?" for the rest.
+        short-description: string,
+        // `description` says more than `short-description`.
+        more-help: bool,
     }
 
 export struct PipelineCommand {
@@ -111,6 +122,9 @@ export struct PipelineCommand {
         advanced-changed: int,
         // A group card: the group library has a newer version ("3"), or empty.
         update-version: string,
+        // The sections of `parameters`, in order - "" (no section) first
+        // when there are such settings. The settings dialog's sections.
+        sections: [string],
     }
 
 export struct Pipeline {
@@ -1086,6 +1100,7 @@ component SpinnerInput inherits HorizontalLayout {
         in property <float> step: 1;
         in property <float> min: 0;
         in property <float> max: 100;
+        in property <bool> enabled: true;
         callback changed(string);
 
         spacing: 2px;
@@ -1111,6 +1126,7 @@ component SpinnerInput inherits HorizontalLayout {
             }
 
             dec := TouchArea {
+                enabled: root.enabled;
                 mouse-cursor: pointer;
                 clicked => {
                 // Read current displayed text (user may have typed a value different from root.value),
@@ -1124,6 +1140,7 @@ component SpinnerInput inherits HorizontalLayout {
         }
 
         input := LineEdit {
+            enabled: root.enabled;
             horizontal-stretch: 1;
             text: "\{root.value}";
             font-size: 11px;
@@ -1149,6 +1166,7 @@ component SpinnerInput inherits HorizontalLayout {
             }
 
             inc := TouchArea {
+                enabled: root.enabled;
                 mouse-cursor: pointer;
                 clicked => {
                     input.text = input.text.to-float() + root.step <= root.max ? "\{input.text.to-float() + root.step}" : "\{root.max}";
@@ -1272,6 +1290,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.number || p.param-type == ParamType.text:
     LineEdit {
+            enabled: !PipelinesPanelState.open-group-read-only;
             height: 24px;
             text: p.value;
             font-size: 11px;
@@ -1293,6 +1312,7 @@ component LeafParamRow inherits VerticalLayout {
 
             spacing: 4px;
             leaf-fp-input := LineEdit {
+                enabled: !PipelinesPanelState.open-group-read-only;
                 height: 24px;
                 horizontal-stretch: 1;
                 text: p.value;
@@ -1340,6 +1360,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.spinner:
     SpinnerInput {
+            enabled: !PipelinesPanelState.open-group-read-only;
             value: p.value.to-float();
             step: p.step;
             min: p.min;
@@ -1351,6 +1372,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.dropdown:
     ComboBox {
+            enabled: !PipelinesPanelState.open-group-read-only;
             model: p.options;
             current-value: p.value;
             selected(v) => {
@@ -1361,6 +1383,7 @@ component LeafParamRow inherits VerticalLayout {
         if p.param-type == ParamType.slider: HorizontalLayout {
             spacing: 8px;
             Slider {
+                enabled: !PipelinesPanelState.open-group-read-only;
                 minimum: p.min;
                 maximum: p.max;
                 value: p.value.to-float();
@@ -1383,6 +1406,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.toggle: HorizontalLayout {
             CheckBox {
+                enabled: !PipelinesPanelState.open-group-read-only;
                 checked: p.value == "true";
                 toggled => {
                     root.changed(self.checked ? "true" : "false");
@@ -1430,6 +1454,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units:
     ComboBox {
+            enabled: !PipelinesPanelState.open-group-read-only;
             model: p.options;
             current-value: p.value;
             selected(v) => {
@@ -1439,6 +1464,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.image-address:
     ImageAddressPicker {
+            enabled: !PipelinesPanelState.open-group-read-only;
             kind: p.options[0];
             number: p.options[1].to-float();
             in-group: PipelinesPanelState.open-group-name != "";
@@ -1461,7 +1487,587 @@ component LeafParamRow inherits VerticalLayout {
 // ----------------------------------------------------------
 // Parameter row
 
+// Header above the first setting of a section.
+component SectionHeader inherits VerticalLayout {
+        in property <string> text;
+        padding-top: 4px;
+        spacing: 3px;
+        Text {
+            text: root.text;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: Theme.text-dim;
+            overflow: elide;
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.border-soft;
+        }
+    }
+
+// A setting's name line: ◇/✎ inside an opened group, the name, and "?"
+// for its help text.
+component ParamLabel inherits HorizontalLayout {
+        in property <CommandParameter> p;
+        // The settings dialog's layout: a larger name, and "?" shows the
+        // full help text below the short one (`help-open`) instead of a popup.
+        in property <bool> wide: false;
+        in-out property <bool> help-open: false;
+        callback toggle-exposed();
+        callback edit-exposed();
+
+        spacing: 4px;
+        alignment: start;
+        // Inside an opened group: ◆ exposes the setting as a group
+        // parameter (filled) or hides it again.
+        if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.param-type != ParamType.group && p.param-type != ParamType.label: Rectangle {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            background: expose-ta.has-hover ? Theme.raised : transparent;
+            Text {
+                text: p.exposed ? "◆" : "◇";
+                font-size: 10px;
+                color: p.exposed ? Theme.cat-group : Theme.text-mute;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            expose-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.toggle-exposed();
+                }
+            }
+        }
+        if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.exposed: Rectangle {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            background: edit-exposed-ta.has-hover ? Theme.raised : transparent;
+            Text {
+                text: "✎";
+                font-size: 10px;
+                color: Theme.cat-group;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            edit-exposed-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.edit-exposed();
+                }
+            }
+        }
+        Text {
+            text: p.display-name == "" ? p.name : p.display-name;
+            font-size: root.wide ? 12px : 11px;
+            font-weight: root.wide ? 600 : 400;
+            color: p.exposed ? Theme.cat-group : (root.wide ? Theme.text : Theme.text-dim);
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        if root.wide ? p.more-help : p.description != "": help-btn := Rectangle {
+            width: 14px;
+            height: 14px;
+            border-radius: 7px;
+            background: help-ta.has-hover || root.help-open ? Theme.accent.with-alpha(0.3) : Theme.border-soft;
+            animate background { duration: 100ms; }
+            Text {
+                text: "?";
+                font-size: 8px;
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            help-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    if root.wide {
+                        root.help-open = !root.help-open;
+                    } else {
+                        help-popup.show();
+                    }
+                }
+            }
+
+            help-popup := PopupWindow {
+                x: 0px;
+                y: parent.height + 3px;
+                width: 240px;
+                Rectangle {
+                    background: Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 6px;
+                    drop-shadow-blur: 10px;
+                    drop-shadow-color: #000000.with-alpha(0.35);
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 0px;
+                        Text {
+                            text: p.description;
+                            font-size: 11px;
+                            color: Theme.text;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+// A setting's control (text field, spinner, dropdown, list entries, …).
+// Locked while a group is only viewed.
+component ParamControls inherits Rectangle {
+        in property <CommandParameter> p;
+        callback changed(string);
+        callback item-field-changed(int, string, string);
+        callback add-item();
+        callback remove-item(int);
+        callback show-model-info();
+        // A list entry's setting: entry index, setting name.
+        callback toggle-item-exposed(int, string);
+        callback edit-item-exposed(int, string);
+        // This row's pending file-browser request (see `browse-file`).
+        property <int> browse-token: -1;
+        // This row's pending script-editor request (see `ScriptEditorState`).
+        property <int> script-token: -1;
+
+        VerticalLayout {
+            spacing: 4px;
+
+            // Script: read-only preview, click opens the script editor.
+            if p.param-type == ParamType.script: Rectangle {
+                property <int> result-token: ScriptEditorState.result-token;
+                changed result-token => {
+                    if (self.result-token == root.script-token && root.script-token >= 0) {
+                        root.script-token = -1;
+                        root.changed(ScriptEditorState.result-text);
+                    }
+                }
+
+                height: 84px;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: script-ta.has-hover ? Theme.accent.with-alpha(0.6) : Theme.border;
+                background: Theme.bg;
+                clip: true;
+
+                Text {
+                    x: 6px;
+                    y: 4px;
+                    width: parent.width - 12px;
+                    height: parent.height - 8px;
+                    text: p.value;
+                    font-family: ScriptFont.family;
+                    font-size: 10px;
+                    color: Theme.text-dim;
+                    wrap: no-wrap;
+                    overflow: clip;
+                    vertical-alignment: top;
+                }
+
+                Rectangle {
+                    x: parent.width - self.width - 4px;
+                    y: parent.height - self.height - 4px;
+                    width: edit-label.preferred-width + 12px;
+                    height: 18px;
+                    border-radius: 3px;
+                    background: script-ta.has-hover ? Theme.accent : Theme.raised;
+                    edit-label := Text {
+                        text: "Edit script";
+                        font-size: 10px;
+                        color: script-ta.has-hover ? #FFFFFF : Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                script-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        ScriptEditorState.token-counter += 1;
+                        root.script-token = ScriptEditorState.token-counter;
+                        ScriptEditorState.open(p.display-name, p.value, root.script-token);
+                    }
+                }
+            }
+
+            if p.param-type == ParamType.number || p.param-type == ParamType.text:
+        LineEdit {
+                enabled: !PipelinesPanelState.open-group-read-only;
+                height: 26px;
+                text: p.value;
+                font-size: 11px;
+                edited(t) => {
+                    root.changed(t);
+                }
+            }
+
+            if p.param-type == ParamType.file-path: HorizontalLayout {
+                // Applies this row's file-browser result once it arrives.
+                property <int> result-token: PipelinesPanelState.browse-result-token;
+                changed result-token => {
+                    if (self.result-token == root.browse-token && root.browse-token >= 0) {
+                        root.browse-token = -1;
+                        fp-input.text = PipelinesPanelState.browse-result-path;
+                        root.changed(PipelinesPanelState.browse-result-path);
+                    }
+                }
+
+                spacing: 4px;
+                fp-input := LineEdit {
+                    enabled: !PipelinesPanelState.open-group-read-only;
+                    height: 26px;
+                    horizontal-stretch: 1;
+                    text: p.value;
+                    font-size: 11px;
+                    edited(t) => {
+                        root.changed(t);
+                    }
+                }
+
+                Rectangle {
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: browse-ta.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
+                    Image {
+                        source: @image-url("../icons/regular-white/folder-open.svg");
+                        width: 14px;
+                        height: 14px;
+                        colorize: Theme.text-dim;
+                    }
+
+                    browse-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            PipelinesPanelState.browse-token-counter += 1;
+                            root.browse-token = PipelinesPanelState.browse-token-counter;
+                            PipelinesPanelState.browse-file(
+                            p.options.length > 0 ? p.options[0] : "",
+                            fp-input.text,
+                            root.browse-token);
+                        }
+                    }
+                }
+
+                if p.has-model-info: Rectangle {
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: info-ta.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
+                    Text {
+                        text: "i";
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    info-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.show-model-info();
+                        }
+                    }
+                }
+            }
+
+            if p.param-type == ParamType.label: Text {
+                text: p.value;
+                font-size: 11px;
+                font-family: Theme.font-mono;
+                color: Theme.text-dim;
+                vertical-alignment: center;
+            }
+
+            if p.param-type == ParamType.spinner:
+        SpinnerInput {
+                enabled: !PipelinesPanelState.open-group-read-only;
+                value: p.value.to-float();
+                step: p.step;
+                min: p.min;
+                max: p.max;
+                changed(v) => {
+                    root.changed(v);
+                }
+            }
+
+            if p.param-type == ParamType.dropdown:
+        ComboBox {
+                enabled: !PipelinesPanelState.open-group-read-only;
+                model: p.options;
+                current-value: p.value;
+                selected(v) => {
+                    root.changed(v);
+                }
+            }
+
+            if p.param-type == ParamType.slider: HorizontalLayout {
+                spacing: 8px;
+                Slider {
+                    enabled: !PipelinesPanelState.open-group-read-only;
+                    minimum: p.min;
+                    maximum: p.max;
+                    value: p.value.to-float();
+                    horizontal-stretch: 1;
+                    changed(v) => {
+                        root.changed("\{v}");
+                    }
+                }
+
+                Text {
+                    text: p.value;
+                    font-size: 11px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                    width: 36px;
+                    horizontal-alignment: right;
+                }
+            }
+
+            if p.param-type == ParamType.toggle: HorizontalLayout {
+                CheckBox {
+                    enabled: !PipelinesPanelState.open-group-read-only;
+                    checked: p.value == "true";
+                    toggled => {
+                        root.changed(self.checked ? "true" : "false");
+                    }
+                }
+            }
+
+            if p.param-type == ParamType.obj-class:
+        ClassDropdown {
+                is-seg: false;
+                value: p.value;
+                changed(v) => {
+                    root.changed(v);
+                }
+            }
+
+            if p.param-type == ParamType.seg-class:
+        ClassDropdown {
+                is-seg: true;
+                value: p.value;
+                changed(v) => {
+                    root.changed(v);
+                }
+            }
+
+            if p.param-type == ParamType.multi-obj-class:
+        MultiClassDropdown {
+                is-seg: false;
+                value: p.value;
+                selection-flags: p.options;
+                changed(v) => {
+                    root.changed(v);
+                }
+            }
+
+            if p.param-type == ParamType.multi-seg-class:
+        MultiClassDropdown {
+                is-seg: true;
+                value: p.value;
+                selection-flags: p.options;
+                changed(v) => {
+                    root.changed(v);
+                }
+            }
+
+            if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units:
+        ComboBox {
+                enabled: !PipelinesPanelState.open-group-read-only;
+                model: p.options;
+                current-value: p.value;
+                selected(v) => {
+                    root.changed(v);
+                }
+            }
+
+            if p.param-type == ParamType.image-address:
+        ImageAddressPicker {
+                enabled: !PipelinesPanelState.open-group-read-only;
+                kind: p.options[0];
+                number: p.options[1].to-float();
+                in-group: PipelinesPanelState.open-group-name != "";
+                changed(v) => {
+                    root.changed(v);
+                }
+            }
+
+            if p.param-type == ParamType.image-channel:
+        ChannelPicker {
+                height: 24px;
+                font-size: 11px;
+                value: p.value.to-float();
+                changed(v) => {
+                    root.changed(v);
+                }
+            }
+
+            if p.param-type == ParamType.group: VerticalLayout {
+                spacing: 4px;
+                for item[i] in p.group-items: Rectangle {
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: Theme.border-soft;
+                    background: Theme.bg;
+                    VerticalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        spacing: 6px;
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text {
+                                text: "#" + (i + 1);
+                                font-size: 9.5px;
+                                font-family: Theme.font-mono;
+                                color: Theme.text-mute;
+                                vertical-alignment: center;
+                            }
+
+                            GhostIconBtn {
+                                icon: @image-url("../icons/regular-white/trash-simple.svg");
+                                sz: 18px;
+                                icon-sz: 10px;
+                                tint: Theme.err.with-alpha(0.6);
+                                clicked => {
+                                    root.remove-item(i);
+                                }
+                            }
+                        }
+
+                        for field in item.fields: LeafParamRow {
+                            p: field;
+                            changed(v) => {
+                                root.item-field-changed(i, field.name, v);
+                            }
+                            toggle-exposed => {
+                                root.toggle-item-exposed(i, field.name);
+                            }
+                            edit-exposed => {
+                                root.edit-item-exposed(i, field.name);
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 26px;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: add-item-ta.has-hover ? Theme.raised : transparent;
+                    animate background { duration: 100ms; }
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 5px;
+                        Image {
+                            source: @image-url("../icons/regular-white/plus.svg");
+                            width: 10px;
+                            height: 10px;
+                            colorize: Theme.text-dim;
+                            y: 8px;
+                        }
+
+                        Text {
+                            text: "Add item";
+                            font-size: 10.5px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    add-item-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.add-item();
+                        }
+                    }
+                }
+            }
+        }
+
+        // "View": the settings can be read, not changed - the names and
+        // their "?" around the controls still work.
+        if PipelinesPanelState.open-group-read-only: TouchArea { }
+    }
+
 component ParamRow inherits VerticalLayout {
+        in property <CommandParameter> p;
+        // Show `p.section-header` (the settings dialog has its own).
+        in property <bool> show-section: true;
+        callback changed(string);
+        callback item-field-changed(int, string, string);
+        callback add-item();
+        callback remove-item(int);
+        callback show-model-info();
+        callback toggle-exposed();
+        callback edit-exposed();
+        // A list entry's setting: entry index, setting name.
+        callback toggle-item-exposed(int, string);
+        callback edit-item-exposed(int, string);
+
+        spacing: 4px;
+
+        if root.show-section && p.section-header != "": SectionHeader {
+            text: p.section-header;
+        }
+
+        ParamLabel {
+            p: root.p;
+            toggle-exposed => {
+                root.toggle-exposed();
+            }
+            edit-exposed => {
+                root.edit-exposed();
+            }
+        }
+
+        ParamControls {
+            p: root.p;
+            changed(v) => {
+                root.changed(v);
+            }
+            item-field-changed(i, n, v) => {
+                root.item-field-changed(i, n, v);
+            }
+            add-item => {
+                root.add-item();
+            }
+            remove-item(i) => {
+                root.remove-item(i);
+            }
+            show-model-info => {
+                root.show-model-info();
+            }
+            toggle-item-exposed(i, n) => {
+                root.toggle-item-exposed(i, n);
+            }
+            edit-item-exposed(i, n) => {
+                root.edit-item-exposed(i, n);
+            }
+        }
+    }
+
+// A setting in the settings dialog, laid out like the project settings:
+// name, short help ("?" for the full one) on the left, the control on the
+// right - or below, for list entries and scripts, which need the width.
+component WideParamRow inherits VerticalLayout {
         in property <CommandParameter> p;
         callback changed(string);
         callback item-field-changed(int, string, string);
@@ -1473,459 +2079,106 @@ component ParamRow inherits VerticalLayout {
         // A list entry's setting: entry index, setting name.
         callback toggle-item-exposed(int, string);
         callback edit-item-exposed(int, string);
-        // This row's pending file-browser request (see `browse-file`).
-        property <int> browse-token: -1;
-        // This row's pending script-editor request (see `ScriptEditorState`).
-        property <int> script-token: -1;
 
-        spacing: 4px;
+        property <bool> help-open: false;
+        property <bool> block: p.param-type == ParamType.group || p.param-type == ParamType.script;
+
+        Rectangle {
+            height: 1px;
+            background: Theme.border-soft;
+        }
 
         HorizontalLayout {
-            spacing: 4px;
-            alignment: start;
-            // Inside an opened group: ◆ exposes the setting as a group
-            // parameter (filled) or hides it again.
-            if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.param-type != ParamType.group && p.param-type != ParamType.label: Rectangle {
-                width: 16px;
-                height: 16px;
-                border-radius: 3px;
-                background: expose-ta.has-hover ? Theme.raised : transparent;
-                Text {
-                    text: p.exposed ? "◆" : "◇";
-                    font-size: 10px;
-                    color: p.exposed ? Theme.cat-group : Theme.text-mute;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 12px;
+            padding-bottom: root.block ? 4px : 12px;
+            spacing: 24px;
 
-                expose-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 3px;
+
+                ParamLabel {
+                    p: root.p;
+                    wide: true;
+                    help-open <=> root.help-open;
+                    toggle-exposed => {
                         root.toggle-exposed();
                     }
-                }
-            }
-            if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.exposed: Rectangle {
-                width: 16px;
-                height: 16px;
-                border-radius: 3px;
-                background: edit-exposed-ta.has-hover ? Theme.raised : transparent;
-                Text {
-                    text: "✎";
-                    font-size: 10px;
-                    color: Theme.cat-group;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                edit-exposed-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
+                    edit-exposed => {
                         root.edit-exposed();
                     }
                 }
-            }
-            Text {
-                text: p.display-name == "" ? p.name : p.display-name;
-                font-size: 11px;
-                color: p.exposed ? Theme.cat-group : Theme.text-dim;
-                vertical-alignment: center;
-            }
 
-            if p.description != "": help-btn := Rectangle {
-                width: 14px;
-                height: 14px;
-                border-radius: 7px;
-                background: help-ta.has-hover ? Theme.accent.with-alpha(0.3) : Theme.border-soft;
-                animate background { duration: 100ms; }
-                Text {
-                    text: "?";
-                    font-size: 8px;
+                // `height` from the text's own width (see the project
+                // settings' `SettingRow`).
+                if p.short-description != "": Text {
+                    text: root.help-open ? p.description : p.short-description;
+                    font-size: 11px;
                     color: Theme.text-dim;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    height: self.preferred-height;
                 }
+            }
 
-                help-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        help-popup.show();
+            if !root.block: VerticalLayout {
+                width: 280px;
+                alignment: center;
+                ParamControls {
+                    p: root.p;
+                    changed(v) => {
+                        root.changed(v);
                     }
-                }
-
-                help-popup := PopupWindow {
-                    x: 0px;
-                    y: parent.height + 3px;
-                    width: 240px;
-                    Rectangle {
-                        background: Theme.panel;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        border-radius: 6px;
-                        drop-shadow-blur: 10px;
-                        drop-shadow-color: #000000.with-alpha(0.35);
-                        VerticalLayout {
-                            padding: 10px;
-                            spacing: 0px;
-                            Text {
-                                text: p.description;
-                                font-size: 11px;
-                                color: Theme.text;
-                                wrap: word-wrap;
-                            }
-                        }
+                    item-field-changed(i, n, v) => {
+                        root.item-field-changed(i, n, v);
                     }
-                }
-            }
-        }
-
-        // Script: read-only preview, click opens the script editor.
-        if p.param-type == ParamType.script: Rectangle {
-            property <int> result-token: ScriptEditorState.result-token;
-            changed result-token => {
-                if (self.result-token == root.script-token && root.script-token >= 0) {
-                    root.script-token = -1;
-                    root.changed(ScriptEditorState.result-text);
-                }
-            }
-
-            height: 84px;
-            border-radius: 4px;
-            border-width: 1px;
-            border-color: script-ta.has-hover ? Theme.accent.with-alpha(0.6) : Theme.border;
-            background: Theme.bg;
-            clip: true;
-
-            Text {
-                x: 6px;
-                y: 4px;
-                width: parent.width - 12px;
-                height: parent.height - 8px;
-                text: p.value;
-                font-family: ScriptFont.family;
-                font-size: 10px;
-                color: Theme.text-dim;
-                wrap: no-wrap;
-                overflow: clip;
-                vertical-alignment: top;
-            }
-
-            Rectangle {
-                x: parent.width - self.width - 4px;
-                y: parent.height - self.height - 4px;
-                width: edit-label.preferred-width + 12px;
-                height: 18px;
-                border-radius: 3px;
-                background: script-ta.has-hover ? Theme.accent : Theme.raised;
-                edit-label := Text {
-                    text: "Edit script";
-                    font-size: 10px;
-                    color: script-ta.has-hover ? #FFFFFF : Theme.text-dim;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-
-            script-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    ScriptEditorState.token-counter += 1;
-                    root.script-token = ScriptEditorState.token-counter;
-                    ScriptEditorState.open(p.display-name, p.value, root.script-token);
-                }
-            }
-        }
-
-        if p.param-type == ParamType.number || p.param-type == ParamType.text:
-    LineEdit {
-            height: 26px;
-            text: p.value;
-            font-size: 11px;
-            edited(t) => {
-                root.changed(t);
-            }
-        }
-
-        if p.param-type == ParamType.file-path: HorizontalLayout {
-            // Applies this row's file-browser result once it arrives.
-            property <int> result-token: PipelinesPanelState.browse-result-token;
-            changed result-token => {
-                if (self.result-token == root.browse-token && root.browse-token >= 0) {
-                    root.browse-token = -1;
-                    fp-input.text = PipelinesPanelState.browse-result-path;
-                    root.changed(PipelinesPanelState.browse-result-path);
-                }
-            }
-
-            spacing: 4px;
-            fp-input := LineEdit {
-                height: 26px;
-                horizontal-stretch: 1;
-                text: p.value;
-                font-size: 11px;
-                edited(t) => {
-                    root.changed(t);
-                }
-            }
-
-            Rectangle {
-                width: 26px;
-                height: 26px;
-                border-radius: 4px;
-                border-width: 1px;
-                border-color: Theme.border;
-                background: browse-ta.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
-                Image {
-                    source: @image-url("../icons/regular-white/folder-open.svg");
-                    width: 14px;
-                    height: 14px;
-                    colorize: Theme.text-dim;
-                }
-
-                browse-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        PipelinesPanelState.browse-token-counter += 1;
-                        root.browse-token = PipelinesPanelState.browse-token-counter;
-                        PipelinesPanelState.browse-file(
-                        p.options.length > 0 ? p.options[0] : "",
-                        fp-input.text,
-                        root.browse-token);
-                    }
-                }
-            }
-
-            if p.has-model-info: Rectangle {
-                width: 26px;
-                height: 26px;
-                border-radius: 4px;
-                border-width: 1px;
-                border-color: Theme.border;
-                background: info-ta.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
-                Text {
-                    text: "i";
-                    font-size: 12px;
-                    font-weight: 700;
-                    color: Theme.text-dim;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                info-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.show-model-info();
-                    }
-                }
-            }
-        }
-
-        if p.param-type == ParamType.label: Text {
-            text: p.value;
-            font-size: 11px;
-            font-family: Theme.font-mono;
-            color: Theme.text-dim;
-            vertical-alignment: center;
-        }
-
-        if p.param-type == ParamType.spinner:
-    SpinnerInput {
-            value: p.value.to-float();
-            step: p.step;
-            min: p.min;
-            max: p.max;
-            changed(v) => {
-                root.changed(v);
-            }
-        }
-
-        if p.param-type == ParamType.dropdown:
-    ComboBox {
-            model: p.options;
-            current-value: p.value;
-            selected(v) => {
-                root.changed(v);
-            }
-        }
-
-        if p.param-type == ParamType.slider: HorizontalLayout {
-            spacing: 8px;
-            Slider {
-                minimum: p.min;
-                maximum: p.max;
-                value: p.value.to-float();
-                horizontal-stretch: 1;
-                changed(v) => {
-                    root.changed("\{v}");
-                }
-            }
-
-            Text {
-                text: p.value;
-                font-size: 11px;
-                font-family: Theme.font-mono;
-                color: Theme.text;
-                vertical-alignment: center;
-                width: 36px;
-                horizontal-alignment: right;
-            }
-        }
-
-        if p.param-type == ParamType.toggle: HorizontalLayout {
-            CheckBox {
-                checked: p.value == "true";
-                toggled => {
-                    root.changed(self.checked ? "true" : "false");
-                }
-            }
-        }
-
-        if p.param-type == ParamType.obj-class:
-    ClassDropdown {
-            is-seg: false;
-            value: p.value;
-            changed(v) => {
-                root.changed(v);
-            }
-        }
-
-        if p.param-type == ParamType.seg-class:
-    ClassDropdown {
-            is-seg: true;
-            value: p.value;
-            changed(v) => {
-                root.changed(v);
-            }
-        }
-
-        if p.param-type == ParamType.multi-obj-class:
-    MultiClassDropdown {
-            is-seg: false;
-            value: p.value;
-            selection-flags: p.options;
-            changed(v) => {
-                root.changed(v);
-            }
-        }
-
-        if p.param-type == ParamType.multi-seg-class:
-    MultiClassDropdown {
-            is-seg: true;
-            value: p.value;
-            selection-flags: p.options;
-            changed(v) => {
-                root.changed(v);
-            }
-        }
-
-        if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units:
-    ComboBox {
-            model: p.options;
-            current-value: p.value;
-            selected(v) => {
-                root.changed(v);
-            }
-        }
-
-        if p.param-type == ParamType.image-address:
-    ImageAddressPicker {
-            kind: p.options[0];
-            number: p.options[1].to-float();
-            in-group: PipelinesPanelState.open-group-name != "";
-            changed(v) => {
-                root.changed(v);
-            }
-        }
-
-        if p.param-type == ParamType.image-channel:
-    ChannelPicker {
-            height: 24px;
-            font-size: 11px;
-            value: p.value.to-float();
-            changed(v) => {
-                root.changed(v);
-            }
-        }
-
-        if p.param-type == ParamType.group: VerticalLayout {
-            spacing: 4px;
-            for item[i] in p.group-items: Rectangle {
-                border-radius: 4px;
-                border-width: 1px;
-                border-color: Theme.border-soft;
-                background: Theme.bg;
-                VerticalLayout {
-                    padding-left: 8px;
-                    padding-right: 8px;
-                    padding-top: 6px;
-                    padding-bottom: 6px;
-                    spacing: 6px;
-                    HorizontalLayout {
-                        alignment: space-between;
-                        Text {
-                            text: "#" + (i + 1);
-                            font-size: 9.5px;
-                            font-family: Theme.font-mono;
-                            color: Theme.text-mute;
-                            vertical-alignment: center;
-                        }
-
-                        GhostIconBtn {
-                            icon: @image-url("../icons/regular-white/trash-simple.svg");
-                            sz: 18px;
-                            icon-sz: 10px;
-                            tint: Theme.err.with-alpha(0.6);
-                            clicked => {
-                                root.remove-item(i);
-                            }
-                        }
-                    }
-
-                    for field in item.fields: LeafParamRow {
-                        p: field;
-                        changed(v) => {
-                            root.item-field-changed(i, field.name, v);
-                        }
-                        toggle-exposed => {
-                            root.toggle-item-exposed(i, field.name);
-                        }
-                        edit-exposed => {
-                            root.edit-item-exposed(i, field.name);
-                        }
-                    }
-                }
-            }
-            Rectangle {
-                height: 26px;
-                border-radius: 4px;
-                border-width: 1px;
-                border-color: Theme.border;
-                background: add-item-ta.has-hover ? Theme.raised : transparent;
-                animate background { duration: 100ms; }
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: 5px;
-                    Image {
-                        source: @image-url("../icons/regular-white/plus.svg");
-                        width: 10px;
-                        height: 10px;
-                        colorize: Theme.text-dim;
-                        y: 8px;
-                    }
-
-                    Text {
-                        text: "Add item";
-                        font-size: 10.5px;
-                        color: Theme.text-dim;
-                        vertical-alignment: center;
-                    }
-                }
-
-                add-item-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
+                    add-item => {
                         root.add-item();
                     }
+                    remove-item(i) => {
+                        root.remove-item(i);
+                    }
+                    show-model-info => {
+                        root.show-model-info();
+                    }
+                    toggle-item-exposed(i, n) => {
+                        root.toggle-item-exposed(i, n);
+                    }
+                    edit-item-exposed(i, n) => {
+                        root.edit-item-exposed(i, n);
+                    }
+                }
+            }
+        }
+
+        if root.block: VerticalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-bottom: 12px;
+            ParamControls {
+                p: root.p;
+                changed(v) => {
+                    root.changed(v);
+                }
+                item-field-changed(i, n, v) => {
+                    root.item-field-changed(i, n, v);
+                }
+                add-item => {
+                    root.add-item();
+                }
+                remove-item(i) => {
+                    root.remove-item(i);
+                }
+                show-model-info => {
+                    root.show-model-info();
+                }
+                toggle-item-exposed(i, n) => {
+                    root.toggle-item-exposed(i, n);
+                }
+                edit-item-exposed(i, n) => {
+                    root.edit-item-exposed(i, n);
                 }
             }
         }
@@ -1950,6 +2203,7 @@ component StepRow inherits Rectangle {
         callback update-group;
         callback param-changed(string, string);
         callback toggle-breakpoint;
+        callback open-settings;
 
         background: Theme.raised;
         border-width: 1px;
@@ -2139,6 +2393,16 @@ component StepRow inherits Rectangle {
                                     if !PipelinesPanelState.open-group-read-only {
                                         root.toggle-enabled();
                                     }
+                                }
+                            }
+
+                            // Opens the settings in the larger dialog.
+                            if step.parameters.length > 0 || step.advanced-count > 0: GhostIconBtn {
+                                icon: @image-url("../icons/regular-white/arrows-out-simple.svg");
+                                icon-sz: 12px;
+                                tint: Theme.text-dim;
+                                clicked => {
+                                    root.open-settings();
                                 }
                             }
 
@@ -2514,8 +2778,6 @@ component StepRow inherits Rectangle {
                     }
                 }
 
-                // "View": the settings can be read, not changed.
-                if PipelinesPanelState.open-group-read-only: TouchArea { }
             }
         }
     }
@@ -2721,6 +2983,10 @@ export global PipelinesPanelState {
         callback always-show-advanced-toggled(bool);
         callback remove-group-item(int, string, int); // step-id, param-name, item-idx
     callback show-model-info(int); // step-id
+        // The step (step-id) whose settings the settings dialog shows.
+        in-out property <string> settings-step-id;
+        // Opens the settings dialog for a step (step-id).
+        callback open-step-settings(string);
 
     callback run-all();
         callback dry-run();
@@ -3267,6 +3533,9 @@ export component PipelinesPanel inherits Rectangle {
                                 param-changed(n, v) => {
                                     PipelinesPanelState.param-changed(cmd.id, n, v);
                                 }
+                                open-settings => {
+                                    PipelinesPanelState.open-step-settings(cmd.step-id);
+                                }
                                 toggle-breakpoint => {
                                     if PipelinesPanelState.breakpoint-pipeline-id == PipelinesPanelState.active-pipeline-id && PipelinesPanelState.breakpoint-step-id == cmd.step-id {
                                         if PipelinesPanelState.breakpoint-mode == 1 {
@@ -3634,3 +3903,329 @@ export component PipelinesPanel inherits Rectangle {
             }
         }
     }
+
+// ══════════════════════════════════════════════════════════
+// Step settings dialog
+
+// One section of the settings dialog's list on the left.
+component SectionNavItem inherits Rectangle {
+    in property <string> text;
+    // Shown after the name, e.g. "2 changed".
+    in property <string> note;
+    in property <bool> active;
+    callback clicked;
+
+    height: 30px;
+    border-radius: 6px;
+    background: root.active ? Theme.accent-dim : (ta.has-hover ? Theme.hover : transparent);
+
+    Rectangle {
+        x: 0;
+        y: 7px;
+        width: 3px;
+        height: parent.height - 14px;
+        border-radius: 1.5px;
+        background: root.active ? Theme.accent : transparent;
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 6px;
+
+        Text {
+            text: root.text;
+            vertical-alignment: center;
+            font-size: 12px;
+            font-weight: root.active ? 600 : 400;
+            color: root.active ? Theme.text : Theme.text-dim;
+            overflow: elide;
+        }
+
+        if root.note != "": Text {
+            text: root.note;
+            vertical-alignment: center;
+            font-size: 10px;
+            color: Theme.warn;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A step's settings in a larger dialog (⤢ on the step card), like the
+// project settings: the step's sections - the sections of its settings,
+// and "Advanced" - on the left, the chosen section's settings on the right;
+// or, while searching, every matching setting. Shows the step
+// `PipelinesPanelState.settings-step-id`, live: edits go through the same
+// callbacks as on the card. (Opening it shows the step's advanced settings,
+// so they are there to pick and to search.)
+export component StepSettingsDialog inherits Rectangle {
+    callback close();
+
+    // The list is rebuilt after each change - what's chosen lives out here
+    // so it stays.
+    // Index into the step's `sections`; `sections.length` is Advanced.
+    property <int> current: 0;
+    property <string> query;
+    property <bool> searching: root.query.replace-all(" ", "") != "";
+
+    // Whether setting `p` is found by the search text (ignoring case).
+    pure function matches(p: CommandParameter) -> bool {
+        root.found("\{p.display-name} \{p.name} \{p.description} \{p.section}")
+    }
+
+    pure function found(words: string) -> bool {
+        words.to-lowercase().replace-all(root.query.to-lowercase(), "") != words.to-lowercase()
+    }
+
+    // Whether setting `p` of the basic (not advanced) ones is shown.
+    pure function shows(p: CommandParameter, sections: [string]) -> bool {
+        root.searching ? root.matches(p) : (root.current < sections.length && p.section == sections[root.current])
+    }
+
+    background: Theme.modal-overlay;
+
+    TouchArea {
+        clicked => {
+            root.close();
+        }
+    }
+
+    for cmd in PipelinesPanelState.active-commands: Rectangle {
+        width: 100%;
+        height: 100%;
+        if cmd.step-id == PipelinesPanelState.settings-step-id: Rectangle {
+            property <bool> on-advanced: !root.searching && root.current >= cmd.sections.length;
+
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(920px, parent.width - 48px);
+            height: min(660px, parent.height - 48px);
+            background: Theme.panel;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.border;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: Theme.shadow;
+            drop-shadow-offset-y: 12px;
+            clip: true;
+
+            TouchArea { }
+
+            HorizontalLayout {
+                // -- Left: name, search, sections --
+                Rectangle {
+                    width: 230px;
+                    background: Theme.bg;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 4px;
+                        alignment: start;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rectangle {
+                                width: 4px;
+                                border-radius: 2px;
+                                background: Cat.color(cmd.category);
+                            }
+
+                            Text {
+                                text: cmd.name;
+                                font-size: 18px;
+                                font-weight: 700;
+                                color: Theme.text;
+                                overflow: elide;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 10px;
+                        }
+
+                        LineEdit {
+                            text: root.query;
+                            placeholder-text: "Search settings";
+                            edited(t) => {
+                                root.query = t;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 10px;
+                        }
+
+                        for section[si] in cmd.sections: SectionNavItem {
+                            text: section == "" ? "General" : section;
+                            active: !root.searching && root.current == si;
+                            clicked => {
+                                root.query = "";
+                                root.current = si;
+                            }
+                        }
+
+                        if cmd.advanced-count > 0: SectionNavItem {
+                            text: "Advanced (\{cmd.advanced-count})";
+                            note: cmd.advanced-changed > 0 ? "\{cmd.advanced-changed} changed" : "";
+                            active: on-advanced;
+                            clicked => {
+                                root.query = "";
+                                root.current = cmd.sections.length;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 1px;
+                    background: Theme.border-soft;
+                }
+
+                // -- Right: the chosen section's settings --
+                Rectangle {
+                    horizontal-stretch: 1;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 24px;
+                            padding-top: 20px;
+                            spacing: 6px;
+                            alignment: start;
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: root.searching ? "Search results" : on-advanced ? "Advanced" : (cmd.sections[root.current] == "" ? "General" : cmd.sections[root.current]);
+                                    font-size: 16px;
+                                    font-weight: 700;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                }
+
+                                GhostIconBtn {
+                                    icon: @image-url("../icons/regular-white/x.svg");
+                                    icon-sz: 12px;
+                                    clicked => {
+                                        root.close();
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: cmd.summary;
+                                font-size: 11px;
+                                font-family: Theme.font-mono;
+                                color: Theme.text-mute;
+                                overflow: elide;
+                            }
+
+                            // What the command does - on its first page.
+                            if cmd.help != "" && !root.searching && root.current == 0: Text {
+                                text: cmd.help;
+                                font-size: 11px;
+                                color: Theme.text-dim;
+                                wrap: word-wrap;
+                                height: self.preferred-height;
+                            }
+
+                            Rectangle {
+                                height: 8px;
+                            }
+
+                            // The rows draw the dividers between them; the
+                            // card's top border is the first one's.
+                            Rectangle {
+                                background: Theme.panel;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                clip: true;
+
+                                VerticalLayout {
+                                    padding-top: -1px;
+
+                                    if !on-advanced: VerticalLayout {
+                                        for p in cmd.parameters: VerticalLayout {
+                                            if root.shows(p, cmd.sections): WideParamRow {
+                                                p: p;
+                                                changed(v) => {
+                                                    PipelinesPanelState.param-changed(cmd.id, p.name, v);
+                                                }
+                                                item-field-changed(item_idx, field_name, v) => {
+                                                    PipelinesPanelState.param-changed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}", v);
+                                                }
+                                                add-item => {
+                                                    PipelinesPanelState.add-group-item(cmd.id, p.name);
+                                                }
+                                                remove-item(idx) => {
+                                                    PipelinesPanelState.remove-group-item(cmd.id, p.name, idx);
+                                                }
+                                                show-model-info => {
+                                                    PipelinesPanelState.show-model-info(cmd.id);
+                                                }
+                                                toggle-exposed => {
+                                                    PipelinesPanelState.toggle-exposed(cmd.id, p.name);
+                                                }
+                                                toggle-item-exposed(item_idx, field_name) => {
+                                                    PipelinesPanelState.toggle-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                                }
+                                                edit-exposed => {
+                                                    PipelinesPanelState.edit-exposed(cmd.id, p.name);
+                                                }
+                                                edit-item-exposed(item_idx, field_name) => {
+                                                    PipelinesPanelState.edit-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if on-advanced || root.searching: VerticalLayout {
+                                        for p in cmd.advanced-parameters: VerticalLayout {
+                                            if !root.searching || root.matches(p): WideParamRow {
+                                                p: p;
+                                                changed(v) => {
+                                                    PipelinesPanelState.param-changed(cmd.id, p.name, v);
+                                                }
+                                                item-field-changed(item_idx, field_name, v) => {
+                                                    PipelinesPanelState.param-changed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}", v);
+                                                }
+                                                add-item => {
+                                                    PipelinesPanelState.add-group-item(cmd.id, p.name);
+                                                }
+                                                remove-item(idx) => {
+                                                    PipelinesPanelState.remove-group-item(cmd.id, p.name, idx);
+                                                }
+                                                show-model-info => {
+                                                    PipelinesPanelState.show-model-info(cmd.id);
+                                                }
+                                                toggle-exposed => {
+                                                    PipelinesPanelState.toggle-exposed(cmd.id, p.name);
+                                                }
+                                                toggle-item-exposed(item_idx, field_name) => {
+                                                    PipelinesPanelState.toggle-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                                }
+                                                edit-exposed => {
+                                                    PipelinesPanelState.edit-exposed(cmd.id, p.name);
+                                                }
+                                                edit-item-exposed(item_idx, field_name) => {
+                                                    PipelinesPanelState.edit-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                }
+            }
+        }
+    }
+}

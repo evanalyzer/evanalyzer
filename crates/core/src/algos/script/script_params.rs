@@ -219,6 +219,7 @@ pub fn script_parameters(
             default_value: value_text(&decl.default),
             advanced: false,
             option_advanced: vec![],
+            section: String::new(),
         })
         .collect()
 }

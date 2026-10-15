@@ -517,6 +517,8 @@ export struct GroupParamRow {
     default-description: string,
     /// What it sets: "Blur › Kernel size, Blur › Kernel size".
     sets: string,
+    /// The section it's shown in on the group card; empty: none.
+    section: string,
 }
 
 /// The opened group's name, descriptions and parameters (name, help text,
@@ -546,6 +548,8 @@ export global GroupSettingsState {
     callback parameter-name-edited(string, string);
     /// key, help text
     callback parameter-help-edited(string, string);
+    /// key, section on the group card (empty: none)
+    callback parameter-section-edited(string, string);
     /// key, -1 up / +1 down
     callback parameter-moved(string, int);
     /// key: back to the bound setting's own help text.
@@ -557,7 +561,7 @@ export global GroupSettingsState {
 
 export component GroupSettingsDialog inherits Rectangle {
     background: Theme.modal-overlay;
-    property <length> row-height: 158px;
+    property <length> row-height: 190px;
     property <length> row-spacing: 8px;
 
     TouchArea {
@@ -837,6 +841,15 @@ export component GroupSettingsDialog inherits Rectangle {
                                 accessible-label: "Parameter help text";
                                 edited(t) => {
                                     GroupSettingsState.parameter-help-edited(param.key, t);
+                                }
+                            }
+
+                            LineEdit {
+                                text: param.section;
+                                placeholder-text: "Section on the group card (optional), e.g. Detection";
+                                accessible-label: "Parameter section";
+                                edited(t) => {
+                                    GroupSettingsState.parameter-section-edited(param.key, t);
                                 }
                             }
 

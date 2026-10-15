@@ -43,7 +43,7 @@ pub mod groups {
         clone_group_for_step, compatible_parameters, edit_parameter, exposed_settings, group_steps,
         group_uses, list_entry_removed, move_parameter, new_parameter_key, parameter_for_setting,
         plan_grouping, prune_group_values, remove_group, remove_group_step, remove_parameter,
-        remove_unused_groups, setting_at, toggle_exposed, ungroup, unused_groups,
+        remove_unused_groups, set_parameter_section, setting_at, toggle_exposed, ungroup, unused_groups,
     };
     pub use evanalyzer_core::group_parameters;
     pub use evanalyzer_core::group_steps_with_values;

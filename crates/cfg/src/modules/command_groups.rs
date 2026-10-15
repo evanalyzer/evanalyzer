@@ -74,6 +74,11 @@ pub struct GroupParameterDef {
     #[serde(default)]
     pub description: String,
 
+    /// Section the parameter is shown in on the group card, e.g.
+    /// "Detection"; empty: the unnamed first section.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub section: String,
+
     /// The value an instance starts with.
     pub default: ParamValue,
 

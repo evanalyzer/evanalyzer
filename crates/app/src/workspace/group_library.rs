@@ -296,6 +296,7 @@ mod tests {
                 key: GroupParamKey::from("1"),
                 label: "Size".into(),
                 description: String::new(),
+                section: String::new(),
                 default: ParamValue::Int(3),
                 bindings: vec![ParamBinding {
                     step: StepId(1),

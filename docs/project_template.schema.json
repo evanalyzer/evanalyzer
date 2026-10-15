@@ -1001,6 +1001,10 @@
         "label": {
           "description": "Name shown to the user, e.g. \"Cell class\".",
           "type": "string"
+        },
+        "section": {
+          "description": "Section the parameter is shown in on the group card, e.g.\n\"Detection\"; empty: the unnamed first section.",
+          "type": "string"
         }
       },
       "required": [

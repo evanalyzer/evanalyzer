@@ -272,6 +272,36 @@ impl PipelinesController {
                     manager.sync_steps_of_selected_pipeline_to_slint(pipeline_id, false);
                 });
 
+            // ⤢ on a step card: its settings in the larger dialog.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_open_step_settings(move |step_id| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<PipelinesPanelState>();
+                    // Its advanced settings are only sent while shown - the
+                    // dialog has them on a page of their own and searches them.
+                    let commands = state.get_active_commands();
+                    let mut opened_advanced = false;
+                    for i in 0..commands.row_count() {
+                        if let Some(mut cmd) = commands.row_data(i) {
+                            if cmd.step_id == step_id && !cmd.show_advanced {
+                                cmd.show_advanced = true;
+                                commands.set_row_data(i, cmd);
+                                opened_advanced = true;
+                            }
+                        }
+                    }
+                    if opened_advanced && !state.get_always_show_advanced() {
+                        let pipeline_id = PipelineId(state.get_active_pipeline_id() as u32);
+                        manager.sync_steps_of_selected_pipeline_to_slint(pipeline_id, false);
+                    }
+                    state.set_settings_step_id(step_id);
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::StepSettings);
+                });
+
             // "Always show advanced settings" (user preference)
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
@@ -1317,6 +1347,20 @@ impl PipelinesController {
                             &id,
                             &label,
                             &description,
+                        )
+                    });
+                });
+
+            // The parameter's section on the group card - no refill while
+            // typing either; the card shows it on close.
+            let manager = self.clone();
+            ui.global::<GroupSettingsState>()
+                .on_parameter_section_edited(move |id, section| {
+                    manager.edit_open_group_definition(|definition| {
+                        evanalyzer_app::groups::set_parameter_section(
+                            definition,
+                            &GroupParamKey::from(id.as_str()),
+                            &section,
                         )
                     });
                 });
@@ -2985,6 +3029,7 @@ impl PipelinesController {
             .map(|parameter| GroupParamRow {
                 key: parameter.key.to_string().into(),
                 label: parameter.label.clone().into(),
+                section: parameter.section.clone().into(),
                 description: parameter.description.clone().into(),
                 default_value: param_value_display(&parameter.default).into(),
                 default_description: parameter
@@ -4059,12 +4104,38 @@ impl PipelinesController {
                                 exposed: exposed.contains(&p_name),
                                 group_items: ModelRc::new(VecModel::from(group_items)),
                                 has_model_info,
+                                section_header: SharedString::new(),
+                                section: SharedString::new(),
+                                short_description: SharedString::new(),
+                                more_help: false,
                             }
                         };
-                        let params: Vec<CommandParameter> =
-                            basic_defs.into_iter().map(&convert).collect();
-                        let advanced_params: Vec<CommandParameter> = if show_advanced {
-                            advanced_defs.into_iter().map(&convert).collect()
+                        let in_sections = |defs: Vec<ParameterDef>| -> Vec<CommandParameter> {
+                            let defs = order_by_section(defs);
+                            let sections = section_headers(&defs);
+                            defs.into_iter()
+                                .zip(sections)
+                                .map(|(p, section)| CommandParameter {
+                                    section_header: section.into(),
+                                    section: p.section.clone().into(),
+                                    short_description: short_description(&p.description).into(),
+                                    more_help: p.description.split("\n\n").filter(|paragraph| !paragraph.trim().is_empty()).count() > 1,
+                                    ..convert(p)
+                                })
+                                .collect()
+                        };
+                        let sections: Vec<SharedString> = order_by_section(basic_defs.clone())
+                            .iter()
+                            .map(|p| SharedString::from(p.section.as_str()))
+                            .fold(Vec::new(), |mut sections, section| {
+                                if sections.last() != Some(&section) {
+                                    sections.push(section);
+                                }
+                                sections
+                            });
+                        let params = in_sections(basic_defs);
+                        let advanced_params = if show_advanced {
+                            in_sections(advanced_defs)
                         } else {
                             Vec::new()
                         };
@@ -4083,6 +4154,7 @@ impl PipelinesController {
                             advanced_changed: advanced_changed as i32,
                             update_version: d.update_version.into(),
                             help: d.help.into(),
+                            sections: ModelRc::new(VecModel::from(sections)),
                         }
                     })
                     .collect();
@@ -4662,6 +4734,46 @@ fn advanced_stats(params: &[ParameterDef]) -> (usize, usize) {
 /// advanced dropdown options - except the selected one, so a field never
 /// shows a value missing from its list. (Top-level advanced settings are
 /// split off by the caller.)
+/// A step's settings ordered by section: the ones without a section first,
+/// then each section in the order it first appears. Within a section the
+/// settings keep their order.
+fn order_by_section(mut params: Vec<ParameterDef>) -> Vec<ParameterDef> {
+    let mut sections_seen: Vec<String> = vec![String::new()];
+    for p in &params {
+        if !sections_seen.contains(&p.section) {
+            sections_seen.push(p.section.clone());
+        }
+    }
+    params.sort_by_key(|p| sections_seen.iter().position(|c| *c == p.section));
+    params
+}
+
+/// The first paragraph of a setting's help text, on one line - what the
+/// settings dialog shows under its name ("?" shows all of it).
+fn short_description(description: &str) -> String {
+    description
+        .split("\n\n")
+        .find(|paragraph| !paragraph.trim().is_empty())
+        .unwrap_or("")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Per setting of `params` (ordered by [`order_by_section`]): the section
+/// header shown above it - its section where one starts, else empty.
+fn section_headers(params: &[ParameterDef]) -> Vec<String> {
+    let mut previous = "";
+    params
+        .iter()
+        .map(|p| {
+            let starts = p.section != previous;
+            previous = &p.section;
+            if starts { p.section.clone() } else { String::new() }
+        })
+        .collect()
+}
+
 /// A step id as Slint carries it.
 fn step_id_text(id: evanalyzer_cfg::core_types::StepId) -> SharedString {
     id.0.to_string().into()
@@ -5883,6 +5995,7 @@ mod tests {
             default_value: default.into(),
             advanced,
             option_advanced: vec![],
+            section: String::new(),
         }
     }
 
@@ -5901,6 +6014,46 @@ mod tests {
             group,
         ];
         assert_eq!(advanced_stats(&params), (4, 2));
+    }
+
+    #[test]
+    fn the_short_description_is_the_first_paragraph_on_one_line() {
+        assert_eq!(
+            short_description("The radius\nin pixels.\n\nLarger values are slower."),
+            "The radius in pixels."
+        );
+        assert_eq!(short_description("\n\nOnly this."), "Only this.");
+        assert_eq!(short_description(""), "");
+    }
+
+    #[test]
+    fn settings_are_ordered_by_section_with_a_header_where_each_starts() {
+        let in_section = |name: &str, section: &str| ParameterDef {
+            section: section.into(),
+            ..def(name, "", "", false)
+        };
+        let ordered = order_by_section(vec![
+            in_section("radius", "Detection"),
+            in_section("channel", ""),
+            in_section("min_area", "Filtering"),
+            in_section("sigma", "Detection"),
+            in_section("output", ""),
+        ]);
+        let names: Vec<&str> = ordered.iter().map(|p| p.name.as_str()).collect();
+        // No section first, then each in the order it first appears; the
+        // settings of a section keep their order.
+        assert_eq!(
+            names,
+            ["channel", "output", "radius", "sigma", "min_area"]
+        );
+        assert_eq!(
+            section_headers(&ordered),
+            ["", "", "Detection", "", "Filtering"]
+        );
+        // Without sections: no headers, order unchanged.
+        let plain = order_by_section(vec![def("a", "", "", false), def("b", "", "", false)]);
+        assert_eq!(section_headers(&plain), ["", ""]);
+        assert_eq!(plain[0].name, "a");
     }
 
     #[test]
@@ -6403,6 +6556,7 @@ mod tests {
                     key: GroupParamKey::from("1"),
                     label: "Smoothing".into(),
                     description: String::new(),
+                    section: String::new(),
                     default: ParamValue::Int(3),
                     bindings: vec![ParamBinding {
                         step: evanalyzer_cfg::core_types::StepId(1),
@@ -6436,6 +6590,97 @@ mod tests {
             ParamValue::Int(5)
         );
         assert_eq!(card(&ui).parameters.row_data(0).unwrap().value, "5");
+    }
+
+    #[test]
+    fn a_group_parameter_in_a_section_shows_its_header_on_the_card() {
+        use evanalyzer_cfg::settings::command_groups::{
+            GroupDefinition, GroupInstance, GroupParameterDef, ParamBinding, ParamValue,
+        };
+        use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
+        let group = PipelineStepSettings {
+            id: evanalyzer_cfg::core_types::StepId(2),
+            enabled: true,
+            content: StepContent::Group(GroupInstance {
+                key: "SMOOTH".into(),
+                values: Default::default(),
+            }),
+        };
+        let (ui, ui_state, controller) = selected(vec![group]);
+        let parameter = |key: &str, label: &str, section: &str| GroupParameterDef {
+            key: GroupParamKey::from(key),
+            label: label.into(),
+            description: String::new(),
+            section: section.into(),
+            default: ParamValue::Int(3),
+            bindings: vec![ParamBinding {
+                step: evanalyzer_cfg::core_types::StepId(1),
+                param: "kernel_size".into(),
+            }],
+        };
+        ui_state
+            .get_project_write()
+            .command_groups
+            .push(GroupDefinition {
+                key: "SMOOTH".into(),
+                meta: Default::default(),
+                classes: vec![],
+                steps: vec![PipelineStepSettings {
+                    id: evanalyzer_cfg::core_types::StepId(1),
+                    enabled: true,
+                    content: StepContent::Command(PipelineCommand::Blur(BlurSettings::default())),
+                }],
+                parameters: vec![
+                    parameter("1", "Smoothing", "Filtering"),
+                    parameter("2", "Size", ""),
+                ],
+                origin: None,
+            });
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+
+        let card = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(0)
+            .unwrap();
+        let shown: Vec<(String, String, String)> = card
+            .parameters
+            .iter()
+            .map(|p| {
+                (
+                    p.display_name.to_string(),
+                    p.section_header.to_string(),
+                    p.section.to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("Size".into(), "".into(), "".into()),
+                ("Smoothing".into(), "Filtering".into(), "Filtering".into()),
+            ]
+        );
+        let sections: Vec<String> = card.sections.iter().map(|s| s.to_string()).collect();
+        assert_eq!(sections, ["", "Filtering"]);
+    }
+
+    #[test]
+    fn the_expand_button_opens_the_steps_settings_dialog() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Threshold")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        let step_id = panel.get_active_commands().row_data(0).unwrap().step_id;
+        panel.invoke_open_step_settings(step_id.clone());
+        assert_eq!(panel.get_settings_step_id(), step_id);
+        assert_eq!(
+            ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::StepSettings
+        );
+        assert!(
+            panel.get_active_commands().row_data(0).unwrap().show_advanced,
+            "its advanced settings are there to pick and search"
+        );
     }
 
     #[test]
@@ -7258,6 +7503,7 @@ mod tests {
                 key: GroupParamKey(format!("filler_{i}")),
                 label: format!("Filler {i}"),
                 description: String::new(),
+                section: String::new(),
                 default: ParamValue::Int(0),
                 bindings: vec![ParamBinding {
                     step: evanalyzer_cfg::core_types::StepId(999),

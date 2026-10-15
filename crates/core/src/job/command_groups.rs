@@ -266,6 +266,7 @@ pub fn group_parameters(
             })?;
             shown.name = parameter.key.to_string();
             shown.display_name = parameter.label.clone();
+            shown.section = parameter.section.clone();
             if !parameter.description.is_empty() {
                 shown.description = parameter.description.clone();
             }
@@ -612,6 +613,7 @@ mod tests {
             key: GroupParamKey(id.to_string()),
             label: format!("Parameter {id}"),
             description: String::new(),
+            section: String::new(),
             default,
             bindings: bindings
                 .iter()

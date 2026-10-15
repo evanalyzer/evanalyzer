@@ -93,3 +93,11 @@
 - [ ] `Object::measure_intensities`/`overlaps` are scalar nested loops, not parallelized (low severity — object bboxes are usually small) — [`object.rs:634-755`](crates/core/src/object.rs#L634)
 - [ ] GUI: command-picker filter rebuilds 5 `Vec`s on every keystroke with no debounce — low impact while the command list stays small — [`pipelines_controller.rs:1465-1502`](crates/gui/src/editor/pipelines_controller.rs#L1465)
 - [ ] `save_image.rs` full-buffer `map().collect()` per save call is sequential — low severity, debug/checkpoint path only — [`save_image.rs:78-158`](crates/core/src/algos/math/save_image.rs#L78)
+
+
+
+# Grouping
+
+- [x] If group or command name is too long the question mark to the right is not shown any more
+- [x] To organize group and command paramters allow to define a "parameter category/group" all parameters in same categeory get an own section in the parameter list in the ui. For algos this should be deifned using #cmdsmeta for group parameters an optional category field should be added which is editable by the user
+- [x] Expand featute for commands in the list. If a command or group gets many parameters the list may get a little bit overloaded. An exapnd feature would be noce which when clicked opens the command/group settings in a bigger dialog which shows the paremeter better organized simialr to the project settings.

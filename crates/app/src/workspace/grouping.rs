@@ -252,6 +252,7 @@ pub fn group_steps(
                     key,
                     label: class_name.clone(),
                     description: String::new(),
+                    section: String::new(),
                     default: ParamValue::Text(class.to_text()),
                     bindings,
                 });
@@ -281,6 +282,7 @@ pub fn group_steps(
             key,
             label,
             description: String::new(),
+            section: String::new(),
             default: ParamValue::Int(channel as i64),
             bindings: ids
                 .into_iter()
@@ -578,6 +580,7 @@ pub fn toggle_exposed(
         key: new_parameter_key(definition, label),
         label: label.to_string(),
         description: String::new(),
+        section: String::new(),
         default: evanalyzer_core::value_from_text(value),
         bindings: vec![ParamBinding {
             step: step_id,
@@ -629,6 +632,20 @@ pub fn edit_parameter(
     };
     parameter.label = label.to_string();
     parameter.description = description.to_string();
+    true
+}
+
+/// Puts parameter `key` of `definition` in section `section` on the group
+/// card (blank: no section). Returns whether the parameter exists.
+pub fn set_parameter_section(
+    definition: &mut GroupDefinition,
+    key: &GroupParamKey,
+    section: &str,
+) -> bool {
+    let Some(parameter) = definition.parameters.iter_mut().find(|p| &p.key == key) else {
+        return false;
+    };
+    parameter.section = section.trim().to_string();
     true
 }
 
@@ -1733,6 +1750,16 @@ mod tests {
             &GroupParamKey::from("999"),
             "x",
             ""
+        ));
+
+        assert!(set_parameter_section(definition, &last, "  Filtering "));
+        assert_eq!(definition.parameters.last().unwrap().section, "Filtering");
+        assert!(set_parameter_section(definition, &last, "   "));
+        assert_eq!(definition.parameters.last().unwrap().section, "");
+        assert!(!set_parameter_section(
+            definition,
+            &GroupParamKey::from("999"),
+            "x"
         ));
 
         assert!(move_parameter(definition, &last, -1));

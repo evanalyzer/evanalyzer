@@ -793,6 +793,8 @@ struct FieldMetadata {
     /// the variant choice that's fixed; the variant's own value stays
     /// editable.
     read_only: bool,
+    /// `#[cmdsmeta(section = "...")]`: the section the setting is shown in.
+    section: Option<String>,
 }
 
 /// `#[cmdsmeta(visibility = ...)]` of a setting or a dropdown option.
@@ -847,6 +849,7 @@ impl Default for FieldMetadata {
             file_extensions: None,
             script: false,
             read_only: false,
+            section: None,
         }
     }
 }
@@ -1462,6 +1465,9 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                     metadata.file_extensions = Some(value.value());
                 } else if meta.path.is_ident("read_only") {
                     metadata.read_only = true;
+                } else if meta.path.is_ident("section") {
+                    let value: syn::LitStr = meta.value()?.parse()?;
+                    metadata.section = Some(value.value());
                 } else if meta.path.is_ident("script") {
                     metadata.script = true;
                     if let Ok(stream) = meta.value() {
@@ -1781,7 +1787,7 @@ fn leaf_param_def_literal(
     };
     let advanced = meta.visibility.is_advanced();
     Some(format!(
-        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: {option_advanced_expr} }}",
+        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: {option_advanced_expr}, section: String::new() }}",
     ))
 }
 
@@ -2237,7 +2243,7 @@ fn tuple_variant_param_def_literal(
             "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
         );
         return Some(format!(
-            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}"
+            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![], section: String::new() }}"
         ));
     }
     if ty == "Vec<SegmentationClass>" {
@@ -2248,7 +2254,7 @@ fn tuple_variant_param_def_literal(
             "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
         );
         return Some(format!(
-            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}"
+            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![], section: String::new() }}"
         ));
     }
     let meta = FieldMetadata::default();
@@ -2271,6 +2277,26 @@ fn tuple_variant_param_def_literal(
 /// the visible field set actually change when the user switches the dropdown, rather than just
 /// changing a label's value.
 fn field_to_param_def(
+    field: &FieldInfo,
+    enums: &[EnumInfo],
+    commands: &[CommandInfo],
+    var: &str,
+    name_prefix: &str,
+) -> Vec<String> {
+    let parts = field_param_defs(field, enums, commands, var, name_prefix);
+    // Everything the field contributes (a rich enum's variant fields, a
+    // flattened struct's fields) goes in its section.
+    match &field.meta.section {
+        Some(section) if !parts.is_empty() => vec![format!(
+            "ParameterDef::in_section({}, {section:?})",
+            concat_param_vecs(&parts)
+        )],
+        _ => parts,
+    }
+}
+
+/// [`field_to_param_def`] without the field's section.
+fn field_param_defs(
     field: &FieldInfo,
     enums: &[EnumInfo],
     commands: &[CommandInfo],
@@ -2315,7 +2341,7 @@ fn field_to_param_def(
                 .collect();
             let inner_expr = concat_param_vecs(&inner_parts);
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: {access}.iter().map(|__item| {inner_expr}).collect(), default_value: String::new(), advanced: {advanced}, option_advanced: vec![] }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: {access}.iter().map(|__item| {inner_expr}).collect(), default_value: String::new(), advanced: {advanced}, option_advanced: vec![], section: String::new() }}]"
             )];
         }
         // Vec<ObjectClass> / Vec<SegmentationClass> → multi-select class picker.
@@ -2330,7 +2356,7 @@ fn field_to_param_def(
                 "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
             );
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![], section: String::new() }}]"
             )];
         }
         if inner_ty == "SegmentationClass" {
@@ -2342,7 +2368,7 @@ fn field_to_param_def(
                 "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
             );
             return vec![format!(
-                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![] }}]"
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![], default_value: {default_expr}, advanced: {advanced}, option_advanced: vec![], section: String::new() }}]"
             )];
         }
 

@@ -55,6 +55,9 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         "script",
         // Shown, not editable (the generator renders it as a label).
         "read_only",
+        // Section the setting is shown in, e.g. "Detection" - settings of
+        // the same section are listed together under its header.
+        "section",
     ];
 
     // Validate struct-level #[cmdsmeta(...)]

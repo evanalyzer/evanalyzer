@@ -66,4 +66,45 @@ pub struct ParameterDef {
     /// Per entry of `options` (dropdowns): whether that option is advanced.
     /// Empty when no option is.
     pub option_advanced: Vec<bool>,
+    /// Section the setting is shown in (`#[cmdsmeta(section = "...")]`, or a
+    /// group parameter's section); empty: the unnamed first section.
+    pub section: String,
+}
+
+impl ParameterDef {
+    /// `defs`, all put in section `section`.
+    #[allow(dead_code)]
+    pub fn in_section(mut defs: Vec<ParameterDef>, section: &str) -> Vec<ParameterDef> {
+        for def in &mut defs {
+            def.section = section.to_string();
+        }
+        defs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn in_section_puts_every_setting_in_the_section() {
+        let def = |name: &str| ParameterDef {
+            name: name.into(),
+            display_name: name.into(),
+            description: String::new(),
+            value: String::new(),
+            param_type: ParamType::Number,
+            options: vec![],
+            min: 0.0,
+            max: 0.0,
+            step: 1.0,
+            groups: vec![],
+            default_value: String::new(),
+            advanced: false,
+            option_advanced: vec![],
+            section: "Old".into(),
+        };
+        let defs = ParameterDef::in_section(vec![def("a"), def("b")], "Detection");
+        assert!(defs.iter().all(|d| d.section == "Detection"));
+    }
 }

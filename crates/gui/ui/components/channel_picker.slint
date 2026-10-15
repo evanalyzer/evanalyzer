@@ -164,6 +164,7 @@ export component ImageAddressPicker inherits HorizontalLayout {
     in property <string> kind;
     in property <int> number;
     in property <bool> in-group: false;
+    in property <bool> enabled: true;
     callback changed(string);
 
     // The kinds offered, and which one `kind` is.
@@ -173,6 +174,7 @@ export component ImageAddressPicker inherits HorizontalLayout {
     spacing: 4px;
 
     ComboBox {
+        enabled: root.enabled;
         horizontal-stretch: 1;
         // "Memory": this pipeline's slots; "Shared": slots every pipeline
         // after this one can read (a group's slots show as "Memory").
@@ -204,6 +206,7 @@ export component ImageAddressPicker inherits HorizontalLayout {
     }
 
     if root.kind == "memory" || root.kind == "cache" || root.kind == "group": ComboBox {
+        enabled: root.enabled;
         horizontal-stretch: 2;
         model: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
         current-value: root.number;
