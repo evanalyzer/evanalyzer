@@ -1,20 +1,20 @@
-//! "Group steps": turns consecutive steps of a pipeline into a command group
+//! "Create component": turns consecutive steps of a pipeline into a component
 //! - a new definition in the project, and a step using it in their place.
 //!
-//! [`plan_grouping`] looks at the project classes the steps use and suggests
-//! a role for each ([`ClassRole`]); [`group_steps`] builds the group with the
-//! roles the user confirmed. With every class a parameter or fixed, the group
+//! [`plan_component`] looks at the project classes the steps use and suggests
+//! a role for each ([`ClassRole`]); [`create_component`] builds the component with the
+//! roles the user confirmed. With every class a parameter or fixed, the component
 //! runs exactly the commands the steps ran before.
 
 use chrono::Utc;
 use evanalyzer_cfg::{
     core_types::{
-        GroupParamKey, InternalErrors, ObjectClass, PipelineId, SegmentationClass, StepId,
+        ComponentParamKey, InternalErrors, ObjectClass, PipelineId, SegmentationClass, StepId,
     },
     settings::{
         classification_settings::Class,
-        command_groups::{
-            GroupDefinition, GroupInstance, GroupParameterDef, ParamBinding, ParamValue,
+        components::{
+            ComponentDefinition, ComponentInstance, ComponentParameterDef, ParamBinding, ParamValue,
         },
         meta_data::MetaData,
         parameter_def::{ParamType, ParameterDef},
@@ -30,22 +30,22 @@ use std::ops::RangeInclusive;
 
 use crate::workspace::extensions::utils::assign_step_ids;
 
-/// What a project class becomes in the new group.
+/// What a project class becomes in the new component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClassRole {
-    /// A class of the group's own (`L1`, `L2`, ...): internal, each use of
-    /// the group has its own, and its objects don't reach the results.
+    /// A class of the component's own (`L1`, `L2`, ...): internal, each use of
+    /// the component has its own, and its objects don't reach the results.
     Local,
-    /// A group parameter: each use of the group picks the class (starting
+    /// A component parameter: each use of the component picks the class (starting
     /// with this one).
     Parameter,
-    /// Stays written into the group's steps as it is.
+    /// Stays written into the component's steps as it is.
     Fixed,
 }
 
-/// A project class the steps to group use.
+/// A project class the steps going into the component use.
 #[derive(Debug, Clone, PartialEq)]
-pub struct GroupingClass {
+pub struct ComponentPlanClass {
     pub class: ObjectClass,
     /// The class's name in the project ("Class 5" if it has none).
     pub name: String,
@@ -54,16 +54,16 @@ pub struct GroupingClass {
     pub suggested: ClassRole,
 }
 
-/// What grouping some steps would involve - see [`plan_grouping`].
+/// What making a component of some steps would involve - see [`plan_component`].
 #[derive(Debug, Clone, PartialEq)]
-pub struct GroupingPlan {
-    pub classes: Vec<GroupingClass>,
-    /// Image channels the steps load (Load Image Channel): exposed as group
+pub struct ComponentPlan {
+    pub classes: Vec<ComponentPlanClass>,
+    /// Image channels the steps load (Load Image Channel): exposed as component
     /// parameters.
     pub channels: BTreeSet<u32>,
     /// The pipeline's memory slots only these steps use: they become the
-    /// group's own (each use of the group has its own).
-    pub group_slots: BTreeSet<u32>,
+    /// component's own (each use of the component has its own).
+    pub component_slots: BTreeSet<u32>,
 }
 
 /// The project classes steps `range` of pipeline `pipeline_id` use, each with
@@ -71,11 +71,11 @@ pub struct GroupingPlan {
 /// here → [`ClassRole::Local`] - except a class the steps only know as a
 /// segmentation class with no Extract Objects among them to turn it into
 /// objects ([`ClassRole::Fixed`]: making it local would change nothing).
-pub fn plan_grouping(
+pub fn plan_component(
     project: &ProjectSettings,
     pipeline_id: PipelineId,
     range: RangeInclusive<usize>,
-) -> Result<GroupingPlan, InternalErrors> {
+) -> Result<ComponentPlan, InternalErrors> {
     let steps = selected_steps(project, pipeline_id, &range)?;
     let elsewhere = classes_used_elsewhere(project, pipeline_id, &range);
     let extracts = steps
@@ -87,14 +87,14 @@ pub fn plan_grouping(
     for step in steps {
         match &step.content {
             StepContent::Command(command) => used.extend(command.object_classes()),
-            // A nested group's classes are written inside its own
+            // A nested component's classes are written inside its own
             // definition - they can't be rewritten here.
-            StepContent::Group(_) => {}
+            StepContent::Component(_) => {}
         }
     }
     let nested: BTreeSet<ObjectClass> = steps
         .iter()
-        .filter(|s| matches!(s.content, StepContent::Group(_)))
+        .filter(|s| matches!(s.content, StepContent::Component(_)))
         .flat_map(|s| commands_of(project, s))
         .flat_map(|c| c.object_classes())
         .collect();
@@ -115,7 +115,7 @@ pub fn plan_grouping(
             } else {
                 ClassRole::Local
             };
-            GroupingClass {
+            ComponentPlanClass {
                 class,
                 name: class_name(project, class),
                 used_elsewhere,
@@ -132,19 +132,19 @@ pub fn plan_grouping(
             _ => None,
         })
         .collect();
-    Ok(GroupingPlan {
+    Ok(ComponentPlan {
         classes,
         channels,
-        group_slots: slots_only_used_by(project, pipeline_id, &range),
+        component_slots: slots_only_used_by(project, pipeline_id, &range),
     })
 }
 
-/// Turns steps `range` of pipeline `pipeline_id` into a command group named
+/// Turns steps `range` of pipeline `pipeline_id` into a component named
 /// `name`: a new definition in the project and one step using it in their
-/// place. `roles` says what each class of [`plan_grouping`] becomes (a class
+/// place. `roles` says what each class of [`plan_component`] becomes (a class
 /// left out stays [`ClassRole::Fixed`]); loaded channels become parameters.
 /// Returns the new definition's key.
-pub fn group_steps(
+pub fn create_component(
     project: &mut ProjectSettings,
     pipeline_id: PipelineId,
     range: RangeInclusive<usize>,
@@ -155,11 +155,11 @@ pub fn group_steps(
     let name = name.trim();
     if name.is_empty() {
         return Err(InternalErrors::InvalidArgument(
-            "a command group needs a name".into(),
+            "a component needs a name".into(),
         ));
     }
     let key = unique_key(project, name);
-    let group_slots = slots_only_used_by(project, pipeline_id, &range);
+    let component_slots = slots_only_used_by(project, pipeline_id, &range);
     let names: Vec<(ObjectClass, String, u32)> = roles
         .iter()
         .map(|(class, _)| {
@@ -183,7 +183,7 @@ pub fn group_steps(
         .expect("checked by selected_steps");
     let mut steps: Vec<PipelineStepSettings> = pipeline.steps.drain(range.clone()).collect();
 
-    let mut definition = GroupDefinition {
+    let mut definition = ComponentDefinition {
         key: key.clone(),
         meta: MetaData {
             name: name.to_string(),
@@ -227,7 +227,7 @@ pub fn group_steps(
                     .filter_map(|s| s.command().map(|c| (s.id, c)))
                     .flat_map(|(id, command)| {
                         // Only the object-class side: a segmentation class
-                        // with the class's number is the group's own
+                        // with the class's number is the component's own
                         // business (as for a local class).
                         class_paths(command, *class)
                             .into_iter()
@@ -248,7 +248,7 @@ pub fn group_steps(
                     continue;
                 }
                 let key = new_parameter_key(&definition, class_name);
-                definition.parameters.push(GroupParameterDef {
+                definition.parameters.push(ComponentParameterDef {
                     key,
                     label: class_name.clone(),
                     description: String::new(),
@@ -278,7 +278,7 @@ pub fn group_steps(
             "Channel".into()
         };
         let key = new_parameter_key(&definition, &label);
-        definition.parameters.push(GroupParameterDef {
+        definition.parameters.push(ComponentParameterDef {
             key,
             label,
             description: String::new(),
@@ -294,10 +294,10 @@ pub fn group_steps(
         });
     }
 
-    // The pipeline's slots only these steps use become the group's own.
+    // The pipeline's slots only these steps use become the component's own.
     for step in &mut steps {
         if let StepContent::Command(command) = &mut step.content {
-            *command = slots_to_group(command, &group_slots)?;
+            *command = slots_to_component(command, &component_slots)?;
         }
     }
 
@@ -308,24 +308,24 @@ pub fn group_steps(
         PipelineStepSettings {
             id: StepId::UNASSIGNED,
             enabled: true,
-            content: StepContent::Group(GroupInstance {
+            content: StepContent::Component(ComponentInstance {
                 key: key.clone(),
                 values: Default::default(),
             }),
         },
     );
     assign_step_ids(&mut pipeline.steps);
-    project.command_groups.push(definition);
+    project.components.push(definition);
     Ok(key)
 }
 
-/// Drops the values group steps hold for parameters their group no longer
-/// has (hidden again, removed in the group settings, its step or script
+/// Drops the values component steps hold for parameters their component no longer
+/// has (hidden again, removed in the component settings, its step or script
 /// param gone): a run never reads them, they'd only clutter the file.
 /// Returns how many went.
-pub fn prune_group_values(project: &mut ProjectSettings) -> usize {
-    let parameters: std::collections::HashMap<String, BTreeSet<GroupParamKey>> = project
-        .command_groups
+pub fn prune_component_values(project: &mut ProjectSettings) -> usize {
+    let parameters: std::collections::HashMap<String, BTreeSet<ComponentParamKey>> = project
+        .components
         .iter()
         .map(|d| {
             (
@@ -341,12 +341,12 @@ pub fn prune_group_values(project: &mut ProjectSettings) -> usize {
         .flat_map(|p| p.steps.iter_mut())
         .chain(
             project
-                .command_groups
+                .components
                 .iter_mut()
                 .flat_map(|d| d.steps.iter_mut()),
         );
     for step in steps {
-        if let StepContent::Group(instance) = &mut step.content
+        if let StepContent::Component(instance) = &mut step.content
             && let Some(keys) = parameters.get(&instance.key)
         {
             let before = instance.values.len();
@@ -357,21 +357,21 @@ pub fn prune_group_values(project: &mut ProjectSettings) -> usize {
     pruned
 }
 
-/// How often the project uses group `key`: steps in its pipelines and in
-/// other groups.
-pub fn group_uses(project: &ProjectSettings, key: &str) -> usize {
+/// How often the project uses component `key`: steps in its pipelines and in
+/// other components.
+pub fn component_uses(project: &ProjectSettings, key: &str) -> usize {
     project
         .pipelines
         .iter()
         .flat_map(|p| p.steps.iter())
-        .chain(project.command_groups.iter().flat_map(|d| d.steps.iter()))
-        .filter(|step| matches!(&step.content, StepContent::Group(i) if i.key == key))
+        .chain(project.components.iter().flat_map(|d| d.steps.iter()))
+        .filter(|step| matches!(&step.content, StepContent::Component(i) if i.key == key))
         .count()
 }
 
-/// The keys of the groups no pipeline uses - not even through another
-/// group (a group only an unused group uses is unused too).
-pub fn unused_groups(project: &ProjectSettings) -> Vec<String> {
+/// The keys of the components no pipeline uses - not even through another
+/// component (a component only an unused component uses is unused too).
+pub fn unused_components(project: &ProjectSettings) -> Vec<String> {
     let mut used: Vec<&str> = Vec::new();
     let mut next: Vec<&PipelineStepSettings> = project
         .pipelines
@@ -379,64 +379,60 @@ pub fn unused_groups(project: &ProjectSettings) -> Vec<String> {
         .flat_map(|p| p.steps.iter())
         .collect();
     while let Some(step) = next.pop() {
-        if let StepContent::Group(instance) = &step.content
+        if let StepContent::Component(instance) = &step.content
             && !used.contains(&instance.key.as_str())
         {
             used.push(&instance.key);
-            if let Some(definition) = project
-                .command_groups
-                .iter()
-                .find(|d| d.key == instance.key)
-            {
+            if let Some(definition) = project.components.iter().find(|d| d.key == instance.key) {
                 next.extend(definition.steps.iter());
             }
         }
     }
     project
-        .command_groups
+        .components
         .iter()
         .filter(|d| !used.contains(&d.key.as_str()))
         .map(|d| d.key.clone())
         .collect()
 }
 
-/// Removes group `key` from the project - refused while a pipeline uses it.
-pub fn remove_group(project: &mut ProjectSettings, key: &str) -> Result<(), InternalErrors> {
-    if !unused_groups(project).iter().any(|k| k == key) {
+/// Removes component `key` from the project - refused while a pipeline uses it.
+pub fn remove_component(project: &mut ProjectSettings, key: &str) -> Result<(), InternalErrors> {
+    if !unused_components(project).iter().any(|k| k == key) {
         return Err(InternalErrors::InvalidArgument(format!(
-            "command group {key} is still used - remove the steps using it first"
+            "component {key} is still used - remove the steps using it first"
         )));
     }
-    project.command_groups.retain(|d| d.key != key);
+    project.components.retain(|d| d.key != key);
     Ok(())
 }
 
-/// Removes every group no pipeline uses; returns their keys.
-pub fn remove_unused_groups(project: &mut ProjectSettings) -> Vec<String> {
-    let unused = unused_groups(project);
-    project.command_groups.retain(|d| !unused.contains(&d.key));
+/// Removes every component no pipeline uses; returns their keys.
+pub fn remove_unused_components(project: &mut ProjectSettings) -> Vec<String> {
+    let unused = unused_components(project);
+    project.components.retain(|d| !unused.contains(&d.key));
     unused
 }
 
 /// "Only this step": gives step `step_index` of pipeline `pipeline_id` (a
-/// group step) a copy of its group - "Name (2)" with a key of its own - so
-/// changes to it don't affect the group's other uses. Returns the copy's key.
-pub fn clone_group_for_step(
+/// component step) a copy of its component - "Name (2)" with a key of its own - so
+/// changes to it don't affect the component's other uses. Returns the copy's key.
+pub fn clone_component_for_step(
     project: &mut ProjectSettings,
     pipeline_id: PipelineId,
     step_index: usize,
 ) -> Result<String, InternalErrors> {
-    let key = group_key_of(project, pipeline_id, step_index)?;
+    let key = component_key_of(project, pipeline_id, step_index)?;
     let mut copy = project
-        .command_groups
+        .components
         .iter()
         .find(|d| d.key == key)
         .cloned()
-        .ok_or_else(|| InternalErrors::InvalidArgument(format!("no command group {key}")))?;
+        .ok_or_else(|| InternalErrors::InvalidArgument(format!("no component {key}")))?;
     let base = copy.meta.name.clone();
     let name = (2..)
         .map(|n| format!("{base} ({n})"))
-        .find(|name| !project.command_groups.iter().any(|d| d.meta.name == *name))
+        .find(|name| !project.components.iter().any(|d| d.meta.name == *name))
         .expect("some number is free");
     copy.key = unique_key(project, &name);
     copy.meta.name = name;
@@ -444,31 +440,34 @@ pub fn clone_group_for_step(
     // Not the library file's version any more.
     copy.origin = None;
     let new_key = copy.key.clone();
-    project.command_groups.push(copy);
-    if let StepContent::Group(instance) = &mut step_mut(project, pipeline_id, step_index)?.content {
+    project.components.push(copy);
+    if let StepContent::Component(instance) =
+        &mut step_mut(project, pipeline_id, step_index)?.content
+    {
         instance.key = new_key.clone();
     }
     Ok(new_key)
 }
 
-/// "Ungroup": replaces step `step_index` of pipeline `pipeline_id` (a group
-/// step) by its group's steps, with the step's values applied. The group's
+/// "Expand component": replaces step `step_index` of pipeline `pipeline_id` (a component
+/// step) by its component's steps, with the step's values applied. The component's
 /// own classes become new project classes (same name and colour) and its
-/// memory slots pipeline slots - both only exist inside a group. The
+/// memory slots pipeline slots - both only exist inside a component. The
 /// definition stays in the project.
-pub fn ungroup(
+pub fn expand_component(
     project: &mut ProjectSettings,
     pipeline_id: PipelineId,
     step_index: usize,
 ) -> Result<(), InternalErrors> {
-    let key = group_key_of(project, pipeline_id, step_index)?;
-    let StepContent::Group(instance) = &step_mut(project, pipeline_id, step_index)?.content else {
-        unreachable!("checked by group_key_of");
+    let key = component_key_of(project, pipeline_id, step_index)?;
+    let StepContent::Component(instance) = &step_mut(project, pipeline_id, step_index)?.content
+    else {
+        unreachable!("checked by component_key_of");
     };
     let instance = instance.clone();
-    let steps = evanalyzer_core::group_steps_with_values(&instance, &project.command_groups)?;
+    let steps = evanalyzer_core::component_steps_with_values(&instance, &project.components)?;
     let definition = project
-        .command_groups
+        .components
         .iter()
         .find(|d| d.key == key)
         .expect("expanded above")
@@ -500,7 +499,7 @@ pub fn ungroup(
         .map(|mut step| {
             step.id = StepId::UNASSIGNED;
             if let StepContent::Command(command) = &mut step.content {
-                *command = outside_the_group(command, &to_global)?;
+                *command = outside_the_component(command, &to_global)?;
             }
             Ok(step)
         })
@@ -509,7 +508,7 @@ pub fn ungroup(
         .pipelines
         .iter_mut()
         .find(|p| p.id == pipeline_id)
-        .expect("checked by group_key_of");
+        .expect("checked by component_key_of");
     pipeline
         .steps
         .splice(step_index..=step_index, steps.drain(..));
@@ -517,10 +516,10 @@ pub fn ungroup(
     Ok(())
 }
 
-/// `command` as it reads outside its group: its local classes the project
-/// classes `to_global` names, its group memory slots pipeline slots.
+/// `command` as it reads outside its component: its local classes the project
+/// classes `to_global` names, its component memory slots pipeline slots.
 /// Rewritten in its file form, so every setting holding them is covered.
-fn outside_the_group(
+fn outside_the_component(
     command: &PipelineCommand,
     to_global: &std::collections::BTreeMap<u32, u32>,
 ) -> Result<PipelineCommand, InternalErrors> {
@@ -536,7 +535,7 @@ fn outside_the_group(
                         *value = serde_json::json!({ "GLOBAL": global });
                         return;
                     }
-                    if let Some(slot) = map.remove("groupContext") {
+                    if let Some(slot) = map.remove("componentContext") {
                         map.insert("pipelineContext".into(), slot);
                         return;
                     }
@@ -558,7 +557,7 @@ fn outside_the_group(
 /// it again: the binding goes, and the parameter once nothing is bound to
 /// it. Returns whether it's exposed now.
 pub fn toggle_exposed(
-    definition: &mut GroupDefinition,
+    definition: &mut ComponentDefinition,
     step_id: StepId,
     path: &str,
     label: &str,
@@ -576,7 +575,7 @@ pub fn toggle_exposed(
         definition.parameters.retain(|p| !p.bindings.is_empty());
         return false;
     }
-    definition.parameters.push(GroupParameterDef {
+    definition.parameters.push(ComponentParameterDef {
         key: new_parameter_key(definition, label),
         label: label.to_string(),
         description: String::new(),
@@ -594,7 +593,7 @@ pub fn toggle_exposed(
 /// `snake_case` ("Min Size" → `min_size`), with `_2`, `_3` … if taken. It
 /// stays when the label changes later - the instances' values are keyed by
 /// it.
-pub fn new_parameter_key(definition: &GroupDefinition, label: &str) -> GroupParamKey {
+pub fn new_parameter_key(definition: &ComponentDefinition, label: &str) -> ComponentParamKey {
     let mut base = String::new();
     for c in label.trim().chars() {
         if c.is_alphanumeric() {
@@ -616,14 +615,14 @@ pub fn new_parameter_key(definition: &GroupDefinition, label: &str) -> GroupPara
         key = format!("{base}_{n}");
         n += 1;
     }
-    GroupParamKey(key)
+    ComponentParamKey(key)
 }
 
 /// Renames parameter `key` of `definition` (its key stays) and sets its
 /// help text. Returns whether the parameter exists.
 pub fn edit_parameter(
-    definition: &mut GroupDefinition,
-    key: &GroupParamKey,
+    definition: &mut ComponentDefinition,
+    key: &ComponentParamKey,
     label: &str,
     description: &str,
 ) -> bool {
@@ -635,11 +634,11 @@ pub fn edit_parameter(
     true
 }
 
-/// Puts parameter `key` of `definition` in section `section` on the group
+/// Puts parameter `key` of `definition` in section `section` on the component
 /// card (blank: no section). Returns whether the parameter exists.
 pub fn set_parameter_section(
-    definition: &mut GroupDefinition,
-    key: &GroupParamKey,
+    definition: &mut ComponentDefinition,
+    key: &ComponentParamKey,
     section: &str,
 ) -> bool {
     let Some(parameter) = definition.parameters.iter_mut().find(|p| &p.key == key) else {
@@ -650,8 +649,12 @@ pub fn set_parameter_section(
 }
 
 /// Moves parameter `key` of `definition` `delta` places (-1 up, +1 down) -
-/// the order on the group card. Returns whether it moved.
-pub fn move_parameter(definition: &mut GroupDefinition, key: &GroupParamKey, delta: i32) -> bool {
+/// the order on the component card. Returns whether it moved.
+pub fn move_parameter(
+    definition: &mut ComponentDefinition,
+    key: &ComponentParamKey,
+    delta: i32,
+) -> bool {
     let Some(from) = definition.parameters.iter().position(|p| &p.key == key) else {
         return false;
     };
@@ -665,8 +668,8 @@ pub fn move_parameter(definition: &mut GroupDefinition, key: &GroupParamKey, del
 }
 
 /// Stops exposing parameter `key` of `definition`: the settings it set keep
-/// the group's own values. Returns whether it existed.
-pub fn remove_parameter(definition: &mut GroupDefinition, key: &GroupParamKey) -> bool {
+/// the component's own values. Returns whether it existed.
+pub fn remove_parameter(definition: &mut ComponentDefinition, key: &ComponentParamKey) -> bool {
     let before = definition.parameters.len();
     definition.parameters.retain(|p| &p.key != key);
     definition.parameters.len() != before
@@ -674,10 +677,10 @@ pub fn remove_parameter(definition: &mut GroupDefinition, key: &GroupParamKey) -
 
 /// The parameter of `definition` that sets `path` of step `step_id`, if any.
 pub fn parameter_for_setting(
-    definition: &GroupDefinition,
+    definition: &ComponentDefinition,
     step_id: StepId,
     path: &str,
-) -> Option<GroupParamKey> {
+) -> Option<ComponentParamKey> {
     definition
         .parameters
         .iter()
@@ -691,7 +694,7 @@ pub fn parameter_for_setting(
 
 /// The setting at `path` of `command` - a top-level one ("min_area") or one
 /// of a list entry ("thresholds.1.min_threshold") - and a label for it as a
-/// group parameter ("Thresholds 2 · Min Threshold").
+/// component parameter ("Thresholds 2 · Min Threshold").
 pub fn setting_at(command: &PipelineCommand, path: &str) -> Option<(ParameterDef, String)> {
     fn find(params: &[ParameterDef], path: &str) -> Option<(ParameterDef, String)> {
         if let Some(p) = params.iter().find(|p| p.name == path) {
@@ -717,21 +720,21 @@ pub fn setting_at(command: &PipelineCommand, path: &str) -> Option<(ParameterDef
     find(&evanalyzer_core::command_parameters(command), path)
 }
 
-/// The parameters of group `key` a setting like `setting` could be added
+/// The parameters of component `key` a setting like `setting` could be added
 /// to: those with the same control - type, and a dropdown's options.
 pub fn compatible_parameters(
-    definitions: &[GroupDefinition],
+    definitions: &[ComponentDefinition],
     key: &str,
     setting: &ParameterDef,
-) -> Vec<(GroupParamKey, String)> {
+) -> Vec<(ComponentParamKey, String)> {
     let Some(definition) = definitions.iter().find(|d| d.key == key) else {
         return Vec::new();
     };
-    let instance = GroupInstance {
+    let instance = ComponentInstance {
         key: key.to_string(),
         values: Default::default(),
     };
-    let Ok(shown) = evanalyzer_core::group_parameters(&instance, definitions) else {
+    let Ok(shown) = evanalyzer_core::component_parameters(&instance, definitions) else {
         return Vec::new();
     };
     definition
@@ -743,7 +746,7 @@ pub fn compatible_parameters(
         .collect()
 }
 
-/// Whether a group parameter shown with the control of setting `shown`
+/// Whether a component parameter shown with the control of setting `shown`
 /// (its first binding) can also set `other`: the same type and options -
 /// or `shown` is a single object class and `other` a class list (the value
 /// is then a list of one). Not the other way round: a list picks several
@@ -764,8 +767,8 @@ pub(crate) fn same_kind(shown: &ParameterDef, other: &ParameterDef) -> bool {
 /// Adds setting `path` of step `step_id` to parameter `key` of
 /// `definition`: the parameter sets it too from now on.
 pub fn add_binding(
-    definition: &mut GroupDefinition,
-    key: &GroupParamKey,
+    definition: &mut ComponentDefinition,
+    key: &ComponentParamKey,
     step_id: StepId,
     path: &str,
 ) -> Result<(), InternalErrors> {
@@ -774,7 +777,7 @@ pub fn add_binding(
         .iter_mut()
         .find(|p| &p.key == key)
         .ok_or_else(|| {
-            InternalErrors::InvalidArgument(format!("the group has no parameter {key}"))
+            InternalErrors::InvalidArgument(format!("the component has no parameter {key}"))
         })?;
     let binding = ParamBinding {
         step: step_id,
@@ -789,24 +792,28 @@ pub fn add_binding(
 }
 
 /// `definition`'s steps with each parameter's default written into the
-/// settings it sets - what a use of the group without values of its own
+/// settings it sets - what a use of the component without values of its own
 /// runs. A bound setting's own value never runs: the parameter's replaces
 /// it. Unchanged if a default can't be applied (the checks report that).
-pub fn apply_defaults(definition: &GroupDefinition) -> Vec<PipelineStepSettings> {
-    let instance = GroupInstance {
+pub fn apply_defaults(definition: &ComponentDefinition) -> Vec<PipelineStepSettings> {
+    let instance = ComponentInstance {
         key: definition.key.clone(),
         values: Default::default(),
     };
-    evanalyzer_core::group_steps_with_values(&instance, std::slice::from_ref(definition))
+    evanalyzer_core::component_steps_with_values(&instance, std::slice::from_ref(definition))
         .unwrap_or_else(|_| definition.steps.clone())
 }
 
 /// Setting `path` of step `step_id` of `definition` was edited (in the
-/// opened group). If a parameter sets it, its new value becomes the
+/// opened component). If a parameter sets it, its new value becomes the
 /// parameter's default - else the edit would be lost, the parameter's value
 /// replaces it at every run - and every setting the parameter sets shows
 /// it. Returns whether a parameter sets it.
-pub fn bound_setting_edited(definition: &mut GroupDefinition, step_id: StepId, path: &str) -> bool {
+pub fn bound_setting_edited(
+    definition: &mut ComponentDefinition,
+    step_id: StepId,
+    path: &str,
+) -> bool {
     let Some(key) = parameter_for_setting(definition, step_id, path) else {
         return false;
     };
@@ -827,8 +834,8 @@ pub fn bound_setting_edited(definition: &mut GroupDefinition, step_id: StepId, p
     true
 }
 
-/// The settings of step `step_id` that are group parameters.
-pub fn exposed_settings(definition: &GroupDefinition, step_id: StepId) -> Vec<String> {
+/// The settings of step `step_id` that are component parameters.
+pub fn exposed_settings(definition: &ComponentDefinition, step_id: StepId) -> Vec<String> {
     definition
         .parameters
         .iter()
@@ -844,7 +851,7 @@ pub fn exposed_settings(definition: &GroupDefinition, step_id: StepId) -> Vec<St
 /// ("thresholds.3.min" → "thresholds.2.min") - so they keep setting the
 /// same entry.
 pub fn list_entry_removed(
-    definition: &mut GroupDefinition,
+    definition: &mut ComponentDefinition,
     step_id: StepId,
     list: &str,
     index: usize,
@@ -874,8 +881,8 @@ pub fn list_entry_removed(
 }
 
 /// Removes step `index` of `definition` and every binding to it (and a
-/// parameter left without bindings) - so the group still works.
-pub fn remove_group_step(definition: &mut GroupDefinition, index: usize) {
+/// parameter left without bindings) - so the component still works.
+pub fn remove_component_step(definition: &mut ComponentDefinition, index: usize) {
     if index >= definition.steps.len() {
         return;
     }
@@ -904,16 +911,16 @@ fn step_mut(
         })
 }
 
-/// The key of the group step `step_index` of pipeline `pipeline_id` uses.
-fn group_key_of(
+/// The key of the component step `step_index` of pipeline `pipeline_id` uses.
+fn component_key_of(
     project: &mut ProjectSettings,
     pipeline_id: PipelineId,
     step_index: usize,
 ) -> Result<String, InternalErrors> {
     match &step_mut(project, pipeline_id, step_index)?.content {
-        StepContent::Group(instance) => Ok(instance.key.clone()),
+        StepContent::Component(instance) => Ok(instance.key.clone()),
         StepContent::Command(_) => Err(InternalErrors::InvalidArgument(format!(
-            "step {} isn't a command group",
+            "step {} isn't a component",
             step_index + 1
         ))),
     }
@@ -926,7 +933,7 @@ enum PathKind {
     /// only this class.
     Single,
     /// One entry of a class list with other classes too (e.g.
-    /// "input_classes" = 1, 3) - a group parameter can't set one entry.
+    /// "input_classes" = 1, 3) - a component parameter can't set one entry.
     Multi,
     /// A segmentation class with the class's number (a Threshold's class -
     /// the same number by convention).
@@ -993,9 +1000,9 @@ fn class_paths(command: &PipelineCommand, class: ObjectClass) -> Vec<(String, Pa
 }
 
 /// Rewrites every reference of `command` to project class `class` to the
-/// group's class `local`. If `segmented_here` (a step being grouped makes the
+/// component's class `local`. If `segmented_here` (a step going into the component makes the
 /// segmentation class with the class's number), an Extract Objects maps that
-/// segmentation class to `local`, so its objects get the group's class.
+/// segmentation class to `local`, so its objects get the component's class.
 fn make_local(
     command: &mut PipelineCommand,
     class: ObjectClass,
@@ -1027,7 +1034,7 @@ fn make_local(
             != Some(value.as_str())
         {
             return Err(InternalErrors::InvalidArgument(format!(
-                "{} doesn't take the group class {} for {path}",
+                "{} doesn't take the component class {} for {path}",
                 command.name(),
                 local.to_text()
             )));
@@ -1093,10 +1100,10 @@ fn selected_steps<'a>(
     })
 }
 
-/// The commands `step` runs (a group's with its values) - none if it can't
+/// The commands `step` runs (a component's with its values) - none if it can't
 /// be expanded.
 fn commands_of(project: &ProjectSettings, step: &PipelineStepSettings) -> Vec<PipelineCommand> {
-    expand_step(step, &project.command_groups, &mut ScopeCounter::default())
+    expand_step(step, &project.components, &mut ScopeCounter::default())
         .map(|commands| {
             commands
                 .into_iter()
@@ -1132,7 +1139,7 @@ fn pipeline_slots(command: &PipelineCommand) -> BTreeSet<u32> {
 }
 
 /// The memory slots of pipeline `pipeline_id` only its steps `range` use -
-/// not its other steps, nor a group among the steps (whose definition can't
+/// not its other steps, nor a component among the steps (whose definition can't
 /// be rewritten here).
 fn slots_only_used_by(
     project: &ProjectSettings,
@@ -1156,8 +1163,8 @@ fn slots_only_used_by(
     inside.difference(&elsewhere).copied().collect()
 }
 
-/// `command` with the pipeline memory slots `slots` as group slots.
-fn slots_to_group(
+/// `command` with the pipeline memory slots `slots` as component slots.
+fn slots_to_component(
     command: &PipelineCommand,
     slots: &BTreeSet<u32>,
 ) -> Result<PipelineCommand, InternalErrors> {
@@ -1168,7 +1175,7 @@ fn slots_to_group(
                     && let Some(slot) = map.get("pipelineContext").and_then(|v| v.as_u64())
                     && slots.contains(&(slot as u32))
                 {
-                    *value = serde_json::json!({ "groupContext": slot });
+                    *value = serde_json::json!({ "componentContext": slot });
                     return;
                 }
                 map.values_mut().for_each(|v| rewrite(v, slots));
@@ -1187,7 +1194,7 @@ fn slots_to_group(
 }
 
 /// The classes the project uses outside steps `range` of pipeline
-/// `pipeline_id`: in other steps and pipelines (inside groups too), in hand
+/// `pipeline_id`: in other steps and pipelines (inside components too), in hand
 /// annotations, in the tile merge settings.
 fn classes_used_elsewhere(
     project: &ProjectSettings,
@@ -1230,7 +1237,7 @@ fn class_name(project: &ProjectSettings, class: ObjectClass) -> String {
     }
 }
 
-/// A key for a group named `name` that no group of the project has:
+/// A key for a component named `name` that no component of the project has:
 /// SCREAMING_SNAKE_CASE of the name, numbered if taken ("CELLS_2").
 fn unique_key(project: &ProjectSettings, name: &str) -> String {
     let mut base: String = name
@@ -1248,9 +1255,9 @@ fn unique_key(project: &ProjectSettings, name: &str) -> String {
         base = base.replace("__", "_");
     }
     if base.is_empty() {
-        base = "GROUP".into();
+        base = "COMPONENT".into();
     }
-    let taken = |key: &str| project.command_groups.iter().any(|d| d.key == key);
+    let taken = |key: &str| project.components.iter().any(|d| d.key == key);
     if !taken(&base) {
         return base;
     }
@@ -1349,7 +1356,7 @@ mod tests {
         project
     }
 
-    fn roles(plan: &GroupingPlan) -> Vec<(ObjectClass, ClassRole)> {
+    fn roles(plan: &ComponentPlan) -> Vec<(ObjectClass, ClassRole)> {
         plan.classes
             .iter()
             .map(|c| (c.class, c.suggested))
@@ -1370,7 +1377,7 @@ mod tests {
 
     #[test]
     fn classes_used_elsewhere_are_suggested_as_parameters_the_others_as_local() {
-        let plan = plan_grouping(&project(), PipelineId(1), 2..=4).unwrap();
+        let plan = plan_component(&project(), PipelineId(1), 2..=4).unwrap();
         assert_eq!(
             roles(&plan),
             [
@@ -1384,10 +1391,10 @@ mod tests {
     }
 
     #[test]
-    fn grouping_puts_the_steps_into_a_definition_and_a_step_using_it_in_their_place() {
+    fn creating_a_component_puts_the_steps_into_a_definition_and_a_step_using_it_in_their_place() {
         let mut project = project();
-        let plan = plan_grouping(&project, PipelineId(1), 2..=4).unwrap();
-        let key = group_steps(
+        let plan = plan_component(&project, PipelineId(1), 2..=4).unwrap();
+        let key = create_component(
             &mut project,
             PipelineId(1),
             2..=4,
@@ -1399,11 +1406,11 @@ mod tests {
         assert_eq!(key, "CELL_RECONSTRUCTION");
         let steps = &project.pipelines[0].steps;
         assert_eq!(steps.len(), 3);
-        let StepContent::Group(instance) = &steps[2].content else {
-            panic!("a group step in their place");
+        let StepContent::Component(instance) = &steps[2].content else {
+            panic!("a component step in their place");
         };
         assert_eq!(instance.key, key);
-        let definition = &project.command_groups[0];
+        let definition = &project.components[0];
         assert_eq!(definition.meta.name, "Cell reconstruction");
         assert_eq!(definition.steps.len(), 3);
         assert_eq!(definition.classes.len(), 1);
@@ -1421,7 +1428,7 @@ mod tests {
             .collect();
         assert_eq!(labels, ["Nuclei", "Cells"]);
 
-        // What runs: the seeds are the group's own now.
+        // What runs: the seeds are the component's own now.
         let commands = commands_of_step(&project, 0, 2);
         let PipelineCommand::ClassifyObjects(classify) = &commands[1] else {
             panic!("classify")
@@ -1440,23 +1447,23 @@ mod tests {
     }
 
     #[test]
-    fn without_local_classes_the_group_runs_exactly_what_the_steps_ran() {
+    fn without_local_classes_the_component_runs_exactly_what_the_steps_ran() {
         let mut project = project();
         let before: Vec<PipelineCommand> = project.pipelines[0].steps[2..=4]
             .iter()
             .filter_map(|s| s.command().cloned())
             .collect();
-        let plan = plan_grouping(&project, PipelineId(1), 2..=4).unwrap();
+        let plan = plan_component(&project, PipelineId(1), 2..=4).unwrap();
         let roles: Vec<_> = plan
             .classes
             .iter()
             .map(|c| (c.class, ClassRole::Parameter))
             .collect();
-        group_steps(&mut project, PipelineId(1), 2..=4, "Cells", &roles).unwrap();
+        create_component(&mut project, PipelineId(1), 2..=4, "Cells", &roles).unwrap();
 
         assert_eq!(json(commands_of_step(&project, 0, 2)), json(before));
         // Each use can pick other classes: a parameter per class.
-        assert_eq!(project.command_groups[0].parameters.len(), 3);
+        assert_eq!(project.components[0].parameters.len(), 3);
     }
 
     #[test]
@@ -1482,18 +1489,18 @@ mod tests {
                 ),
             ],
         ));
-        let plan = plan_grouping(&project, PipelineId(3), 0..=3).unwrap();
+        let plan = plan_component(&project, PipelineId(3), 0..=3).unwrap();
         assert_eq!(roles(&plan), [(ObjectClass::Global(7), ClassRole::Local)]);
         assert_eq!(plan.channels, BTreeSet::from([1]));
 
-        group_steps(&mut project, PipelineId(3), 0..=3, "Spots", &roles(&plan)).unwrap();
+        create_component(&mut project, PipelineId(3), 0..=3, "Spots", &roles(&plan)).unwrap();
         let commands = commands_of_step(&project, 2, 0);
         let PipelineCommand::ExtractObjects(extract) = &commands[3] else {
             panic!("extract")
         };
         assert_eq!(extract.class_mapping.len(), 1);
         assert_eq!(extract.class_mapping[0].object_class, ObjectClass::Local(1));
-        let channel = &project.command_groups[0].parameters[0];
+        let channel = &project.components[0].parameters[0];
         assert_eq!(
             (channel.label.as_str(), &channel.default),
             ("Channel", &ParamValue::Int(1))
@@ -1506,7 +1513,7 @@ mod tests {
         project
             .pipelines
             .push(pipeline(3, vec![step(1, threshold(8))]));
-        let plan = plan_grouping(&project, PipelineId(3), 0..=0).unwrap();
+        let plan = plan_component(&project, PipelineId(3), 0..=0).unwrap();
         assert_eq!(roles(&plan), [(ObjectClass::Global(8), ClassRole::Fixed)]);
     }
 
@@ -1515,25 +1522,25 @@ mod tests {
         let mut project = project();
         let none: [(ObjectClass, ClassRole); 0] = [];
         assert_eq!(
-            group_steps(&mut project, PipelineId(1), 1..=1, "Cells!", &none).unwrap(),
+            create_component(&mut project, PipelineId(1), 1..=1, "Cells!", &none).unwrap(),
             "CELLS"
         );
         assert_eq!(
-            group_steps(&mut project, PipelineId(1), 1..=1, "cells", &none).unwrap(),
+            create_component(&mut project, PipelineId(1), 1..=1, "cells", &none).unwrap(),
             "CELLS_2"
         );
-        assert!(group_steps(&mut project, PipelineId(1), 0..=0, "  ", &none).is_err());
-        assert!(group_steps(&mut project, PipelineId(1), 0..=9, "Too many", &none).is_err());
-        assert!(plan_grouping(&project, PipelineId(9), 0..=0).is_err());
+        assert!(create_component(&mut project, PipelineId(1), 0..=0, "  ", &none).is_err());
+        assert!(create_component(&mut project, PipelineId(1), 0..=9, "Too many", &none).is_err());
+        assert!(plan_component(&project, PipelineId(9), 0..=0).is_err());
     }
 
-    // ---- Open, ungroup, expose ----
+    // ---- Open, Expand, expose ----
 
-    /// `project()` with steps 3-5 of pipeline 1 grouped - "Seeds" internal.
-    fn grouped() -> ProjectSettings {
+    /// `project()` with steps 3-5 of pipeline 1 made a component - "Seeds" internal.
+    fn with_component() -> ProjectSettings {
         let mut project = project();
-        let plan = plan_grouping(&project, PipelineId(1), 2..=4).unwrap();
-        group_steps(
+        let plan = plan_component(&project, PipelineId(1), 2..=4).unwrap();
+        create_component(
             &mut project,
             PipelineId(1),
             2..=4,
@@ -1545,9 +1552,9 @@ mod tests {
     }
 
     #[test]
-    fn ungrouping_puts_the_steps_back_with_the_groups_classes_as_project_classes() {
-        let mut project = grouped();
-        ungroup(&mut project, PipelineId(1), 2).unwrap();
+    fn expanding_puts_the_steps_back_with_the_groups_classes_as_project_classes() {
+        let mut project = with_component();
+        expand_component(&mut project, PipelineId(1), 2).unwrap();
 
         let steps = &project.pipelines[0].steps;
         assert_eq!(steps.len(), 5);
@@ -1556,7 +1563,7 @@ mod tests {
             .classes()
             .iter()
             .find(|c| c.name == "Seeds" && c.id != 2)
-            .expect("a new project class for the group's \"Seeds\"");
+            .expect("a new project class for the component's \"Seeds\"");
         let PipelineCommand::ClassifyObjects(classify) = steps[3].command().unwrap() else {
             panic!("classify")
         };
@@ -1570,17 +1577,17 @@ mod tests {
         );
         let ids: BTreeSet<StepId> = steps.iter().map(|s| s.id).collect();
         assert_eq!(ids.len(), 5, "every step its own id");
-        assert_eq!(project.command_groups.len(), 1, "the definition stays");
+        assert_eq!(project.components.len(), 1, "the definition stays");
     }
 
     #[test]
-    fn ungrouping_turns_group_memory_slots_into_pipeline_slots() {
+    fn expanding_turns_group_memory_slots_into_pipeline_slots() {
         use evanalyzer_cfg::core_types::MemoryId;
         use evanalyzer_cfg::settings::pipeline_command_settings::{
             ImageCacheSettings, MathImageCacheImageCacheModeSettings,
         };
         let mut project = project();
-        project.command_groups.push(GroupDefinition {
+        project.components.push(ComponentDefinition {
             key: "STORE".into(),
             meta: Default::default(),
             classes: vec![],
@@ -1588,7 +1595,7 @@ mod tests {
                 1,
                 PipelineCommand::ImageCache(ImageCacheSettings {
                     mode: MathImageCacheImageCacheModeSettings::Store,
-                    address: ImageAddress::Memory(MemoryId::GroupContext(2)),
+                    address: ImageAddress::Memory(MemoryId::ComponentContext(2)),
                 }),
             )],
             parameters: vec![],
@@ -1597,12 +1604,12 @@ mod tests {
         project.pipelines[1].steps.push(PipelineStepSettings {
             id: StepId(9),
             enabled: true,
-            content: StepContent::Group(GroupInstance {
+            content: StepContent::Component(ComponentInstance {
                 key: "STORE".into(),
                 values: Default::default(),
             }),
         });
-        ungroup(&mut project, PipelineId(2), 1).unwrap();
+        expand_component(&mut project, PipelineId(2), 1).unwrap();
         let PipelineCommand::ImageCache(cache) = project.pipelines[1].steps[1].command().unwrap()
         else {
             panic!("image cache")
@@ -1614,10 +1621,10 @@ mod tests {
     }
 
     /// Steps storing to slot 2 and reading it back: slot 2 becomes the
-    /// group's. Slot 3 is read after the steps too, so it stays the
+    /// component's. Slot 3 is read after the steps too, so it stays the
     /// pipeline's.
     #[test]
-    fn slots_only_the_grouped_steps_use_become_group_slots() {
+    fn slots_only_the_chosen_steps_use_become_component_slots() {
         use evanalyzer_cfg::core_types::MemoryId;
         use evanalyzer_cfg::settings::pipeline_command_settings::{
             ImageCacheSettings, MathImageCacheImageCacheModeSettings,
@@ -1635,11 +1642,11 @@ mod tests {
             step(3, cache(MathImageCacheImageCacheModeSettings::Store, 3)),
             step(4, cache(MathImageCacheImageCacheModeSettings::Load, 3)),
         ];
-        let plan = plan_grouping(&project, PipelineId(1), 0..=2).unwrap();
-        assert_eq!(plan.group_slots, BTreeSet::from([2]));
+        let plan = plan_component(&project, PipelineId(1), 0..=2).unwrap();
+        assert_eq!(plan.component_slots, BTreeSet::from([2]));
 
-        group_steps(&mut project, PipelineId(1), 0..=2, "Cache", &[]).unwrap();
-        let addresses: Vec<ImageAddress> = project.command_groups[0]
+        create_component(&mut project, PipelineId(1), 0..=2, "Cache", &[]).unwrap();
+        let addresses: Vec<ImageAddress> = project.components[0]
             .steps
             .iter()
             .map(|s| match s.command() {
@@ -1650,45 +1657,42 @@ mod tests {
         assert_eq!(
             addresses,
             [
-                ImageAddress::Memory(MemoryId::GroupContext(2)),
-                ImageAddress::Memory(MemoryId::GroupContext(2)),
+                ImageAddress::Memory(MemoryId::ComponentContext(2)),
+                ImageAddress::Memory(MemoryId::ComponentContext(2)),
                 ImageAddress::Memory(MemoryId::PipelineContext(3)),
             ]
         );
         assert!(
-            crate::workspace::group_checks::check_groups(&project)
+            crate::workspace::component_checks::check_components(&project)
                 .iter()
-                .all(|p| p.severity != crate::workspace::group_checks::Severity::Error),
-            "the group is valid"
+                .all(|p| p.severity != crate::workspace::component_checks::Severity::Error),
+            "the component is valid"
         );
     }
 
     #[test]
-    fn only_this_step_gets_a_copy_of_the_group() {
-        let mut project = grouped();
+    fn only_this_step_gets_a_copy_of_the_component() {
+        let mut project = with_component();
         let mut second_use = project.pipelines[0].steps[2].clone();
         second_use.id = StepId(1);
         project.pipelines[1].steps.push(second_use);
-        assert_eq!(group_uses(&project, "CELL_RECONSTRUCTION"), 2);
+        assert_eq!(component_uses(&project, "CELL_RECONSTRUCTION"), 2);
 
-        let key = clone_group_for_step(&mut project, PipelineId(2), 1).unwrap();
+        let key = clone_component_for_step(&mut project, PipelineId(2), 1).unwrap();
         assert_eq!(key, "CELL_RECONSTRUCTION_2");
+        assert_eq!(project.components[1].meta.name, "Cell reconstruction (2)");
         assert_eq!(
-            project.command_groups[1].meta.name,
-            "Cell reconstruction (2)"
-        );
-        assert_eq!(
-            group_uses(&project, "CELL_RECONSTRUCTION"),
+            component_uses(&project, "CELL_RECONSTRUCTION"),
             1,
             "the other use keeps it"
         );
-        assert_eq!(group_uses(&project, &key), 1);
+        assert_eq!(component_uses(&project, &key), 1);
     }
 
     #[test]
     fn a_setting_is_exposed_and_hidden_again() {
-        let mut project = grouped();
-        let definition = &mut project.command_groups[0];
+        let mut project = with_component();
+        let definition = &mut project.components[0];
         let before = definition.parameters.len();
 
         assert!(toggle_exposed(
@@ -1722,10 +1726,10 @@ mod tests {
 
     #[test]
     fn a_parameter_is_renamed_described_and_moved() {
-        let mut project = grouped();
-        let definition = &mut project.command_groups[0];
+        let mut project = with_component();
+        let definition = &mut project.components[0];
         toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
-        let ids = |d: &GroupDefinition| {
+        let ids = |d: &ComponentDefinition| {
             d.parameters
                 .iter()
                 .map(|p| p.key.clone())
@@ -1747,7 +1751,7 @@ mod tests {
         );
         assert!(!edit_parameter(
             definition,
-            &GroupParamKey::from("999"),
+            &ComponentParamKey::from("999"),
             "x",
             ""
         ));
@@ -1758,7 +1762,7 @@ mod tests {
         assert_eq!(definition.parameters.last().unwrap().section, "");
         assert!(!set_parameter_section(
             definition,
-            &GroupParamKey::from("999"),
+            &ComponentParamKey::from("999"),
             "x"
         ));
 
@@ -1775,8 +1779,8 @@ mod tests {
 
     #[test]
     fn a_parameter_is_found_by_its_setting_and_removed() {
-        let mut project = grouped();
-        let definition = &mut project.command_groups[0];
+        let mut project = with_component();
+        let definition = &mut project.components[0];
         toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
         let id = parameter_for_setting(definition, StepId(4), "min_area").unwrap();
         assert_eq!(
@@ -1794,7 +1798,7 @@ mod tests {
 
     /// Threshold → Extract Objects (Seg 1 → class 1) → Classify, class 1 as
     /// a parameter: the parameter is the class the objects get - the
-    /// segmentation class stays the group's own, and the check is happy.
+    /// segmentation class stays the component's own, and the check is happy.
     #[test]
     fn a_class_parameter_sets_the_object_classes_not_the_segmentation_class() {
         use evanalyzer_cfg::settings::pipeline_command_settings::ExtractClassMappingSettings;
@@ -1813,7 +1817,7 @@ mod tests {
             ),
             step(3, classify(NUCLEI, ObjectClass::Unset)),
         ];
-        group_steps(
+        create_component(
             &mut project,
             PipelineId(1),
             0..=2,
@@ -1822,8 +1826,8 @@ mod tests {
         )
         .unwrap();
 
-        let definition = &project.command_groups[0];
-        let class_parameters: Vec<&GroupParameterDef> = definition
+        let definition = &project.components[0];
+        let class_parameters: Vec<&ComponentParameterDef> = definition
             .parameters
             .iter()
             .filter(|p| p.label == "Nuclei")
@@ -1839,11 +1843,12 @@ mod tests {
             ["class_mapping.0.object_class", "input_classes"],
             "not the Threshold's or the mapping's segmentation class"
         );
-        let problems = crate::workspace::group_checks::check_group(&project, &definition.key);
+        let problems =
+            crate::workspace::component_checks::check_component(&project, &definition.key);
         assert!(
             !problems
                 .iter()
-                .any(|p| p.severity == crate::workspace::group_checks::Severity::Error),
+                .any(|p| p.severity == crate::workspace::component_checks::Severity::Error),
             "{:?}",
             problems.iter().map(|p| &p.message).collect::<Vec<_>>()
         );
@@ -1851,7 +1856,7 @@ mod tests {
         // Shown as the list (several classes) it couldn't set the mapping's
         // single class.
         let id = class_parameters[0].key.clone();
-        let definition = &mut project.command_groups[0];
+        let definition = &mut project.components[0];
         let parameter = definition
             .parameters
             .iter_mut()
@@ -1859,7 +1864,7 @@ mod tests {
             .unwrap();
         parameter.bindings.reverse();
         let key = definition.key.clone();
-        let problems = crate::workspace::group_checks::check_group(&project, &key);
+        let problems = crate::workspace::component_checks::check_component(&project, &key);
         assert!(
             problems
                 .iter()
@@ -1869,13 +1874,13 @@ mod tests {
         );
     }
 
-    /// A setting a parameter sets: editing it in the opened group changes the
+    /// A setting a parameter sets: editing it in the opened component changes the
     /// parameter's default (what runs), and the other settings it sets
     /// follow.
     #[test]
     fn editing_a_bound_setting_changes_the_parameters_default() {
-        let mut project = grouped();
-        let definition = &mut project.command_groups[0];
+        let mut project = with_component();
+        let definition = &mut project.components[0];
         toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
         let id = parameter_for_setting(definition, StepId(4), "min_area").unwrap();
         let step = definition
@@ -1891,13 +1896,15 @@ mod tests {
         let parameter = definition.parameters.iter().find(|p| p.key == id).unwrap();
         assert_eq!(parameter.default, ParamValue::Int(80));
         // What runs for a use without values of its own.
-        let instance = GroupInstance {
+        let instance = ComponentInstance {
             key: definition.key.clone(),
             values: Default::default(),
         };
-        let steps =
-            evanalyzer_core::group_steps_with_values(&instance, std::slice::from_ref(&*definition))
-                .unwrap();
+        let steps = evanalyzer_core::component_steps_with_values(
+            &instance,
+            std::slice::from_ref(&*definition),
+        )
+        .unwrap();
         let classify = steps.iter().find(|s| s.id == StepId(4)).unwrap();
         let Some(PipelineCommand::ClassifyObjects(c)) = classify.command() else {
             panic!("classify")
@@ -1912,29 +1919,29 @@ mod tests {
 
     #[test]
     fn parameters_get_readable_unique_keys_that_stay_when_relabelled() {
-        let mut project = grouped();
-        let keys = |d: &GroupDefinition| {
+        let mut project = with_component();
+        let keys = |d: &ComponentDefinition| {
             d.parameters
                 .iter()
                 .map(|p| p.key.to_string())
                 .collect::<Vec<_>>()
         };
-        // Grouping: the class parameters are named after their classes.
-        assert!(keys(&project.command_groups[0]).contains(&"cells".to_string()));
+        // Creating it: the class parameters are named after their classes.
+        assert!(keys(&project.components[0]).contains(&"cells".to_string()));
 
-        let definition = &mut project.command_groups[0];
+        let definition = &mut project.components[0];
         toggle_exposed(definition, StepId(4), "min_area", "Min. Size (px)", "50");
         toggle_exposed(definition, StepId(4), "max_area", "Min. Size (px)", "500");
         assert!(keys(definition).ends_with(&["min_size_px".into(), "min_size_px_2".into()]));
 
-        let key = GroupParamKey::from("min_size_px");
+        let key = ComponentParamKey::from("min_size_px");
         assert!(edit_parameter(definition, &key, "Smallest", ""));
         assert!(
             keys(definition).contains(&"min_size_px".to_string()),
             "the key stays"
         );
 
-        let empty = GroupDefinition {
+        let empty = ComponentDefinition {
             parameters: vec![],
             ..definition.clone()
         };
@@ -1946,41 +1953,43 @@ mod tests {
     }
 
     #[test]
-    fn values_for_parameters_a_group_no_longer_has_are_dropped() {
-        let mut project = grouped();
-        let definition = &mut project.command_groups[0];
+    fn values_for_parameters_a_component_no_longer_has_are_dropped() {
+        let mut project = with_component();
+        let definition = &mut project.components[0];
         toggle_exposed(definition, StepId(4), "min_area", "Minimum size", "50");
         let key = parameter_for_setting(definition, StepId(4), "min_area").unwrap();
-        let StepContent::Group(instance) = &mut project.pipelines[0].steps[2].content else {
-            panic!("group step")
+        let StepContent::Component(instance) = &mut project.pipelines[0].steps[2].content else {
+            panic!("component step")
         };
         instance.values.insert(key.clone(), ParamValue::Int(80));
         instance.values.insert("cells".into(), ParamValue::Int(3));
-        assert_eq!(prune_group_values(&mut project), 0, "both exist");
+        assert_eq!(prune_component_values(&mut project), 0, "both exist");
 
-        remove_parameter(&mut project.command_groups[0], &key);
-        assert_eq!(prune_group_values(&mut project), 1);
-        let StepContent::Group(instance) = &project.pipelines[0].steps[2].content else {
-            panic!("group step")
+        remove_parameter(&mut project.components[0], &key);
+        assert_eq!(prune_component_values(&mut project), 1);
+        let StepContent::Component(instance) = &project.pipelines[0].steps[2].content else {
+            panic!("component step")
         };
         assert!(!instance.values.contains_key(&key));
         assert!(
-            instance.values.contains_key(&GroupParamKey::from("cells")),
+            instance
+                .values
+                .contains_key(&ComponentParamKey::from("cells")),
             "kept"
         );
     }
 
     #[test]
-    fn removing_a_step_of_a_group_removes_the_bindings_to_it() {
-        let mut project = grouped();
-        let definition = &mut project.command_groups[0];
+    fn removing_a_step_of_a_component_removes_the_bindings_to_it() {
+        let mut project = with_component();
+        let definition = &mut project.components[0];
         // "Cells" is bound to the Voronoi (step 5) only.
         let index = definition
             .steps
             .iter()
             .position(|s| s.id == StepId(5))
             .unwrap();
-        remove_group_step(definition, index);
+        remove_component_step(definition, index);
         let labels: Vec<&str> = definition
             .parameters
             .iter()
@@ -2000,10 +2009,10 @@ mod tests {
     }
 
     #[test]
-    fn a_list_entry_setting_exposed_is_set_by_the_groups_parameter() {
+    fn a_list_entry_setting_exposed_is_set_by_the_components_parameter() {
         let mut project = project();
-        group_steps(&mut project, PipelineId(1), 0..=0, "Detect", &[]).unwrap();
-        let definition = &mut project.command_groups[0];
+        create_component(&mut project, PipelineId(1), 0..=0, "Detect", &[]).unwrap();
+        let definition = &mut project.components[0];
         assert!(toggle_exposed(
             definition,
             StepId(1),
@@ -2012,8 +2021,8 @@ mod tests {
             "0"
         ));
         let id = definition.parameters[0].key.clone();
-        let StepContent::Group(instance) = &mut project.pipelines[0].steps[0].content else {
-            panic!("group step")
+        let StepContent::Component(instance) = &mut project.pipelines[0].steps[0].content else {
+            panic!("component step")
         };
         instance.values.insert(id, ParamValue::Int(1200));
 
@@ -2026,9 +2035,9 @@ mod tests {
 
     #[test]
     fn a_second_setting_can_join_a_parameter_with_the_same_control() {
-        let mut project = grouped();
-        let key = project.command_groups[0].key.clone();
-        let voronoi = project.command_groups[0]
+        let mut project = with_component();
+        let key = project.components[0].key.clone();
+        let voronoi = project.components[0]
             .steps
             .iter()
             .find(|s| s.id == StepId(5))
@@ -2037,12 +2046,12 @@ mod tests {
         let (mask, _) = setting_at(&voronoi, "mask").unwrap();
 
         // "Cells" (a class) fits, "Nuclei" (a class list) doesn't.
-        let candidates = compatible_parameters(&project.command_groups, &key, &mask);
+        let candidates = compatible_parameters(&project.components, &key, &mask);
         let labels: Vec<&str> = candidates.iter().map(|(_, l)| l.as_str()).collect();
         assert_eq!(labels, ["Cells"]);
 
         add_binding(
-            &mut project.command_groups[0],
+            &mut project.components[0],
             &candidates[0].0,
             StepId(5),
             "mask",
@@ -2055,8 +2064,8 @@ mod tests {
         assert_eq!(voronoi.mask, CELLS, "set by the parameter too");
         assert!(
             add_binding(
-                &mut project.command_groups[0],
-                &GroupParamKey::from("99"),
+                &mut project.components[0],
+                &ComponentParamKey::from("99"),
                 StepId(5),
                 "mask"
             )
@@ -2066,7 +2075,7 @@ mod tests {
 
     #[test]
     fn removing_a_list_entry_keeps_the_bindings_on_their_entries() {
-        let mut definition = GroupDefinition {
+        let mut definition = ComponentDefinition {
             key: "T".into(),
             meta: Default::default(),
             classes: vec![],
@@ -2074,7 +2083,7 @@ mod tests {
             parameters: vec![],
             origin: None,
         };
-        let bind = |definition: &mut GroupDefinition, step: u32, path: &str| {
+        let bind = |definition: &mut ComponentDefinition, step: u32, path: &str| {
             toggle_exposed(definition, StepId(step), path, path, "1");
         };
         bind(&mut definition, 1, "thresholds.0.min_threshold");
@@ -2107,12 +2116,12 @@ mod tests {
         );
     }
 
-    // ---- Removing groups ----
+    // ---- Removing components ----
 
     #[test]
-    fn only_groups_no_pipeline_reaches_count_as_unused_and_can_be_removed() {
-        let mut project = grouped(); // CELL_RECONSTRUCTION, used by pipeline 1
-        let definition = |key: &str, steps: Vec<PipelineStepSettings>| GroupDefinition {
+    fn only_components_no_pipeline_reaches_count_as_unused_and_can_be_removed() {
+        let mut project = with_component(); // CELL_RECONSTRUCTION, used by pipeline 1
+        let definition = |key: &str, steps: Vec<PipelineStepSettings>| ComponentDefinition {
             key: key.into(),
             meta: Default::default(),
             classes: vec![],
@@ -2123,29 +2132,25 @@ mod tests {
         let uses = |key: &str| PipelineStepSettings {
             id: StepId(1),
             enabled: true,
-            content: StepContent::Group(GroupInstance {
+            content: StepContent::Component(ComponentInstance {
                 key: key.into(),
                 values: Default::default(),
             }),
         };
         // OUTER is used by nothing; INNER only by OUTER.
         project
-            .command_groups
+            .components
             .push(definition("OUTER", vec![uses("INNER")]));
-        project.command_groups.push(definition("INNER", vec![]));
-        assert_eq!(unused_groups(&project), ["OUTER", "INNER"]);
+        project.components.push(definition("INNER", vec![]));
+        assert_eq!(unused_components(&project), ["OUTER", "INNER"]);
 
         assert!(
-            remove_group(&mut project, "CELL_RECONSTRUCTION").is_err(),
+            remove_component(&mut project, "CELL_RECONSTRUCTION").is_err(),
             "still used"
         );
-        remove_group(&mut project, "INNER").unwrap();
-        assert_eq!(remove_unused_groups(&mut project), ["OUTER"]);
-        let keys: Vec<&str> = project
-            .command_groups
-            .iter()
-            .map(|d| d.key.as_str())
-            .collect();
+        remove_component(&mut project, "INNER").unwrap();
+        assert_eq!(remove_unused_components(&mut project), ["OUTER"]);
+        let keys: Vec<&str> = project.components.iter().map(|d| d.key.as_str()).collect();
         assert_eq!(keys, ["CELL_RECONSTRUCTION"]);
     }
 }

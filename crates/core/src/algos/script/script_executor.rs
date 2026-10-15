@@ -4,7 +4,7 @@ use crate::algos::script::script_bridge::{
 use crate::algos::script::script_params;
 use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass};
-use evanalyzer_cfg::settings::command_groups::ParamValue;
+use evanalyzer_cfg::settings::components::ParamValue;
 use log::{debug, info};
 use macros::CommandsMeta;
 use rhai::{AST, Engine, EvalAltResult, Map, Position, Scope};
@@ -128,7 +128,7 @@ pub fn declared_script_params(source: &str) -> Result<Vec<script_params::ParamDe
 
 /// `command`'s settings as the editor shows them: the generated ones, and
 /// for a Script step one per `param` of its script (`values.<name>`, see
-/// [`script_params`]). Group parameters bind to these too.
+/// [`script_params`]). Component parameters bind to these too.
 pub fn command_parameters(
     command: &evanalyzer_cfg::settings::pipeline_command::PipelineCommand,
 ) -> Vec<evanalyzer_cfg::settings::parameter_def::ParameterDef> {
@@ -477,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn a_class_param_is_a_number_or_a_groups_class_and_may_be_used_by_commands() {
+    fn a_class_param_is_a_number_or_a_components_class_and_may_be_used_by_commands() {
         let check = r#"
             param cell: class = 4;
             if cell != expected { throw `got ${cell}`; }
@@ -497,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn a_groups_own_class_from_a_param_reaches_a_command() {
+    fn a_components_own_class_from_a_param_reaches_a_command() {
         // Save Image needs an output folder the test doesn't have - what
         // matters is that the class got past the checks.
         let result = run_with(

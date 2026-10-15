@@ -271,7 +271,7 @@ impl Object {
             self.scope = class_scope;
         } else if self.scope != class_scope {
             return Err(InternalErrors::InvalidArgument(format!(
-                "object {} can't get class {} - an object can't have a command group's \
+                "object {} can't get class {} - an object can't have a component's \
                  local classes and project classes at the same time",
                 self.id,
                 object_class.to_text()
@@ -894,7 +894,7 @@ impl Object {
         // only touches a handful of those tiles.
         let channel_views = cache.resolve_channel_views_for_bbox(self.bbox);
 
-        // Group the loaded tiles by channel, preserving first-seen channel order so the
+        // Component the loaded tiles by channel, preserving first-seen channel order so the
         // returned map's key order matches `resolve_channel_views_for_bbox`'s own order
         // (existing callers/tests rely on `IndexMap` insertion order).
         let mut by_channel: IndexMap<i32, Vec<(ImageTile, bool, &[f32])>> = IndexMap::new();
@@ -1805,7 +1805,7 @@ mod tests {
         assert!(object.is_of(&ObjectClass::Global(5), Scope::Global));
         assert!(
             object.is_of(&ObjectClass::Global(5), scoped(3)),
-            "seen from inside a group"
+            "seen from inside a component"
         );
     }
 

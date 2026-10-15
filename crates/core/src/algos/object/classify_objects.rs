@@ -1362,7 +1362,7 @@ mod tests {
         }
     }
 
-    // ---- Scopes: two instances of one command group ----
+    // ---- Scopes: two instances of one component ----
 
     const LOCAL_SEED: ObjectClass = ObjectClass::Local(1);
 

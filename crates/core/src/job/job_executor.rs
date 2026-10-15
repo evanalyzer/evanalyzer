@@ -883,7 +883,7 @@ impl<'a> JobExecutor {
                         cache
                             .object_cache
                             .values()
-                            // Command groups' internal objects aren't shown.
+                            // Components' internal objects aren't shown.
                             .filter(|r| r.scope() == Scope::Global)
                             .map(|r| r.to_object_settings())
                             .collect()
@@ -1002,7 +1002,7 @@ impl<'a> JobExecutor {
                         }
                     }
 
-                    // Command groups' internal objects never reach the results.
+                    // Components' internal objects never reach the results.
                     // `EndScope` after each instance's last command normally
                     // removed them already (with the references to them) -
                     // this catches a run stopped early by a breakpoint.
@@ -2529,12 +2529,12 @@ mod full_run_integration_tests {
     }
 
     #[test]
-    fn a_groups_internal_objects_never_reach_the_results() {
+    fn a_components_internal_objects_never_reach_the_results() {
         use crate::algos::{ClassifyMatchHandling, ClassifyObjects};
         use crate::pipeline::scope::ScopeId;
 
         // Every extracted object is reclassified into a local class by a
-        // command running in a group instance's scope.
+        // command running in a component instance's scope.
         let run_with_reclassify_in = |scope: Scope| {
             let out_objects = Arc::new(Mutex::new(Vec::new()));
             let mut job = make_single_image_job(out_objects.clone());
@@ -2564,8 +2564,8 @@ mod full_run_integration_tests {
             0,
             "local objects are internal"
         );
-        // Control: the same run without the group's scope exports them (a
-        // local class outside a group is otherwise refused at expansion).
+        // Control: the same run without the component's scope exports them (a
+        // local class outside a component is otherwise refused at expansion).
         assert!(run_with_reclassify_in(Scope::Global) > 0);
     }
 

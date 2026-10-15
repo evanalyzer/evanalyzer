@@ -1,9 +1,7 @@
 use crate::api::{Backend, FileSystem};
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::templates::{GroupTemplate, PipelineTemplate, ProjectTemplate};
-use evanalyzer_cfg::{
-    GROUP_TEMPLATE_EXTENSION, PIPELINE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS,
-};
+use evanalyzer_cfg::settings::templates::{ComponentTemplate, ProjectTemplate};
+use evanalyzer_cfg::{COMPONENT_TEMPLATE_EXTENSION, PROJECT_FILE_TEMPLATE_EXTENSIONS};
 use std::path::{Path, PathBuf};
 
 /// Loads a single `ProjectTemplate` from an arbitrary path (e.g. one picked
@@ -21,19 +19,10 @@ pub fn load_project_template_from_file(
         .map_err(|e| InternalErrors::Internal(format!("Failed to parse project template: {e}")))
 }
 
-/// Loads all `PipelineTemplate`s found in the backend's user and app
-/// templates folders.
-///
-/// Files are matched by the [`PIPELINE_EXTENSIONS`] extension. The returned
-/// templates are paired with the path they were loaded from.
-pub fn load_pipeline_templates(backend: &dyn Backend) -> Vec<(PathBuf, PipelineTemplate)> {
-    load_templates(backend, PIPELINE_EXTENSIONS)
-}
-
-/// Loads all command group library files (`.evagroup`, see `GroupTemplate`)
+/// Loads all component library files (`.evacomp`, see `ComponentTemplate`)
 /// found in the backend's user and app templates folders.
-pub fn load_group_templates(backend: &dyn Backend) -> Vec<(PathBuf, GroupTemplate)> {
-    load_templates(backend, GROUP_TEMPLATE_EXTENSION)
+pub fn load_component_templates(backend: &dyn Backend) -> Vec<(PathBuf, ComponentTemplate)> {
+    load_templates(backend, COMPONENT_TEMPLATE_EXTENSION)
 }
 
 /// Loads all `ProjectTemplate`s found in the backend's user and app
@@ -100,13 +89,12 @@ mod tests {
     use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
     use evanalyzer_cfg::settings::plate_settings::PlateSettings;
 
-    fn pipeline_template(name: &str) -> PipelineTemplate {
-        PipelineTemplate {
+    fn project_template(name: &str) -> ProjectTemplate {
+        ProjectTemplate {
             meta: MetaData {
                 name: name.into(),
                 ..Default::default()
             },
-            steps: vec![],
             ..Default::default()
         }
     }
@@ -128,11 +116,11 @@ mod tests {
 
     #[test]
     fn returns_empty_for_a_folder_that_does_not_exist() {
-        let mut out: Vec<(PathBuf, PipelineTemplate)> = Vec::new();
+        let mut out: Vec<(PathBuf, ProjectTemplate)> = Vec::new();
         load_templates_from_folder(
             &LocalFileSystem::default(),
             Path::new("/does/not/exist/at/all"),
-            PIPELINE_EXTENSIONS,
+            PROJECT_FILE_TEMPLATE_EXTENSIONS,
             &mut out,
         );
         assert!(out.is_empty());
@@ -141,21 +129,21 @@ mod tests {
     #[test]
     fn loads_only_files_with_the_matching_extension() {
         let dir = tempfile::tempdir().unwrap();
-        let json = serde_json::to_string(&pipeline_template("Match")).unwrap();
-        write(dir.path(), "a.evapipe", &json);
+        let json = serde_json::to_string(&project_template("Match")).unwrap();
+        write(dir.path(), "a.evapt", &json);
         write(dir.path(), "b.txt", &json); // same content, wrong extension
-        write(dir.path(), "c.evapipe.bak", &json); // extension is "bak", not "evapipe"
+        write(dir.path(), "c.evapt.bak", &json); // extension is "bak", not "evapt"
 
-        let mut out: Vec<(PathBuf, PipelineTemplate)> = Vec::new();
+        let mut out: Vec<(PathBuf, ProjectTemplate)> = Vec::new();
         load_templates_from_folder(
             &LocalFileSystem::default(),
             dir.path(),
-            PIPELINE_EXTENSIONS,
+            PROJECT_FILE_TEMPLATE_EXTENSIONS,
             &mut out,
         );
 
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].0, dir.path().join("a.evapipe"));
+        assert_eq!(out[0].0, dir.path().join("a.evapt"));
         assert_eq!(out[0].1.meta.name, "Match");
     }
 
@@ -164,16 +152,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(
             dir.path(),
-            "good.evapipe",
-            &serde_json::to_string(&pipeline_template("Good")).unwrap(),
+            "good.evapt",
+            &serde_json::to_string(&project_template("Good")).unwrap(),
         );
-        write(dir.path(), "bad.evapipe", "{ this is not valid json");
+        write(dir.path(), "bad.evapt", "{ this is not valid json");
 
-        let mut out: Vec<(PathBuf, PipelineTemplate)> = Vec::new();
+        let mut out: Vec<(PathBuf, ProjectTemplate)> = Vec::new();
         load_templates_from_folder(
             &LocalFileSystem::default(),
             dir.path(),
-            PIPELINE_EXTENSIONS,
+            PROJECT_FILE_TEMPLATE_EXTENSIONS,
             &mut out,
         );
 
@@ -188,22 +176,18 @@ mod tests {
     #[test]
     fn skips_a_file_that_matches_the_extension_but_is_not_readable_as_utf8() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("binary.evapipe"),
-            [0xFFu8, 0xFE, 0x00, 0x01],
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("binary.evapt"), [0xFFu8, 0xFE, 0x00, 0x01]).unwrap();
         write(
             dir.path(),
-            "good.evapipe",
-            &serde_json::to_string(&pipeline_template("Good")).unwrap(),
+            "good.evapt",
+            &serde_json::to_string(&project_template("Good")).unwrap(),
         );
 
-        let mut out: Vec<(PathBuf, PipelineTemplate)> = Vec::new();
+        let mut out: Vec<(PathBuf, ProjectTemplate)> = Vec::new();
         load_templates_from_folder(
             &LocalFileSystem::default(),
             dir.path(),
-            PIPELINE_EXTENSIONS,
+            PROJECT_FILE_TEMPLATE_EXTENSIONS,
             &mut out,
         );
 

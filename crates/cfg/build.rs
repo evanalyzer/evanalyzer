@@ -96,10 +96,10 @@ mod modules {
         ));
     }
     #[allow(dead_code)]
-    pub mod command_groups {
+    pub mod components {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/command_groups.rs"
+            "/src/modules/components.rs"
         ));
     }
     // Only the types are needed for the schema, not their helpers.
@@ -137,7 +137,7 @@ mod modules {
 }
 mod settings {
     pub use crate::modules::classification_settings;
-    pub use crate::modules::command_groups;
+    pub use crate::modules::components;
     pub use crate::modules::images_settings;
     pub use crate::modules::object_settings;
     pub use crate::modules::pipeline_command;
@@ -165,7 +165,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/modules/images_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/parameter_def.rs");
     println!("cargo:rerun-if-changed=src/modules/pipeline_settings.rs");
-    println!("cargo:rerun-if-changed=src/modules/command_groups.rs");
+    println!("cargo:rerun-if-changed=src/modules/components.rs");
     println!("cargo:rerun-if-changed=src/modules/plate_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/project_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/meta_data.rs");

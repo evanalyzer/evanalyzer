@@ -12,8 +12,7 @@ pub use load_config::{load_ai_learning_settings, load_project_settings};
 // Constants
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
 pub const PROJECT_FILE_TEMPLATE_EXTENSIONS: &str = &"evapt";
-pub const PIPELINE_EXTENSIONS: &str = &"evapipe";
-pub const GROUP_TEMPLATE_EXTENSION: &str = &"evagroup";
+pub const COMPONENT_TEMPLATE_EXTENSION: &str = &"evacomp";
 pub const RESULTS_FILE_EXTENSION: &str = &"evadb";
 pub const EVANALYZER_TRAINED_AI_MODELS: &str = &"evamodel";
 /// Project file extension used by the old (pre-rewrite) application.
@@ -45,15 +44,9 @@ pub const CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION: u32 = 4;
 pub const CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 /// Current on-disk format version for
-/// [`settings::templates::PipelineTemplate`] (`.evapipe` files, and each
-/// entry of a `ProjectTemplate`'s `pipelines`). See
+/// [`settings::templates::ComponentTemplate`] (`.evacomp` files). See
 /// `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`.
-pub const CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION: u32 = 4;
-
-/// Current on-disk format version for
-/// [`settings::templates::GroupTemplate`] (`.evagroup` files). See
-/// `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`.
-pub const CURRENT_GROUP_TEMPLATE_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_COMPONENT_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 // Project Settings structs
 pub mod settings {
@@ -73,8 +66,8 @@ pub mod core_types {
     pub use crate::types::errors::*;
     pub use crate::types::events::TrainingProgressEvent;
     pub use crate::types::events::TrainingStats;
-    pub use crate::types::ids::GroupId;
-    pub use crate::types::ids::GroupParamKey;
+    pub use crate::types::ids::ComponentId;
+    pub use crate::types::ids::ComponentParamKey;
     pub use crate::types::ids::ImageAddress;
     pub use crate::types::ids::ImageChannelIdx;
     pub use crate::types::ids::MemoryId;

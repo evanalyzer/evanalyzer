@@ -1,5 +1,5 @@
 use evanalyzer_cfg::core_types::{InternalErrors, StepId};
-use evanalyzer_cfg::settings::command_groups::GroupDefinition;
+use evanalyzer_cfg::settings::components::ComponentDefinition;
 use evanalyzer_cfg::settings::parameter_def::ParamType;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
@@ -69,15 +69,15 @@ pub fn relativize_file_paths(pipelines: &mut [PipelineSettings], project_dir: &P
     }
 }
 
-/// [`relativize_file_paths`] for the steps of `groups`' definitions.
-pub fn relativize_group_file_paths(groups: &mut [GroupDefinition], project_dir: &Path) {
-    for group in groups {
-        relativize_step_paths(&mut group.steps, project_dir);
+/// [`relativize_file_paths`] for the steps of `components`' definitions.
+pub fn relativize_component_file_paths(components: &mut [ComponentDefinition], project_dir: &Path) {
+    for component in components {
+        relativize_step_paths(&mut component.steps, project_dir);
     }
 }
 
 fn relativize_step_paths(steps: &mut [PipelineStepSettings], project_dir: &Path) {
-    // A group instance holds no paths itself - its definition's steps do.
+    // A component instance holds no paths itself - its definition's steps do.
     for command in steps.iter_mut().filter_map(|step| step.command_mut()) {
         let changes = file_path_changes(
             command,
@@ -101,10 +101,10 @@ pub fn resolve_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path
     }
 }
 
-/// [`resolve_file_paths`] for the steps of `groups`' definitions.
-pub fn resolve_group_file_paths(groups: &mut [GroupDefinition], project_dir: &Path) {
-    for group in groups {
-        resolve_step_paths(&mut group.steps, project_dir);
+/// [`resolve_file_paths`] for the steps of `components`' definitions.
+pub fn resolve_component_file_paths(components: &mut [ComponentDefinition], project_dir: &Path) {
+    for component in components {
+        resolve_step_paths(&mut component.steps, project_dir);
     }
 }
 
@@ -121,7 +121,7 @@ fn resolve_step_paths(steps: &mut [PipelineStepSettings], project_dir: &Path) {
     }
 }
 
-/// Gives every step of one list (a pipeline, or a group definition) that has
+/// Gives every step of one list (a pipeline, or a component definition) that has
 /// no id yet - or one an earlier step of the list already has - the next
 /// number after the list's highest. The first of two equal ids keeps it.
 /// Call it after adding steps to a list. Returns how many got a new id.
@@ -140,22 +140,24 @@ pub fn assign_step_ids(steps: &mut [PipelineStepSettings]) -> usize {
     assigned
 }
 
-/// Numbers the steps of a group definition that have no id yet, like
+/// Numbers the steps of a component definition that have no id yet, like
 /// [`assign_step_ids`] - but two steps with the same id are an error, not
-/// renumbered: the group's bindings refer to steps by id, so which of the
+/// renumbered: the component's bindings refer to steps by id, so which of the
 /// two one means can't be known. Returns how many got an id.
-pub fn assign_group_step_ids(group: &mut GroupDefinition) -> Result<usize, InternalErrors> {
+pub fn assign_component_step_ids(
+    component: &mut ComponentDefinition,
+) -> Result<usize, InternalErrors> {
     let mut seen = std::collections::HashSet::new();
-    for step in &group.steps {
+    for step in &component.steps {
         if step.id != StepId::UNASSIGNED && !seen.insert(step.id) {
             return Err(InternalErrors::ParseError(format!(
-                "Command group {}: two steps have the id {} - its parameters can't tell \
+                "Component {}: two steps have the id {} - its parameters can't tell \
                  which one they set",
-                group.key, step.id
+                component.key, step.id
             )));
         }
     }
-    Ok(assign_step_ids(&mut group.steps))
+    Ok(assign_step_ids(&mut component.steps))
 }
 
 /// `steps` without their ids - copies to add to another list (a template's
@@ -543,11 +545,11 @@ mod tests {
     }
 
     #[test]
-    fn model_paths_in_group_definitions_are_stored_relative_too() {
+    fn model_paths_in_component_definitions_are_stored_relative_too() {
         use evanalyzer_cfg::settings::pipeline_command_settings::CellposeSettings;
 
         let original = PathBuf::from("/data/project/models/cyto.pt");
-        let mut groups = vec![GroupDefinition {
+        let mut components = vec![ComponentDefinition {
             key: "SEGMENT".into(),
             meta: Default::default(),
             classes: vec![],
@@ -561,14 +563,14 @@ mod tests {
         }];
         let project_dir = Path::new("/data/project");
 
-        relativize_group_file_paths(&mut groups, project_dir);
-        let Some(PipelineCommand::Cellpose(stored)) = groups[0].steps[0].command() else {
+        relativize_component_file_paths(&mut components, project_dir);
+        let Some(PipelineCommand::Cellpose(stored)) = components[0].steps[0].command() else {
             panic!("expected Cellpose");
         };
         assert_eq!(stored.model_path, PathBuf::from("models/cyto.pt"));
 
-        resolve_group_file_paths(&mut groups, project_dir);
-        let Some(PipelineCommand::Cellpose(loaded)) = groups[0].steps[0].command() else {
+        resolve_component_file_paths(&mut components, project_dir);
+        let Some(PipelineCommand::Cellpose(loaded)) = components[0].steps[0].command() else {
             panic!("expected Cellpose");
         };
         assert_eq!(loaded.model_path, original);
@@ -725,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn a_groups_missing_step_ids_are_assigned_but_a_duplicate_is_an_error() {
+    fn a_components_missing_step_ids_are_assigned_but_a_duplicate_is_an_error() {
         use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
         let step = |id| PipelineStepSettings {
             id: StepId(id),
@@ -734,7 +736,7 @@ mod tests {
                 PipelineCommand::Blur(BlurSettings::default()),
             ),
         };
-        let mut group = GroupDefinition {
+        let mut component = ComponentDefinition {
             key: "CELL_RECONSTRUCTION".into(),
             meta: Default::default(),
             classes: vec![],
@@ -742,11 +744,11 @@ mod tests {
             parameters: Vec::new(),
             origin: None,
         };
-        assert_eq!(super::assign_group_step_ids(&mut group).unwrap(), 1);
-        assert_eq!(group.steps[1].id, StepId(3));
+        assert_eq!(super::assign_component_step_ids(&mut component).unwrap(), 1);
+        assert_eq!(component.steps[1].id, StepId(3));
 
-        group.steps.push(step(2));
-        let err = super::assign_group_step_ids(&mut group)
+        component.steps.push(step(2));
+        let err = super::assign_component_step_ids(&mut component)
             .unwrap_err()
             .to_string();
         assert!(

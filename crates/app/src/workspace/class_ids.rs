@@ -1,12 +1,12 @@
 //! A project class's id: the free ones to choose from, and changing it -
 //! together with every reference to the class.
 
-use crate::workspace::grouping::{setting_at, uses_segmentation_class};
+use crate::workspace::component_editing::{setting_at, uses_segmentation_class};
 use evanalyzer_cfg::{
-    core_types::{GroupParamKey, InternalErrors, MAX_CLASS_ID, ObjectClass, SegmentationClass},
+    core_types::{ComponentParamKey, InternalErrors, MAX_CLASS_ID, ObjectClass, SegmentationClass},
     settings::{
         classification_settings::ClassificationSettings,
-        command_groups::{GroupDefinition, ParamValue},
+        components::{ComponentDefinition, ParamValue},
         parameter_def::ParamType,
         pipeline_command::PipelineCommand,
         pipeline_command_settings::ExtractClassMappingSettings,
@@ -39,7 +39,7 @@ pub fn free_class_ids(classification: &ClassificationSettings) -> Vec<u32> {
 /// What [`change_class_id`] changed besides the class itself.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ClassIdChange {
-    /// References to the class that now name the new id: in commands, group
+    /// References to the class that now name the new id: in commands, component
     /// parameter values, annotated objects, the tile merge settings.
     pub references: usize,
     /// Extract Objects steps that got a mapping for the segmentation class
@@ -48,7 +48,7 @@ pub struct ClassIdChange {
 }
 
 /// Gives project class `from` the id `to`, and every reference to it too:
-/// commands of pipelines and groups, group parameters setting a class, the
+/// commands of pipelines and components, component parameters setting a class, the
 /// classes of annotated objects, the tile merge settings. A segmentation
 /// class with the old number stays as it is: Extract Objects steps without
 /// a mapping for it (which gave its objects the class of the same number)
@@ -85,13 +85,13 @@ pub fn change_class_id(
 
     let mut change = ClassIdChange::default();
     let segmented = all_commands(project).any(|c| uses_segmentation_class(c, from));
-    let class_parameters = class_parameters(&project.command_groups);
+    let class_parameters = class_parameters(&project.components);
 
     // Commands: every `{"GLOBAL": from}`.
     let pipelines = rewrite_classes(&project.pipelines, from, to, &mut change.references)?;
-    let groups = rewrite_classes(&project.command_groups, from, to, &mut change.references)?;
+    let components = rewrite_classes(&project.components, from, to, &mut change.references)?;
     project.pipelines = pipelines;
-    project.command_groups = groups;
+    project.components = components;
 
     if segmented {
         let steps = project
@@ -100,7 +100,7 @@ pub fn change_class_id(
             .flat_map(|p| p.steps.iter_mut())
             .chain(
                 project
-                    .command_groups
+                    .components
                     .iter_mut()
                     .flat_map(|g| g.steps.iter_mut()),
             );
@@ -120,8 +120,8 @@ pub fn change_class_id(
         }
     }
 
-    // Group parameters setting a class: their defaults and values.
-    for definition in &mut project.command_groups {
+    // Component parameters setting a class: their defaults and values.
+    for definition in &mut project.components {
         if let Some(ids) = class_parameters.get(&definition.key) {
             for parameter in &mut definition.parameters {
                 if ids.contains(&parameter.key) {
@@ -136,12 +136,12 @@ pub fn change_class_id(
         .flat_map(|p| p.steps.iter_mut())
         .chain(
             project
-                .command_groups
+                .components
                 .iter_mut()
                 .flat_map(|g| g.steps.iter_mut()),
         );
     for step in steps {
-        if let StepContent::Group(instance) = &mut step.content
+        if let StepContent::Component(instance) = &mut step.content
             && let Some(ids) = class_parameters.get(&instance.key)
         {
             for (id, value) in &mut instance.values {
@@ -198,19 +198,21 @@ pub fn change_class_id(
     Ok(change)
 }
 
-/// Every command of the project's pipelines and groups.
+/// Every command of the project's pipelines and components.
 fn all_commands(project: &ProjectSettings) -> impl Iterator<Item = &PipelineCommand> {
     project
         .pipelines
         .iter()
         .flat_map(|p| p.steps.iter())
-        .chain(project.command_groups.iter().flat_map(|g| g.steps.iter()))
+        .chain(project.components.iter().flat_map(|g| g.steps.iter()))
         .filter_map(PipelineStepSettings::command)
 }
 
-/// Per group key, its parameters that set a class (their card shows a class
+/// Per component key, its parameters that set a class (their card shows a class
 /// choice): those whose first setting is a class or a class list.
-fn class_parameters(definitions: &[GroupDefinition]) -> BTreeMap<String, BTreeSet<GroupParamKey>> {
+fn class_parameters(
+    definitions: &[ComponentDefinition],
+) -> BTreeMap<String, BTreeSet<ComponentParamKey>> {
     definitions
         .iter()
         .map(|definition| {
@@ -292,7 +294,7 @@ fn rewrite_value(value: &mut ParamValue, from: u32, to: u32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::grouping::{ClassRole, group_steps};
+    use crate::workspace::component_editing::{ClassRole, create_component};
     use evanalyzer_cfg::core_types::{ImageAddress, PipelineId, StepId};
     use evanalyzer_cfg::settings::classification_settings::Class;
     use evanalyzer_cfg::settings::pipeline_command_settings::{
@@ -452,9 +454,9 @@ mod tests {
     }
 
     #[test]
-    fn group_steps_and_class_parameter_values_follow() {
+    fn create_component_and_class_parameter_values_follow() {
         let mut project = project();
-        group_steps(
+        create_component(
             &mut project,
             PipelineId(1),
             2..=2,
@@ -465,22 +467,22 @@ mod tests {
             ],
         )
         .unwrap();
-        let parameter = project.command_groups[0].parameters[0].key.clone();
-        let StepContent::Group(instance) = &mut project.pipelines[0].steps[2].content else {
-            panic!("group step")
+        let parameter = project.components[0].parameters[0].key.clone();
+        let StepContent::Component(instance) = &mut project.pipelines[0].steps[2].content else {
+            panic!("component step")
         };
         instance
             .values
             .insert(parameter.clone(), ParamValue::Int(3));
 
         change_class_id(&mut project, 3, 5).unwrap();
-        let definition = &project.command_groups[0];
+        let definition = &project.components[0];
         assert_eq!(
             definition.parameters[0].default,
             ParamValue::Text("5".into())
         );
-        let StepContent::Group(instance) = &project.pipelines[0].steps[2].content else {
-            panic!("group step")
+        let StepContent::Component(instance) = &project.pipelines[0].steps[2].content else {
+            panic!("component step")
         };
         assert_eq!(instance.values[&parameter], ParamValue::Int(5));
         let Some(PipelineCommand::ClassifyObjects(classify)) = definition.steps[0].command() else {

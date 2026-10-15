@@ -15,8 +15,8 @@ pub enum MemoryId {
     PipelineContext(MemorySlot),
     #[serde(alias = "PROJECT_CACHE", alias = "project_cache")]
     ProjectCache(MemorySlot),
-    #[serde(alias = "GROUP_CONTEXT", alias = "group_context")]
-    GroupContext(MemorySlot),
+    #[serde(alias = "COMPONENT_CONTEXT", alias = "component_context")]
+    ComponentContext(MemorySlot),
 }
 
 impl Default for MemoryId {
@@ -50,14 +50,14 @@ impl Default for ImageAddress {
 #[allow(dead_code)]
 impl ImageAddress {
     /// Kind and number as the pipeline UI edits them: ("scratchpad", 0),
-    /// ("memory", slot), ("cache", slot), ("group", slot) or ("channel",
+    /// ("memory", slot), ("cache", slot), ("component", slot) or ("channel",
     /// channel).
     pub fn param_parts(&self) -> (&'static str, i64) {
         match *self {
             ImageAddress::Scratchpad => ("scratchpad", 0),
             ImageAddress::Memory(MemoryId::PipelineContext(slot)) => ("memory", slot as i64),
             ImageAddress::Memory(MemoryId::ProjectCache(slot)) => ("cache", slot as i64),
-            ImageAddress::Memory(MemoryId::GroupContext(slot)) => ("group", slot as i64),
+            ImageAddress::Memory(MemoryId::ComponentContext(slot)) => ("component", slot as i64),
             ImageAddress::Channel(channel) => ("channel", channel as i64),
             ImageAddress::None => ("none", 0),
         }
@@ -90,7 +90,7 @@ impl ImageAddress {
             "cache" => Some(ImageAddress::Memory(MemoryId::ProjectCache(
                 nr.parse().ok()?,
             ))),
-            "group" => Some(ImageAddress::Memory(MemoryId::GroupContext(
+            "component" => Some(ImageAddress::Memory(MemoryId::ComponentContext(
                 nr.parse().ok()?,
             ))),
             "channel" => Some(ImageAddress::Channel(nr.parse().ok()?)),
@@ -136,16 +136,16 @@ impl fmt::Display for PipelineId {
     Ord,
     PartialOrd,
 )]
-pub struct GroupId(pub u32);
+pub struct ComponentId(pub u32);
 
-impl fmt::Display for GroupId {
+impl fmt::Display for ComponentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Group({})", self.0) // Or just self.0
+        write!(f, "Component({})", self.0) // Or just self.0
     }
 }
 
-/// A group parameter's key, unique within its group definition and
-/// readable in the file (`"min_size"`). The values a group instance holds
+/// A component parameter's key, unique within its component definition and
+/// readable in the file (`"min_size"`). The values a component instance holds
 /// are keyed by it, so they survive reordering and relabelling the
 /// definition's parameters, and updating it from the library. Made from the
 /// label when the parameter is made, then kept.
@@ -153,28 +153,28 @@ impl fmt::Display for GroupId {
     Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default, JsonSchema, Ord, PartialOrd,
 )]
 #[serde(transparent)]
-pub struct GroupParamKey(pub String);
+pub struct ComponentParamKey(pub String);
 
-impl GroupParamKey {
+impl ComponentParamKey {
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-impl From<&str> for GroupParamKey {
+impl From<&str> for ComponentParamKey {
     fn from(key: &str) -> Self {
         Self(key.to_string())
     }
 }
 
-impl fmt::Display for GroupParamKey {
+impl fmt::Display for ComponentParamKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
 /// A pipeline step's id: a small number, unique within its list of steps
-/// (a pipeline, or a group definition), so it reads well in a hand-written
+/// (a pipeline, or a component definition), so it reads well in a hand-written
 /// project file (`"id": 7`) and in references to the step. Assigned by
 /// whoever adds a step - the next number after the list's highest, never
 /// reused within the list. `0` ([`StepId::UNASSIGNED`]) means "not
@@ -349,7 +349,7 @@ mod tests {
             ImageAddress::Scratchpad,
             ImageAddress::Memory(MemoryId::PipelineContext(3)),
             ImageAddress::Memory(MemoryId::ProjectCache(7)),
-            ImageAddress::Memory(MemoryId::GroupContext(2)),
+            ImageAddress::Memory(MemoryId::ComponentContext(2)),
             ImageAddress::None,
             ImageAddress::Channel(0),
             ImageAddress::Channel(15),
@@ -364,12 +364,12 @@ mod tests {
         assert_eq!(ImageAddress::Channel(2).to_param_value(), "channel:2");
         assert_eq!(ImageAddress::Scratchpad.to_param_value(), "scratchpad");
         assert_eq!(
-            ImageAddress::Memory(MemoryId::GroupContext(2)).to_param_value(),
-            "group:2"
+            ImageAddress::Memory(MemoryId::ComponentContext(2)).to_param_value(),
+            "component:2"
         );
         assert_eq!(
-            serde_json::to_string(&MemoryId::GroupContext(2)).unwrap(),
-            r#"{"groupContext":2}"#
+            serde_json::to_string(&MemoryId::ComponentContext(2)).unwrap(),
+            r#"{"componentContext":2}"#
         );
     }
 
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn object_id_display_formats_as_a_uuid() {
         // 0x0123456789abcdef0123456789abcdef split into the standard
-        // 8-4-4-4-12 hex groups.
+        // 8-4-4-4-12 hex components.
         let id = ObjectId(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
         assert_eq!(id.to_string(), "01234567-89ab-cdef-0123-456789abcdef");
     }

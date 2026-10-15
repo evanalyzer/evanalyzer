@@ -81,21 +81,21 @@ import {
     PipelineDeleteConfirmState,
 } from "dialogs/pipeline_edit_dialog.slint";
 import {
-    GroupUpdateDialog,
-    GroupUpdateState,
-    GroupSettingsDialog,
-    GroupSettingsState,
-    GroupParamRow,
-} from "dialogs/group_steps_dialog.slint";
+    ComponentUpdateDialog,
+    ComponentUpdateState,
+    ComponentSettingsDialog,
+    ComponentSettingsState,
+    ComponentParamRow,
+} from "dialogs/create_component_dialog.slint";
 import {
-    GroupStepsDialog,
-    GroupStepsState,
-    GroupClassRow,
-    GroupEditChoiceDialog,
-    GroupEditChoiceState,
+    CreateComponentDialog,
+    CreateComponentState,
+    ComponentClassRow,
+    ComponentEditChoiceDialog,
+    ComponentEditChoiceState,
     ExposeChoiceDialog,
     ExposeChoiceState,
-} from "dialogs/group_steps_dialog.slint";
+} from "dialogs/create_component_dialog.slint";
 import {
     PipelineRunningDialog,
     PipelineRunningState,
@@ -204,13 +204,13 @@ export {
     CommandAuthor,
     DefaultParamPreview,
     PipelineEditState,
-    GroupStepsState,
-    GroupClassRow,
-    GroupEditChoiceState,
+    CreateComponentState,
+    ComponentClassRow,
+    ComponentEditChoiceState,
     ExposeChoiceState,
-    GroupUpdateState,
-    GroupSettingsState,
-    GroupParamRow,
+    ComponentUpdateState,
+    ComponentSettingsState,
+    ComponentParamRow,
     PipelineDeleteConfirmState,
     PipelineRunningState,
     TemplateMetaState,
@@ -411,9 +411,8 @@ export component AppWindow inherits Window {
                 shown-classify: CommandPickerState.shown-classify;
                 shown-dataset: CommandPickerState.shown-dataset;
                 shown-measure: CommandPickerState.shown-measure;
-                shown-templates: CommandPickerState.shown-templates;
-                shown-groups: CommandPickerState.shown-groups;
-                shown-library-groups: CommandPickerState.shown-library-groups;
+                shown-components: CommandPickerState.shown-components;
+                shown-library-components: CommandPickerState.shown-library-components;
                 detail: CommandPickerState.detail;
                 has-detail: CommandPickerState.has-detail;
                 total-shown: CommandPickerState.total-shown;
@@ -423,9 +422,8 @@ export component AppWindow inherits Window {
                 cat-count-cls: CommandPickerState.cat-count-cls;
                 cat-count-dat: CommandPickerState.cat-count-dat;
                 cat-count-mea: CommandPickerState.cat-count-mea;
-                cat-count-fav: CommandPickerState.cat-count-fav;
                 cat-count-grp: CommandPickerState.cat-count-grp;
-                unused-group-count: CommandPickerState.unused-group-count;
+                unused-component-count: CommandPickerState.unused-component-count;
                 detail-removable: CommandPickerState.detail-removable;
                 query <=> CommandPickerState.query;
                 fcat-pre <=> CommandPickerState.fcat-pre;
@@ -434,8 +432,7 @@ export component AppWindow inherits Window {
                 fcat-mea <=> CommandPickerState.fcat-mea;
                 fcat-cls <=> CommandPickerState.fcat-cls;
                 fcat-dat <=> CommandPickerState.fcat-dat;
-                filter-favorites <=> CommandPickerState.filter-favorites;
-                filter-groups <=> CommandPickerState.filter-groups;
+                filter-components <=> CommandPickerState.filter-components;
                 selected-id <=> CommandPickerState.selected-id;
                 query-changed(t) => {
                     CommandPickerState.query-changed(t);
@@ -446,11 +443,11 @@ export component AppWindow inherits Window {
                 confirm(id) => {
                     CommandPickerState.confirm(id);
                 }
-                remove-group(id) => {
-                    CommandPickerState.remove-group(id);
+                remove-component(id) => {
+                    CommandPickerState.remove-component(id);
                 }
-                remove-unused-groups => {
-                    CommandPickerState.remove-unused-groups();
+                remove-unused-components => {
+                    CommandPickerState.remove-unused-components();
                 }
                 cancel => {
                     CommandPickerState.cancel();
@@ -467,11 +464,11 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
             }
-            if (GlobalAppState.active_dialog == DialogType.group-steps): GroupStepsDialog {
+            if (GlobalAppState.active_dialog == DialogType.create-component): CreateComponentDialog {
                 width: 100%;
                 height: 100%;
             }
-            if (GlobalAppState.active_dialog == DialogType.group-edit-choice): GroupEditChoiceDialog {
+            if (GlobalAppState.active_dialog == DialogType.component-edit-choice): ComponentEditChoiceDialog {
                 width: 100%;
                 height: 100%;
             }
@@ -479,11 +476,11 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
             }
-            if (GlobalAppState.active_dialog == DialogType.group-update): GroupUpdateDialog {
+            if (GlobalAppState.active_dialog == DialogType.component-update): ComponentUpdateDialog {
                 width: 100%;
                 height: 100%;
             }
-            if (GlobalAppState.active_dialog == DialogType.group-settings): GroupSettingsDialog {
+            if (GlobalAppState.active_dialog == DialogType.component-settings): ComponentSettingsDialog {
                 width: 100%;
                 height: 100%;
             }

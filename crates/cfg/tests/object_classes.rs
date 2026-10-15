@@ -1,6 +1,6 @@
 //! Tests for the generated `PipelineCommand::object_classes()` (see
 //! `build/pipeline_commands_generator.rs`). A pipeline's classes (also
-//! inside groups) are `evanalyzer_core::pipeline_classes`.
+//! inside components) are `evanalyzer_core::pipeline_classes`.
 //! The generated file can't carry inline tests, so they live here.
 
 use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};

@@ -1,17 +1,17 @@
-//! Expanding command groups into plain commands before a job runs.
+//! Expanding components into plain commands before a job runs.
 //!
-//! A pipeline step is a command or an instance of a command group (see
-//! `evanalyzer_cfg::settings::command_groups`). The executor only knows
-//! commands, so the job generator replaces each group instance by its
+//! A pipeline step is a command or an instance of a component (see
+//! `evanalyzer_cfg::settings::components`). The executor only knows
+//! commands, so the job generator replaces each component instance by its
 //! definition's commands, with the instance's parameter values written into
 //! the inner parameters they're bound to.
 
 use crate::pipeline::scope::{Scope, ScopeId};
 use evanalyzer_cfg::{
-    core_types::{GroupParamKey, InternalErrors, ObjectClass, StepId},
+    core_types::{ComponentParamKey, InternalErrors, ObjectClass, StepId},
     settings::{
-        command_groups::{
-            GroupDefinition, GroupInstance, GroupParameterDef, ParamBinding, ParamValue,
+        components::{
+            ComponentDefinition, ComponentInstance, ComponentParameterDef, ParamBinding, ParamValue,
         },
         parameter_def::ParameterDef,
         pipeline_command::{CommandCategory, PipelineCommand},
@@ -23,20 +23,20 @@ use evanalyzer_cfg::{
     },
 };
 
-/// How deep groups may nest - deeper is almost certainly a mistake.
-const MAX_GROUP_DEPTH: usize = 8;
+/// How deep components may nest - deeper is almost certainly a mistake.
+const MAX_COMPONENT_DEPTH: usize = 8;
 
 /// One command a pipeline step runs.
 #[derive(Debug, Clone)]
 pub struct ExpandedCommand {
     /// What a breakpoint targets - see [`expand_step`].
     pub step_id: StepId,
-    /// The scope the command runs in: its group instance's, else `Global`.
+    /// The scope the command runs in: its component instance's, else `Global`.
     pub scope: Scope,
     pub command: PipelineCommand,
 }
 
-/// Hands out a new [`ScopeId`] per group instance - one counter per job, so
+/// Hands out a new [`ScopeId`] per component instance - one counter per job, so
 /// no two instances share a scope.
 #[derive(Debug, Default)]
 pub struct ScopeCounter(u32);
@@ -50,27 +50,27 @@ impl ScopeCounter {
 
 /// The commands `step` runs, in order, each with the id a breakpoint
 /// targets and the scope it runs in: a command step is itself, in the
-/// global scope; a group is its definition's enabled commands with the
-/// instance's values applied, in a new scope from `scopes` (a nested group
-/// in one of its own) - the last one carries the group step's id (a
-/// breakpoint on a group stops after the whole group), the others
+/// global scope; a component is its definition's enabled commands with the
+/// instance's values applied, in a new scope from `scopes` (a nested component
+/// in one of its own) - the last one carries the component step's id (a
+/// breakpoint on a component stops after the whole component), the others
 /// [`StepId::UNASSIGNED`] (inner steps can't be targeted).
 pub fn expand_step(
     step: &PipelineStepSettings,
-    definitions: &[GroupDefinition],
+    definitions: &[ComponentDefinition],
     scopes: &mut ScopeCounter,
 ) -> Result<Vec<ExpandedCommand>, InternalErrors> {
     match &step.content {
         StepContent::Command(command) => {
             if let Some(class) = command.local_classes().first() {
                 return Err(InternalErrors::InvalidArgument(format!(
-                    "uses the group class {}, which only exists inside a command group",
+                    "uses the component class {}, which only exists inside a component",
                     class.to_text()
                 )));
             }
-            if let Some(slot) = group_memory_slots(command).first() {
+            if let Some(slot) = component_memory_slots(command).first() {
                 return Err(InternalErrors::InvalidArgument(format!(
-                    "uses the group memory slot {slot}, which only exists inside a command group"
+                    "uses the component memory slot {slot}, which only exists inside a component"
                 )));
             }
             Ok(vec![ExpandedCommand {
@@ -79,8 +79,8 @@ pub fn expand_step(
                 command: command.clone(),
             }])
         }
-        StepContent::Group(instance) => {
-            let commands = expand_group(instance, definitions, scopes, &mut Vec::new())?;
+        StepContent::Component(instance) => {
+            let commands = expand_instance(instance, definitions, scopes, &mut Vec::new())?;
             let last = commands.len().saturating_sub(1);
             Ok(commands
                 .into_iter()
@@ -101,24 +101,24 @@ pub fn expand_step(
 
 /// The commands of `instance`'s definition with its values applied, each
 /// with the scope it runs in - the instance's own, new one from `scopes`.
-/// `open` holds the keys of the groups being expanded around this one.
-fn expand_group(
-    instance: &GroupInstance,
-    definitions: &[GroupDefinition],
+/// `open` holds the keys of the components being expanded around this one.
+fn expand_instance(
+    instance: &ComponentInstance,
+    definitions: &[ComponentDefinition],
     scopes: &mut ScopeCounter,
     open: &mut Vec<String>,
 ) -> Result<Vec<(Scope, PipelineCommand)>, InternalErrors> {
     let definition = definitions
         .iter()
         .find(|d| d.key == instance.key)
-        .ok_or_else(|| group_error(&instance.key, "isn't defined in this project".into()))?;
+        .ok_or_else(|| component_error(&instance.key, "isn't defined in this project".into()))?;
     if open.contains(&instance.key) {
-        return Err(group_error(&instance.key, "contains itself".into()));
+        return Err(component_error(&instance.key, "contains itself".into()));
     }
-    if open.len() >= MAX_GROUP_DEPTH {
-        return Err(group_error(
+    if open.len() >= MAX_COMPONENT_DEPTH {
+        return Err(component_error(
             &instance.key,
-            format!("is nested deeper than {MAX_GROUP_DEPTH} groups"),
+            format!("is nested deeper than {MAX_COMPONENT_DEPTH} components"),
         ));
     }
 
@@ -135,10 +135,10 @@ fn expand_group(
                     .into_iter()
                     .find(|class| !definition.classes.iter().any(|c| c.local() == *class));
                 if let Some(class) = undeclared {
-                    return Err(group_error(
+                    return Err(component_error(
                         &definition.key,
                         format!(
-                            "step {} uses the group class {}, which the group doesn't define",
+                            "step {} uses the component class {}, which the component doesn't define",
                             step.id,
                             class.to_text()
                         ),
@@ -146,10 +146,10 @@ fn expand_group(
                 }
                 if matches!(command.category(), CommandCategory::Dataset) {
                     if let Some(class) = command.local_classes().first() {
-                        return Err(group_error(
+                        return Err(component_error(
                             &definition.key,
                             format!(
-                                "step {} is a dataset step using the group class {} - dataset \
+                                "step {} is a dataset step using the component class {} - dataset \
                                  steps run on stored objects, which only have project classes",
                                 step.id,
                                 class.to_text()
@@ -158,15 +158,15 @@ fn expand_group(
                     }
                 }
                 if let Some(why) = mixed_classes(command) {
-                    return Err(group_error(
+                    return Err(component_error(
                         &definition.key,
                         format!("step {} {why}", step.id),
                     ));
                 }
                 commands.push((scope, command.clone()))
             }
-            StepContent::Group(inner) => {
-                commands.extend(expand_group(inner, definitions, scopes, open)?)
+            StepContent::Component(inner) => {
+                commands.extend(expand_instance(inner, definitions, scopes, open)?)
             }
         }
     }
@@ -177,8 +177,8 @@ fn expand_group(
 /// `definition`'s steps with `instance`'s values written into what they're
 /// bound to - the instance's value, else the definition's default.
 fn steps_with_values(
-    instance: &GroupInstance,
-    definition: &GroupDefinition,
+    instance: &ComponentInstance,
+    definition: &ComponentDefinition,
 ) -> Result<Vec<PipelineStepSettings>, InternalErrors> {
     let mut steps = definition.steps.clone();
     for parameter in &definition.parameters {
@@ -191,16 +191,16 @@ fn steps_with_values(
                 .iter_mut()
                 .find(|s| s.id == binding.step)
                 .ok_or_else(|| {
-                    group_error(
+                    component_error(
                         &definition.key,
                         format!(
-                            "parameter \"{}\" is bound to step {}, which the group doesn't have",
+                            "parameter \"{}\" is bound to step {}, which the component doesn't have",
                             parameter.label, binding.step
                         ),
                     )
                 })?;
             set_bound_value(step, &binding.param, value).map_err(|why| {
-                group_error(
+                component_error(
                     &definition.key,
                     format!(
                         "parameter \"{}\" can't set {} of step {}: {why}",
@@ -213,23 +213,23 @@ fn steps_with_values(
     Ok(steps)
 }
 
-/// `instance`'s group's steps with the instance's values applied - what
-/// "Ungroup" puts into the pipeline in its place.
-pub fn group_steps_with_values(
-    instance: &GroupInstance,
-    definitions: &[GroupDefinition],
+/// `instance`'s component's steps with the instance's values applied - what
+/// "Expand component" puts into the pipeline in its place.
+pub fn component_steps_with_values(
+    instance: &ComponentInstance,
+    definitions: &[ComponentDefinition],
 ) -> Result<Vec<PipelineStepSettings>, InternalErrors> {
     steps_with_values(instance, definition_of(instance, definitions)?)
 }
 
-/// The parameters a group card shows for `instance`: each group parameter
+/// The parameters a component card shows for `instance`: each component parameter
 /// as the inner parameter it's bound to (its first binding) - same type,
 /// options and range, so the card gets the same control as the command -
-/// with the instance's value, the group parameter's id as `name`, its label
+/// with the instance's value, the component parameter's id as `name`, its label
 /// and description, and its default.
-pub fn group_parameters(
-    instance: &GroupInstance,
-    definitions: &[GroupDefinition],
+pub fn component_parameters(
+    instance: &ComponentInstance,
+    definitions: &[ComponentDefinition],
 ) -> Result<Vec<ParameterDef>, InternalErrors> {
     let definition = definition_of(instance, definitions)?;
     let steps = steps_with_values(instance, definition)?;
@@ -238,7 +238,7 @@ pub fn group_parameters(
         .iter()
         .map(|parameter| {
             let binding = parameter.bindings.first().ok_or_else(|| {
-                group_error(
+                component_error(
                     &definition.key,
                     format!("parameter \"{}\" isn't bound to anything", parameter.label),
                 )
@@ -251,12 +251,12 @@ pub fn group_parameters(
                 StepContent::Command(command) => {
                     find_param(&crate::algos::command_parameters(command), &binding.param).cloned()
                 }
-                StepContent::Group(inner) => group_parameters(inner, definitions)?
+                StepContent::Component(inner) => component_parameters(inner, definitions)?
                     .into_iter()
                     .find(|p| p.name == binding.param),
             };
             let mut shown = bound.ok_or_else(|| {
-                group_error(
+                component_error(
                     &definition.key,
                     format!(
                         "parameter \"{}\" is bound to {} of step {}, which doesn't exist",
@@ -278,14 +278,14 @@ pub fn group_parameters(
         .collect()
 }
 
-/// Sets `instance`'s value of group parameter `key` from `text` - a value as
+/// Sets `instance`'s value of component parameter `key` from `text` - a value as
 /// the card's control reports it (`apply_param_change`'s format, e.g. a
 /// dropdown label or "toggle:3"). It's applied to a copy of the bound
 /// command and read back, so the value is the one the command took.
-pub fn set_group_parameter(
-    instance: &mut GroupInstance,
-    definitions: &[GroupDefinition],
-    key: &GroupParamKey,
+pub fn set_component_parameter(
+    instance: &mut ComponentInstance,
+    definitions: &[ComponentDefinition],
+    key: &ComponentParamKey,
     text: &str,
 ) -> Result<(), InternalErrors> {
     let definition = definition_of(instance, definitions)?;
@@ -293,9 +293,9 @@ pub fn set_group_parameter(
         .parameters
         .iter()
         .find(|p| &p.key == key)
-        .ok_or_else(|| group_error(&definition.key, format!("has no parameter {key}")))?;
+        .ok_or_else(|| component_error(&definition.key, format!("has no parameter {key}")))?;
     let binding = parameter.bindings.first().ok_or_else(|| {
-        group_error(
+        component_error(
             &definition.key,
             format!("parameter \"{}\" isn't bound to anything", parameter.label),
         )
@@ -312,9 +312,9 @@ pub fn set_group_parameter(
                 .unwrap_or_default();
             value_from_text(&now)
         }
-        StepContent::Group(inner) => {
-            let inner_key = GroupParamKey::from(binding.param.as_str());
-            set_group_parameter(inner, definitions, &inner_key, text)?;
+        StepContent::Component(inner) => {
+            let inner_key = ComponentParamKey::from(binding.param.as_str());
+            set_component_parameter(inner, definitions, &inner_key, text)?;
             let inner_definition = definition_of(inner, definitions)?;
             inner.values.get(&inner_key).cloned().unwrap_or_else(|| {
                 inner_definition
@@ -330,30 +330,30 @@ pub fn set_group_parameter(
 }
 
 fn definition_of<'a>(
-    instance: &GroupInstance,
-    definitions: &'a [GroupDefinition],
-) -> Result<&'a GroupDefinition, InternalErrors> {
+    instance: &ComponentInstance,
+    definitions: &'a [ComponentDefinition],
+) -> Result<&'a ComponentDefinition, InternalErrors> {
     definitions
         .iter()
         .find(|d| d.key == instance.key)
-        .ok_or_else(|| group_error(&instance.key, "isn't defined in this project".into()))
+        .ok_or_else(|| component_error(&instance.key, "isn't defined in this project".into()))
 }
 
 fn missing_step(
-    definition: &GroupDefinition,
-    parameter: &GroupParameterDef,
+    definition: &ComponentDefinition,
+    parameter: &ComponentParameterDef,
     binding: &ParamBinding,
 ) -> InternalErrors {
-    group_error(
+    component_error(
         &definition.key,
         format!(
-            "parameter \"{}\" is bound to step {}, which the group doesn't have",
+            "parameter \"{}\" is bound to step {}, which the component doesn't have",
             parameter.label, binding.step
         ),
     )
 }
 
-/// A parameter's text value (`ParameterDef::value`) as a typed group value -
+/// A parameter's text value (`ParameterDef::value`) as a typed component value -
 /// the reverse of [`value_text`]: `true`/`false`, whole and decimal numbers,
 /// comma-separated lists (e.g. classes "1,3"), else text.
 pub fn value_from_text(text: &str) -> ParamValue {
@@ -412,8 +412,8 @@ fn mixed_classes(command: &PipelineCommand) -> Option<String> {
         if inputs.is_empty() {
             if is_local(output) {
                 return Some(format!(
-                    "adds the group class {} to all objects, also the project's - an object \
-                     can't have both; select the group classes it applies to",
+                    "adds the component class {} to all objects, also the project's - an object \
+                     can't have both; select the component classes it applies to",
                     output.to_text()
                 ));
             }
@@ -422,9 +422,9 @@ fn mixed_classes(command: &PipelineCommand) -> Option<String> {
         for input in inputs.iter().filter(|c| **c != ObjectClass::Unset) {
             if is_local(input) != is_local(output) {
                 let (adding, to) = if is_local(output) {
-                    ("group class", "project class")
+                    ("component class", "project class")
                 } else {
-                    ("project class", "group class")
+                    ("project class", "component class")
                 };
                 return Some(format!(
                     "adds the {adding} {} to objects of the {to} {} - an object can't have \
@@ -440,7 +440,7 @@ fn mixed_classes(command: &PipelineCommand) -> Option<String> {
 
 /// Writes `value` into `param` of `step`: a command's parameter (checked
 /// to have taken it - `apply_param_change` ignores what it can't use), or
-/// for a nested group, the value of its group parameter `param` (its id).
+/// for a nested component, the value of its component parameter `param` (its id).
 fn set_bound_value(
     step: &mut PipelineStepSettings,
     param: &str,
@@ -462,18 +462,18 @@ fn set_bound_value(
                 Err(format!("it doesn't accept {text:?}"))
             }
         }
-        StepContent::Group(inner) => {
-            let key = GroupParamKey::from(param);
-            // The inner group would read it as one of its own local classes.
+        StepContent::Component(inner) => {
+            let key = ComponentParamKey::from(param);
+            // The inner component would read it as one of its own local classes.
             if let Some(local) = local_class_in(value) {
                 return Err(format!(
-                    "the group class {} can't be passed into a nested group",
+                    "the component class {} can't be passed into a nested component",
                     local.to_text()
                 ));
             }
-            if group_memory_in(value) {
+            if component_memory_in(value) {
                 return Err(
-                    "a group memory slot can't be passed into a nested group - it has its own"
+                    "a component memory slot can't be passed into a nested component - it has its own"
                         .into(),
                 );
             }
@@ -483,17 +483,17 @@ fn set_bound_value(
     }
 }
 
-/// The group memory slots (`MemoryId::GroupContext`) `command` reads or writes.
+/// The component memory slots (`MemoryId::ComponentContext`) `command` reads or writes.
 /// Found in its file form, where such a slot is always `{"memory":
-/// {"groupContext": n}}` - whichever setting holds it (an image address, a
+/// {"componentContext": n}}` - whichever setting holds it (an image address, a
 /// threshold's value source, ...).
-fn group_memory_slots(command: &PipelineCommand) -> Vec<u64> {
+fn component_memory_slots(command: &PipelineCommand) -> Vec<u64> {
     fn collect(value: &serde_json::Value, slots: &mut Vec<u64>) {
         match value {
             serde_json::Value::Object(map) => {
                 if let Some(slot) = map
                     .get("memory")
-                    .and_then(|memory| memory.get("groupContext"))
+                    .and_then(|memory| memory.get("componentContext"))
                     .and_then(serde_json::Value::as_u64)
                 {
                     slots.push(slot);
@@ -511,11 +511,11 @@ fn group_memory_slots(command: &PipelineCommand) -> Vec<u64> {
     slots
 }
 
-/// Whether `value` holds a group memory slot in its text form (`"group:2"`).
-fn group_memory_in(value: &ParamValue) -> bool {
+/// Whether `value` holds a component memory slot in its text form (`"component:2"`).
+fn component_memory_in(value: &ParamValue) -> bool {
     match value {
-        ParamValue::Text(text) => text.starts_with("group:"),
-        ParamValue::List(items) => items.iter().any(group_memory_in),
+        ParamValue::Text(text) => text.starts_with("component:"),
+        ParamValue::List(items) => items.iter().any(component_memory_in),
         _ => false,
     }
 }
@@ -566,8 +566,8 @@ fn same_value(a: &str, b: &str) -> bool {
     }
 }
 
-fn group_error(key: &str, what: String) -> InternalErrors {
-    InternalErrors::InvalidArgument(format!("Command group {key}: {what}"))
+fn component_error(key: &str, what: String) -> InternalErrors {
+    InternalErrors::InvalidArgument(format!("Component {key}: {what}"))
 }
 
 #[cfg(test)]
@@ -577,7 +577,7 @@ mod tests {
     use evanalyzer_cfg::core_types::SegmentationClass;
     use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
     use evanalyzer_cfg::settings::classification_settings::Class;
-    use evanalyzer_cfg::settings::command_groups::{GroupParameterDef, ParamBinding};
+    use evanalyzer_cfg::settings::components::{ComponentParameterDef, ParamBinding};
     use evanalyzer_cfg::settings::pipeline_command_settings::{
         AiObjectClassifierSettings, BlurSettings, ClassificationMappingSettings,
         ClassifyObjectsSettings, ExtractClassMappingSettings, ExtractObjectsSettings,
@@ -594,23 +594,23 @@ mod tests {
         }
     }
 
-    fn group_step(id: u32, key: &str, values: &[(u32, ParamValue)]) -> PipelineStepSettings {
+    fn component_step(id: u32, key: &str, values: &[(u32, ParamValue)]) -> PipelineStepSettings {
         PipelineStepSettings {
             id: StepId(id),
             enabled: true,
-            content: StepContent::Group(GroupInstance {
+            content: StepContent::Component(ComponentInstance {
                 key: key.into(),
                 values: values
                     .iter()
-                    .map(|(k, v)| (GroupParamKey(k.to_string()), v.clone()))
+                    .map(|(k, v)| (ComponentParamKey(k.to_string()), v.clone()))
                     .collect::<BTreeMap<_, _>>(),
             }),
         }
     }
 
-    fn parameter(id: u32, default: ParamValue, bindings: &[(u32, &str)]) -> GroupParameterDef {
-        GroupParameterDef {
-            key: GroupParamKey(id.to_string()),
+    fn parameter(id: u32, default: ParamValue, bindings: &[(u32, &str)]) -> ComponentParameterDef {
+        ComponentParameterDef {
+            key: ComponentParamKey(id.to_string()),
             label: format!("Parameter {id}"),
             description: String::new(),
             section: String::new(),
@@ -628,9 +628,9 @@ mod tests {
     fn definition(
         key: &str,
         steps: Vec<PipelineStepSettings>,
-        parameters: Vec<GroupParameterDef>,
-    ) -> GroupDefinition {
-        GroupDefinition {
+        parameters: Vec<ComponentParameterDef>,
+    ) -> ComponentDefinition {
+        ComponentDefinition {
             key: key.into(),
             meta: Default::default(),
             classes: vec![],
@@ -641,7 +641,7 @@ mod tests {
     }
 
     /// Blur, then Voronoi - "Cell class" set in both places.
-    fn cell_reconstruction() -> GroupDefinition {
+    fn cell_reconstruction() -> ComponentDefinition {
         definition(
             "CELL_RECONSTRUCTION",
             vec![
@@ -662,7 +662,7 @@ mod tests {
     /// Expands `step` with a fresh scope counter, like one job does.
     fn expand(
         step: &PipelineStepSettings,
-        definitions: &[GroupDefinition],
+        definitions: &[ComponentDefinition],
     ) -> Result<Vec<ExpandedCommand>, InternalErrors> {
         expand_step(step, definitions, &mut ScopeCounter::default())
     }
@@ -683,8 +683,8 @@ mod tests {
     }
 
     #[test]
-    fn a_group_runs_its_commands_with_the_instances_values_and_defaults() {
-        let step = group_step(9, "CELL_RECONSTRUCTION", &[(2, ParamValue::Int(4))]);
+    fn a_component_runs_its_commands_with_the_instances_values_and_defaults() {
+        let step = component_step(9, "CELL_RECONSTRUCTION", &[(2, ParamValue::Int(4))]);
         let commands = expand(&step, &[cell_reconstruction()]).unwrap();
 
         assert_eq!(commands.len(), 2);
@@ -692,7 +692,7 @@ mod tests {
             panic!("expected Blur");
         };
         assert_eq!(blur.kernel_size, 3, "the definition's default");
-        // One group parameter, two inner parameters - always the same value.
+        // One component parameter, two inner parameters - always the same value.
         assert_eq!(
             voronoi(&commands[1].command).centers,
             ObjectClass::Global(4)
@@ -701,33 +701,34 @@ mod tests {
             voronoi(&commands[1].command).output_class,
             ObjectClass::Global(4)
         );
-        // A breakpoint on the group stops after it.
+        // A breakpoint on the component stops after it.
         assert_eq!(commands[0].step_id, StepId::UNASSIGNED);
         assert_eq!(commands[1].step_id, StepId(9));
     }
 
     #[test]
     fn disabled_inner_steps_are_left_out() {
-        let mut group = cell_reconstruction();
-        group.steps[0].enabled = false;
-        let commands = expand(&group_step(9, "CELL_RECONSTRUCTION", &[]), &[group]).unwrap();
+        let mut component = cell_reconstruction();
+        component.steps[0].enabled = false;
+        let commands =
+            expand(&component_step(9, "CELL_RECONSTRUCTION", &[]), &[component]).unwrap();
         assert_eq!(commands.len(), 1);
         assert!(matches!(commands[0].command, PipelineCommand::Voronoi(_)));
     }
 
     #[test]
-    fn groups_nest_and_an_outer_parameter_can_set_an_inner_groups_parameter() {
+    fn components_nest_and_an_outer_parameter_can_set_an_inner_components_parameter() {
         let outer = definition(
             "OUTER",
             vec![
-                group_step(1, "CELL_RECONSTRUCTION", &[]),
+                component_step(1, "CELL_RECONSTRUCTION", &[]),
                 command_step(2, PipelineCommand::Blur(BlurSettings::default())),
             ],
-            // Sets the inner group's "Cell class" (its parameter 2).
+            // Sets the inner component's "Cell class" (its parameter 2).
             vec![parameter(1, ParamValue::Int(7), &[(1, "2")])],
         );
         let commands = expand(
-            &group_step(4, "OUTER", &[]),
+            &component_step(4, "OUTER", &[]),
             &[cell_reconstruction(), outer],
         )
         .unwrap();
@@ -740,33 +741,39 @@ mod tests {
     }
 
     #[test]
-    fn mistakes_are_reported_with_the_group_and_what_is_wrong() {
-        let error = |definitions: &[GroupDefinition], step: PipelineStepSettings| {
+    fn mistakes_are_reported_with_the_component_and_what_is_wrong() {
+        let error = |definitions: &[ComponentDefinition], step: PipelineStepSettings| {
             expand(&step, definitions).unwrap_err().to_string()
         };
 
-        let err = error(&[], group_step(1, "MISSING", &[]));
+        let err = error(&[], component_step(1, "MISSING", &[]));
         assert!(
             err.contains("MISSING") && err.contains("isn't defined"),
             "{err}"
         );
 
-        let looping = definition("LOOP", vec![group_step(1, "LOOP", &[])], vec![]);
-        let err = error(&[looping], group_step(1, "LOOP", &[]));
+        let looping = definition("LOOP", vec![component_step(1, "LOOP", &[])], vec![]);
+        let err = error(&[looping], component_step(1, "LOOP", &[]));
         assert!(err.contains("contains itself"), "{err}");
 
         let mut unknown_step = cell_reconstruction();
         unknown_step.parameters[0].bindings[0].step = StepId(99);
-        let err = error(&[unknown_step], group_step(1, "CELL_RECONSTRUCTION", &[]));
+        let err = error(
+            &[unknown_step],
+            component_step(1, "CELL_RECONSTRUCTION", &[]),
+        );
         assert!(err.contains("step 99"), "{err}");
 
         let mut unknown_param = cell_reconstruction();
         unknown_param.parameters[0].bindings[0].param = "no_such".into();
-        let err = error(&[unknown_param], group_step(1, "CELL_RECONSTRUCTION", &[]));
+        let err = error(
+            &[unknown_param],
+            component_step(1, "CELL_RECONSTRUCTION", &[]),
+        );
         assert!(err.contains("no such parameter"), "{err}");
 
         // A value the parameter can't take is an error, not silently ignored.
-        let bad_value = group_step(
+        let bad_value = component_step(
             1,
             "CELL_RECONSTRUCTION",
             &[(1, ParamValue::Text("big".into()))],
@@ -809,14 +816,14 @@ mod tests {
     }
 
     #[test]
-    fn a_local_class_outside_a_group_is_refused() {
+    fn a_local_class_outside_a_component_is_refused() {
         let step = command_step(4, voronoi_with_center(ObjectClass::Local(1)));
         let error = expand(&step, &[]).unwrap_err().to_string();
-        assert!(error.contains("group class L1"), "{error}");
+        assert!(error.contains("component class L1"), "{error}");
     }
 
     #[test]
-    fn extracting_into_a_local_class_outside_a_group_is_refused() {
+    fn extracting_into_a_local_class_outside_a_component_is_refused() {
         let extract = PipelineCommand::ExtractObjects(ExtractObjectsSettings {
             class_mapping: vec![ExtractClassMappingSettings {
                 segmentation_class: SegmentationClass(1),
@@ -827,22 +834,25 @@ mod tests {
         let error = expand(&command_step(1, extract), &[])
             .unwrap_err()
             .to_string();
-        assert!(error.contains("group class L1"), "{error}");
+        assert!(error.contains("component class L1"), "{error}");
     }
 
     #[test]
-    fn a_group_may_only_use_the_local_classes_it_defines() {
+    fn a_component_may_only_use_the_local_classes_it_defines() {
         let undeclared = definition(
             "SEEDS",
             vec![command_step(1, voronoi_with_center(ObjectClass::Local(2)))],
             vec![],
         );
-        let error = expand(&group_step(1, "SEEDS", &[]), &[undeclared])
+        let error = expand(&component_step(1, "SEEDS", &[]), &[undeclared])
             .unwrap_err()
             .to_string();
-        assert!(error.contains("step 1 uses the group class L2"), "{error}");
+        assert!(
+            error.contains("step 1 uses the component class L2"),
+            "{error}"
+        );
 
-        // Declared, and set through a group parameter in its text form.
+        // Declared, and set through a component parameter in its text form.
         let mut declared = definition(
             "SEEDS",
             vec![command_step(1, voronoi_with_center(ObjectClass::Global(4)))],
@@ -853,7 +863,7 @@ mod tests {
             )],
         );
         declared.classes = vec![local_class(2)];
-        let commands = expand(&group_step(1, "SEEDS", &[]), &[declared]).unwrap();
+        let commands = expand(&component_step(1, "SEEDS", &[]), &[declared]).unwrap();
         assert_eq!(voronoi(&commands[0].command).centers, ObjectClass::Local(2));
     }
 
@@ -862,34 +872,34 @@ mod tests {
     }
 
     #[test]
-    fn each_group_instance_runs_in_a_scope_of_its_own() {
+    fn each_component_instance_runs_in_a_scope_of_its_own() {
         let mut scopes = ScopeCounter::default();
         let plain = command_step(1, PipelineCommand::Blur(BlurSettings::default()));
-        let group = group_step(2, "CELL_RECONSTRUCTION", &[]);
+        let component = component_step(2, "CELL_RECONSTRUCTION", &[]);
         let definitions = [cell_reconstruction()];
 
         let commands = expand_step(&plain, &definitions, &mut scopes).unwrap();
-        assert_eq!(commands[0].scope, Scope::Global, "outside groups");
+        assert_eq!(commands[0].scope, Scope::Global, "outside components");
 
-        // Two instances of one group, as in two pipelines of a job.
-        let first = expand_step(&group, &definitions, &mut scopes).unwrap();
-        let second = expand_step(&group, &definitions, &mut scopes).unwrap();
+        // Two instances of one component, as in two pipelines of a job.
+        let first = expand_step(&component, &definitions, &mut scopes).unwrap();
+        let second = expand_step(&component, &definitions, &mut scopes).unwrap();
         assert!(first.iter().all(|c| c.scope == scope(1)));
         assert!(second.iter().all(|c| c.scope == scope(2)));
     }
 
     #[test]
-    fn a_nested_group_has_its_own_scope() {
+    fn a_nested_component_has_its_own_scope() {
         let outer = definition(
             "OUTER",
             vec![
-                group_step(1, "CELL_RECONSTRUCTION", &[]),
+                component_step(1, "CELL_RECONSTRUCTION", &[]),
                 command_step(2, PipelineCommand::Blur(BlurSettings::default())),
             ],
             vec![],
         );
         let commands = expand(
-            &group_step(4, "OUTER", &[]),
+            &component_step(4, "OUTER", &[]),
             &[cell_reconstruction(), outer],
         )
         .unwrap();
@@ -898,28 +908,28 @@ mod tests {
     }
 
     #[test]
-    fn a_local_class_cant_be_passed_into_a_nested_group() {
+    fn a_local_class_cant_be_passed_into_a_nested_component() {
         let mut outer = definition(
             "OUTER",
-            vec![group_step(1, "CELL_RECONSTRUCTION", &[])],
-            // The outer group's local class 1 into the inner "Cell class".
+            vec![component_step(1, "CELL_RECONSTRUCTION", &[])],
+            // The outer component's local class 1 into the inner "Cell class".
             vec![parameter(1, ParamValue::Text("L1".into()), &[(1, "2")])],
         );
         outer.classes = vec![local_class(1)];
         let error = expand(
-            &group_step(4, "OUTER", &[]),
+            &component_step(4, "OUTER", &[]),
             &[cell_reconstruction(), outer],
         )
         .unwrap_err()
         .to_string();
         assert!(
-            error.contains("can't be passed into a nested group"),
+            error.contains("can't be passed into a nested component"),
             "{error}"
         );
     }
 
     #[test]
-    fn a_dataset_step_in_a_group_may_not_use_local_classes() {
+    fn a_dataset_step_in_a_component_may_not_use_local_classes() {
         let mut tracker = definition(
             "TRACK",
             vec![command_step(
@@ -932,11 +942,11 @@ mod tests {
             vec![],
         );
         tracker.classes = vec![local_class(1)];
-        let error = expand(&group_step(1, "TRACK", &[]), &[tracker])
+        let error = expand(&component_step(1, "TRACK", &[]), &[tracker])
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("dataset step using the group class L1"),
+            error.contains("dataset step using the component class L1"),
             "{error}"
         );
     }
@@ -956,11 +966,11 @@ mod tests {
         })
     }
 
-    /// Expands a group with local classes 1 and 2 running `command`.
-    fn in_group(command: PipelineCommand) -> Result<Vec<ExpandedCommand>, InternalErrors> {
-        let mut group = definition("MIX", vec![command_step(3, command)], vec![]);
-        group.classes = vec![local_class(1), local_class(2)];
-        expand(&group_step(1, "MIX", &[]), &[group])
+    /// Expands a component with local classes 1 and 2 running `command`.
+    fn in_component(command: PipelineCommand) -> Result<Vec<ExpandedCommand>, InternalErrors> {
+        let mut component = definition("MIX", vec![command_step(3, command)], vec![]);
+        component.classes = vec![local_class(1), local_class(2)];
+        expand(&component_step(1, "MIX", &[]), &[component])
     }
 
     #[test]
@@ -969,23 +979,23 @@ mod tests {
         let local = ObjectClass::Local(1);
         let global = ObjectClass::Global(5);
 
-        let error = in_group(classify(vec![local], AddOutputClassIfMatch, global))
+        let error = in_component(classify(vec![local], AddOutputClassIfMatch, global))
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("step 3 adds the project class 5 to objects of the group class L1")
+            error.contains("step 3 adds the project class 5 to objects of the component class L1")
                 && error.contains("Reclassify"),
             "{error}"
         );
-        let error = in_group(classify(vec![global], AddOutputClassIfNotMatch, local))
+        let error = in_component(classify(vec![global], AddOutputClassIfNotMatch, local))
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("adds the group class L1 to objects of the project class 5"),
+            error.contains("adds the component class L1 to objects of the project class 5"),
             "{error}"
         );
         // No input classes: every object the command sees, the project's too.
-        let error = in_group(classify(vec![], AddOutputClassIfMatch, local))
+        let error = in_component(classify(vec![], AddOutputClassIfMatch, local))
             .unwrap_err()
             .to_string();
         assert!(
@@ -1010,7 +1020,7 @@ mod tests {
             classify(vec![], AddOutputClassIfMatch, global),
             classify(vec![l1], RemoveInputClassIfMatch, global),
         ] {
-            assert!(in_group(command).is_ok());
+            assert!(in_component(command).is_ok());
         }
     }
 
@@ -1033,21 +1043,21 @@ mod tests {
                 ..Default::default()
             })
         };
-        let error = in_group(ai(
+        let error = in_component(ai(
             ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch,
         ))
         .unwrap_err()
         .to_string();
         assert!(error.contains("adds the project class 7"), "{error}");
         assert!(
-            in_group(ai(
+            in_component(ai(
                 ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch
             ))
             .is_ok()
         );
     }
 
-    // ---- Group memory slots ----
+    // ---- Component memory slots ----
 
     fn store_in(address: ImageAddress) -> PipelineCommand {
         PipelineCommand::ImageCache(ImageCacheSettings {
@@ -1057,19 +1067,23 @@ mod tests {
     }
 
     #[test]
-    fn a_group_memory_slot_outside_a_group_is_refused() {
-        let group_slot = ImageAddress::Memory(MemoryId::GroupContext(2));
-        let error = expand(&command_step(1, store_in(group_slot)), &[])
+    fn a_component_memory_slot_outside_a_component_is_refused() {
+        let component_slot = ImageAddress::Memory(MemoryId::ComponentContext(2));
+        let error = expand(&command_step(1, store_in(component_slot)), &[])
             .unwrap_err()
             .to_string();
-        assert!(error.contains("group memory slot 2"), "{error}");
+        assert!(error.contains("component memory slot 2"), "{error}");
 
-        let group = definition("SLOTS", vec![command_step(1, store_in(group_slot))], vec![]);
-        assert!(expand(&group_step(1, "SLOTS", &[]), &[group]).is_ok());
+        let component = definition(
+            "SLOTS",
+            vec![command_step(1, store_in(component_slot))],
+            vec![],
+        );
+        assert!(expand(&component_step(1, "SLOTS", &[]), &[component]).is_ok());
     }
 
     #[test]
-    fn a_group_memory_slot_cant_be_passed_into_a_nested_group() {
+    fn a_component_memory_slot_cant_be_passed_into_a_nested_component() {
         let inner = definition(
             "INNER",
             vec![command_step(
@@ -1084,35 +1098,35 @@ mod tests {
         );
         let outer = definition(
             "OUTER",
-            vec![group_step(1, "INNER", &[])],
+            vec![component_step(1, "INNER", &[])],
             vec![parameter(
                 1,
-                ParamValue::Text("group:1".into()),
+                ParamValue::Text("component:1".into()),
                 &[(1, "1")],
             )],
         );
-        let error = expand(&group_step(4, "OUTER", &[]), &[inner, outer])
+        let error = expand(&component_step(4, "OUTER", &[]), &[inner, outer])
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("memory slot can't be passed into a nested group"),
+            error.contains("memory slot can't be passed into a nested component"),
             "{error}"
         );
     }
 
-    // ---- The group card's parameters ----
+    // ---- The component card's parameters ----
 
-    fn instance(key: &str, values: &[(u32, ParamValue)]) -> GroupInstance {
-        let StepContent::Group(instance) = group_step(1, key, values).content else {
+    fn instance(key: &str, values: &[(u32, ParamValue)]) -> ComponentInstance {
+        let StepContent::Component(instance) = component_step(1, key, values).content else {
             unreachable!()
         };
         instance
     }
 
     #[test]
-    fn a_group_parameter_shows_as_the_parameter_it_is_bound_to() {
+    fn a_component_parameter_shows_as_the_parameter_it_is_bound_to() {
         let definitions = [cell_reconstruction()];
-        let shown = group_parameters(
+        let shown = component_parameters(
             &instance("CELL_RECONSTRUCTION", &[(2, ParamValue::Int(4))]),
             &definitions,
         )
@@ -1139,48 +1153,72 @@ mod tests {
 
         let cell_class = &shown[1];
         assert_eq!(cell_class.value, "4", "the instance's value");
-        assert_eq!(cell_class.default_value, "1", "the group's default");
+        assert_eq!(cell_class.default_value, "1", "the component's default");
     }
 
     #[test]
-    fn setting_a_group_parameter_stores_what_the_command_took() {
+    fn setting_a_component_parameter_stores_what_the_command_took() {
         let definitions = [cell_reconstruction()];
         let mut cells = instance("CELL_RECONSTRUCTION", &[]);
 
-        set_group_parameter(&mut cells, &definitions, &GroupParamKey::from("1"), "5").unwrap();
-        set_group_parameter(&mut cells, &definitions, &GroupParamKey::from("2"), "L1").unwrap();
-        assert_eq!(cells.values[&GroupParamKey::from("1")], ParamValue::Int(5));
+        set_component_parameter(&mut cells, &definitions, &ComponentParamKey::from("1"), "5")
+            .unwrap();
+        set_component_parameter(
+            &mut cells,
+            &definitions,
+            &ComponentParamKey::from("2"),
+            "L1",
+        )
+        .unwrap();
         assert_eq!(
-            cells.values[&GroupParamKey::from("2")],
+            cells.values[&ComponentParamKey::from("1")],
+            ParamValue::Int(5)
+        );
+        assert_eq!(
+            cells.values[&ComponentParamKey::from("2")],
             ParamValue::Text("L1".into())
         );
 
         // Text the command doesn't take leaves the value as it was.
-        set_group_parameter(&mut cells, &definitions, &GroupParamKey::from("1"), "big").unwrap();
-        assert_eq!(cells.values[&GroupParamKey::from("1")], ParamValue::Int(5));
+        set_component_parameter(
+            &mut cells,
+            &definitions,
+            &ComponentParamKey::from("1"),
+            "big",
+        )
+        .unwrap();
+        assert_eq!(
+            cells.values[&ComponentParamKey::from("1")],
+            ParamValue::Int(5)
+        );
 
         assert!(
-            set_group_parameter(&mut cells, &definitions, &GroupParamKey::from("9"), "1").is_err()
+            set_component_parameter(&mut cells, &definitions, &ComponentParamKey::from("9"), "1")
+                .is_err()
         );
     }
 
     #[test]
-    fn a_parameter_bound_to_a_nested_groups_parameter_works_the_same() {
+    fn a_parameter_bound_to_a_nested_components_parameter_works_the_same() {
         let outer = definition(
             "OUTER",
-            vec![group_step(1, "CELL_RECONSTRUCTION", &[])],
+            vec![component_step(1, "CELL_RECONSTRUCTION", &[])],
             vec![parameter(1, ParamValue::Int(7), &[(1, "2")])],
         );
         let definitions = [cell_reconstruction(), outer];
         let mut outer = instance("OUTER", &[]);
 
-        let shown = group_parameters(&outer, &definitions).unwrap();
+        let shown = component_parameters(&outer, &definitions).unwrap();
         assert_eq!(shown[0].value, "7");
 
-        set_group_parameter(&mut outer, &definitions, &GroupParamKey::from("1"), "8").unwrap();
-        assert_eq!(outer.values[&GroupParamKey::from("1")], ParamValue::Int(8));
+        set_component_parameter(&mut outer, &definitions, &ComponentParamKey::from("1"), "8")
+            .unwrap();
+        assert_eq!(
+            outer.values[&ComponentParamKey::from("1")],
+            ParamValue::Int(8)
+        );
         let commands = expand(
-            &group_step(1, "OUTER", &[(1, ParamValue::Int(8))]),
+            &component_step(1, "OUTER", &[(1, ParamValue::Int(8))]),
             &definitions,
         )
         .unwrap();

@@ -1,31 +1,31 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "GroupTemplate",
-  "description": "A command group saved to a library file (`.evagroup`). Inserting it copies\nthe group into a project, where it lives on its own from then on.",
+  "title": "ComponentTemplate",
+  "description": "A component saved to a library file (`.evacomp`). Inserting it copies\nthe component into a project, where it lives on its own from then on.",
   "type": "object",
   "properties": {
-    "group": {
-      "description": "The group. Its `meta` is the template's: name, description, authors,\nversion (\"Update available\" compares it).",
-      "$ref": "#/$defs/GroupDefinition"
+    "component": {
+      "description": "The component. Its `meta` is the template's: name, description, authors,\nversion (\"Update available\" compares it).",
+      "$ref": "#/$defs/ComponentDefinition"
     },
     "schemaVersion": {
-      "description": "On-disk format version (`.evagroup`), see\n`CURRENT_GROUP_TEMPLATE_SCHEMA_VERSION`. Like the other templates, not\nmigrated.",
+      "description": "On-disk format version (`.evacomp`), see\n`CURRENT_COMPONENT_TEMPLATE_SCHEMA_VERSION`. Like the other templates, not\nmigrated.",
       "type": "integer",
       "format": "uint32",
       "default": 0,
       "minimum": 0
     },
     "uses": {
-      "description": "The groups it uses inside, so the file is complete on its own.",
+      "description": "The components it uses inside, so the file is complete on its own.",
       "type": "array",
       "default": [],
       "items": {
-        "$ref": "#/$defs/GroupDefinition"
+        "$ref": "#/$defs/ComponentDefinition"
       }
     }
   },
   "required": [
-    "group"
+    "component"
   ],
   "$defs": {
     "AiObjectClassifierSettings": {
@@ -454,6 +454,155 @@
         "range"
       ]
     },
+    "ComponentDefinition": {
+      "description": "A component as defined in the project: its steps and the parameters it shows.",
+      "type": "object",
+      "properties": {
+        "classes": {
+          "description": "Local classes used by the component. These classes are scoped to the component only",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Class"
+          }
+        },
+        "key": {
+          "description": "Unique component key, prefere SCREAMING_SNAKE_CASE",
+          "type": "string"
+        },
+        "meta": {
+          "description": "Metadata of this component",
+          "$ref": "#/$defs/MetaData"
+        },
+        "origin": {
+          "description": "The library file this definition was inserted from, if any.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComponentOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameters": {
+          "description": "The component's parameters, shown on the component card.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ComponentParameterDef"
+          }
+        },
+        "steps": {
+          "description": "The steps which are executed in the given order",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PipelineStepSettings"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "meta",
+        "steps",
+        "parameters"
+      ]
+    },
+    "ComponentInstance": {
+      "description": "A use of a component in a pipeline: which definition, with which values.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The component's key in the project.",
+          "type": "string"
+        },
+        "values": {
+          "description": "This instance's parameter values. A parameter missing here has its\ndefinition's default (e.g. one the definition gained later).",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ParamValue"
+          },
+          "default": {}
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "ComponentOrigin": {
+      "description": "Where a definition came from: a component library file.",
+      "type": "object",
+      "properties": {
+        "contentHash": {
+          "description": "A fingerprint of the definition as inserted - if it differs now, the\nproject changed the component, and an update from the library would\nreplace those changes. Empty in files written before.",
+          "type": "string",
+          "default": ""
+        },
+        "library": {
+          "description": "The library file's name (`.evacomp`).",
+          "type": "string"
+        },
+        "originComponentKey": {
+          "description": "If this is a copy form an existing component, this is the origin component key.\nThis allows to reset the component default settings.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The definition's version in that file when it was inserted.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "originComponentKey",
+        "library",
+        "version"
+      ]
+    },
+    "ComponentParamKey": {
+      "description": "A component parameter's key, unique within its component definition and\nreadable in the file (`\"min_size\"`). The values a component instance holds\nare keyed by it, so they survive reordering and relabelling the\ndefinition's parameters, and updating it from the library. Made from the\nlabel when the parameter is made, then kept.",
+      "type": "string"
+    },
+    "ComponentParameterDef": {
+      "description": "One parameter of a component: what it sets inside the component, and its default.",
+      "type": "object",
+      "properties": {
+        "bindings": {
+          "description": "The inner parameters this one sets - all of the same type. Type,\noptions and range are those of the bound parameters (not stored here,\nso they can't go stale when a command changes).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParamBinding"
+          }
+        },
+        "default": {
+          "description": "The value an instance starts with.",
+          "$ref": "#/$defs/ParamValue"
+        },
+        "description": {
+          "description": "Explanation shown to the user.",
+          "type": "string",
+          "default": ""
+        },
+        "key": {
+          "description": "Unique within the component definition, readable (`\"min_size\"`); the\ninstances' values are keyed by it.",
+          "$ref": "#/$defs/ComponentParamKey"
+        },
+        "label": {
+          "description": "Name shown to the user, e.g. \"Cell class\".",
+          "type": "string"
+        },
+        "section": {
+          "description": "Section the parameter is shown in on the component card, e.g.\n\"Detection\"; empty: the unnamed first section.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "default",
+        "bindings"
+      ]
+    },
     "ConnectedComponentsSettings": {
       "description": "Identifies and labels discrete objects within a binary or multi-class image.\n\n[Preprocessing] -> [Segment/Threshold] -> [Fill Holes] -> [Connected Components] -> [Watershed] -> [Extract Objects]",
       "type": "object",
@@ -557,7 +706,7 @@
       "type": "object",
       "properties": {
         "objectClass": {
-          "description": "The object class its objects get: a project class, or inside a\ncommand group one of the group's own classes.",
+          "description": "The object class its objects get: a project class, or inside a\ncomponent one of the component's own classes.",
           "$ref": "#/$defs/ObjectClass"
         },
         "segmentationClass": {
@@ -575,7 +724,7 @@
       "type": "object",
       "properties": {
         "classMapping": {
-          "description": "Which object class the objects of a segmentation class get.\n\nWithout an entry, a segmentation class's objects get the project class\nwith the same number - what the Threshold's class choice means. Inside\na command group, map to one of the group's own classes to keep the\nobjects internal to the group.",
+          "description": "Which object class the objects of a segmentation class get.\n\nWithout an entry, a segmentation class's objects get the project class\nwith the same number - what the Threshold's class choice means. Inside\na component, map to one of the component's own classes to keep the\nobjects internal to the component.",
           "type": "array",
           "default": [],
           "items": {
@@ -833,155 +982,6 @@
           "minimum": 0.1
         }
       }
-    },
-    "GroupDefinition": {
-      "description": "A group as defined in the project: its steps and the parameters it shows.",
-      "type": "object",
-      "properties": {
-        "classes": {
-          "description": "Local classes used by the group. These classes are scoped to the group only",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/Class"
-          }
-        },
-        "key": {
-          "description": "Unique group key, prefere SCREAMING_SNAKE_CASE",
-          "type": "string"
-        },
-        "meta": {
-          "description": "Metadata of this group",
-          "$ref": "#/$defs/MetaData"
-        },
-        "origin": {
-          "description": "The library file this definition was inserted from, if any.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GroupOrigin"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "parameters": {
-          "description": "The group's parameters, shown on the group card.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/GroupParameterDef"
-          }
-        },
-        "steps": {
-          "description": "The steps which are executed in the given order",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/PipelineStepSettings"
-          }
-        }
-      },
-      "required": [
-        "key",
-        "meta",
-        "steps",
-        "parameters"
-      ]
-    },
-    "GroupInstance": {
-      "description": "A use of a group in a pipeline: which definition, with which values.",
-      "type": "object",
-      "properties": {
-        "key": {
-          "description": "The group's key in the project.",
-          "type": "string"
-        },
-        "values": {
-          "description": "This instance's parameter values. A parameter missing here has its\ndefinition's default (e.g. one the definition gained later).",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/ParamValue"
-          },
-          "default": {}
-        }
-      },
-      "required": [
-        "key"
-      ]
-    },
-    "GroupOrigin": {
-      "description": "Where a definition came from: a group library file.",
-      "type": "object",
-      "properties": {
-        "contentHash": {
-          "description": "A fingerprint of the definition as inserted - if it differs now, the\nproject changed the group, and an update from the library would\nreplace those changes. Empty in files written before.",
-          "type": "string",
-          "default": ""
-        },
-        "library": {
-          "description": "The library file's name (`.evagroup`).",
-          "type": "string"
-        },
-        "originGroupKey": {
-          "description": "If this is a copy form an existing group, this is the origin group key.\nThis allows to reset the group default settings.",
-          "type": "string"
-        },
-        "version": {
-          "description": "The definition's version in that file when it was inserted.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "originGroupKey",
-        "library",
-        "version"
-      ]
-    },
-    "GroupParamKey": {
-      "description": "A group parameter's key, unique within its group definition and\nreadable in the file (`\"min_size\"`). The values a group instance holds\nare keyed by it, so they survive reordering and relabelling the\ndefinition's parameters, and updating it from the library. Made from the\nlabel when the parameter is made, then kept.",
-      "type": "string"
-    },
-    "GroupParameterDef": {
-      "description": "One parameter of a group: what it sets inside the group, and its default.",
-      "type": "object",
-      "properties": {
-        "bindings": {
-          "description": "The inner parameters this one sets - all of the same type. Type,\noptions and range are those of the bound parameters (not stored here,\nso they can't go stale when a command changes).",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ParamBinding"
-          }
-        },
-        "default": {
-          "description": "The value an instance starts with.",
-          "$ref": "#/$defs/ParamValue"
-        },
-        "description": {
-          "description": "Explanation shown to the user.",
-          "type": "string",
-          "default": ""
-        },
-        "key": {
-          "description": "Unique within the group definition, readable (`\"min_size\"`); the\ninstances' values are keyed by it.",
-          "$ref": "#/$defs/GroupParamKey"
-        },
-        "label": {
-          "description": "Name shown to the user, e.g. \"Cell class\".",
-          "type": "string"
-        },
-        "section": {
-          "description": "Section the parameter is shown in on the group card, e.g.\n\"Detection\"; empty: the unnamed first section.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "label",
-        "default",
-        "bindings"
-      ]
     },
     "HessianSettings": {
       "description": "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.\n\nThis algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.\n\n# Examples\n\n```\n# use imagec::backend::algos::{Hessian, HessianMode};\nlet detector = Hessian {\nmode: HessianMode::Determinant,\n};\n```",
@@ -1272,7 +1272,7 @@
       }
     },
     "LoadChannelSettings": {
-      "description": "Loads an image channel as the image the following steps work on.\n\nReplaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na command group that detects nuclei in one channel and cells in another.",
+      "description": "Loads an image channel as the image the following steps work on.\n\nReplaces the current image. Use it as the first step of a pipeline\nwithout an image source, or to switch channels within a pipeline - e.g.\na component that detects nuclei in one channel and cells in another.",
       "type": "object",
       "properties": {
         "channel": {
@@ -1424,7 +1424,7 @@
         {
           "type": "object",
           "properties": {
-            "groupContext": {
+            "componentContext": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
@@ -1432,7 +1432,7 @@
           },
           "additionalProperties": false,
           "required": [
-            "groupContext"
+            "componentContext"
           ]
         }
       ]
@@ -1484,7 +1484,7 @@
           }
         },
         "version": {
-          "description": "The author's version of this group or template",
+          "description": "The author's version of this component or template",
           "type": [
             "integer",
             "null"
@@ -1606,7 +1606,7 @@
           ]
         },
         {
-          "description": "A class of a command group (`GroupDefinition::classes`): only valid\ninside the group, each instance has its own.",
+          "description": "A class of a component (`ComponentDefinition::classes`): only valid\ninside the component, each instance has its own.",
           "type": "object",
           "properties": {
             "LOCAL": {
@@ -1961,7 +1961,7 @@
       ]
     },
     "ParamBinding": {
-      "description": "An inner parameter a group parameter sets.",
+      "description": "An inner parameter a component parameter sets.",
       "type": "object",
       "properties": {
         "param": {
@@ -1969,7 +1969,7 @@
           "type": "string"
         },
         "step": {
-          "description": "The step of the group that owns the parameter.",
+          "description": "The step of the component that owns the parameter.",
           "$ref": "#/$defs/StepId"
         }
       },
@@ -1979,7 +1979,7 @@
       ]
     },
     "ParamValue": {
-      "description": "A group parameter's value - written as plain JSON (`4`, `4.5`, `true`,\n`\"PARABOLOID\"`, `[1, 2]`). Typed by JSON kind only: what it means (a\nclass, a channel, a dropdown option) and which values are valid come\nfrom the bound inner parameters.",
+      "description": "A component parameter's value - written as plain JSON (`4`, `4.5`, `true`,\n`\"PARABOLOID\"`, `[1, 2]`). Typed by JSON kind only: what it means (a\nclass, a channel, a dropdown option) and which values are valid come\nfrom the bound inner parameters.",
       "anyOf": [
         {
           "type": "boolean"
@@ -2543,7 +2543,7 @@
       ]
     },
     "PipelineStepSettings": {
-      "description": "What a pipeline step runs. In JSON the variant name is the key, next to\n`id` and `enabled`: `\"command\": {...}` (as in files written before\ngroups existed) or `\"group\": {...}`.",
+      "description": "What a pipeline step runs. In JSON the variant name is the key, next to\n`id` and `enabled`: `\"command\": {...}` (as in files written before\ncomponents existed) or `\"component\": {...}`.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -2570,12 +2570,12 @@
         {
           "type": "object",
           "properties": {
-            "group": {
-              "$ref": "#/$defs/GroupInstance"
+            "component": {
+              "$ref": "#/$defs/ComponentInstance"
             }
           },
           "required": [
-            "group"
+            "component"
           ]
         }
       ],
@@ -3152,7 +3152,7 @@
       }
     },
     "StepId": {
-      "description": "A pipeline step's id: a small number, unique within its list of steps\n(a pipeline, or a group definition), so it reads well in a hand-written\nproject file (`\"id\": 7`) and in references to the step. Assigned by\nwhoever adds a step - the next number after the list's highest, never\nreused within the list. `0` ([`StepId::UNASSIGNED`]) means \"not\nassigned yet\": a step written without an id gets one when the project is\nloaded.",
+      "description": "A pipeline step's id: a small number, unique within its list of steps\n(a pipeline, or a component definition), so it reads well in a hand-written\nproject file (`\"id\": 7`) and in references to the step. Assigned by\nwhoever adds a step - the next number after the list's highest, never\nreused within the list. `0` ([`StepId::UNASSIGNED`]) means \"not\nassigned yet\": a step written without an id gets one when the project is\nloaded.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0

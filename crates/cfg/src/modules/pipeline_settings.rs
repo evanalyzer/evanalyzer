@@ -1,5 +1,5 @@
 use crate::{
-    core_types::ImageAddress, settings::command_groups::GroupInstance,
+    core_types::ImageAddress, settings::components::ComponentInstance,
     settings::pipeline_command::PipelineCommand, types::ids::PipelineId, types::ids::StepId,
 };
 use schemars::JsonSchema;
@@ -14,37 +14,37 @@ pub struct PipelineStepSettings {
     /// If enabled, the command is executed, if not enabled, this command is skiped during pipeline execution
     pub enabled: bool,
 
-    /// What the step runs: one command, or a command group.
+    /// What the step runs: one command, or a component.
     #[serde(flatten)]
     pub content: StepContent,
 }
 
 impl PipelineStepSettings {
-    /// The step's command - `None` for a command group.
+    /// The step's command - `None` for a component.
     pub fn command(&self) -> Option<&PipelineCommand> {
         match &self.content {
             StepContent::Command(command) => Some(command),
-            StepContent::Group(_) => None,
+            StepContent::Component(_) => None,
         }
     }
 
-    /// The step's command, to change - `None` for a command group.
+    /// The step's command, to change - `None` for a component.
     pub fn command_mut(&mut self) -> Option<&mut PipelineCommand> {
         match &mut self.content {
             StepContent::Command(command) => Some(command),
-            StepContent::Group(_) => None,
+            StepContent::Component(_) => None,
         }
     }
 }
 
 /// What a pipeline step runs. In JSON the variant name is the key, next to
 /// `id` and `enabled`: `"command": {...}` (as in files written before
-/// groups existed) or `"group": {...}`.
+/// components existed) or `"component": {...}`.
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StepContent {
     Command(PipelineCommand),
-    Group(GroupInstance),
+    Component(ComponentInstance),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
@@ -75,7 +75,7 @@ mod step_content_tests {
     use super::*;
 
     #[test]
-    fn a_step_written_before_groups_existed_still_loads_as_a_command() {
+    fn a_step_written_before_components_existed_still_loads_as_a_command() {
         let json = r#"{"id":3,"enabled":true,"command":{"type":"BLUR","kernelSize":3}}"#;
         // Projects load through `serde_json::Value`.
         let raw: serde_json::Value = serde_json::from_str(json).unwrap();
@@ -91,15 +91,14 @@ mod step_content_tests {
     }
 
     #[test]
-    fn a_group_step_loads_and_is_written_as_group() {
-        let json =
-            r#"{"enabled":true,"group":{"key":"CELL_RECONSTRUCTION","values":{"cell_class":3}}}"#;
+    fn a_component_step_loads_and_is_written_as_component() {
+        let json = r#"{"enabled":true,"component":{"key":"CELL_RECONSTRUCTION","values":{"cell_class":3}}}"#;
         let raw: serde_json::Value = serde_json::from_str(json).unwrap();
         let step: PipelineStepSettings = serde_json::from_value(raw).unwrap();
-        let StepContent::Group(group) = &step.content else {
-            panic!("expected a group step");
+        let StepContent::Component(component) = &step.content else {
+            panic!("expected a component step");
         };
-        assert_eq!(group.key, "CELL_RECONSTRUCTION");
+        assert_eq!(component.key, "CELL_RECONSTRUCTION");
         assert!(step.command().is_none());
         assert_eq!(
             step.id,
@@ -107,6 +106,6 @@ mod step_content_tests {
             "no id written: assigned on load"
         );
         let written = serde_json::to_value(&step).unwrap();
-        assert_eq!(written["group"]["key"], "CELL_RECONSTRUCTION");
+        assert_eq!(written["component"]["key"], "CELL_RECONSTRUCTION");
     }
 }

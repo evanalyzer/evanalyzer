@@ -2,35 +2,35 @@ import { LineEdit, ComboBox, ScrollView, TextEdit } from "std-widgets.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Theme } from "../style.slint";
 
-// "Group steps": turns consecutive steps of a pipeline into a command group.
+// "Create component": turns consecutive steps of a pipeline into a component.
 // The host fills the class list with suggested roles (see
-// `evanalyzer_app::groups::plan_grouping`) and recomputes it when the range
+// `evanalyzer_app::components::plan_component`) and recomputes it when the range
 // changes.
 
 // -- Global state --------------------------------------------
 
-/// A project class the steps use, and what it becomes in the group.
-export struct GroupClassRow {
+/// A project class the steps use, and what it becomes in the component.
+export struct ComponentClassRow {
     /// The class in its text form ("3") - how the host knows which it is.
     class-text: string,
     name: string,
     /// "Only used by these steps" / "Also used elsewhere".
     detail: string,
-    /// 0 = internal (the group's own), 1 = group parameter, 2 = fixed.
+    /// 0 = internal (the component's own), 1 = component parameter, 2 = fixed.
     role: int,
 }
 
-export global GroupStepsState {
+export global CreateComponentState {
     in property <int> pipeline-id: 0;
     /// "1 · Threshold", "2 · Extract Objects", ... - for the range pickers.
     in property <[string]> step-names: [];
     in-out property <int> from-step: 0;
     in-out property <int> to-step: 0;
     in-out property <string> name: "";
-    in property <[GroupClassRow]> classes: [];
-    /// "Channel 1 becomes a group parameter", or empty.
+    in property <[ComponentClassRow]> classes: [];
+    /// "Channel 1 becomes a component parameter", or empty.
     in property <string> channels-text: "";
-    /// Why the group can't be made, or empty.
+    /// Why the component can't be made, or empty.
     in property <string> error: "";
     callback range-changed(int, int);
     callback role-changed(int, int);
@@ -65,12 +65,12 @@ component RangeRow inherits HorizontalLayout {
 
 // -- Dialog component -----------------------------------------
 
-export component GroupStepsDialog inherits Rectangle {
+export component CreateComponentDialog inherits Rectangle {
     background: Theme.modal-overlay;
 
     TouchArea {
         clicked => {
-            GroupStepsState.cancel();
+            CreateComponentState.cancel();
         }
     }
 
@@ -96,7 +96,7 @@ export component GroupStepsDialog inherits Rectangle {
             HorizontalLayout {
                 alignment: space-between;
                 Text {
-                    text: "Group steps";
+                    text: "Create component";
                     font-size: 16px;
                     font-weight: 700;
                     color: Theme.text;
@@ -118,14 +118,14 @@ export component GroupStepsDialog inherits Rectangle {
                     close-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            GroupStepsState.cancel();
+                            CreateComponentState.cancel();
                         }
                     }
                 }
             }
 
             Text {
-                text: "The steps become one step - a command group you can use like a command, in this and other pipelines.";
+                text: "The steps become one step - a component you can use like a command, in this and other pipelines.";
                 font-size: 11px;
                 color: Theme.text-dim;
                 wrap: word-wrap;
@@ -134,18 +134,18 @@ export component GroupStepsDialog inherits Rectangle {
             VerticalLayout {
                 spacing: 5px;
                 Text {
-                    text: "Group name";
+                    text: "Component name";
                     font-size: 11px;
                     color: Theme.text-dim;
                 }
 
                 LineEdit {
                     height: 30px;
-                    text: GroupStepsState.name;
+                    text: CreateComponentState.name;
                     placeholder-text: "e.g. Cell reconstruction";
                     font-size: 12px;
                     edited(t) => {
-                        GroupStepsState.name = t;
+                        CreateComponentState.name = t;
                     }
                 }
             }
@@ -154,24 +154,24 @@ export component GroupStepsDialog inherits Rectangle {
                 spacing: 6px;
                 RangeRow {
                     label: "From";
-                    model: GroupStepsState.step-names;
-                    current: GroupStepsState.from-step;
+                    model: CreateComponentState.step-names;
+                    current: CreateComponentState.from-step;
                     picked(i) => {
-                        GroupStepsState.range-changed(i, GroupStepsState.to-step);
+                        CreateComponentState.range-changed(i, CreateComponentState.to-step);
                     }
                 }
 
                 RangeRow {
                     label: "To";
-                    model: GroupStepsState.step-names;
-                    current: GroupStepsState.to-step;
+                    model: CreateComponentState.step-names;
+                    current: CreateComponentState.to-step;
                     picked(i) => {
-                        GroupStepsState.range-changed(GroupStepsState.from-step, i);
+                        CreateComponentState.range-changed(CreateComponentState.from-step, i);
                     }
                 }
             }
 
-            if GroupStepsState.classes.length > 0: VerticalLayout {
+            if CreateComponentState.classes.length > 0: VerticalLayout {
                 spacing: 6px;
                 Text {
                     text: "Classes";
@@ -179,7 +179,7 @@ export component GroupStepsDialog inherits Rectangle {
                     color: Theme.text-dim;
                 }
 
-                for row[i] in GroupStepsState.classes: HorizontalLayout {
+                for row[i] in CreateComponentState.classes: HorizontalLayout {
                     spacing: 8px;
                     VerticalLayout {
                         horizontal-stretch: 1;
@@ -199,31 +199,31 @@ export component GroupStepsDialog inherits Rectangle {
 
                     ComboBox {
                         width: 190px;
-                        model: ["Internal (group only)", "Group parameter", "Fixed"];
+                        model: ["Internal (component only)", "Component parameter", "Fixed"];
                         current-index: row.role;
                         selected(v) => {
-                            GroupStepsState.role-changed(i, self.current-index);
+                            CreateComponentState.role-changed(i, self.current-index);
                         }
                     }
                 }
 
                 Text {
-                    text: "Internal classes are the group's own: each use of the group has its own, and their objects don't reach the results.";
+                    text: "Internal classes are the component's own: each use of the component has its own, and their objects don't reach the results.";
                     font-size: 10px;
                     color: Theme.text-mute;
                     wrap: word-wrap;
                 }
             }
 
-            if GroupStepsState.channels-text != "": Text {
-                text: GroupStepsState.channels-text;
+            if CreateComponentState.channels-text != "": Text {
+                text: CreateComponentState.channels-text;
                 font-size: 11px;
                 color: Theme.text-dim;
                 wrap: word-wrap;
             }
 
-            if GroupStepsState.error != "": Text {
-                text: GroupStepsState.error;
+            if CreateComponentState.error != "": Text {
+                text: CreateComponentState.error;
                 font-size: 11px;
                 color: Theme.err;
                 wrap: word-wrap;
@@ -235,15 +235,15 @@ export component GroupStepsDialog inherits Rectangle {
                 AppButton {
                     text: "Cancel";
                     clicked => {
-                        GroupStepsState.cancel();
+                        CreateComponentState.cancel();
                     }
                 }
 
                 AppButton {
-                    text: "Create group";
+                    text: "Create component";
                     primary: true;
                     clicked => {
-                        GroupStepsState.confirm();
+                        CreateComponentState.confirm();
                     }
                 }
             }
@@ -255,23 +255,23 @@ export component GroupStepsDialog inherits Rectangle {
 
 // -- "Edit for all" or "Only this step" -------------------------
 
-/// Asked when opening a group that other steps use too.
-export global GroupEditChoiceState {
+/// Asked when opening a component that other steps use too.
+export global ComponentEditChoiceState {
     in property <int> pipeline-id: 0;
     in property <int> step-idx: 0;
-    in property <string> group-name: "";
+    in property <string> component-name: "";
     in property <int> uses: 0;
     callback edit-all();
     callback only-this();
     callback cancel();
 }
 
-export component GroupEditChoiceDialog inherits Rectangle {
+export component ComponentEditChoiceDialog inherits Rectangle {
     background: Theme.modal-overlay;
 
     TouchArea {
         clicked => {
-            GroupEditChoiceState.cancel();
+            ComponentEditChoiceState.cancel();
         }
     }
 
@@ -295,14 +295,14 @@ export component GroupEditChoiceDialog inherits Rectangle {
             spacing: 14px;
 
             Text {
-                text: "Open \{GroupEditChoiceState.group-name}";
+                text: "Open \{ComponentEditChoiceState.component-name}";
                 font-size: 16px;
                 font-weight: 700;
                 color: Theme.text;
             }
 
             Text {
-                text: "This group is used by \{GroupEditChoiceState.uses} steps. Changes to it apply to all of them - or make a copy just for this step.";
+                text: "This component is used by \{ComponentEditChoiceState.uses} steps. Changes to it apply to all of them - or make a copy just for this step.";
                 font-size: 11px;
                 color: Theme.text-dim;
                 wrap: word-wrap;
@@ -314,14 +314,14 @@ export component GroupEditChoiceDialog inherits Rectangle {
                 AppButton {
                     text: "Cancel";
                     clicked => {
-                        GroupEditChoiceState.cancel();
+                        ComponentEditChoiceState.cancel();
                     }
                 }
 
                 AppButton {
                     text: "Only this step";
                     clicked => {
-                        GroupEditChoiceState.only-this();
+                        ComponentEditChoiceState.only-this();
                     }
                 }
 
@@ -329,7 +329,7 @@ export component GroupEditChoiceDialog inherits Rectangle {
                     text: "Edit for all";
                     primary: true;
                     clicked => {
-                        GroupEditChoiceState.edit-all();
+                        ComponentEditChoiceState.edit-all();
                     }
                 }
             }
@@ -341,7 +341,7 @@ export component GroupEditChoiceDialog inherits Rectangle {
 
 // -- Expose a setting: a new parameter, or one that exists -------
 
-/// Asked when exposing a setting that existing group parameters could set
+/// Asked when exposing a setting that existing component parameters could set
 /// too (same kind of setting).
 export global ExposeChoiceState {
     in property <string> setting-name: "";
@@ -387,7 +387,7 @@ export component ExposeChoiceDialog inherits Rectangle {
             }
 
             Text {
-                text: "As a parameter of its own, or set by a parameter the group has already:";
+                text: "As a parameter of its own, or set by a parameter the component has already:";
                 font-size: 11px;
                 color: Theme.text-dim;
                 wrap: word-wrap;
@@ -416,25 +416,25 @@ export component ExposeChoiceDialog inherits Rectangle {
     }
 }
 
-// -- Update a group from the library -------------------------------
+// -- Update a component from the library -------------------------------
 
-export global GroupUpdateState {
-    in property <string> group-name: "";
+export global ComponentUpdateState {
+    in property <string> component-name: "";
     /// "v1 → v3"
     in property <string> versions: "";
-    /// The project changed the group since it was inserted - the update
+    /// The project changed the component since it was inserted - the update
     /// replaces those changes.
     in property <bool> changed-here: false;
     callback confirm();
     callback cancel();
 }
 
-export component GroupUpdateDialog inherits Rectangle {
+export component ComponentUpdateDialog inherits Rectangle {
     background: Theme.modal-overlay;
 
     TouchArea {
         clicked => {
-            GroupUpdateState.cancel();
+            ComponentUpdateState.cancel();
         }
     }
 
@@ -458,21 +458,21 @@ export component GroupUpdateDialog inherits Rectangle {
             spacing: 12px;
 
             Text {
-                text: "Update \{GroupUpdateState.group-name}";
+                text: "Update \{ComponentUpdateState.component-name}";
                 font-size: 16px;
                 font-weight: 700;
                 color: Theme.text;
             }
 
             Text {
-                text: "The group library has a newer version (\{GroupUpdateState.versions}). Every step using the group gets it; their values stay.";
+                text: "The component library has a newer version (\{ComponentUpdateState.versions}). Every step using the component gets it; their values stay.";
                 font-size: 11px;
                 color: Theme.text-dim;
                 wrap: word-wrap;
             }
 
-            if GroupUpdateState.changed-here: Text {
-                text: "This project changed the group since it was inserted - updating replaces those changes.";
+            if ComponentUpdateState.changed-here: Text {
+                text: "This project changed the component since it was inserted - updating replaces those changes.";
                 font-size: 11px;
                 color: Theme.warn;
                 wrap: word-wrap;
@@ -484,7 +484,7 @@ export component GroupUpdateDialog inherits Rectangle {
                 AppButton {
                     text: "Cancel";
                     clicked => {
-                        GroupUpdateState.cancel();
+                        ComponentUpdateState.cancel();
                     }
                 }
 
@@ -492,7 +492,7 @@ export component GroupUpdateDialog inherits Rectangle {
                     text: "Update";
                     primary: true;
                     clicked => {
-                        GroupUpdateState.confirm();
+                        ComponentUpdateState.confirm();
                     }
                 }
             }
@@ -502,10 +502,10 @@ export component GroupUpdateDialog inherits Rectangle {
     }
 }
 
-// -- Group settings ------------------------------------------------
+// -- Component settings ------------------------------------------------
 
-/// A parameter of the group, as it shows on the group card.
-export struct GroupParamRow {
+/// A parameter of the component, as it shows on the component card.
+export struct ComponentParamRow {
     // The parameter's key ("min_size").
     key: string,
     label: string,
@@ -517,25 +517,25 @@ export struct GroupParamRow {
     default-description: string,
     /// What it sets: "Blur › Kernel size, Blur › Kernel size".
     sets: string,
-    /// The section it's shown in on the group card; empty: none.
+    /// The section it's shown in on the component card; empty: none.
     section: string,
 }
 
-/// The opened group's name, descriptions and parameters (name, help text,
-/// order). Opened from "Settings…" in the bar of a group opened to edit, or
+/// The opened component's name, descriptions and parameters (name, help text,
+/// order). Opened from "Settings…" in the bar of a component opened to edit, or
 /// from ✎ on an exposed setting (`focus-index` is then that parameter's
 /// row).
-export global GroupSettingsState {
+export global ComponentSettingsState {
     in property <string> name: "";
     /// One line, shown in the command picker.
     in property <string> description: "";
-    /// The full description, shown with the short one behind the group
+    /// The full description, shown with the short one behind the component
     /// card's "?".
     in property <string> long-description: "";
     /// The first author - shown in the command picker.
     in property <string> author-name: "";
     in property <string> author-organization: "";
-    in property <[GroupParamRow]> parameters: [];
+    in property <[ComponentParamRow]> parameters: [];
     /// The row to scroll to and highlight, or -1.
     in property <int> focus-index: -1;
     callback name-edited(string);
@@ -548,25 +548,25 @@ export global GroupSettingsState {
     callback parameter-name-edited(string, string);
     /// key, help text
     callback parameter-help-edited(string, string);
-    /// key, section on the group card (empty: none)
+    /// key, section on the component card (empty: none)
     callback parameter-section-edited(string, string);
     /// key, -1 up / +1 down
     callback parameter-moved(string, int);
     /// key: back to the bound setting's own help text.
     callback parameter-help-reset(string);
-    /// key: stop exposing it - its settings go back to the group's values.
+    /// key: stop exposing it - its settings go back to the component's values.
     callback parameter-removed(string);
     callback close();
 }
 
-export component GroupSettingsDialog inherits Rectangle {
+export component ComponentSettingsDialog inherits Rectangle {
     background: Theme.modal-overlay;
     property <length> row-height: 190px;
     property <length> row-spacing: 8px;
 
     TouchArea {
         clicked => {
-            GroupSettingsState.close();
+            ComponentSettingsState.close();
         }
     }
 
@@ -592,7 +592,7 @@ export component GroupSettingsDialog inherits Rectangle {
             HorizontalLayout {
                 alignment: space-between;
                 Text {
-                    text: "Group settings";
+                    text: "Component settings";
                     font-size: 16px;
                     font-weight: 700;
                     color: Theme.text;
@@ -614,7 +614,7 @@ export component GroupSettingsDialog inherits Rectangle {
                     close-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            GroupSettingsState.close();
+                            ComponentSettingsState.close();
                         }
                     }
                 }
@@ -629,10 +629,10 @@ export component GroupSettingsDialog inherits Rectangle {
                 }
 
                 LineEdit {
-                    text: GroupSettingsState.name;
-                    placeholder-text: "Group name";
+                    text: ComponentSettingsState.name;
+                    placeholder-text: "Component name";
                     edited(t) => {
-                        GroupSettingsState.name-edited(t);
+                        ComponentSettingsState.name-edited(t);
                     }
                 }
             }
@@ -646,10 +646,10 @@ export component GroupSettingsDialog inherits Rectangle {
                 }
 
                 LineEdit {
-                    text: GroupSettingsState.description;
-                    placeholder-text: "What the group does";
+                    text: ComponentSettingsState.description;
+                    placeholder-text: "What the component does";
                     edited(t) => {
-                        GroupSettingsState.description-edited(t);
+                        ComponentSettingsState.description-edited(t);
                     }
                 }
             }
@@ -665,10 +665,10 @@ export component GroupSettingsDialog inherits Rectangle {
                     }
 
                     author-name-edit := LineEdit {
-                        text: GroupSettingsState.author-name;
+                        text: ComponentSettingsState.author-name;
                         placeholder-text: "Full name";
                         edited(t) => {
-                            GroupSettingsState.author-edited(t, author-organization-edit.text);
+                            ComponentSettingsState.author-edited(t, author-organization-edit.text);
                         }
                     }
                 }
@@ -682,10 +682,10 @@ export component GroupSettingsDialog inherits Rectangle {
                     }
 
                     author-organization-edit := LineEdit {
-                        text: GroupSettingsState.author-organization;
+                        text: ComponentSettingsState.author-organization;
                         placeholder-text: "Lab, institute, company";
                         edited(t) => {
-                            GroupSettingsState.author-edited(author-name-edit.text, t);
+                            ComponentSettingsState.author-edited(author-name-edit.text, t);
                         }
                     }
                 }
@@ -694,54 +694,54 @@ export component GroupSettingsDialog inherits Rectangle {
             VerticalLayout {
                 spacing: 5px;
                 Text {
-                    text: "Description (shown behind the group card's ?)";
+                    text: "Description (shown behind the component card's ?)";
                     font-size: 11px;
                     color: Theme.text-dim;
                 }
 
                 TextEdit {
                     height: 72px;
-                    text: GroupSettingsState.long-description;
+                    text: ComponentSettingsState.long-description;
                     wrap: word-wrap;
                     placeholder-text: "How to use it, what it expects, references…";
                     edited(t) => {
-                        GroupSettingsState.long-description-edited(t);
+                        ComponentSettingsState.long-description-edited(t);
                     }
                 }
             }
 
             Text {
-                text: GroupSettingsState.parameters.length == 0 ? "No parameters yet - ◇ next to a setting of the opened group exposes it on the group card." : "Parameters on the group card, in this order";
+                text: ComponentSettingsState.parameters.length == 0 ? "No parameters yet - ◇ next to a setting of the opened component exposes it on the component card." : "Parameters on the component card, in this order";
                 font-size: 11px;
                 font-weight: 600;
-                color: Theme.cat-group;
+                color: Theme.cat-component;
                 wrap: word-wrap;
             }
 
             // Rows have a fixed height, so the scroll position of the
             // focused one is known before the list is laid out.
-            if GroupSettingsState.parameters.length > 0: list := ScrollView {
+            if ComponentSettingsState.parameters.length > 0: list := ScrollView {
                 property <length> pitch: root.row-height + root.row-spacing;
-                property <length> total: GroupSettingsState.parameters.length * self.pitch - root.row-spacing;
+                property <length> total: ComponentSettingsState.parameters.length * self.pitch - root.row-spacing;
                 // Shrinks (down to about one row) when the window is small.
                 min-height: min(self.total, root.row-height);
                 preferred-height: min(self.total, 440px);
                 vertical-stretch: 1;
                 vertical-scrollbar-policy: always-on;
                 init => {
-                    if GroupSettingsState.focus-index > 0 {
-                        self.content-y = max(-GroupSettingsState.focus-index * self.pitch, min(0px, self.height - self.total));
+                    if ComponentSettingsState.focus-index > 0 {
+                        self.content-y = max(-ComponentSettingsState.focus-index * self.pitch, min(0px, self.height - self.total));
                     }
                 }
 
                 VerticalLayout {
                     spacing: root.row-spacing;
-                    for param[pi] in GroupSettingsState.parameters: Rectangle {
+                    for param[pi] in ComponentSettingsState.parameters: Rectangle {
                         height: root.row-height;
                         clip: true;
                         border-radius: 8px;
                         border-width: 1px;
-                        border-color: pi == GroupSettingsState.focus-index ? Theme.cat-group : Theme.border;
+                        border-color: pi == ComponentSettingsState.focus-index ? Theme.cat-component : Theme.border;
                         background: Theme.raised.with-alpha(0.4);
 
                         VerticalLayout {
@@ -753,10 +753,10 @@ export component GroupSettingsDialog inherits Rectangle {
                                 LineEdit {
                                     horizontal-stretch: 1;
                                     text: param.label;
-                                                    placeholder-text: "Name on the group card";
+                                                    placeholder-text: "Name on the component card";
                                     accessible-label: "Parameter name";
                                     edited(t) => {
-                                        GroupSettingsState.parameter-name-edited(param.key, t);
+                                        ComponentSettingsState.parameter-name-edited(param.key, t);
                                     }
                                 }
 
@@ -785,16 +785,16 @@ export component GroupSettingsDialog inherits Rectangle {
                                             enabled: pi > 0;
                                             mouse-cursor: pointer;
                                             clicked => {
-                                                GroupSettingsState.parameter-moved(param.key, -1);
+                                                ComponentSettingsState.parameter-moved(param.key, -1);
                                             }
                                         }
                                     }
 
                                     Rectangle {
                                         width: 24px;
-                                        opacity: pi < GroupSettingsState.parameters.length - 1 ? 1 : 0.3;
+                                        opacity: pi < ComponentSettingsState.parameters.length - 1 ? 1 : 0.3;
                                         border-radius: 4px;
-                                        background: down-ta.has-hover && pi < GroupSettingsState.parameters.length - 1 ? Theme.raised : transparent;
+                                        background: down-ta.has-hover && pi < ComponentSettingsState.parameters.length - 1 ? Theme.raised : transparent;
                                         Text {
                                             text: "↓";
                                             color: Theme.text-dim;
@@ -803,10 +803,10 @@ export component GroupSettingsDialog inherits Rectangle {
                                         }
 
                                         down-ta := TouchArea {
-                                            enabled: pi < GroupSettingsState.parameters.length - 1;
+                                            enabled: pi < ComponentSettingsState.parameters.length - 1;
                                             mouse-cursor: pointer;
                                             clicked => {
-                                                GroupSettingsState.parameter-moved(param.key, 1);
+                                                ComponentSettingsState.parameter-moved(param.key, 1);
                                             }
                                         }
                                     }
@@ -826,7 +826,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                         remove-ta := TouchArea {
                                             mouse-cursor: pointer;
                                             clicked => {
-                                                GroupSettingsState.parameter-removed(param.key);
+                                                ComponentSettingsState.parameter-removed(param.key);
                                             }
                                         }
                                     }
@@ -840,16 +840,16 @@ export component GroupSettingsDialog inherits Rectangle {
                                 placeholder-text: "Help text, shown as ? next to the parameter";
                                 accessible-label: "Parameter help text";
                                 edited(t) => {
-                                    GroupSettingsState.parameter-help-edited(param.key, t);
+                                    ComponentSettingsState.parameter-help-edited(param.key, t);
                                 }
                             }
 
                             LineEdit {
                                 text: param.section;
-                                placeholder-text: "Section on the group card (optional), e.g. Detection";
+                                placeholder-text: "Section on the component card (optional), e.g. Detection";
                                 accessible-label: "Parameter section";
                                 edited(t) => {
-                                    GroupSettingsState.parameter-section-edited(param.key, t);
+                                    ComponentSettingsState.parameter-section-edited(param.key, t);
                                 }
                             }
 
@@ -892,7 +892,7 @@ export component GroupSettingsDialog inherits Rectangle {
                                     reset-ta := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => {
-                                            GroupSettingsState.parameter-help-reset(param.key);
+                                            ComponentSettingsState.parameter-help-reset(param.key);
                                         }
                                     }
                                 }
@@ -908,7 +908,7 @@ export component GroupSettingsDialog inherits Rectangle {
                     text: "Close";
                     primary: true;
                     clicked => {
-                        GroupSettingsState.close();
+                        ComponentSettingsState.close();
                     }
                 }
             }

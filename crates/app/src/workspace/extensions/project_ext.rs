@@ -11,19 +11,18 @@ use crate::workspace::extensions::utils::{
 };
 use crate::workspace::{FocusChannels, PipelineFocus};
 use bitvec::{order::Lsb0, vec::BitVec};
-use evanalyzer_cfg::core_types::ImageAddress;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId};
 use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
-use evanalyzer_cfg::settings::command_groups::GroupDefinition;
+use evanalyzer_cfg::settings::components::ComponentDefinition;
 use evanalyzer_cfg::settings::images_settings::{
     ChannelSettings, HistogramSettings, PixelSizeSettings, TStackSettings, ZStackSettings,
 };
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
-use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
+use evanalyzer_cfg::settings::templates::ProjectTemplate;
 use evanalyzer_cfg::{
-    CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION, CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION,
-    PIPELINE_EXTENSIONS, PROJECT_FILE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS,
+    CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION, PROJECT_FILE_EXTENSIONS,
+    PROJECT_FILE_TEMPLATE_EXTENSIONS,
 };
 use evanalyzer_cfg::{
     core_types::ObjectClass,
@@ -231,13 +230,6 @@ pub trait ProjectExt {
         meta: MetaData,
         path: &PathBuf,
     ) -> Result<(), InternalErrors>;
-    fn save_pipeline_as_template(
-        &mut self,
-        files: &dyn FileSystem,
-        meta: MetaData,
-        pipeline_id: PipelineId,
-        path: &PathBuf,
-    ) -> Result<(), InternalErrors>;
 
     fn new(&self) -> Arc<ProjectWithRuntime>;
     fn new_project(
@@ -253,7 +245,6 @@ pub trait ProjectExt {
     fn enable_pipeline_step(&mut self, enabled: bool, pipeline_id: PipelineId, step_id: usize);
 
     fn add_pipeline(&mut self, pipeline_settings: PipelineSettings);
-    fn add_pipeline_from_template_file(&mut self, files: &dyn FileSystem, template_file: &PathBuf);
 
     /// Replaces the classification, plate and pipeline settings of this project
     /// with the ones from `template`. The image list and project path are kept.
@@ -1428,8 +1419,8 @@ impl ProjectExt for ProjectWithRuntime {
                 &mut on_disk_settings.pipelines,
                 project_dir,
             );
-            crate::workspace::extensions::utils::relativize_group_file_paths(
-                &mut on_disk_settings.command_groups,
+            crate::workspace::extensions::utils::relativize_component_file_paths(
+                &mut on_disk_settings.components,
                 project_dir,
             );
         }
@@ -1456,46 +1447,13 @@ impl ProjectExt for ProjectWithRuntime {
             classification: self.classification.clone(),
             plate: self.plate.clone(),
             pipelines: self.pipelines.clone(),
-            command_groups: self.command_groups.clone(),
+            components: self.components.clone(),
         };
 
         let mut final_path = path.clone();
         if final_path.extension().and_then(|s| s.to_str()) != Some(PROJECT_FILE_TEMPLATE_EXTENSIONS)
         {
             final_path.set_extension(PROJECT_FILE_TEMPLATE_EXTENSIONS);
-        }
-
-        let json = serde_json::to_string_pretty(&template)
-            .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
-        files.write_file(&final_path, json.as_bytes())?;
-        Ok(())
-    }
-
-    /// Stores the selected pipeline as template
-    fn save_pipeline_as_template(
-        &mut self,
-        files: &dyn FileSystem,
-        mut meta: MetaData,
-        pipeline_id: PipelineId,
-        path: &PathBuf,
-    ) -> Result<(), InternalErrors> {
-        let pipeline = self
-            .pipelines
-            .iter()
-            .find(|p| p.id == pipeline_id)
-            .ok_or_else(|| InternalErrors::Internal("Pipeline not found".into()))?;
-
-        meta.app_version = env!("CARGO_PKG_VERSION").to_string();
-        let template = PipelineTemplate {
-            schema_version: CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION,
-            meta,
-            steps: pipeline.steps.clone(),
-            command_groups: crate::workspace::group_library::groups_used_by(self, &pipeline.steps),
-        };
-
-        let mut final_path = path.clone();
-        if final_path.extension().and_then(|s| s.to_str()) != Some(PIPELINE_EXTENSIONS) {
-            final_path.set_extension(PIPELINE_EXTENSIONS);
         }
 
         let json = serde_json::to_string_pretty(&template)
@@ -1560,40 +1518,6 @@ impl ProjectExt for ProjectWithRuntime {
         super::utils::assign_step_ids(&mut pipeline_settings.steps);
         self.pipelines.push(pipeline_settings);
     }
-    fn add_pipeline_from_template_file(&mut self, files: &dyn FileSystem, template_file: &PathBuf) {
-        let Some(data) = files
-            .read_file(template_file)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-        else {
-            warn!("Could not read pipeline template {:?}", template_file);
-            return;
-        };
-        let template: PipelineTemplate = match serde_json::from_str(&data) {
-            Ok(template) => template,
-            Err(err) => {
-                warn!(
-                    "Could not parse pipeline template {:?}: {}",
-                    template_file, err
-                );
-                return;
-            }
-        };
-
-        let next_id = self.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
-        // The groups its steps use, unless the project has them already.
-        crate::workspace::group_library::merge_group_definitions(self, &template.command_groups);
-
-        self.add_pipeline(PipelineSettings {
-            id: PipelineId(next_id),
-            name: template.meta.name,
-            description: Some(template.meta.short_description),
-            image_source: ImageAddress::default(),
-            enabled: true,
-            steps: template.steps, // numbered by `add_pipeline`
-        });
-    }
-
     fn apply_project_template(&mut self, template: &ProjectTemplate) {
         self.classification = template.classification.clone();
         self.plate = template.plate.clone();
@@ -1606,9 +1530,9 @@ impl ProjectExt for ProjectWithRuntime {
                 pipeline
             })
             .collect();
-        self.command_groups = template.command_groups.clone();
-        for group in &mut self.command_groups {
-            if let Err(e) = super::utils::assign_group_step_ids(group) {
+        self.components = template.components.clone();
+        for component in &mut self.components {
+            if let Err(e) = super::utils::assign_component_step_ids(component) {
                 warn!("Project template {}: {e}", template.meta.name);
             }
         }
@@ -1636,7 +1560,7 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     /// Focuses the given pipeline: only the image channels it reads (its
-    /// source's and its load steps', also inside groups - all channels if it
+    /// source's and its load steps', also inside components - all channels if it
     /// reads none) and its object classes are shown.
     /// Returns `false` (and clears any focus) if there is no such pipeline.
     fn focus_pipeline(&mut self, pipeline_id: PipelineId) -> bool {
@@ -1644,8 +1568,8 @@ impl ProjectExt for ProjectWithRuntime {
             self.tmp_settings.pipeline_focus = None;
             return false;
         };
-        let channels = focus_channels(pipeline, &self.command_groups);
-        let pipeline_classes = evanalyzer_core::pipeline_classes(pipeline, &self.command_groups);
+        let channels = focus_channels(pipeline, &self.components);
+        let pipeline_classes = evanalyzer_core::pipeline_classes(pipeline, &self.components);
         self.tmp_settings.pipeline_focus = Some(PipelineFocus {
             pipeline_id,
             channels,
@@ -1667,13 +1591,13 @@ impl ProjectExt for ProjectWithRuntime {
             self.tmp_settings.pipeline_focus = None;
             return;
         };
-        let source_channels = focus_channels(pipeline, &self.command_groups);
+        let source_channels = focus_channels(pipeline, &self.components);
         let source_changed = match (&source_channels, &focus.channels) {
             (FocusChannels::Only(new), FocusChannels::Only(old)) => !new.is_subset(old),
             (a, b) => a != b,
         };
         if source_changed
-            || evanalyzer_core::pipeline_classes(pipeline, &self.command_groups)
+            || evanalyzer_core::pipeline_classes(pipeline, &self.components)
                 != focus.pipeline_classes
         {
             self.focus_pipeline(focus.pipeline_id);
@@ -1719,8 +1643,11 @@ impl ProjectExt for ProjectWithRuntime {
 
 /// The channels a focus on `pipeline` shows - see
 /// [`ProjectExt::focus_pipeline`].
-fn focus_channels(pipeline: &PipelineSettings, groups: &[GroupDefinition]) -> FocusChannels {
-    let channels = evanalyzer_core::pipeline_channels(pipeline, groups);
+fn focus_channels(
+    pipeline: &PipelineSettings,
+    components: &[ComponentDefinition],
+) -> FocusChannels {
+    let channels = evanalyzer_core::pipeline_channels(pipeline, components);
     if channels.is_empty() {
         FocusChannels::All
     } else {
@@ -1814,10 +1741,10 @@ pub fn load_project(
         serde_json::from_str(&data).map_err(|e| InternalErrors::ParseError(e.to_string()))?;
     let mut inner: ProjectSettings = evanalyzer_cfg::load_project_settings(raw)?;
 
-    // A group definition's steps are a list of their own (see
-    // `assign_group_step_ids`).
-    for group in &mut inner.command_groups {
-        super::utils::assign_group_step_ids(group)?;
+    // A component definition's steps are a list of their own (see
+    // `assign_component_step_ids`).
+    for component in &mut inner.components {
+        super::utils::assign_component_step_ids(component)?;
     }
     // Steps written without an id (or copied within a hand-written file,
     // sharing one) get the next number of their pipeline.
@@ -1837,17 +1764,17 @@ pub fn load_project(
     // plain absolute paths.
     if let Some(project_dir) = path.parent() {
         crate::workspace::extensions::utils::resolve_file_paths(&mut inner.pipelines, project_dir);
-        crate::workspace::extensions::utils::resolve_group_file_paths(
-            &mut inner.command_groups,
+        crate::workspace::extensions::utils::resolve_component_file_paths(
+            &mut inner.components,
             project_dir,
         );
     }
 
-    // Values for parameters a group no longer has (e.g. a hand edit).
-    crate::workspace::grouping::prune_group_values(&mut inner);
+    // Values for parameters a component no longer has (e.g. a hand edit).
+    crate::workspace::component_editing::prune_component_values(&mut inner);
 
-    // Group mistakes show in the editor too; here they're logged.
-    for problem in crate::workspace::group_checks::check_groups(&inner) {
+    // Component mistakes show in the editor too; here they're logged.
+    for problem in crate::workspace::component_checks::check_components(&inner) {
         warn!("{}", problem.message);
     }
 
@@ -1975,6 +1902,7 @@ mod tests {
 
     use super::*;
     use crate::workspace::extensions::utils::wavelength_to_rgb_u32;
+    use evanalyzer_cfg::core_types::ImageAddress;
 
     fn fs() -> LocalFileSystem {
         Default::default()
@@ -2716,51 +2644,6 @@ mod tests {
     }
 
     #[test]
-    fn add_pipeline_from_template_file_assigns_the_next_id_and_carries_the_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("t.evapipe");
-        let template = evanalyzer_cfg::settings::templates::PipelineTemplate {
-            meta: evanalyzer_cfg::settings::meta_data::MetaData {
-                name: "Imported".into(),
-                ..Default::default()
-            },
-            steps: vec![],
-            ..Default::default()
-        };
-        std::fs::write(&path, serde_json::to_string(&template).unwrap()).unwrap();
-
-        let mut project = ProjectWithRuntime::default();
-        project.add_pipeline(pipeline(5));
-        project.add_pipeline_from_template_file(&fs(), &path);
-
-        assert_eq!(project.pipelines.len(), 2);
-        assert_eq!(
-            project.pipelines[1].id,
-            PipelineId(6),
-            "next id must be max(existing) + 1"
-        );
-        assert_eq!(project.pipelines[1].name, "Imported");
-    }
-
-    #[test]
-    fn add_pipeline_from_template_file_is_a_noop_for_a_missing_file() {
-        let mut project = ProjectWithRuntime::default();
-        project.add_pipeline_from_template_file(&fs(), &PathBuf::from("/does/not/exist.evapipe"));
-        assert!(project.pipelines.is_empty());
-    }
-
-    #[test]
-    fn add_pipeline_from_template_file_is_a_noop_for_malformed_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bad.evapipe");
-        std::fs::write(&path, "{ not json").unwrap();
-
-        let mut project = ProjectWithRuntime::default();
-        project.add_pipeline_from_template_file(&fs(), &path);
-        assert!(project.pipelines.is_empty());
-    }
-
-    #[test]
     fn apply_project_template_replaces_classification_plate_and_pipelines() {
         let mut project = ProjectWithRuntime::default();
         project.classification.classes_mut().push(class(1, "Stale"));
@@ -2780,7 +2663,7 @@ mod tests {
                 steps: vec![],
                 image_source: ImageAddress::Scratchpad
             }],
-            command_groups: vec![evanalyzer_cfg::settings::command_groups::GroupDefinition {
+            components: vec![evanalyzer_cfg::settings::components::ComponentDefinition {
                 key: "CELL_RECONSTRUCTION".into(),
                 meta: Default::default(),
                 classes: vec![],
@@ -2795,13 +2678,9 @@ mod tests {
             ..Default::default()
         };
         project.apply_project_template(&template);
+        assert_eq!(project.components.len(), 1, "the definitions come along");
         assert_eq!(
-            project.command_groups.len(),
-            1,
-            "the definitions come along"
-        );
-        assert_eq!(
-            project.command_groups[0].steps[0].id,
+            project.components[0].steps[0].id,
             evanalyzer_cfg::core_types::StepId(1),
             "numbered within the definition"
         );
@@ -3156,14 +3035,14 @@ mod tests {
     }
 
     #[test]
-    fn focus_shows_the_classes_used_inside_a_pipelines_groups() {
+    fn focus_shows_the_classes_used_inside_a_pipelines_components() {
         let mut project = project_with_focus_pipelines();
-        // Pipeline 3: only a group step, whose transform uses classes 7 → 8.
+        // Pipeline 3: only a component step, whose transform uses classes 7 → 8.
         let mut inner = focus_test_pipeline(9, ImageAddress::Channel(0), 7, 8).steps;
         inner[0].id = evanalyzer_cfg::core_types::StepId(1);
         project
-            .command_groups
-            .push(evanalyzer_cfg::settings::command_groups::GroupDefinition {
+            .components
+            .push(evanalyzer_cfg::settings::components::ComponentDefinition {
                 key: "INNER".into(),
                 meta: Default::default(),
                 classes: vec![],
@@ -3175,8 +3054,8 @@ mod tests {
         pipeline.steps = vec![PipelineStepSettings {
             id: evanalyzer_cfg::core_types::StepId(1),
             enabled: true,
-            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Group(
-                evanalyzer_cfg::settings::command_groups::GroupInstance {
+            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Component(
+                evanalyzer_cfg::settings::components::ComponentInstance {
                     key: "INNER".into(),
                     values: Default::default(),
                 },
@@ -3707,7 +3586,7 @@ mod tests {
         );
     }
 
-    // -- save_project_as_template / save_pipeline_as_template -----------------
+    // -- save_project_as_template ---------------------------------------------
 
     #[test]
     fn save_project_as_template_writes_classification_plate_and_pipelines() {
@@ -3738,50 +3617,6 @@ mod tests {
         assert_eq!(parsed.classification.classes()[1].name, "A");
         assert_eq!(parsed.pipelines.len(), 1);
         assert_eq!(parsed.pipelines[0].name, "MyPipe");
-    }
-
-    #[test]
-    fn save_pipeline_as_template_writes_only_the_selected_pipelines_steps() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut project = ProjectWithRuntime::default();
-        let mut p = pipeline(1);
-        p.steps = vec![PipelineStepSettings {
-            id: evanalyzer_cfg::core_types::StepId::UNASSIGNED,
-            enabled: true,
-            content: evanalyzer_cfg::settings::pipeline_settings::StepContent::Command(
-                PipelineCommand::Blur(Default::default()),
-            ),
-        }];
-        project.add_pipeline(p);
-        project.add_pipeline(pipeline(2));
-
-        let meta = evanalyzer_cfg::settings::meta_data::MetaData {
-            name: "StepTmpl".into(),
-            ..Default::default()
-        };
-        let path = dir.path().join("pipe");
-        project
-            .save_pipeline_as_template(&fs(), meta, PipelineId(1), &path)
-            .expect("save should succeed");
-
-        let expected = dir.path().join(format!("pipe.{}", PIPELINE_EXTENSIONS));
-        assert!(expected.exists());
-        let content = std::fs::read_to_string(&expected).unwrap();
-        let parsed: PipelineTemplate = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed.steps.len(), 1);
-    }
-
-    #[test]
-    fn save_pipeline_as_template_errors_for_an_unknown_pipeline_id() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut project = ProjectWithRuntime::default();
-        project.add_pipeline(pipeline(1));
-
-        let meta = evanalyzer_cfg::settings::meta_data::MetaData::default();
-        let path = dir.path().join("pipe");
-        let result = project.save_pipeline_as_template(&fs(), meta, PipelineId(99), &path);
-        assert!(result.is_err());
-        assert!(!path.with_extension(PIPELINE_EXTENSIONS).exists());
     }
 
     // -- new / new_project ----------------------------------------------------

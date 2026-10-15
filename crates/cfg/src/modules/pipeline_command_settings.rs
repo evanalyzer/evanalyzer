@@ -1,6 +1,6 @@
 // @generated - do not edit by hand
 #[allow(unused_imports)]
-use crate::modules::command_groups::ParamValue;
+use crate::modules::components::ParamValue;
 #[allow(unused_imports)]
 use crate::types::classes::{ModelClass, ModelSegmentationClass};
 use crate::{
@@ -1238,7 +1238,7 @@ pub struct LaplacianSettings {
 ///
 /// Replaces the current image. Use it as the first step of a pipeline
 /// without an image source, or to switch channels within a pipeline - e.g.
-/// a command group that detects nuclei in one channel and cells in another.
+/// a component that detects nuclei in one channel and cells in another.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadChannelSettings {
@@ -2102,8 +2102,8 @@ pub struct ExtractObjectsSettings {
     ///
     /// Without an entry, a segmentation class's objects get the project class
     /// with the same number - what the Threshold's class choice means. Inside
-    /// a command group, map to one of the group's own classes to keep the
-    /// objects internal to the group.
+    /// a component, map to one of the component's own classes to keep the
+    /// objects internal to the component.
     #[serde(default = "_serde_default_extractobjects_class_mapping")]
     pub class_mapping: Vec<ExtractClassMappingSettings>,
 }
@@ -2454,7 +2454,7 @@ pub struct ExtractClassMappingSettings {
     /// The segmentation class, as set by Threshold, Pixel classifier, ...
     pub segmentation_class: SegmentationClass,
     /// The object class its objects get: a project class, or inside a
-    /// command group one of the group's own classes.
+    /// component one of the component's own classes.
     pub object_class: ObjectClass,
 }
 

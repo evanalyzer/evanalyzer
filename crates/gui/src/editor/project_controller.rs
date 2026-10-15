@@ -2076,7 +2076,7 @@ pub(crate) mod tests {
             classification: Default::default(),
             plate: Default::default(),
             pipelines,
-            command_groups: Vec::new(),
+            components: Vec::new(),
         }
     }
 

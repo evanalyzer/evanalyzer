@@ -27,27 +27,29 @@ pub mod settings_of {
     pub use evanalyzer_core::{apply_command_param, command_parameters, declared_script_params};
 }
 
-/// Command groups in the editor: group cards, grouping steps, the library,
+/// Components in the editor: component cards, creating and expanding components, the library,
 /// checks.
-pub mod groups {
-    pub use crate::workspace::group_checks::{
-        GroupProblem, Severity, check_group, check_groups, step_problem,
+pub mod components {
+    pub use crate::workspace::component_checks::{
+        ComponentProblem, Severity, check_component, check_components, step_problem,
     };
-    pub use crate::workspace::group_library::{
-        content_hash, groups_used_by, insert_group_template, library_name, merge_group_definitions,
-        modified_since_inserted, project_copy, save_group_template, update_available,
-        update_from_library,
+    pub use crate::workspace::component_editing::{
+        ClassRole, ComponentPlan, ComponentPlanClass, add_binding, apply_defaults,
+        bound_setting_edited, clone_component_for_step, compatible_parameters, component_uses,
+        create_component, edit_parameter, expand_component, exposed_settings, list_entry_removed,
+        move_parameter, new_parameter_key, parameter_for_setting, plan_component,
+        prune_component_values, remove_component, remove_component_step, remove_parameter,
+        remove_unused_components, set_parameter_section, setting_at, toggle_exposed,
+        unused_components,
     };
-    pub use crate::workspace::grouping::{
-        ClassRole, GroupingClass, GroupingPlan, add_binding, apply_defaults, bound_setting_edited,
-        clone_group_for_step, compatible_parameters, edit_parameter, exposed_settings, group_steps,
-        group_uses, list_entry_removed, move_parameter, new_parameter_key, parameter_for_setting,
-        plan_grouping, prune_group_values, remove_group, remove_group_step, remove_parameter,
-        remove_unused_groups, set_parameter_section, setting_at, toggle_exposed, ungroup, unused_groups,
+    pub use crate::workspace::component_library::{
+        components_used_by, content_hash, insert_component_template, library_name,
+        merge_component_definitions, modified_since_inserted, project_copy,
+        save_component_template, save_pipeline_as_component, update_available, update_from_library,
     };
-    pub use evanalyzer_core::group_parameters;
-    pub use evanalyzer_core::group_steps_with_values;
-    pub use evanalyzer_core::set_group_parameter;
+    pub use evanalyzer_core::component_parameters;
+    pub use evanalyzer_core::component_steps_with_values;
+    pub use evanalyzer_core::set_component_parameter;
 }
 
 pub mod global {
@@ -141,8 +143,7 @@ pub mod bioimageio {
 
 pub mod templates {
     pub use crate::api::TemplateFolders;
-    pub use crate::workspace::templates::load_group_templates;
-    pub use crate::workspace::templates::load_pipeline_templates;
+    pub use crate::workspace::templates::load_component_templates;
     pub use crate::workspace::templates::load_project_template_from_file;
     pub use crate::workspace::templates::load_project_templates;
 }

@@ -4,11 +4,14 @@ use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::quantized_qwen2::ModelWeights;
 use evanalyzer_app::backends::local::LocalBackend;
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::templates::PipelineTemplate;
+use evanalyzer_cfg::settings::meta_data::MetaData;
+use evanalyzer_cfg::settings::pipeline_settings::PipelineStepSettings;
 use llguidance::api::TopLevelGrammar;
 use llguidance::toktrie::{ApproximateTokEnv, SimpleVob, TokEnv, TokRxInfo, TokTrie};
 use llguidance::{Constraint, ParserFactory};
 use log::{info, warn};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,10 +24,19 @@ const MAX_NEW_TOKENS: usize = 1000;
 /// library doesn't blow the model's (small) context budget.
 const MAX_EXAMPLE_TEMPLATES: usize = 100;
 
+/// What [`generate_pipeline`] produces: a named list of steps. Also the shape
+/// of the few-shot examples taken from the component library.
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedPipeline {
+    pub meta: MetaData,
+    pub steps: Vec<PipelineStepSettings>,
+}
+
 /// Optional, off-by-default behaviour for [`generate_pipeline`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GenerateOptions {
-    /// Prepend a few of the project's existing saved `PipelineTemplate`s to
+    /// Prepend a few of the component library's components to
     /// the prompt as few-shot examples, so the model has real content to
     /// imitate instead of confabulating field values.
     pub include_existing_templates: bool,
@@ -33,15 +45,15 @@ pub struct GenerateOptions {
 /// Gets a user prompt and the project's schema as input and the predicted pipeline as output.
 ///
 /// Generation is grammar-constrained: at every step the sampler is restricted to
-/// tokens that keep the output on a valid path through `PipelineTemplate`'s JSON
+/// tokens that keep the output on a valid path through `GeneratedPipeline`'s JSON
 /// schema (see [`mask_logits`]), so the model can only ever produce
 /// schema-conformant JSON. That's what makes the final `serde_json::from_str`
 /// below safe to trust rather than just a hopeful parse of free-form output.
 pub fn generate_pipeline(
     prompt: &str,
     options: GenerateOptions,
-) -> Result<PipelineTemplate, InternalErrors> {
-    let schema = schemars::schema_for!(PipelineTemplate);
+) -> Result<GeneratedPipeline, InternalErrors> {
+    let schema = schemars::schema_for!(GeneratedPipeline);
     let schema_value = serde_json::to_value(&schema)
         .map_err(|e| InternalErrors::Generic(format!("failed to serialize schema: {e}")))?;
     let prompt = build_chat_prompt(prompt, &options, &schema_value);
@@ -167,7 +179,7 @@ pub fn generate_pipeline(
     }
     println!();
 
-    serde_json::from_str::<PipelineTemplate>(&generated_json)
+    serde_json::from_str::<GeneratedPipeline>(&generated_json)
         .map_err(|e| InternalErrors::Generic(format!("model output did not match schema: {e}")))
 }
 
@@ -294,13 +306,19 @@ fn user_message(user_prompt: &str, options: &GenerateOptions) -> String {
         return user_prompt.to_string();
     }
 
-    // Pipeline generation runs on this machine, so its own templates serve
-    // as the examples.
+    // Pipeline generation runs on this machine, so its own component library
+    // serves as the examples.
     let backend = LocalBackend::default();
-    let examples: Vec<String> = evanalyzer_app::templates::load_pipeline_templates(&backend)
+    let examples: Vec<String> = evanalyzer_app::templates::load_component_templates(&backend)
         .into_iter()
         .take(MAX_EXAMPLE_TEMPLATES)
-        .filter_map(|(_, template)| serde_json::to_string(&template).ok())
+        .filter_map(|(_, template)| {
+            serde_json::to_string(&GeneratedPipeline {
+                meta: template.component.meta,
+                steps: template.component.steps,
+            })
+            .ok()
+        })
         .collect();
     if examples.is_empty() {
         warn!("No templates found!");

@@ -63,7 +63,7 @@ pub struct Pipeline {
     /// from (see `add_step`) - what a breakpoint targets, so it resolves
     /// correctly although `Tile` and `WholeImage` commands are split into
     /// two separately-run lists - and with the scope it runs in (a command
-    /// group instance's, or `Global`).
+    /// component instance's, or `Global`).
     pub commands: Vec<(StepId, Scope, Box<dyn ImageAlgorithm>)>,
 }
 
@@ -126,7 +126,7 @@ impl Pipeline {
                 match slot {
                     MemoryId::PipelineContext(n)
                     | MemoryId::ProjectCache(n)
-                    | MemoryId::GroupContext(n) => n,
+                    | MemoryId::ComponentContext(n) => n,
                 }
             ),
             ImageAddress::Scratchpad | ImageAddress::None => {
@@ -183,7 +183,7 @@ impl Pipeline {
             ImageAddress::Memory(
                 MemoryId::PipelineContext(slot) | MemoryId::ProjectCache(slot),
             ) => CacheAddress::Memory(MemoryId::ProjectCache(slot)),
-            // A pipeline's start isn't inside a group.
+            // A pipeline's start isn't inside a component.
             ImageAddress::Memory(memory_id) => CacheAddress::memory(memory_id, Scope::Global)?,
             ImageAddress::Channel(channel_idx) => CacheAddress::Channel((channel_idx, tile)),
             // No start image: the first step loads one (checked when the

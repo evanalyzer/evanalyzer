@@ -12,26 +12,28 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheAddress {
     Scratchpad,
-    /// A pipeline or project memory slot - never `MemoryId::GroupContext`, see
+    /// A pipeline or project memory slot - never `MemoryId::ComponentContext`, see
     /// [`CacheAddress::memory`].
     Memory(MemoryId),
     Channel((i32, ImageTile)),
-    /// A command group instance's memory slot (`MemoryId::GroupContext`).
-    GroupMemory(ScopeId, MemorySlot),
+    /// A component instance's memory slot (`MemoryId::ComponentContext`).
+    ComponentMemory(ScopeId, MemorySlot),
 }
 
 impl CacheAddress {
     /// Where memory slot `id` lives for a command running in `scope`: a
-    /// group slot belongs to the group instance (each has its own), the
+    /// component slot belongs to the component instance (each has its own), the
     /// others to the pipeline or project.
     pub fn memory(id: MemoryId, scope: Scope) -> Result<CacheAddress, InternalErrors> {
         match (id, scope) {
-            (MemoryId::GroupContext(slot), Scope::Scoped(scope_id)) => {
-                Ok(CacheAddress::GroupMemory(scope_id, slot))
+            (MemoryId::ComponentContext(slot), Scope::Scoped(scope_id)) => {
+                Ok(CacheAddress::ComponentMemory(scope_id, slot))
             }
-            (MemoryId::GroupContext(slot), Scope::Global) => Err(InternalErrors::InvalidArgument(
-                format!("group memory slot {slot} is only available inside a command group"),
-            )),
+            (MemoryId::ComponentContext(slot), Scope::Global) => {
+                Err(InternalErrors::InvalidArgument(format!(
+                    "component memory slot {slot} is only available inside a component"
+                )))
+            }
             (id, _) => Ok(CacheAddress::Memory(id)),
         }
     }
@@ -102,14 +104,14 @@ mod tests {
 
 impl GlobalPipelineCache {
     /// After a pipeline: what only it could use goes - its memory slots
-    /// (`PipelineContext`), its groups' slots, the scratchpad. The image
+    /// (`PipelineContext`), its components' slots, the scratchpad. The image
     /// channels and the shared slots (`ProjectCache`) stay for the pipelines
     /// after it; [`Self::clear_shared_slots`] frees those.
     pub fn clear_pipeline_context(&mut self) {
         self.image_cache.retain(|key| match key {
             CacheAddress::Channel(_) | CacheAddress::Memory(MemoryId::ProjectCache(_)) => true,
-            CacheAddress::Memory(MemoryId::PipelineContext(_) | MemoryId::GroupContext(_))
-            | CacheAddress::GroupMemory(..)
+            CacheAddress::Memory(MemoryId::PipelineContext(_) | MemoryId::ComponentContext(_))
+            | CacheAddress::ComponentMemory(..)
             | CacheAddress::Scratchpad => false,
         });
     }
@@ -192,7 +194,7 @@ impl GlobalPipelineCache {
                 }))),
             },
             CacheAddress::Memory(memory_id) => self.get_image_from_memory_cache(memory_id.clone()),
-            CacheAddress::GroupMemory(..) => self.image_cache.get(cache_slot),
+            CacheAddress::ComponentMemory(..) => self.image_cache.get(cache_slot),
             CacheAddress::Channel(channel_idx) => {
                 self.get_image_from_channel_cache_for_tile(channel_idx.clone())
             }

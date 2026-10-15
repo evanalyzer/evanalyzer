@@ -67,7 +67,7 @@ pub struct ParameterDef {
     /// Empty when no option is.
     pub option_advanced: Vec<bool>,
     /// Section the setting is shown in (`#[cmdsmeta(section = "...")]`, or a
-    /// group parameter's section); empty: the unnamed first section.
+    /// component parameter's section); empty: the unnamed first section.
     pub section: String,
 }
 

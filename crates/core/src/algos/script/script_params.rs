@@ -1,5 +1,5 @@
 //! A script's `param`s: values the script gets from its step's settings (or a
-//! group parameter) instead of from its code.
+//! component parameter) instead of from its code.
 //!
 //! ```rhai
 //! param nuclei_channel: channel = 0;   // a setting of the step
@@ -16,10 +16,10 @@
 //! The script is the only declaration. The step stores just the values that
 //! differ from the defaults, by name (`ScriptSettings::values`); the editor
 //! shows one setting `values.<name>` per `param` ([`script_parameters`]),
-//! which group parameters bind to like any other setting.
+//! which component parameters bind to like any other setting.
 
 use evanalyzer_cfg::core_types::{ImageChannelIdx, ObjectClass};
-use evanalyzer_cfg::settings::command_groups::ParamValue;
+use evanalyzer_cfg::settings::components::ParamValue;
 use evanalyzer_cfg::settings::parameter_def::{ParamType, ParameterDef};
 use rhai::{
     Dynamic, Engine, EvalAltResult, ImmutableString, LexError, ParseError, ParseErrorType, Position,
@@ -45,7 +45,7 @@ pub enum ParamKind {
     Decimal,
     Bool,
     Text,
-    /// A class: a number in the script (`"L1"` for a group's own class).
+    /// A class: a number in the script (`"L1"` for a component's own class).
     Class,
     /// An image channel: a number in the script.
     Channel,

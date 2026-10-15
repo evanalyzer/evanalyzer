@@ -186,7 +186,7 @@ export component ClassEditDialog inherits Rectangle {
 
                     // Changing an existing class's id moves its references.
                     if ClassificationSettingsState.settings.class-id > 0 && ClassificationSettingsState.id-index > 0: Text {
-                        text: "Pipelines, groups and annotated objects using class \{ClassificationSettingsState.settings.class-id} switch to the new id. Results of earlier runs keep the old one.";
+                        text: "Pipelines, components and annotated objects using class \{ClassificationSettingsState.settings.class-id} switch to the new id. Results of earlier runs keep the old one.";
                         font-size: 11px;
                         color: Theme.text-dim;
                         wrap: word-wrap;

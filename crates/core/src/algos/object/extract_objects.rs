@@ -52,8 +52,8 @@ pub struct ExtractObjects {
     ///
     /// Without an entry, a segmentation class's objects get the project class
     /// with the same number - what the Threshold's class choice means. Inside
-    /// a command group, map to one of the group's own classes to keep the
-    /// objects internal to the group.
+    /// a component, map to one of the component's own classes to keep the
+    /// objects internal to the component.
     #[cmdsmeta(optional, display_name = "Class Mapping")]
     pub class_mapping: Vec<ExtractClassMapping>,
 }
@@ -66,7 +66,7 @@ pub struct ExtractClassMapping {
     pub segmentation_class: SegmentationClass,
 
     /// The object class its objects get: a project class, or inside a
-    /// command group one of the group's own classes.
+    /// component one of the component's own classes.
     pub object_class: ObjectClass,
 }
 
@@ -280,7 +280,7 @@ impl ImageAlgorithm for ExtractObjects {
                 }
 
                 // The object class, so Classify Objects isn't mandatory - local
-                // ones put the object in the scope of the group running this.
+                // ones put the object in the scope of the component running this.
                 let segmentation_class = SegmentationClass(seg_class[id]);
                 let object_class = self.object_class_for(segmentation_class);
 
@@ -913,8 +913,8 @@ mod tests {
     }
 
     #[test]
-    fn mapped_classes_are_used_and_local_ones_keep_the_objects_in_the_groups_scope() {
-        let group = Scope::Scoped(crate::pipeline::scope::ScopeId(3));
+    fn mapped_classes_are_used_and_local_ones_keep_the_objects_in_the_components_scope() {
+        let component = Scope::Scoped(crate::pipeline::scope::ScopeId(3));
         let extractor = ExtractObjects {
             max_objects_before_fail: 100_000,
             // Segmentation class 1 internal, 2 a result.
@@ -923,12 +923,12 @@ mod tests {
                 mapping(2, ObjectClass::Global(7)),
             ],
         };
-        let objects = extract_in(&extractor, group);
+        let objects = extract_in(&extractor, component);
 
-        assert_eq!(objects[0].scope(), group);
-        assert!(objects[0].is_of(&ObjectClass::Local(1), group));
+        assert_eq!(objects[0].scope(), component);
+        assert!(objects[0].is_of(&ObjectClass::Local(1), component));
         assert_eq!(objects[1].scope(), Scope::Global);
-        assert!(objects[1].is_of(&ObjectClass::Global(7), group));
+        assert!(objects[1].is_of(&ObjectClass::Global(7), component));
     }
 
     #[test]

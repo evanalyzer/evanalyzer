@@ -1,17 +1,17 @@
-# Command groups – still to do
+# Components – still to do
 
-Status 2026-10-14. Done so far: the data model (`command_groups.rs`,
-`StepContent`, typed `ParamValue`), stable step ids, and running groups:
-the job generator expands each group into its commands
-(`core/src/job/command_groups.rs`, `expand_step`). Concept: VISION_GROUP.md.
+Status 2026-10-14. Done so far: the data model (`components.rs`,
+`StepContent`, typed `ParamValue`), stable step ids, and running components:
+the job generator expands each component into its commands
+(`core/src/job/components.rs`, `expand_step`). Concept: VISION_COMPONENT.md.
 
-- [x] **Group card with parameters** – done (step 11).
+- [x] **Component card with parameters** – done (step 11).
 - [x] **Scoping for classes, objects and memory slots** – steps 4–8.
-- [x] **Groups in the command picker** – step 12 (library part with step 16).
-- [x] **Creating groups in the editor** – steps 13 and 14.
-- [x] **Focus classes for group steps** – step 15.
+- [x] **Components in the command picker** – step 12 (library part with step 16).
+- [x] **Creating components in the editor** – steps 13 and 14.
+- [x] **Focus classes for component steps** – step 15.
 - [x] **Validation in the editor** – step 10. Was: mistakes surfaced only when a run started.
-      Check earlier, when loading/editing: unique group keys, every instance's
+      Check earlier, when loading/editing: unique component keys, every instance's
       key is defined, bindings point to existing steps/parameters, all
       bindings of a parameter have the same type, values fit the bound
       parameters.
@@ -23,7 +23,7 @@ the job generator expands each group into its commands
 Each step builds and is tested on its own; the order follows the
 dependencies (A before B: the runtime needs `Local`; B is the core; C can
 run in parallel to B; D before E: the editor needs the validation; 13
-before 14: most groups are made from existing steps).
+before 14: most components are made from existing steps).
 
 **Phase A – types and config (no runtime change yet)**
 
@@ -32,14 +32,14 @@ before 14: most groups are made from existing steps).
        in 56 files. *Done when:* old projects load, all suites pass.
 2. [x] **Add `ObjectClass::Local(u32)`** – last in the enum (postcard), text
        form in the generated code (`"L1"`), handled in every `match`; `Local`
-       outside a group is a validation error. *Done when:* `{"LOCAL": 1}`
+       outside a component is a validation error. *Done when:* `{"LOCAL": 1}`
        round-trips, a local class in a pipeline is refused.
        Done: text form via `ObjectClass::to_text`/`from_text`; generated
-       `local_classes()`; `expand_step` refuses `Local` outside a group and
+       `local_classes()`; `expand_step` refuses `Local` outside a component and
        undeclared local classes inside one. Protocol version 13.
-       Open: a nested group's `Local` value set from the outer group is read
-       in the inner group's scope - decide with scopes (step 4).
-3. [x] **`classes` in `GroupDefinition`** (reuses `Class`: id, colour,
+       Open: a nested component's `Local` value set from the outer component is read
+       in the inner component's scope - decide with scopes (step 4).
+3. [x] **`classes` in `ComponentDefinition`** (reuses `Class`: id, colour,
        name, notes); `ParamKind` removed altogether (only `Exposed` was left).
        `Class.id` is a plain `u32` - the kind follows from where the class is
        defined (`Class::global()` / `Class::local()`). Old files converted on
@@ -61,15 +61,15 @@ before 14: most groups are made from existing steps).
        (empty filter = the project's objects plus the own scope's),
        `add_object_class(class, scope)` refuses mixing, removing classes
        keeps the scope (an internal object stays internal). Passing a
-       `Local` value into a nested group is refused; a dataset step in a
-       group with a local class too. Until step 5: scoped objects are
+       `Local` value into a nested component is refused; a dataset step in a
+       component with a local class too. Until step 5: scoped objects are
        dropped right before the export (`job_executor`, TODO there).
        Benchmark (8 × 4096², 90k objects, 4 classify steps): 1.04–1.08 s vs
        1.06–1.11 s before, peak RSS 2.15–2.24 GB vs 2.20–2.22 GB - no
        measurable change.
        **ExtractObjects class mapping** (optional `class_mapping`:
        segmentation class → object class, local or global; without an entry
-       the project class with the same number, as before). Lets a group
+       the project class with the same number, as before). Lets a component
        extract objects for internal use. Benchmark unchanged (1.02–1.11 s,
        2.20–2.23 GB). For step 10: a mapping to `Global(n)` needs class n in
        the project; `object_classes()` still also lists the mapped
@@ -89,14 +89,14 @@ before 14: most groups are made from existing steps).
        dropping the objects), RSS 717 → 467 MB; 5M: 1.0 s, 3062 → 2079 MB.
        The map is rebuilt when ≥ 1/4 of the objects go - `retain` alone left
        the `BTreeMap`'s nodes (objects inline, 480 bytes each) half empty and
-       freed nothing. End to end (8 × 4096², group making 70k of 90k objects
+       freed nothing. End to end (8 × 4096², component making 70k of 90k objects
        internal): 0.86 s vs 0.89–0.93 s, peak RSS 2.21–2.22 vs 2.23–2.24 GB.
 
 6. [x] **The mixing rule** – `ReclassifyIfMatch` moves an object to
        `Global`; `AddOutputClassIfMatch` local → global is an error (checked
        at expansion, plus a runtime guard).
-       Done (2026-10-14): `mixed_classes` in `command_groups.rs`, checked per
-       command of a group after its values are applied: Classify Objects
+       Done (2026-10-14): `mixed_classes` in `components.rs`, checked per
+       command of a component after its values are applied: Classify Objects
        ("add output class if (not) match") and the AI object classifier ("add
        output class", per output class) may not add a class of the other kind
        than their input classes - nor a local class with no input classes
@@ -107,22 +107,22 @@ before 14: most groups are made from existing steps).
        the same spot of one seam merge per instance (the test fails without
        the scope in the key).
 
-8. [x] **`MemoryId::GroupContext(slot)`** – scoped like classes, freed at
+8. [x] **`MemoryId::ComponentContext(slot)`** – scoped like classes, freed at
        `EndScope`.
-       Done (2026-10-14): `MemoryId::GroupContext` - `{"groupContext": n}` in
-       the file, `"group:n"` as text.
+       Done (2026-10-14): `MemoryId::ComponentContext` - `{"componentContext": n}` in
+       the file, `"component:n"` as text.
        Resolved in one place, `CacheAddress::memory(id, scope)` →
-       `CacheAddress::GroupMemory(scope_id, slot)` (Image Cache, Image Math,
+       `CacheAddress::ComponentMemory(scope_id, slot)` (Image Cache, Image Math,
        Threshold's value source, a pipeline's start image - there an error).
        `EndScope` frees the instance's slots (also spilled ones). Expansion
-       refuses a group slot outside a group and passing `"group:n"` into a
-       nested group. GUI: the slot picker keeps a group slot a group slot;
+       refuses a component slot outside a component and passing `"component:n"` into a
+       nested component. GUI: the slot picker keeps a component slot a component slot;
        choosing one belongs to phase E.
 
-**Phase C – loading channels inside groups**
+**Phase C – loading channels inside components**
 
 9. [x] **The four fixes from LOAD_PIPELINE_CHANGE.md** (source "None",
-       viewer focus from Load steps, pre-start check incl. groups, error
+       viewer focus from Load steps, pre-start check incl. components, error
        message), then **"Load image channel" as a visible command**.
        Done (2026-10-14): `ImageAddress::None` (pipeline dialog: "None");
        such a pipeline starts with a 1×1 placeholder
@@ -130,7 +130,7 @@ before 14: most groups are made from existing steps).
        an image (checked when the job is built). New command **Load Image
        Channel** (`LoadChannel`, Preprocessing). `pipeline_channels` (core):
        the source's channel plus the load steps' (Load Image Channel, Image
-       Cache Load, Image Math's second image), also inside groups - used by
+       Cache Load, Image Math's second image), also inside components - used by
        the pre-start check and the viewer focus. Missing channel: "reads
        image channel 9, which this image doesn't have (it has channels 0,
        2)"; an empty memory slot names the slot. Found on the way: the
@@ -145,21 +145,21 @@ before 14: most groups are made from existing steps).
 
 10. [x] **One validation function in the app layer** (load and editor):
         unique keys, every instance's key exists, bindings exist and fit
-        (types, values), local classes only inside groups and not in
+        (types, values), local classes only inside components and not in
         dataset steps, optional coloc warning. Also from step 4: a mapping
         to `Global(n)` (ExtractObjects) needs class n in the project.
-        Done (2026-10-14): `workspace/group_checks.rs` - `check_groups`
-        (all), `check_group` (one definition), `step_problem` (one step).
-        Errors: duplicate keys, duplicate step ids in a group, a binding to a
+        Done (2026-10-14): `workspace/component_checks.rs` - `check_components`
+        (all), `check_component` (one definition), `step_problem` (one step).
+        Errors: duplicate keys, duplicate step ids in a component, a binding to a
         setting the step doesn't have, a parameter binding settings of
-        different kinds, and everything a run would refuse (the group at its
+        different kinds, and everything a run would refuse (the component at its
         defaults expanded: undeclared local classes, mixing, local classes in
-        dataset steps, cycles, group slots); per step: a missing group, its
-        values not fitting - only if the group itself is fine, so one
+        dataset steps, cycles, component slots); per step: a missing component, its
+        values not fitting - only if the component itself is fine, so one
         mistake isn't repeated per use. Warnings: a parameter binding
         nothing, Colocalization with a local class, an Extract Objects
         mapping to a project class that doesn't exist. Shown as "⚠ …" on step
-        and group cards and in the opened group's bar; logged on load.
+        and component cards and in the opened component's bar; logged on load.
 
         **Open question - memory slots across pipelines** (found in step 8):
         `GlobalPipelineCache::clear_pipeline_context` runs at the end of
@@ -174,7 +174,7 @@ before 14: most groups are made from existing steps).
         `clear_pipeline_context_also_drops_scratchpad_and_project_cache_via_catch_all`
         pins the behaviour as "possibly surprising"; the function's doc
         comment only mentions `PipelineContext` slots. Suggestion: clear only
-        `PipelineContext` (and group) slots per pipeline, keep `ProjectCache`
+        `PipelineContext` (and component) slots per pipeline, keep `ProjectCache`
         slots until the image (plane) is done. Not decided - ask first.
         **Fixed (2026-10-14):** `clear_pipeline_context` keeps the shared
         slots (`ProjectCache`); `clear_shared_slots` frees them once every
@@ -189,158 +189,158 @@ before 14: most groups are made from existing steps).
         pipeline 2 starts from pipeline 1's image (fails with the old code).
 
 **Phase E – editor and picker** (started 2026-10-14; decisions under
-"Command picker" and "Creating groups")
+"Command picker" and "Creating components")
 
-11. [x] Group card with editable parameters.
-        Done (2026-10-14): `group_parameters` / `set_group_parameter` (core,
-        re-exported as `evanalyzer_app::groups`). Each group parameter shows
+11. [x] Component card with editable parameters.
+        Done (2026-10-14): `component_parameters` / `set_component_parameter` (core,
+        re-exported as `evanalyzer_app::components`). Each component parameter shows
         as the inner setting of its first binding - same control, options and
         range - with its label, description and default; a change is applied
         to a copy of the bound command and read back, so only values the
-        command takes are stored. Works through nested groups. Icon/colour of
+        command takes are stored. Works through nested components. Icon/colour of
         the card: with step 12.
-12. [x] Picker: "Groups" chip (in the project / library), "Update
+12. [x] Picker: "Components" chip (in the project / library), "Update
         available" - see "Command picker".
-        Done (2026-10-14): `StepCategory::group` with `Theme.cat-group` - the
-        group colour and "Group" label on picker rows and group cards. Chip
-        "◆ Groups" lists the project's groups ("In this project"); without
-        it, a search lists matching groups in a "Groups" section. Row: "used
-        N×"; detail: the group's parameters with their defaults, source line
+        Done (2026-10-14): `StepCategory::component` with `Theme.cat-component` - the
+        component colour and "Component" label on picker rows and component cards. Chip
+        "◆ Components" lists the project's components ("In this project"); without
+        it, a search lists matching components in a "Components" section. Row: "used
+        N×"; detail: the component's parameters with their defaults, source line
         "this project · Segment → Object" (first/last command). Picker ids
-        from `GROUP_PICKER_ID_BASE` (1 000 000); confirming inserts a group
+        from `COMPONENT_PICKER_ID_BASE` (1 000 000); confirming inserts a component
         step at its defaults. Also fixed: the Templates section was in the
         list twice (each template showed twice).
         Still open: "Library" section and "Update available" (need step 16),
-        "Remove unused groups". Look not checked on screen (no headless
+        "Remove unused components". Look not checked on screen (no headless
         screenshot in the tests).
-13. [x] "Group selected steps" with automatic detection of input, output
+13. [x] "Create component" with automatic detection of input, output
         and local classes.
-        Done (2026-10-14): "Group…" on each step card opens "Group steps"
+        Done (2026-10-14): "Component…" on each step card opens "Create component"
         (name, range from/to - instead of Shift-click selection, which the
         step list doesn't have; can come later). Logic in the app layer
-        (`workspace/grouping.rs`, `evanalyzer_app::groups`): `plan_grouping`
+        (`workspace/component_editing.rs`, `evanalyzer_app::components`): `plan_component`
         lists the project classes the steps use with a suggested role -
-        used elsewhere too (other steps/pipelines, also inside groups; hand
-        annotations; tile merge) → group parameter, only here → internal
+        used elsewhere too (other steps/pipelines, also inside components; hand
+        annotations; tile merge) → component parameter, only here → internal
         (local), only a segmentation class without Extract Objects among the
         steps → fixed. No read/write distinction needed: a class parameter
-        binds the same either way. `group_steps` builds the definition
+        binds the same either way. `create_component` builds the definition
         (steps keep their ids), local classes rewritten to `L1`, `L2`, ...
         (an Extract Objects among the steps maps the segmentation class when
         a step there makes it), parameters bound to every single-class
         setting with the class (also a list with only it; single-class
         settings first, so the card shows a single-class choice); a list with
         other classes too stays as it is. A segmentation class with the
-        class's number isn't bound - it stays the group's own (fixed
+        class's number isn't bound - it stays the component's own (fixed
         2026-10-14: binding it made the check report "different kinds of
         setting"). One parameter may set a class and class lists, not the
         other way round (`same_kind`, used by the check and by "Add to …").
         Load Image Channel steps' channels become parameters. The dialog
         says internal classes don't reach the results. Tested: with no
-        internal classes the group runs exactly the commands the steps ran.
-14. [x] "Open group" with breadcrumb, "Expose as group parameter",
-        "Ungroup".
-        Done (2026-10-14): a group card has "Open" and "Ungroup". Open shows
+        internal classes the component runs exactly the commands the steps ran.
+14. [x] "Open component" with breadcrumb, "Expose as component parameter",
+        "Expand component".
+        Done (2026-10-14): a component card has "Open" and "Expand component". Open shows
         the definition's steps in the panel with a bar "‹ Back · Pipeline ›
-        ◆ Group · changes apply to every use"; the step handlers (toggle,
+        ◆ Component · changes apply to every use"; the step handlers (toggle,
         remove, duplicate, insert, values, list entries, file browse) work on
-        `shown_steps(_mut)` - the opened group's or the pipeline's. Used by
+        `shown_steps(_mut)` - the opened component's or the pipeline's. Used by
         several steps: "Edit for all" / "Only this step"
-        (`clone_group_for_step`: "Name (2)", own key, origin cleared).
-        ◇/◆ on each setting of an opened group exposes it as a group
+        (`clone_component_for_step`: "Name (2)", own key, origin cleared).
+        ◇/◆ on each setting of an opened component exposes it as a component
         parameter (its current value the default) or hides it again
         (`toggle_exposed`; a parameter goes with its last binding).
-        Removing a step of a group removes the bindings to it
-        (`remove_group_step`). Ungroup (`ungroup`): the steps with the
-        instance's values back in the pipeline; the group's classes become
+        Removing a step of a component removes the bindings to it
+        (`remove_component_step`). Expand component (`expand_component`): the steps with the
+        instance's values back in the pipeline; the component's classes become
         new project classes, its memory slots pipeline slots (rewritten in
-        the steps' file form); the definition stays. Inside an opened group:
-        no breakpoints, no "Group…" (groups in groups only from the
-        pipeline, for now), a group can't be inserted into itself. A group
+        the steps' file form); the definition stays. Inside an opened component:
+        no breakpoints, no "Component…" (components in components only from the
+        pipeline, for now), a component can't be inserted into itself. A component
         that's gone (undo) closes.
         Also done: settings of list entries ("thresholds.1.min_threshold",
         label "Thresholds 2 · Min Threshold") get ◇ too; exposing a setting
         that existing parameters with the same control (type, a dropdown's
         options) could set asks "New parameter" / "Add to “Cell class”"
         (`compatible_parameters`, `add_binding`). Removing a list entry inside a
-        group: bindings to it go, bindings to later entries move up
+        component: bindings to it go, bindings to later entries move up
         (`list_entry_removed`, called from `modify_group_item`).
-15. [x] Focus classes for group steps.
+15. [x] Focus classes for component steps.
         Done (2026-10-14): `evanalyzer_core::pipeline_classes` (next to
         `pipeline_channels`) - the project classes of the enabled steps, also
-        inside groups with the instances' values (a group's own classes left
+        inside components with the instances' values (a component's own classes left
         out). Used by the viewer focus; the incomplete
         `PipelineSettings::object_classes` in cfg is gone.
-16. [x] Group library (`.evagroup`): save, insert, update while keeping the
+16. [x] Component library (`.evacomp`): save, insert, update while keeping the
         user's values.
-        Done (2026-10-14), reusing the template machinery: `GroupTemplate`
-        (cfg, next to the other templates: `schemaVersion`, `group` with its
-        `meta` as the template's, `uses` = nested groups; schema
-        `docs/group_template.schema.json`; `check_templates` checks
-        `.evagroup` too), loaded from the template folders like pipeline
-        templates (`load_group_templates`), saved through the template
-        dialog (`TemplateController`, target `Group`, filled from the group,
-        version one up). `workspace/group_library.rs`: saving links the
-        project's group to the file (`origin`); inserting copies it with the
-        groups it uses (once; an unrelated group with the same key → `_2`);
+        Done (2026-10-14), reusing the template machinery: `ComponentTemplate`
+        (cfg, next to the other templates: `schemaVersion`, `component` with its
+        `meta` as the template's, `uses` = nested components; schema
+        `docs/component_template.schema.json`; `check_templates` checks
+        `.evacomp` too), loaded from the template folders like pipeline
+        templates (`load_component_templates`), saved through the template
+        dialog (`TemplateController`, target `Component`, filled from the component,
+        version one up). `workspace/component_library.rs`: saving links the
+        project's component to the file (`origin`); inserting copies it with the
+        components it uses (once; an unrelated component with the same key → `_2`);
         `origin.content_hash` (FNV-1a of steps/parameters/classes) tells
         whether the project changed it; a higher file version → "Update to
-        vN" on the group card, asking (and warning about local changes);
+        vN" on the component card, asking (and warning about local changes);
         the key stays, so the steps keep their values. Picker: "Library"
-        section under the project's groups (files not in the project yet).
-        Pipeline templates now carry the groups their steps use
-        (`command_groups`), merged into the project on insert.
-17. [x] Allow to remove (unused) groups from project
-        Done (2026-10-14): `unused_groups` (not reachable from any pipeline -
-        also a group only an unused group uses), `remove_group` (refused
-        while used), `remove_unused_groups`. Picker: "Remove from project" in
-        the detail of an unused project group; "N groups no pipeline uses ·
-        Remove" in the Groups section.
-18. [x] "View" and "Edit" on a group card ("Edit" is the former "Open")
-        Done (2026-10-14): "View" opens the group read only - no insert
+        section under the project's components (files not in the project yet).
+        Pipeline templates now carry the components their steps use
+        (`components`), merged into the project on insert.
+17. [x] Allow to remove (unused) components from project
+        Done (2026-10-14): `unused_components` (not reachable from any pipeline -
+        also a component only an unused component uses), `remove_component` (refused
+        while used), `remove_unused_components`. Picker: "Remove from project" in
+        the detail of an unused project component; "N components no pipeline uses ·
+        Remove" in the Components section.
+18. [x] "View" and "Edit" on a component card ("Edit" is the former "Open")
+        Done (2026-10-14): "View" opens the component read only - no insert
         points / "Add step", no step buttons, no ◇, settings and the enable
         toggle can't be changed (an overlay over the expanded settings; every
         editing handler refuses too). The bar says "Viewing · read only" and
         has "Edit", which goes the same way as "Edit" on the card (asking if
-        the group is used more than once). Also: "Settings…" in the bar of a
-        group opened to edit (hidden when viewing) opens the group settings
-        dialog - the group's name, short description (picker) and
+        the component is used more than once). Also: "Settings…" in the bar of a
+        component opened to edit (hidden when viewing) opens the component settings
+        dialog - the component's name, short description (picker) and
         description, and per parameter its name, help text (the "?"; empty
         shows the bound setting's own, "Reset help text" goes back to it),
-        default, which settings it sets, ↑/↓ for the order on the group card
+        default, which settings it sets, ↑/↓ for the order on the component card
         and ✕ to stop exposing it (`edit_parameter`, `move_parameter`,
         `remove_parameter`). ✎ next to a ◆ opens the dialog scrolled to that
         parameter (`parameter_for_setting`). A dialog, not the bar, so the
         steps keep their room however many parameters there are. Every step
         card has a "?" with what it does: a command's summary and
-        description, a group's short and long description.
+        description, a component's short and long description.
 19. [x] Gaps found in the review (2026-10-14):
         - **Editing a ◆ setting did nothing.** A setting a parameter sets
           never runs with its own value - the parameter's (the instance's, or
-          the default) replaces it. In an opened group it stayed editable, so
+          the default) replaces it. In an opened component it stayed editable, so
           a change was silently lost. Now editing it sets the parameter's
           default (`bound_setting_edited`), every setting the parameter sets
-          follows, and an opened group shows its settings with the defaults
-          applied (`apply_defaults`) - also in groups saved with stale values.
+          follows, and an opened component shows its settings with the defaults
+          applied (`apply_defaults`) - also in components saved with stale values.
           Joining a parameter ("Add to …") shows its value at once.
-        - **Group memory couldn't be chosen.** Inside an opened group the slot
-          picker offers "Group memory" (each use of the group has its own)
+        - **Component memory couldn't be chosen.** Inside an opened component the slot
+          picker offers "Component memory" (each use of the component has its own)
           next to "Memory" (the pipeline's) and "Shared".
-        - **Grouping didn't localise memory slots.** A pipeline slot only the
-          grouped steps use becomes group memory (`GroupingPlan::group_slots`,
+        - **Creating a component didn't localise memory slots.** A pipeline slot only the
+          chosen steps use becomes component memory (`ComponentPlan::component_slots`,
           the dialog says so), like an internal class; a slot other steps of
-          the pipeline or a nested group use stays the pipeline's.
+          the pipeline or a nested component use stays the pipeline's.
 
 ## Scoping
 
 Decided 2026-10-14. Like variables in a programming language: classes,
 objects and memory slots live in a **scope** – global (project) or the scope
-of one group instance. Nothing is renumbered in the file and nothing
-internal is saved: a scope's objects are thrown away when the group is done.
+of one component instance. Nothing is renumbered in the file and nothing
+internal is saved: a scope's objects are thrown away when the component is done.
 
 ### Decisions
 
-1. **Named scopes, one per group instance** (`ScopeId`, assigned at
+1. **Named scopes, one per component instance** (`ScopeId`, assigned at
    expansion, never saved). Not a `StartScope … EndScope` stack: the
    executor runs a pipeline's tile steps first and its whole-image steps
    afterwards, so scopes of different instances overlap. A scope is thrown
@@ -363,7 +363,7 @@ belongs to exactly one scope:
 ```rust
 pub enum Scope {
     Global,
-    Scoped(ScopeId), // one per group instance, never saved
+    Scoped(ScopeId), // one per component instance, never saved
 }
 
 pub struct Object {
@@ -373,12 +373,12 @@ pub struct Object {
 ```
 
 - A new object gets the scope of the class it's created with.
-- Reading by class within a group means: objects of that class in this scope.
+- Reading by class within a component means: objects of that class in this scope.
 - Once an object has no local class left, it becomes `Global`.
 
 **Config – the class reference says whether it's local.** A list of local
-classes alone isn't enough: a group's local class 1 and the user's project
-class 1, passed in through a group parameter, would end up as the same
+classes alone isn't enough: a component's local class 1 and the user's project
+class 1, passed in through a component parameter, would end up as the same
 number in an inner command. So:
 
 ```rust
@@ -386,19 +386,19 @@ pub enum ObjectClass {
     Unset,
     #[serde(alias = "VALID")] // projects written before
     Global(u32),               // a project class (today's `Valid`)
-    Local(u32),                // a class of the enclosing group's scope
+    Local(u32),                // a class of the enclosing component's scope
 }
 ```
 
 - Readable in the file: `{"LOCAL": 1}` versus `{"GLOBAL": 5}`.
-- No scope id in the file: `Local` always means "the scope of the group this
+- No scope id in the file: `Local` always means "the scope of the component this
   command sits in"; the concrete `ScopeId` is assigned per instance at
-  expansion – two pipelines using the same group look identical.
+  expansion – two pipelines using the same component look identical.
 - The definition declares its local classes with names
-  (`local_classes: [{id: 1, name: "Seed"}]`); "Open group" shows them
+  (`local_classes: [{id: 1, name: "Seed"}]`); "Open component" shows them
   separately from the project classes.
 - `ParamKind::InternalClass` goes away.
-- **Memory slots** the same way: `MemoryId::Group(slot)` next to
+- **Memory slots** the same way: `MemoryId::Component(slot)` next to
   `PipelineContext` and `ProjectCache`.
 
 ### Renaming `Valid` → `Global`
@@ -420,18 +420,18 @@ in the scope of the class it's written to. In the RECONSTRUCT_CELLS example
 (nuclei → local CENTERS, cell area → local AREA, Voronoi of both → global
 CELLS) the cells are new global objects; their references to the local
 centres are removed at `EndScope`. If the user also wants the nuclei, the
-class becomes a group parameter – a global class – and nothing is mixed.
+class becomes a component parameter – a global class – and nothing is mixed.
 
 Mixing can only happen through commands that **change the classes of
 existing objects**:
 
 | Command (mode) | What happens with local input, global output | Rule |
 |---|---|---|
-| Classify Objects – `ReclassifyIfMatch` (also AI Object Classifier) | The matching objects' local class is **replaced** by the global one | Allowed – the object **moves to `Global`** and survives `EndScope`. A "filter" group: local candidates in, global hits out |
-| Classify Objects – `AddOutputClassIfMatch` (also AI Object Classifier) | The global class is **added**, the local one stays → mixed | **Forbidden** – error, ideally already when the group is expanded (input class local + output class global + mode "add" can be checked from the settings) |
+| Classify Objects – `ReclassifyIfMatch` (also AI Object Classifier) | The matching objects' local class is **replaced** by the global one | Allowed – the object **moves to `Global`** and survives `EndScope`. A "filter" component: local candidates in, global hits out |
+| Classify Objects – `AddOutputClassIfMatch` (also AI Object Classifier) | The global class is **added**, the local one stays → mixed | **Forbidden** – error, ideally already when the component is expanded (input class local + output class global + mode "add" can be checked from the settings) |
 | Colocalization (links) | Global objects get links to local ones | Not mixing – links are references, removed at `EndScope` |
 | Tile merge | Merges fragments of one class across tiles | Must merge within one scope only – see below |
-| Dataset steps inside a group (e.g. a tracker) | They run after all images, on stored objects – only global ones exist | A dataset step may only use global classes; a local one is a validation error |
+| Dataset steps inside a component (e.g. a tracker) | They run after all images, on stored objects – only global ones exist | A dataset step may only use global classes; a local one is a validation error |
 
 So mixing has exactly one source – adding a global class to a local object –
 and that is forbidden. The legitimate way from local to global is to replace
@@ -443,17 +443,17 @@ and that is forbidden. The legitimate way from local to global is to replace
 reference to an object the user never sees and can't name has no meaning.
 Consequence: every number computed from those links disappears too – the
 results view's "Coloc with …" columns come from the stored partner lists. A
-"count spots per cell" group with *local* spots has no spot count at the end.
+"count spots per cell" component with *local* spots has no spot count at the end.
 That's consistent: if the number is wanted, the spot class is a result and
-must be an output class (a group parameter, global).
-- Optional: a validation warning, e.g. "Colocalization in group X refers to
-  the local class 'Spots' – its links are dropped at the end of the group".
+must be an output class (a component parameter, global).
+- Optional: a validation warning, e.g. "Colocalization in component X refers to
+  the local class 'Spots' – its links are dropped at the end of the component".
 
 **Tile merge must group fragments by (scope, class, plane)** – today it
 groups by class and plane. Large images are analysed in 4096 px tiles; an
 object on a tile boundary is cut into fragments, and `TileMerge` (the first
 whole-image step) puts touching fragments of the same class back together.
-Two instances of one group (e.g. "Cell reconstruction" in pipeline 1 and 2)
+Two instances of one component (e.g. "Cell reconstruction" in pipeline 1 and 2)
 both write fragments of `Local(1)` ("Seed"), just in different scopes:
 
 ```
@@ -468,12 +468,12 @@ arbitrarily at `EndScope`, and the second instance's Voronoi would get a
 wrong seed.
 - Timing fits: tile merge runs at the start of the whole-image phase, a
   scope ends only after its last step – local fragments a whole-image step
-  needs (Voronoi uses CENTERS) are merged before. A group with only tile
+  needs (Voronoi uses CENTERS) are merged before. A component with only tile
   steps ends its scope earlier; its local fragments are never merged and
   needn't be (they're discarded).
 - `classes_to_not_merge` (project setting) knows only global classes, so
   local objects are always merged – the right default. "Don't merge this
-  local class" would need a setting in the group definition; left out until
+  local class" would need a setting in the component definition; left out until
   someone needs it.
 
 **Dataset steps only work on global classes; a local class is a validation
@@ -481,38 +481,37 @@ error.** They run after all images, on stored objects, and local objects are
 never stored. No use case needs it otherwise: tracking internal objects to
 report per-cell values, or normalising a local measurement per plate, both
 mean the class actually is a result – make it global (an output class). A
-dataset step inside a group with global classes (bound via parameters) is
-fine; it runs after all images, long after the group's scope has ended.
+dataset step inside a component with global classes (bound via parameters) is
+fine; it runs after all images, long after the component's scope has ended.
 
 ## Command picker
 
-Decided 2026-10-14 (replaces the earlier "groups in the category lists"):
+Decided 2026-10-14 (replaces the earlier "components in the category lists"):
 
-- **Two sources of groups.** Groups made in the project live only there
-  (`ProjectSettings::command_groups`). Groups from a library file
-  (`.evagroup`) are **copied** into the project when first used and live
+- **Two sources of components.** Components made in the project live only there
+  (`ProjectSettings::components`). Components from a library file
+  (`.evacomp`) are **copied** into the project when first used and live
   there from then on: changes affect only the project, never the file, and
   the project stays complete without it - like project templates.
-  `GroupDefinition::origin` remembers the file, key and version ("Update
+  `ComponentDefinition::origin` remembers the file, key and version ("Update
   available" later; an update must not silently overwrite the project's own
   changes - needs a "modified since inserted" marker or hash).
-- **Own chip "Groups"**, not mixed into the category lists - a project easily
-  has several variants of one group, which would crowd out the commands. Two
+- **Own chip "Components"**, not mixed into the category lists - a project easily
+  has several variants of one component, which would crowd out the commands. Two
   sections: "In this project" first, then "Library" (not yet in the
   project; inserting copies it).
-- **Search finds groups too** (e.g. "cell" finds commands and groups), marked
-  as groups.
-- **Recognisable as a group**: own icon and an accent colour - the same on
-  the picker row and on the group card in the pipeline. The category derived
+- **Search finds components too** (e.g. "cell" finds commands and components), marked
+  as components.
+- **Recognisable as a component**: own icon and an accent colour - the same on
+  the picker row and on the component card in the pipeline. The category derived
   from the first and last command is shown as a small tag on the row.
-- **Against variant clutter**: "used N×" on each row; "Remove unused groups".
-- **Pipeline templates** (`.evapipe`) hold only steps - a pipeline with a
-  group step saved as template misses the definition elsewhere. Carry the
-  used definitions along (with step 16).
+- **Against variant clutter**: "used N×" on each row; "Remove unused components".
+- **Pipeline templates** are gone: the component library replaces them (insert a
+  component, "Expand component" for the plain steps).
 
-## Creating groups
+## Creating components
 
-1. **"Group selected steps"** (main path): select consecutive steps
+1. **"Create component"** (main path): select consecutive steps
    (Shift-click) → context menu → dialog (name; key generated from it;
    optional description). The steps move into a new definition, the
    pipeline gets an instance in their place – what runs doesn't change.
@@ -520,21 +519,21 @@ Decided 2026-10-14 (replaces the earlier "groups in the category lists"):
    step reads and writes, so it suggests:
    - a class **written and only used inside** → local (hidden);
    - a class **read but not written** inside → input class (exposed);
-   - a class **written and used after the group** → output class (exposed);
+   - a class **written and used after the component** → output class (exposed);
    - **image channels** of Load steps → exposed.
 
    The user confirms or deselects.
-3. **"Open group"**: the inner pipeline with a breadcrumb
+3. **"Open component"**: the inner pipeline with a breadcrumb
    (`Pipeline 1 › Cell reconstruction`), same step editor. Every parameter
-   gets "Expose as group parameter" (new, or added to an existing one of the
+   gets "Expose as component parameter" (new, or added to an existing one of the
    same type).
-4. **On the group card**: the exposed parameters, "Open", "Ungroup", "Save
-   to library" (`.evagroup`).
-5. **"New empty group"** – rarely needed once 1 and 2 exist.
+4. **On the component card**: the exposed parameters, "Open", "Expand component", "Save
+   to library" (`.evacomp`).
+5. **"New empty component"** – rarely needed once 1 and 2 exist.
 
 Order: first 1 and 2, then 3; the library actions after.
 
-**Editing a group** (decided 2026-10-14): one entry point, "Edit group". If
+**Editing a component** (decided 2026-10-14): one entry point, "Edit component". If
 several steps use the definition, the dialog says so ("Used by 3 steps in 2
 pipelines") and offers **"Edit for all"** (default - the definition changes,
 every instance follows) or **"Only this step"** (clones the definition as

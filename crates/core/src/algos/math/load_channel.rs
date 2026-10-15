@@ -16,7 +16,7 @@ use macros::CommandsMeta;
 ///
 /// Replaces the current image. Use it as the first step of a pipeline
 /// without an image source, or to switch channels within a pipeline - e.g.
-/// a command group that detects nuclei in one channel and cells in another.
+/// a component that detects nuclei in one channel and cells in another.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct LoadChannel {

@@ -1,10 +1,10 @@
-// Command groups: a reusable command made of other commands (e.g. "Cell
+// Components: a reusable command made of other commands (e.g. "Cell
 // reconstruction"), showing only its own parameters.
 //
-// A group is defined once in the project ([`GroupDefinition`]) and used in
-// pipelines as instances ([`GroupInstance`]) - changing the definition
+// A component is defined once in the project ([`ComponentDefinition`]) and used in
+// pipelines as instances ([`ComponentInstance`]) - changing the definition
 // changes every instance. An instance only holds what differs per use: its
-// parameter values. See VISION_GROUP.md.
+// parameter values. See VISION_COMPONENT.md.
 // (Plain comments: build.rs include!s this file, where `//!` isn't allowed.)
 
 use crate::{
@@ -12,13 +12,13 @@ use crate::{
         classification_settings::Class, meta_data::MetaData,
         pipeline_settings::PipelineStepSettings,
     },
-    types::ids::{GroupParamKey, StepId},
+    types::ids::{ComponentParamKey, StepId},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// A group parameter's value - written as plain JSON (`4`, `4.5`, `true`,
+/// A component parameter's value - written as plain JSON (`4`, `4.5`, `true`,
 /// `"PARABOLOID"`, `[1, 2]`). Typed by JSON kind only: what it means (a
 /// class, a channel, a dropdown option) and which values are valid come
 /// from the bound inner parameters.
@@ -34,38 +34,38 @@ pub enum ParamValue {
     List(Vec<ParamValue>),
 }
 
-/// A group as defined in the project: its steps and the parameters it shows.
+/// A component as defined in the project: its steps and the parameters it shows.
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct GroupDefinition {
-    /// Unique group key, prefere SCREAMING_SNAKE_CASE
+pub struct ComponentDefinition {
+    /// Unique component key, prefere SCREAMING_SNAKE_CASE
     pub key: String,
 
-    /// Metadata of this group
+    /// Metadata of this component
     pub meta: MetaData,
 
-    /// Local classes used by the group. These classes are scoped to the group only
+    /// Local classes used by the component. These classes are scoped to the component only
     #[serde(default)]
     pub classes: Vec<Class>,
 
     /// The steps which are executed in the given order
     pub steps: Vec<PipelineStepSettings>,
 
-    /// The group's parameters, shown on the group card.
-    pub parameters: Vec<GroupParameterDef>,
+    /// The component's parameters, shown on the component card.
+    pub parameters: Vec<ComponentParameterDef>,
 
     /// The library file this definition was inserted from, if any.
     #[serde(default)]
-    pub origin: Option<GroupOrigin>,
+    pub origin: Option<ComponentOrigin>,
 }
 
-/// One parameter of a group: what it sets inside the group, and its default.
+/// One parameter of a component: what it sets inside the component, and its default.
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct GroupParameterDef {
-    /// Unique within the group definition, readable (`"min_size"`); the
+pub struct ComponentParameterDef {
+    /// Unique within the component definition, readable (`"min_size"`); the
     /// instances' values are keyed by it.
-    pub key: GroupParamKey,
+    pub key: ComponentParamKey,
 
     /// Name shown to the user, e.g. "Cell class".
     pub label: String,
@@ -74,7 +74,7 @@ pub struct GroupParameterDef {
     #[serde(default)]
     pub description: String,
 
-    /// Section the parameter is shown in on the group card, e.g.
+    /// Section the parameter is shown in on the component card, e.g.
     /// "Detection"; empty: the unnamed first section.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub section: String,
@@ -88,11 +88,11 @@ pub struct GroupParameterDef {
     pub bindings: Vec<ParamBinding>,
 }
 
-/// An inner parameter a group parameter sets.
+/// An inner parameter a component parameter sets.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamBinding {
-    /// The step of the group that owns the parameter.
+    /// The step of the component that owns the parameter.
     pub step: StepId,
 
     /// The parameter's path in that step's command, as `ParameterDef::name`
@@ -101,38 +101,38 @@ pub struct ParamBinding {
     pub param: String,
 }
 
-/// Where a definition came from: a group library file.
+/// Where a definition came from: a component library file.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct GroupOrigin {
-    /// If this is a copy form an existing group, this is the origin group key.
-    /// This allows to reset the group default settings.
-    pub origin_group_key: String,
+pub struct ComponentOrigin {
+    /// If this is a copy form an existing component, this is the origin component key.
+    /// This allows to reset the component default settings.
+    pub origin_component_key: String,
 
-    /// The library file's name (`.evagroup`).
+    /// The library file's name (`.evacomp`).
     pub library: String,
 
     /// The definition's version in that file when it was inserted.
     pub version: u32,
 
     /// A fingerprint of the definition as inserted - if it differs now, the
-    /// project changed the group, and an update from the library would
+    /// project changed the component, and an update from the library would
     /// replace those changes. Empty in files written before.
     #[serde(default)]
     pub content_hash: String,
 }
 
-/// A use of a group in a pipeline: which definition, with which values.
+/// A use of a component in a pipeline: which definition, with which values.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct GroupInstance {
-    /// The group's key in the project.
+pub struct ComponentInstance {
+    /// The component's key in the project.
     pub key: String,
 
     /// This instance's parameter values. A parameter missing here has its
     /// definition's default (e.g. one the definition gained later).
     #[serde(default)]
-    pub values: BTreeMap<GroupParamKey, ParamValue>,
+    pub values: BTreeMap<ComponentParamKey, ParamValue>,
 }
 
 #[cfg(test)]
@@ -168,7 +168,7 @@ mod tests {
         let json = r#"{"key":"CELL_RECONSTRUCTION","values":{"cell_class":3,"method":"PARABOLOID","radius":4.5}}"#;
         // Projects load through `serde_json::Value`.
         let raw: serde_json::Value = serde_json::from_str(json).unwrap();
-        let instance: GroupInstance = serde_json::from_value(raw).unwrap();
+        let instance: ComponentInstance = serde_json::from_value(raw).unwrap();
         assert_eq!(instance.values[&"cell_class".into()], ParamValue::Int(3));
         assert_eq!(
             instance.values[&"method".into()],
@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(instance.values[&"radius".into()], ParamValue::Float(4.5));
         assert_eq!(serde_json::to_string(&instance).unwrap(), json);
 
-        let no_values: GroupInstance = serde_json::from_str(r#"{"key":"X"}"#).unwrap();
+        let no_values: ComponentInstance = serde_json::from_str(r#"{"key":"X"}"#).unwrap();
         assert!(
             no_values.values.is_empty(),
             "every parameter at its default"
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn a_parameter_definition_has_a_typed_default() {
-        let parameter: GroupParameterDef = serde_json::from_str(
+        let parameter: ComponentParameterDef = serde_json::from_str(
             r#"{"key":"blur_size","label":"Blur size","default":3,
                 "bindings":[{"step":2,"param":"kernel_size"}]}"#,
         )
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn a_definition_without_classes_needs_no_classes_entry() {
-        let definition = GroupDefinition {
+        let definition = ComponentDefinition {
             key: "BLUR".into(),
             meta: MetaData::default(),
             classes: vec![],
@@ -213,7 +213,7 @@ mod tests {
         };
         let mut json = serde_json::to_value(&definition).unwrap();
         json.as_object_mut().unwrap().remove("classes");
-        let loaded: GroupDefinition = serde_json::from_value(json).unwrap();
+        let loaded: ComponentDefinition = serde_json::from_value(json).unwrap();
         assert!(loaded.classes.is_empty());
     }
 }

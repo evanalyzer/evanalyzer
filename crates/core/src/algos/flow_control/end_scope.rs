@@ -1,4 +1,4 @@
-//! Ends a command group instance's scope.
+//! Ends a component instance's scope.
 
 use crate::algos::{ExecutionScope, ImageAlgorithm};
 use crate::object::Object;
@@ -10,11 +10,11 @@ use crate::pipeline::{
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectId};
 
-/// Ends a command group instance's scope - added by the job generator right
+/// Ends a component instance's scope - added by the job generator right
 /// after the instance's last command, in the phase that command runs in (its
 /// tile commands run before every whole-image command). Frees the scope's
 /// objects and the references to them, and its memory slots
-/// (`MemoryId::GroupContext`), so nothing internal reaches the results and the
+/// (`MemoryId::ComponentContext`), so nothing internal reaches the results and the
 /// memory is free for the rest of the run.
 ///
 /// `pub(crate)` - internal for now: a fully `pub` command here would become a
@@ -34,7 +34,7 @@ impl ImageAlgorithm for EndScope {
         let removed = remove_scope(&mut cache.object_cache, self.scope);
         if let Scope::Scoped(scope_id) = self.scope {
             cache.image_cache.retain(
-                |address| !matches!(address, CacheAddress::GroupMemory(id, _) if *id == scope_id),
+                |address| !matches!(address, CacheAddress::ComponentMemory(id, _) if *id == scope_id),
             );
         }
         log::debug!("End of {:?}: {removed} objects removed", self.scope);
@@ -150,8 +150,8 @@ mod tests {
     use crate::pipeline::scope::ScopeId;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
 
-    const GROUP: Scope = Scope::Scoped(ScopeId(1));
-    const OTHER_GROUP: Scope = Scope::Scoped(ScopeId(2));
+    const COMPONENT: Scope = Scope::Scoped(ScopeId(1));
+    const OTHER_COMPONENT: Scope = Scope::Scoped(ScopeId(2));
 
     fn object(id: u128, class: ObjectClass, scope: Scope) -> Object {
         let mut object = Object::new(ObjectInit {
@@ -169,21 +169,21 @@ mod tests {
     #[test]
     fn ending_a_scope_removes_only_its_objects() {
         let mut cache = cache(vec![
-            object(1, ObjectClass::Local(1), GROUP),
-            object(2, ObjectClass::Local(1), OTHER_GROUP),
-            object(3, ObjectClass::Global(1), GROUP),
+            object(1, ObjectClass::Local(1), COMPONENT),
+            object(2, ObjectClass::Local(1), OTHER_COMPONENT),
+            object(3, ObjectClass::Global(1), COMPONENT),
         ]);
-        assert_eq!(remove_scope(&mut cache, GROUP), 1);
+        assert_eq!(remove_scope(&mut cache, COMPONENT), 1);
         assert!(cache.get(&ObjectId(1)).is_none());
         assert!(cache.get(&ObjectId(2)).is_some(), "another instance's");
         assert!(cache.get(&ObjectId(3)).is_some(), "the project's");
-        assert_eq!(remove_scope(&mut cache, GROUP), 0, "nothing left");
+        assert_eq!(remove_scope(&mut cache, COMPONENT), 0, "nothing left");
     }
 
     #[test]
     fn references_to_removed_objects_are_dropped() {
-        let seed = object(1, ObjectClass::Local(1), GROUP);
-        let mut cell = object(2, ObjectClass::Global(1), GROUP);
+        let seed = object(1, ObjectClass::Local(1), COMPONENT);
+        let mut cell = object(2, ObjectClass::Global(1), COMPONENT);
         let kept = object(3, ObjectClass::Global(2), Scope::Global);
         cell.parent_id = Some(ObjectId(1));
         cell.children = vec![ObjectId(1), ObjectId(3)];
@@ -196,7 +196,7 @@ mod tests {
         cell.track.object_ids = vec![ObjectId(1), ObjectId(2)];
         let mut cache = cache(vec![seed, cell, kept]);
 
-        remove_scope(&mut cache, GROUP);
+        remove_scope(&mut cache, COMPONENT);
 
         let cell = cache.get(&ObjectId(2)).unwrap();
         assert_eq!(cell.parent_id, None);
@@ -232,17 +232,17 @@ mod tests {
             let build = || -> ObjectCache {
                 (0..n)
                     .map(|i| {
-                        let in_group = i % 2 == 0;
+                        let in_component = i % 2 == 0;
                         let mut o = object(
                             i + 1,
-                            if in_group {
+                            if in_component {
                                 ObjectClass::Local(1)
                             } else {
                                 ObjectClass::Global(1)
                             },
-                            GROUP,
+                            COMPONENT,
                         );
-                        if !in_group && i % 10 == 1 {
+                        if !in_component && i % 10 == 1 {
                             o.parent_id = Some(ObjectId(i));
                             o.colocalized_with
                                 .insert(ObjectClass::Local(1), vec![ObjectId(i)]);
@@ -255,14 +255,14 @@ mod tests {
             // Reference: only dropping the same objects.
             let mut plain = build();
             let start = std::time::Instant::now();
-            plain.retain(|_, o| o.scope() != GROUP);
+            plain.retain(|_, o| o.scope() != COMPONENT);
             let drop_only = start.elapsed();
             drop(plain);
 
             let mut cache = build();
             let rss_full = rss_mb();
             let start = std::time::Instant::now();
-            let removed = remove_scope(&mut cache, GROUP);
+            let removed = remove_scope(&mut cache, COMPONENT);
             let elapsed = start.elapsed();
             let rss_after = rss_mb();
             println!(
@@ -315,8 +315,8 @@ mod tests {
             ))
         };
         let mut cache = GlobalPipelineCache::default();
-        let own = CacheAddress::GroupMemory(ScopeId(1), 1);
-        let other = CacheAddress::GroupMemory(ScopeId(2), 1);
+        let own = CacheAddress::ComponentMemory(ScopeId(1), 1);
+        let other = CacheAddress::ComponentMemory(ScopeId(2), 1);
         let pipeline_slot = CacheAddress::Memory(MemoryId::PipelineContext(1));
         for address in [own, other, pipeline_slot] {
             cache.image_cache.insert(address, image());
@@ -334,7 +334,7 @@ mod tests {
         .unwrap();
 
         EndScope {
-            scope: GROUP,
+            scope: COMPONENT,
             phase: ExecutionScope::Tile,
         }
         .execute(&mut ctx, &mut cache)

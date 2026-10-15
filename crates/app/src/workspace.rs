@@ -5,13 +5,13 @@
 pub mod ai_learning;
 pub mod bioimageio;
 pub mod class_ids;
+pub mod component_checks;
+pub mod component_editing;
+pub mod component_library;
 pub mod crash_log;
 pub mod export;
 pub mod extensions;
 pub mod frontend;
-pub mod group_checks;
-pub mod group_library;
-pub mod grouping;
 pub mod images;
 pub(crate) mod project_owner;
 pub mod settings;

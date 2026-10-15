@@ -383,7 +383,7 @@ fn with_source_slice<R>(
     source: ThresholdValueSource,
     channel: Option<i32>,
     tile: ImageTile,
-    // The scope the command runs in - where a group memory slot lives.
+    // The scope the command runs in - where a component memory slot lives.
     scope: Scope,
     cache: &GlobalPipelineCache,
     actual_data: &[f32],

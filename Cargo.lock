@@ -3029,6 +3029,7 @@ dependencies = [
  "llguidance",
  "log",
  "schemars",
+ "serde",
  "serde_json",
  "tokenizers 0.23.2",
 ]

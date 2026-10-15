@@ -1,15 +1,15 @@
 //! Scopes: which objects a command sees.
 //!
 //! Like variables in a programming language, objects live in a scope: the
-//! project's (global) or that of one command group instance. A group's
+//! project's (global) or that of one component instance. A component's
 //! local classes (`ObjectClass::Local`) only name objects of the instance
-//! the command runs in, so two instances of one group never see each
+//! the command runs in, so two instances of one component never see each
 //! other's objects. Scopes exist only while a job runs - nothing is saved.
 
 use evanalyzer_cfg::core_types::ObjectClass;
 use serde::{Deserialize, Serialize};
 
-/// One command group instance's scope, numbered per job at expansion.
+/// One component instance's scope, numbered per job at expansion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ScopeId(pub u32);
 
@@ -18,10 +18,10 @@ pub struct ScopeId(pub u32);
     Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
 pub enum Scope {
-    /// The project's: commands outside groups, objects of project classes.
+    /// The project's: commands outside components, objects of project classes.
     #[default]
     Global,
-    /// One group instance's.
+    /// One component instance's.
     Scoped(ScopeId),
 }
 

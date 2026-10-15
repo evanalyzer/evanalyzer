@@ -292,7 +292,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     out.push_str("use std::path::PathBuf;\n");
     // A Script step's values (`ParamValue`s by `param` name).
     out.push_str("#[allow(unused_imports)]\nuse std::collections::BTreeMap;\n");
-    out.push_str("#[allow(unused_imports)]\nuse crate::modules::command_groups::ParamValue;\n");
+    out.push_str("#[allow(unused_imports)]\nuse crate::modules::components::ParamValue;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
 
@@ -3431,7 +3431,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     // object_classes() - every project class a command creates, reads or filters on
     out.push_str("    /// Every object class this command creates, reads or filters on.\n");
     out.push_str("    /// Segmentation classes count as the object class Extract Objects turns\n");
-    out.push_str("    /// them into. `Unset`, a group's `Local` classes, Background, the\n");
+    out.push_str("    /// them into. `Unset`, a component's `Local` classes, Background, the\n");
     out.push_str("    /// manual-annotation marker and\n");
     out.push_str("    /// `ModelClass`/`ModelSegmentationClass` fields (a trained model's own\n");
     out.push_str("    /// class IDs) are left out - they never name a class of the project.\n");
@@ -3444,8 +3444,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("        });\n");
     out.push_str("        classes\n");
     out.push_str("    }\n\n");
-    out.push_str("    /// The command group local classes (`ObjectClass::Local`) this command\n");
-    out.push_str("    /// uses - only allowed inside a group.\n");
+    out.push_str("    /// The component local classes (`ObjectClass::Local`) this command\n");
+    out.push_str("    /// uses - only allowed inside a component.\n");
     out.push_str("    pub fn local_classes(&self) -> Vec<ObjectClass> {\n");
     out.push_str("        let mut classes = self.all_object_classes();\n");
     out.push_str("        classes.retain(|c| matches!(c, ObjectClass::Local(_)));\n");

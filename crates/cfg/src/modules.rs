@@ -2,7 +2,7 @@ pub mod ai_learning_object_settings;
 pub mod ai_learning_pixel_settings;
 pub mod ai_learning_settings;
 pub mod classification_settings;
-pub mod command_groups;
+pub mod components;
 pub mod images_settings;
 pub mod meta_data;
 pub mod object_settings;

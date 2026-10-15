@@ -23,7 +23,7 @@ import { ScriptEditorState, ScriptFont } from "script_editor_panel.slint";
 // ----------------------------------------------------------
 // Data model
 
-export enum StepCategory { preprocess, segment, instance-segmentation, measure, object, dataset, group }
+export enum StepCategory { preprocess, segment, instance-segmentation, measure, object, dataset, component }
 export enum PipelineStatus { idle, queued, running, done, error }
 export enum ParamType {
     number,
@@ -55,7 +55,7 @@ export struct LeafParam {
         min: float,
         max: float,
         step: float,
-        // Inside an opened command group: this setting is a group parameter.
+        // Inside an opened component: this setting is a component parameter.
         exposed: bool,
     }
 
@@ -80,10 +80,10 @@ export struct CommandParameter {
         // Computed in Rust rather than matched on `name`/`display-name` here,
         // so this is the one place that knows which commands these are.
         has-model-info: bool,
-        // Inside an opened command group: this setting is a group parameter.
+        // Inside an opened component: this setting is a component parameter.
         exposed: bool,
         // The header shown above the setting where its section (`#[cmdsmeta(section)]`
-        // or a group parameter's) starts. Empty otherwise - also for the
+        // or a component parameter's) starts. Empty otherwise - also for the
         // settings without a section, which come first.
         section-header: string,
         // The setting's section; empty: none.
@@ -105,7 +105,7 @@ export struct PipelineCommand {
         name: string,
         category: StepCategory,
         summary: string,        // "σ = 2.0 · per channel"
-        // What the command or group does - behind the card's "?" (empty: no "?").
+        // What the command or component does - behind the card's "?" (empty: no "?").
         help: string,
         enabled: bool,
         expanded: bool,
@@ -120,7 +120,7 @@ export struct PipelineCommand {
         // values never go unnoticed).
         advanced-count: int,
         advanced-changed: int,
-        // A group card: the group library has a newer version ("3"), or empty.
+        // A component card: the component library has a newer version ("3"), or empty.
         update-version: string,
         // The sections of `parameters`, in order - "" (no section) first
         // when there are such settings. The settings dialog's sections.
@@ -158,8 +158,8 @@ global Cat {
             if c == StepCategory.dataset {
                 return Theme.cat-dataset;
             }
-            if c == StepCategory.group {
-                return Theme.cat-group;
+            if c == StepCategory.component {
+                return Theme.cat-component;
             }
             return Theme.cat-classify;
         }
@@ -182,8 +182,8 @@ global Cat {
             if c == StepCategory.dataset {
                 return "Dataset";
             }
-            if c == StepCategory.group {
-                return "Group";
+            if c == StepCategory.component {
+                return "Component";
             }
             return "Object";
         }
@@ -1192,9 +1192,9 @@ component LeafParamRow inherits VerticalLayout {
         HorizontalLayout {
             spacing: 4px;
             alignment: start;
-            // Inside an opened group: ◆ exposes the setting as a group
+            // Inside an opened component: ◆ exposes the setting as a component
             // parameter (filled) or hides it again.
-            if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.param-type != ParamType.label: Rectangle {
+            if PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && p.param-type != ParamType.label: Rectangle {
                 width: 14px;
                 height: 14px;
                 border-radius: 3px;
@@ -1202,7 +1202,7 @@ component LeafParamRow inherits VerticalLayout {
                 Text {
                     text: p.exposed ? "◆" : "◇";
                     font-size: 9px;
-                    color: p.exposed ? Theme.cat-group : Theme.text-mute;
+                    color: p.exposed ? Theme.cat-component : Theme.text-mute;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -1214,7 +1214,7 @@ component LeafParamRow inherits VerticalLayout {
                     }
                 }
             }
-            if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.exposed: Rectangle {
+            if PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && p.exposed: Rectangle {
                 width: 14px;
                 height: 14px;
                 border-radius: 3px;
@@ -1222,7 +1222,7 @@ component LeafParamRow inherits VerticalLayout {
                 Text {
                     text: "✎";
                     font-size: 9px;
-                    color: Theme.cat-group;
+                    color: Theme.cat-component;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -1237,7 +1237,7 @@ component LeafParamRow inherits VerticalLayout {
             Text {
                 text: p.display-name == "" ? p.name : p.display-name;
                 font-size: 10px;
-                color: p.exposed ? Theme.cat-group : Theme.text-dim;
+                color: p.exposed ? Theme.cat-component : Theme.text-dim;
                 vertical-alignment: center;
             }
 
@@ -1290,7 +1290,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.number || p.param-type == ParamType.text:
     LineEdit {
-            enabled: !PipelinesPanelState.open-group-read-only;
+            enabled: !PipelinesPanelState.open-component-read-only;
             height: 24px;
             text: p.value;
             font-size: 11px;
@@ -1312,7 +1312,7 @@ component LeafParamRow inherits VerticalLayout {
 
             spacing: 4px;
             leaf-fp-input := LineEdit {
-                enabled: !PipelinesPanelState.open-group-read-only;
+                enabled: !PipelinesPanelState.open-component-read-only;
                 height: 24px;
                 horizontal-stretch: 1;
                 text: p.value;
@@ -1360,7 +1360,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.spinner:
     SpinnerInput {
-            enabled: !PipelinesPanelState.open-group-read-only;
+            enabled: !PipelinesPanelState.open-component-read-only;
             value: p.value.to-float();
             step: p.step;
             min: p.min;
@@ -1372,7 +1372,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.dropdown:
     ComboBox {
-            enabled: !PipelinesPanelState.open-group-read-only;
+            enabled: !PipelinesPanelState.open-component-read-only;
             model: p.options;
             current-value: p.value;
             selected(v) => {
@@ -1383,7 +1383,7 @@ component LeafParamRow inherits VerticalLayout {
         if p.param-type == ParamType.slider: HorizontalLayout {
             spacing: 8px;
             Slider {
-                enabled: !PipelinesPanelState.open-group-read-only;
+                enabled: !PipelinesPanelState.open-component-read-only;
                 minimum: p.min;
                 maximum: p.max;
                 value: p.value.to-float();
@@ -1406,7 +1406,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.toggle: HorizontalLayout {
             CheckBox {
-                enabled: !PipelinesPanelState.open-group-read-only;
+                enabled: !PipelinesPanelState.open-component-read-only;
                 checked: p.value == "true";
                 toggled => {
                     root.changed(self.checked ? "true" : "false");
@@ -1454,7 +1454,7 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units:
     ComboBox {
-            enabled: !PipelinesPanelState.open-group-read-only;
+            enabled: !PipelinesPanelState.open-component-read-only;
             model: p.options;
             current-value: p.value;
             selected(v) => {
@@ -1464,10 +1464,10 @@ component LeafParamRow inherits VerticalLayout {
 
         if p.param-type == ParamType.image-address:
     ImageAddressPicker {
-            enabled: !PipelinesPanelState.open-group-read-only;
+            enabled: !PipelinesPanelState.open-component-read-only;
             kind: p.options[0];
             number: p.options[1].to-float();
-            in-group: PipelinesPanelState.open-group-name != "";
+            in-component: PipelinesPanelState.open-component-name != "";
             changed(v) => {
                 root.changed(v);
             }
@@ -1507,7 +1507,7 @@ component SectionHeader inherits VerticalLayout {
         }
     }
 
-// A setting's name line: ◇/✎ inside an opened group, the name, and "?"
+// A setting's name line: ◇/✎ inside an opened component, the name, and "?"
 // for its help text.
 component ParamLabel inherits HorizontalLayout {
         in property <CommandParameter> p;
@@ -1520,9 +1520,9 @@ component ParamLabel inherits HorizontalLayout {
 
         spacing: 4px;
         alignment: start;
-        // Inside an opened group: ◆ exposes the setting as a group
+        // Inside an opened component: ◆ exposes the setting as a component
         // parameter (filled) or hides it again.
-        if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.param-type != ParamType.group && p.param-type != ParamType.label: Rectangle {
+        if PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && p.param-type != ParamType.group && p.param-type != ParamType.label: Rectangle {
             width: 16px;
             height: 16px;
             border-radius: 3px;
@@ -1530,7 +1530,7 @@ component ParamLabel inherits HorizontalLayout {
             Text {
                 text: p.exposed ? "◆" : "◇";
                 font-size: 10px;
-                color: p.exposed ? Theme.cat-group : Theme.text-mute;
+                color: p.exposed ? Theme.cat-component : Theme.text-mute;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -1542,7 +1542,7 @@ component ParamLabel inherits HorizontalLayout {
                 }
             }
         }
-        if PipelinesPanelState.open-group-name != "" && !PipelinesPanelState.open-group-read-only && p.exposed: Rectangle {
+        if PipelinesPanelState.open-component-name != "" && !PipelinesPanelState.open-component-read-only && p.exposed: Rectangle {
             width: 16px;
             height: 16px;
             border-radius: 3px;
@@ -1550,7 +1550,7 @@ component ParamLabel inherits HorizontalLayout {
             Text {
                 text: "✎";
                 font-size: 10px;
-                color: Theme.cat-group;
+                color: Theme.cat-component;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -1566,7 +1566,7 @@ component ParamLabel inherits HorizontalLayout {
             text: p.display-name == "" ? p.name : p.display-name;
             font-size: root.wide ? 12px : 11px;
             font-weight: root.wide ? 600 : 400;
-            color: p.exposed ? Theme.cat-group : (root.wide ? Theme.text : Theme.text-dim);
+            color: p.exposed ? Theme.cat-component : (root.wide ? Theme.text : Theme.text-dim);
             vertical-alignment: center;
             overflow: elide;
         }
@@ -1623,7 +1623,7 @@ component ParamLabel inherits HorizontalLayout {
     }
 
 // A setting's control (text field, spinner, dropdown, list entries, …).
-// Locked while a group is only viewed.
+// Locked while a component is only viewed.
 component ParamControls inherits Rectangle {
         in property <CommandParameter> p;
         callback changed(string);
@@ -1701,7 +1701,7 @@ component ParamControls inherits Rectangle {
 
             if p.param-type == ParamType.number || p.param-type == ParamType.text:
         LineEdit {
-                enabled: !PipelinesPanelState.open-group-read-only;
+                enabled: !PipelinesPanelState.open-component-read-only;
                 height: 26px;
                 text: p.value;
                 font-size: 11px;
@@ -1723,7 +1723,7 @@ component ParamControls inherits Rectangle {
 
                 spacing: 4px;
                 fp-input := LineEdit {
-                    enabled: !PipelinesPanelState.open-group-read-only;
+                    enabled: !PipelinesPanelState.open-component-read-only;
                     height: 26px;
                     horizontal-stretch: 1;
                     text: p.value;
@@ -1795,7 +1795,7 @@ component ParamControls inherits Rectangle {
 
             if p.param-type == ParamType.spinner:
         SpinnerInput {
-                enabled: !PipelinesPanelState.open-group-read-only;
+                enabled: !PipelinesPanelState.open-component-read-only;
                 value: p.value.to-float();
                 step: p.step;
                 min: p.min;
@@ -1807,7 +1807,7 @@ component ParamControls inherits Rectangle {
 
             if p.param-type == ParamType.dropdown:
         ComboBox {
-                enabled: !PipelinesPanelState.open-group-read-only;
+                enabled: !PipelinesPanelState.open-component-read-only;
                 model: p.options;
                 current-value: p.value;
                 selected(v) => {
@@ -1818,7 +1818,7 @@ component ParamControls inherits Rectangle {
             if p.param-type == ParamType.slider: HorizontalLayout {
                 spacing: 8px;
                 Slider {
-                    enabled: !PipelinesPanelState.open-group-read-only;
+                    enabled: !PipelinesPanelState.open-component-read-only;
                     minimum: p.min;
                     maximum: p.max;
                     value: p.value.to-float();
@@ -1841,7 +1841,7 @@ component ParamControls inherits Rectangle {
 
             if p.param-type == ParamType.toggle: HorizontalLayout {
                 CheckBox {
-                    enabled: !PipelinesPanelState.open-group-read-only;
+                    enabled: !PipelinesPanelState.open-component-read-only;
                     checked: p.value == "true";
                     toggled => {
                         root.changed(self.checked ? "true" : "false");
@@ -1889,7 +1889,7 @@ component ParamControls inherits Rectangle {
 
             if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units:
         ComboBox {
-                enabled: !PipelinesPanelState.open-group-read-only;
+                enabled: !PipelinesPanelState.open-component-read-only;
                 model: p.options;
                 current-value: p.value;
                 selected(v) => {
@@ -1899,10 +1899,10 @@ component ParamControls inherits Rectangle {
 
             if p.param-type == ParamType.image-address:
         ImageAddressPicker {
-                enabled: !PipelinesPanelState.open-group-read-only;
+                enabled: !PipelinesPanelState.open-component-read-only;
                 kind: p.options[0];
                 number: p.options[1].to-float();
-                in-group: PipelinesPanelState.open-group-name != "";
+                in-component: PipelinesPanelState.open-component-name != "";
                 changed(v) => {
                     root.changed(v);
                 }
@@ -2004,7 +2004,7 @@ component ParamControls inherits Rectangle {
 
         // "View": the settings can be read, not changed - the names and
         // their "?" around the controls still work.
-        if PipelinesPanelState.open-group-read-only: TouchArea { }
+        if PipelinesPanelState.open-component-read-only: TouchArea { }
     }
 
 component ParamRow inherits VerticalLayout {
@@ -2195,12 +2195,12 @@ component StepRow inherits Rectangle {
         callback toggle-expanded;
         callback remove;
         callback duplicate;
-        callback group-steps;
-        callback open-group;
-        callback view-group;
-        callback ungroup;
+        callback create-component;
+        callback open-component;
+        callback view-component;
+        callback expand-component;
         callback save-to-library;
-        callback update-group;
+        callback update-component;
         callback param-changed(string, string);
         callback toggle-breakpoint;
         callback open-settings;
@@ -2359,8 +2359,8 @@ component StepRow inherits Rectangle {
                             // Breakpoint dot: gray=off, red=Stop, orange=Snapshot
                         // Click cycles: off → stop → snapshot → off
                         bp-btn := Rectangle {
-                            // Inner steps of a group can't be breakpoint targets.
-                            visible: PipelinesPanelState.open-group-name == "";
+                            // Inner steps of a component can't be breakpoint targets.
+                            visible: PipelinesPanelState.open-component-name == "";
                             // 0=off, 1=stop, 2=snapshot for this specific step
                             property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
                                 width: 22px;
@@ -2390,7 +2390,7 @@ component StepRow inherits Rectangle {
                                 icon-sz: 13px;
                                 tint: step.enabled ? Theme.text-dim : Theme.text-faint;
                                 clicked => {
-                                    if !PipelinesPanelState.open-group-read-only {
+                                    if !PipelinesPanelState.open-component-read-only {
                                         root.toggle-enabled();
                                     }
                                 }
@@ -2513,9 +2513,9 @@ component StepRow inherits Rectangle {
                         }
                     }
 
-                    // A group's own actions, in a row of their own - with
+                    // A component's own actions, in a row of their own - with
                     // the step actions they'd be wider than the card.
-                    if root.step.category == StepCategory.group && !PipelinesPanelState.open-group-read-only: HorizontalLayout {
+                    if root.step.category == StepCategory.component && !PipelinesPanelState.open-component-read-only: HorizontalLayout {
                         spacing: 6px;
                         padding-top: 2px;
                         alignment: start;
@@ -2524,8 +2524,8 @@ component StepRow inherits Rectangle {
                             height: 26px;
                             border-radius: 4px;
                             border-width: 1px;
-                            border-color: Theme.cat-group;
-                            background: view-ta.has-hover ? Theme.cat-group.with-alpha(0.15) : transparent;
+                            border-color: Theme.cat-component;
+                            background: view-ta.has-hover ? Theme.cat-component.with-alpha(0.15) : transparent;
                             HorizontalLayout {
                                 padding-left: 10px;
                                 padding-right: 10px;
@@ -2533,7 +2533,7 @@ component StepRow inherits Rectangle {
                                 Text {
                                     text: "View";
                                     font-size: 11px;
-                                    color: Theme.cat-group;
+                                    color: Theme.cat-component;
                                     vertical-alignment: center;
                                 }
                             }
@@ -2541,12 +2541,12 @@ component StepRow inherits Rectangle {
                             view-ta := TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
-                                    root.view-group();
+                                    root.view-component();
                                 }
                             }
                         }
 
-                        if root.step.category == StepCategory.group: Rectangle {
+                        if root.step.category == StepCategory.component: Rectangle {
                             height: 26px;
                             border-radius: 4px;
                             border-width: 1px;
@@ -2567,33 +2567,33 @@ component StepRow inherits Rectangle {
                             open-ta := TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
-                                    root.open-group();
+                                    root.open-component();
                                 }
                             }
                         }
 
-                        if root.step.category == StepCategory.group: Rectangle {
+                        if root.step.category == StepCategory.component: Rectangle {
                             height: 26px;
                             border-radius: 4px;
                             border-width: 1px;
                             border-color: Theme.border;
-                            background: ungroup-ta.has-hover ? Theme.raised : transparent;
+                            background: expand-ta.has-hover ? Theme.raised : transparent;
                             HorizontalLayout {
                                 padding-left: 10px;
                                 padding-right: 10px;
                                 alignment: center;
                                 Text {
-                                    text: "Ungroup";
+                                    text: "Expand";
                                     font-size: 11px;
                                     color: Theme.text-dim;
                                     vertical-alignment: center;
                                 }
                             }
 
-                            ungroup-ta := TouchArea {
+                            expand-ta := TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
-                                    root.ungroup();
+                                    root.expand-component();
                                 }
                             }
                         }
@@ -2601,7 +2601,7 @@ component StepRow inherits Rectangle {
                         if root.step.update-version != "": Rectangle {
                             height: 26px;
                             border-radius: 4px;
-                            background: update-ta.has-hover ? Theme.cat-group : Theme.cat-group.with-alpha(0.8);
+                            background: update-ta.has-hover ? Theme.cat-component : Theme.cat-component.with-alpha(0.8);
                             HorizontalLayout {
                                 padding-left: 10px;
                                 padding-right: 10px;
@@ -2617,13 +2617,13 @@ component StepRow inherits Rectangle {
                             update-ta := TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
-                                    root.update-group();
+                                    root.update-component();
                                 }
                             }
                         }
                     }
 
-                    if !PipelinesPanelState.open-group-read-only: HorizontalLayout {
+                    if !PipelinesPanelState.open-component-read-only: HorizontalLayout {
                         spacing: 6px;
                         padding-top: 2px;
 
@@ -2665,7 +2665,7 @@ component StepRow inherits Rectangle {
                             }
                         }
 
-                        if root.step.category == StepCategory.group && PipelinesPanelState.open-group-name == "": Rectangle {
+                        if root.step.category == StepCategory.component && PipelinesPanelState.open-component-name == "": Rectangle {
                             height: 26px;
                             border-radius: 4px;
                             border-width: 1px;
@@ -2691,12 +2691,12 @@ component StepRow inherits Rectangle {
                             }
                         }
 
-                        if root.step.category != StepCategory.group && PipelinesPanelState.open-group-name == "": Rectangle {
+                        if root.step.category != StepCategory.component && PipelinesPanelState.open-component-name == "": Rectangle {
                             height: 26px;
                             border-radius: 4px;
                             border-width: 1px;
                             border-color: Theme.border;
-                            background: group-ta.has-hover ? Theme.raised : transparent;
+                            background: component-ta.has-hover ? Theme.raised : transparent;
                             animate background { duration: 100ms; }
                             HorizontalLayout {
                                 padding-left: 10px;
@@ -2714,17 +2714,17 @@ component StepRow inherits Rectangle {
                                 }
 
                                 Text {
-                                    text: "Group…";
+                                    text: "Create component…";
                                     font-size: 11px;
                                     color: Theme.text-dim;
                                     vertical-alignment: center;
                                 }
                             }
 
-                            group-ta := TouchArea {
+                            component-ta := TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
-                                    root.group-steps();
+                                    root.create-component();
                                 }
                             }
                         }
@@ -2943,33 +2943,33 @@ export global PipelinesPanelState {
         callback expand-step(int);
         callback remove-step(int);
         callback duplicate-step(int);
-        /// Opens "Group steps" starting at this step (its index).
-        callback group-steps(int);
-        /// The command group opened in the panel (its steps are shown), or
+        /// Opens "Create component" starting at this step (its index).
+        callback create-component(int);
+        /// The component opened in the panel (its steps are shown), or
         /// empty.
-        in property <string> open-group-name: "";
-        /// What's wrong with the opened group (its checks), or empty.
-        in property <string> open-group-problem: "";
-        /// The opened group is only being looked at ("View"): nothing can be
+        in property <string> open-component-name: "";
+        /// What's wrong with the opened component (its checks), or empty.
+        in property <string> open-component-problem: "";
+        /// The opened component is only being looked at ("View"): nothing can be
         /// changed.
-        in property <bool> open-group-read-only: false;
-        callback view-group(int);
-        /// "Edit" in the bar of a group opened with "View".
-        callback edit-open-group();
-        /// "Settings…" in the opened group's bar: its name, description and
+        in property <bool> open-component-read-only: false;
+        callback view-component(int);
+        /// "Edit" in the bar of a component opened with "View".
+        callback edit-open-component();
+        /// "Settings…" in the opened component's bar: its name, description and
         /// parameters, in a dialog.
-        callback open-group-settings();
+        callback open-component-settings();
         /// ✎ next to an exposed setting (step index, setting path): the
         /// settings dialog at its parameter.
         callback edit-exposed(int, string);
-        callback open-group(int);
-        callback close-group();
-        callback ungroup(int);
-        /// "Save to library…" on a group card (step index).
-        callback save-group-to-library(int);
-        /// "Update to vN" on a group card (step index).
-        callback update-group(int);
-        /// Exposes a setting of an opened group's step as a group parameter,
+        callback open-component(int);
+        callback close-component();
+        callback expand-component(int);
+        /// "Save to library…" on a component card (step index).
+        callback save-component-to-library(int);
+        /// "Update to vN" on a component card (step index).
+        callback update-component(int);
+        /// Exposes a setting of an opened component's step as a component parameter,
         /// or hides it again: step index, setting path ("min_area",
         /// "thresholds.1.min_threshold").
         callback toggle-exposed(int, string);
@@ -2991,7 +2991,8 @@ export global PipelinesPanelState {
     callback run-all();
         callback dry-run();
         callback auto-preview(bool);
-        callback save-as-template();
+        // Saves the pipeline's steps to the library as one component.
+        callback save-as-component();
 
         // Opens the file browser for a file-path parameter, filtered to the given
     // comma-separated extensions (empty = any file), starting from the
@@ -3320,14 +3321,14 @@ export component PipelinesPanel inherits Rectangle {
                         padding-top: 8px;
                         spacing: 0px;
 
-                        // -- An opened command group --
-                    if PipelinesPanelState.open-group-name != "": Rectangle {
+                        // -- An opened component --
+                    if PipelinesPanelState.open-component-name != "": Rectangle {
                             // As high as its (wrapping) text needs.
                             height: bar.preferred-height;
                             border-radius: 6px;
-                            background: Theme.cat-group.with-alpha(0.10);
+                            background: Theme.cat-component.with-alpha(0.10);
                             border-width: 1px;
-                            border-color: Theme.cat-group.with-alpha(0.5);
+                            border-color: Theme.cat-component.with-alpha(0.5);
                             bar := HorizontalLayout {
                                 padding-left: 8px;
                                 padding-right: 10px;
@@ -3352,7 +3353,7 @@ export component PipelinesPanel inherits Rectangle {
                                         back-ta := TouchArea {
                                             mouse-cursor: pointer;
                                             clicked => {
-                                                PipelinesPanelState.close-group();
+                                                PipelinesPanelState.close-component();
                                             }
                                         }
                                     }
@@ -3363,7 +3364,7 @@ export component PipelinesPanel inherits Rectangle {
                                     alignment: center;
                                     spacing: 2px;
                                     Text {
-                                        text: "\{PipelinesPanelState.active-pipeline-name} › ◆ \{PipelinesPanelState.open-group-name}";
+                                        text: "\{PipelinesPanelState.active-pipeline-name} › ◆ \{PipelinesPanelState.open-component-name}";
                                         font-size: 12px;
                                         font-weight: 600;
                                         color: Theme.text;
@@ -3372,15 +3373,15 @@ export component PipelinesPanel inherits Rectangle {
                                     }
 
                                     Text {
-                                        text: PipelinesPanelState.open-group-read-only ? "Viewing · read only" : "Changes apply to every use of this group · ◇ exposes a setting";
+                                        text: PipelinesPanelState.open-component-read-only ? "Viewing · read only" : "Changes apply to every use of this component · ◇ exposes a setting";
                                         font-size: 10px;
                                         color: Theme.text-mute;
                                         wrap: word-wrap;
                                         height: self.preferred-height;
                                     }
 
-                                    if PipelinesPanelState.open-group-problem != "": Text {
-                                        text: "⚠ \{PipelinesPanelState.open-group-problem}";
+                                    if PipelinesPanelState.open-component-problem != "": Text {
+                                        text: "⚠ \{PipelinesPanelState.open-component-problem}";
                                         font-size: 10px;
                                         color: Theme.warn;
                                         wrap: word-wrap;
@@ -3391,7 +3392,7 @@ export component PipelinesPanel inherits Rectangle {
                                 VerticalLayout {
                                     alignment: center;
                                     spacing: 4px;
-                                    if !PipelinesPanelState.open-group-read-only: Rectangle {
+                                    if !PipelinesPanelState.open-component-read-only: Rectangle {
                                         width: 66px;
                                         height: 24px;
                                         border-radius: 4px;
@@ -3409,22 +3410,22 @@ export component PipelinesPanel inherits Rectangle {
                                         settings-ta := TouchArea {
                                             mouse-cursor: pointer;
                                             clicked => {
-                                                PipelinesPanelState.open-group-settings();
+                                                PipelinesPanelState.open-component-settings();
                                             }
                                         }
                                     }
 
-                                    if PipelinesPanelState.open-group-read-only: Rectangle {
+                                    if PipelinesPanelState.open-component-read-only: Rectangle {
                                         width: 66px;
                                         height: 24px;
                                         border-radius: 4px;
                                         border-width: 1px;
-                                        border-color: Theme.cat-group;
-                                        background: edit-ta.has-hover ? Theme.cat-group.with-alpha(0.15) : transparent;
+                                        border-color: Theme.cat-component;
+                                        background: edit-ta.has-hover ? Theme.cat-component.with-alpha(0.15) : transparent;
                                         Text {
                                             text: "Edit";
                                             font-size: 11px;
-                                            color: Theme.cat-group;
+                                            color: Theme.cat-component;
                                             horizontal-alignment: center;
                                             vertical-alignment: center;
                                         }
@@ -3432,7 +3433,7 @@ export component PipelinesPanel inherits Rectangle {
                                         edit-ta := TouchArea {
                                             mouse-cursor: pointer;
                                             clicked => {
-                                                PipelinesPanelState.edit-open-group();
+                                                PipelinesPanelState.edit-open-component();
                                             }
                                         }
                                     }
@@ -3483,7 +3484,7 @@ export component PipelinesPanel inherits Rectangle {
                         }
 
                         // -- STEP ROWS --
-                    if PipelinesPanelState.active-commands.length > 0 && !PipelinesPanelState.open-group-read-only: InsertPoint {
+                    if PipelinesPanelState.active-commands.length > 0 && !PipelinesPanelState.open-component-read-only: InsertPoint {
                             insert => {
                                 PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, -1);
                             }
@@ -3512,23 +3513,23 @@ export component PipelinesPanel inherits Rectangle {
                                 duplicate => {
                                     PipelinesPanelState.duplicate-step(cmd.id);
                                 }
-                                group-steps => {
-                                    PipelinesPanelState.group-steps(cmd.id);
+                                create-component => {
+                                    PipelinesPanelState.create-component(cmd.id);
                                 }
-                                open-group => {
-                                    PipelinesPanelState.open-group(cmd.id);
+                                open-component => {
+                                    PipelinesPanelState.open-component(cmd.id);
                                 }
-                                view-group => {
-                                    PipelinesPanelState.view-group(cmd.id);
+                                view-component => {
+                                    PipelinesPanelState.view-component(cmd.id);
                                 }
-                                ungroup => {
-                                    PipelinesPanelState.ungroup(cmd.id);
+                                expand-component => {
+                                    PipelinesPanelState.expand-component(cmd.id);
                                 }
                                 save-to-library => {
-                                    PipelinesPanelState.save-group-to-library(cmd.id);
+                                    PipelinesPanelState.save-component-to-library(cmd.id);
                                 }
-                                update-group => {
-                                    PipelinesPanelState.update-group(cmd.id);
+                                update-component => {
+                                    PipelinesPanelState.update-component(cmd.id);
                                 }
                                 param-changed(n, v) => {
                                     PipelinesPanelState.param-changed(cmd.id, n, v);
@@ -3565,7 +3566,7 @@ export component PipelinesPanel inherits Rectangle {
                                 }
                             }
 
-                            if i < PipelinesPanelState.active-commands.length - 1 && !PipelinesPanelState.open-group-read-only: InsertPoint {
+                            if i < PipelinesPanelState.active-commands.length - 1 && !PipelinesPanelState.open-component-read-only: InsertPoint {
                                 insert => {
                                     PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, i);
                                 }
@@ -3576,7 +3577,7 @@ export component PipelinesPanel inherits Rectangle {
                         }
 
                         // -- ADD STEP - only when there is at least one pipeline --
-                    if PipelinesPanelState.pipelines.length > 0 && !PipelinesPanelState.open-group-read-only: Rectangle {
+                    if PipelinesPanelState.pipelines.length > 0 && !PipelinesPanelState.open-component-read-only: Rectangle {
                             height: 34px;
                             border-radius: 6px;
                             border-width: 1px;
@@ -3889,15 +3890,16 @@ export component PipelinesPanel inherits Rectangle {
                             }
                         }
 
-                        // Save pipeline as template
+                        // Save pipeline as component
                     GhostIconBtn {
                             sz: 34px;
                             icon-sz: 14px;
                             icon: @image-url("../icons/regular-white/floppy-disk.svg");
                             clicked => {
-                                PipelinesPanelState.save-as-template();
+                                PipelinesPanelState.save-as-component();
                             }
                         }
+
                     }
                 }
             }
