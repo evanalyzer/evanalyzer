@@ -254,7 +254,7 @@ pub fn step_problem(project: &ProjectSettings, step: &PipelineStepSettings) -> O
 }
 
 /// Every problem of the project: [`check_components`]'s, and what the
-/// steps do with their values - the classes they create (of the
+/// steps of the enabled pipelines do with their values - the classes they create (of the
 /// classification, twice, by two parameters of one component step), the
 /// channels they read (of the images), an overlap with the class itself.
 pub fn check_project(project: &ProjectSettings) -> Vec<ComponentProblem> {
@@ -345,7 +345,8 @@ impl Subject {
     }
 }
 
-/// What [`check_project`] adds to [`check_components`].
+/// What [`check_project`] adds to [`check_components`] - for the enabled
+/// pipelines, the ones a run runs.
 fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
     let mut problems = Vec::new();
     let channels = image_channels(project);
@@ -372,7 +373,8 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
         }
     }
 
-    for pipeline in &project.pipelines {
+    // A disabled pipeline doesn't run: nothing it does can go wrong.
+    for pipeline in project.pipelines.iter().filter(|p| p.enabled) {
         if let (Some(channels), ImageAddress::Channel(channel)) = (&channels, pipeline.image_source)
             && channel as usize >= channels.fewest
         {
@@ -380,7 +382,8 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                 None,
                 Some((pipeline.id, StepId::UNASSIGNED)),
                 format!(
-                    "Pipeline “{}” starts from channel {channel}, but {}",
+                    "The pipeline “{}” itself starts from channel {channel} (its image source - \
+                     ✎ edits it), but {}",
                     pipeline.name,
                     channels.describe()
                 ),
@@ -399,7 +402,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
         }
         let mut unmade: Vec<Unmade> = Vec::new();
 
-        for (index, step) in pipeline.steps.iter().enumerate() {
+        for step in &pipeline.steps {
             let at = Some((pipeline.id, step.id));
             let instance = match &step.content {
                 StepContent::Component(instance) => Some(instance),
@@ -440,20 +443,18 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                         .join(" › ")
                 ),
             };
-            let this_step = match definition {
-                Some(d) => format!(
-                    "step {} “{}” of “{}”",
-                    index + 1,
-                    d.meta.name,
-                    pipeline.name
-                ),
-                None => format!(
-                    "step {} ({}) of “{}”",
-                    index + 1,
-                    step.command().map_or("", |c| c.name()),
-                    pipeline.name
-                ),
-            };
+            // "the pipeline “Coloc” at #8 (Colocalization)" - the step's id
+            // as its card shows it, so it isn't read as a step inside a
+            // component.
+            let this_step = format!(
+                "the pipeline “{}” at #{} ({})",
+                pipeline.name.trim(),
+                step.id,
+                match definition {
+                    Some(d) => format!("“{}”", d.meta.name),
+                    None => step.command().map_or("", |c| c.name()).to_string(),
+                }
+            );
 
             for command in &resolved {
                 if let Some(channels) = &channels {
@@ -530,9 +531,7 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
 
                 // Classes worked on that no step gives any object - one
                 // warning per class and pipeline, at the first step.
-                if pipeline.enabled
-                    && let Some(assigned) = &assigned
-                {
+                if let Some(assigned) = &assigned {
                     for (path, class) in read_classes(&command.command) {
                         let ObjectClass::Global(n) = class else {
                             continue;
@@ -587,7 +586,15 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                         None => creators.push((
                             n,
                             (pipeline.id, step.id),
-                            this_step.clone(),
+                            match path.as_str() {
+                                "class_for_overlapping_areas" => {
+                                    format!(
+                                        "{}, for its overlap areas)",
+                                        this_step.strip_suffix(')').unwrap_or(&this_step)
+                                    )
+                                }
+                                _ => this_step.clone(),
+                            },
                             who.parameters.clone(),
                         )),
                     }
@@ -659,13 +666,14 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
         let class = class_label(project, ObjectClass::Global(*n));
         let message = if named.is_empty() {
             format!(
-                "Class {class} is also created by {} - objects of both end up in one class",
+                "Class {class} is also given to new objects by {} - objects of both end up in \
+                 one class and can't be told apart",
                 joined(others)
             )
         } else {
             format!(
-                "{named} is class {class}, which {} creates too - objects of both end up in \
-                 one class",
+                "{named} is class {class} - but {} gives new objects that class too; objects \
+                 of both end up in one class and can't be told apart",
                 joined(others)
             )
         };
@@ -1385,8 +1393,8 @@ mod tests {
         assert_eq!(errors.len(), 2, "{:?}", messages(&problems));
         assert_eq!(
             errors[0].message,
-            "Pipeline “Spots” starts from channel 2, but the images have only channels 0–1 \
-             (CY5, FITC)"
+            "The pipeline “Spots” itself starts from channel 2 (its image source - ✎ edits \
+             it), but the images have only channels 0–1 (CY5, FITC)"
         );
         assert_eq!(errors[0].step, Some((PipelineId(1), StepId::UNASSIGNED)));
         assert_eq!(
@@ -1434,15 +1442,16 @@ mod tests {
         );
         assert!(
             problems.iter().any(|p| p.message
-                == "“Output class” (Bead) is class 2 “Bead”, which step 2 (ExtractObjects) of \
-                    “Spots” creates too - objects of both end up in one class"),
+                == "“Output class” (Bead) is class 2 “Bead” - but the pipeline “Spots” at #2 \
+                    (ExtractObjects) gives new objects that class too; objects of both end up \
+                    in one class and can't be told apart"),
             "the component step names its parameter: {:?}",
             messages(&problems)
         );
         assert!(
             problems.iter().any(|p| p.message
-                == "Class 2 “Bead” is also created by step 1 “Spots” of “Spots” - objects of \
-                    both end up in one class"),
+                == "Class 2 “Bead” is also given to new objects by the pipeline “Spots” at #1 \
+                    (“Spots”) - objects of both end up in one class and can't be told apart"),
             "{:?}",
             messages(&problems)
         );
@@ -1563,5 +1572,21 @@ mod tests {
             .unwrap_or_else(|| panic!("{:?}", messages(&problems)));
         assert_eq!(empty.step, Some((PipelineId(1), StepId(2))));
         assert_eq!(empty.severity, Severity::Warning);
+    }
+
+    /// A disabled pipeline doesn't run: its channel that doesn't exist, the
+    /// classes it creates are no problem.
+    #[test]
+    fn a_disabled_pipeline_has_no_problems_of_a_run() {
+        let mut project = spots_project();
+        project.pipelines[0].image_source = ImageAddress::Channel(5);
+        project.pipelines.push(project.pipelines[0].clone());
+        project.pipelines[1].id = PipelineId(2);
+        project.pipelines[0].enabled = false;
+        let problems = check_project(&project);
+        assert_eq!(problems.len(), 1, "{:?}", messages(&problems));
+        assert_eq!(problems[0].step, Some((PipelineId(2), StepId::UNASSIGNED)));
+        project.pipelines[1].enabled = false;
+        assert_eq!(messages(&check_project(&project)), Vec::<String>::new());
     }
 }

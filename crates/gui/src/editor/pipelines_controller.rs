@@ -5270,7 +5270,7 @@ fn problem_place(
             .find(|p| p.id == pipeline_id)
             .map_or_else(|| pipeline_id.0.to_string(), |p| p.name.clone());
         return if step_id == StepId::UNASSIGNED {
-            name
+            format!("{name} · image source")
         } else {
             format!("{name} · #{}", step_id_text(step_id))
         };
