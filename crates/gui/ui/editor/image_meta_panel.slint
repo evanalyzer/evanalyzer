@@ -1,848 +1,313 @@
+// editor/image_meta_panel.slint — "Image info": what the file says about
+// the open image. Pixel size, frame interval and the channels' wavelengths
+// can be corrected right in place (Enter applies; for the whole project);
+// Reset brings back the file's values.
+
 import { ChannelState } from "../api/state.slint";
 import { ImageMetaData, WavelengthOption } from "../api/image_meta.slint";
-import {
-    LineEdit,
-    Button,
-    VerticalBox,
-    Palette,
-} from "std-widgets.slint";
-import { Theme } from "../style.slint";
+import { Ink, InkIcons, InkPanelHead, InkTextField, InkButton, InkButtonKind, InkCaption, InkHint, InkDivider } from "../ink/ink.slint";
 import { FocusBanner } from "pipeline_focus.slint";
 
-// A colour tile of the channel colour chooser.
+// "Key   value" - read only.
+component Fact inherits Rectangle {
+    in property <string> key;
+    in property <string> value;
+
+    height: 22px;
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            width: Ink.label-w;
+            text: root.key;
+            font-size: Ink.fs-sm;
+            color: Ink.text-dim;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.value == "" ? "–" : root.value;
+            font-size: Ink.fs-sm;
+            font-family: Ink.font-mono;
+            color: root.value == "" ? Ink.text-faint : Ink.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+// "edited" - set for the project, not read from the file.
+component EditedTag inherits Text {
+    text: "edited";
+    font-size: Ink.fs-xs;
+    color: Ink.focus;
+    vertical-alignment: center;
+}
+
+// A color tile of a channel's color chooser.
 component WavelengthTile inherits Rectangle {
     in property <WavelengthOption> option;
     in property <bool> selected;
     callback picked(float);
+
     width: 18px;
     height: 18px;
-    background: option.color;
-    border-radius: 4px;
-    border-width: selected ? 3px : 1px;
-    border-color: selected ? Theme.accent : Theme.border;
+    accessible-role: button;
+    accessible-label: root.option.nm + " nm";
+    accessible-checked: root.selected;
+
+    face := Rectangle {
+        background: root.option.color;
+        border-radius: Ink.radius-xs;
+        border-width: root.selected ? 2px : 1px;
+        border-color: root.selected ? Ink.text : Ink.shadow.with-alpha(0.25);
+    }
 
     TouchArea {
         mouse-cursor: pointer;
         clicked => {
-            root.picked(option.nm);
+            root.picked(root.option.nm);
         }
     }
 }
 
-// ----------------------------------------------------------
-// Key/value row - used inside every section.
-component MetaRow inherits Rectangle {
-    in property <string> key;
-    in property <string> value;
-    in property <bool> mute: false;
-    in property <bool> last: false;
-
-    height: 26px;
-
-    HorizontalLayout {
-        alignment: space-between;
-        spacing: 12px;
-        padding-top: 4px;
-        padding-bottom: 4px;
-
-        Text {
-            text: root.key;
-            font-size: 11.5px;
-            color: Theme.text-dim;
-            vertical-alignment: center;
-        }
-
-        Text {
-            text: root.value == "" ? "-" : root.value;
-            font-size: 11.5px;
-            font-family: Theme.font-mono;
-            color: root.mute || root.value == "" ? Theme.text-mute : Theme.text;
-            vertical-alignment: center;
-            horizontal-alignment: right;
-            overflow: elide;
-        }
-    }
-
-    // Hairline divider
-    if !root.last: Rectangle {
-        x: 0px;
-        y: parent.height - 1px;
-        width: 100%;
-        height: 1px;
-        background: Theme.border-soft;
-    }
-}
-
-// Section wrapper - uppercase micro-label + optional right-aligned action slot.
-export component MetaGroup inherits VerticalLayout {
-    in property <string> title;
-    spacing: 0px;
-    padding-bottom: 8px;
-}
-
-// ----------------------------------------------------------
 export component ImageMetaPanel inherits Rectangle {
-    property <bool> editing_px: false;
-    property <bool> editing_frame_interval: false;
-    property <string> frame_interval_edit: "";
-    // Channel whose colour chooser is open, -1 for none.
-    property <int> editing_channel: -1;
+    // The channel whose color chooser is open, -1 none.
+    property <int> editing-channel: -1;
 
-    VerticalBox {
-        alignment: start;
-        spacing: 12px;
-        padding: Theme.panel-content-padding;
+    VerticalLayout {
+        spacing: 0px;
 
-        // ----- HEADER -----
-        HorizontalLayout {
-            alignment: space-between;
-            Text {
-                text: "Image Meta";
-                font-size: 14px;
-                font-weight: 600;
-                color: Theme.text;
-                vertical-alignment: center;
-            }
-
-            Text {
-                text: ImageMetaData.nr_series <= 1 ? "1 series" : ImageMetaData.nr_series + " series";
-                font-size: 11px;
-                font-family: Theme.font-mono;
-                color: Theme.text-mute;
-                vertical-alignment: center;
-            }
+        InkPanelHead {
+            title: "Image info";
+            subtitle: ImageMetaData.image_name;
+            closable: false;
         }
 
-        // ----- FILE CARD -----
-        Rectangle {
-            background: Theme.raised;
-            border-width: 1px;
-            border-color: Theme.border-soft;
-            border-radius: Theme.radius-lg;
-            height: ImageMetaData.nr_series > 1 ? 96px : 56px;
+        Flickable {
+            vertical-stretch: 1;
+            content-height: body.preferred-height;
 
-            VerticalLayout {
-                padding: 10px;
-                spacing: 10px;
+            body := VerticalLayout {
+                padding: Ink.pad-panel;
+                padding-top: 8px;
+                spacing: 6px;
+                alignment: start;
 
-                // Filename row: icon + name + format chip
+                InkHint {
+                    text: "Values from the file - correct a wrong one (Enter); Reset brings back the file's.";
+                }
+
+                // -- The file --
+                Fact {
+                    key: "Series";
+                    value: ImageMetaData.nr_series > 1
+                        ? "\{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series} · \{ImageMetaData.size}"
+                        : ImageMetaData.size;
+                }
+                Fact {
+                    key: "Channels · Z · T";
+                    value: ImageMetaData.dimensions_str;
+                }
+                Fact {
+                    key: "Pixel type";
+                    value: ImageMetaData.pixel_type + (ImageMetaData.is-rgb ? " · color" : "");
+                }
+                Fact {
+                    key: "Magnification";
+                    value: ImageMetaData.magnification;
+                }
+                Fact {
+                    key: "File size";
+                    value: ImageMetaData.storage_size;
+                }
+
+                InkDivider { }
+
+                // -- Calibration: pixel size X / Y / Z --
                 HorizontalLayout {
-                    spacing: 9px;
-                    alignment: start;
-
-                    // Icon plate (gradient backplate so it stands out)
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 6px;
-                        background: @linear-gradient(135deg, Theme.accent-dim 0%, #2A2D33 100%);
-                        Image {
-                            source: @image-url("../icons/regular-white/aperture.svg");
-                            width: 15px;
-                            height: 15px;
-                            colorize: Theme.accent;
+                    spacing: 6px;
+                    Text {
+                        width: Ink.label-w;
+                        text: "Pixel size (nm)";
+                        font-size: Ink.fs-sm;
+                        color: Ink.text-dim;
+                        vertical-alignment: center;
+                    }
+                    px-x := InkTextField {
+                        mono: true;
+                        label: "Pixel size X in nm";
+                        value: ImageMetaData.pixel_size_x;
+                        accepted(t) => {
+                            ImageMetaData.pixel_size_changed(t.to-float(), px-y.text.to-float(), px-z.text.to-float());
                         }
                     }
-
-                    VerticalLayout {
-                        spacing: 1px;
-                        horizontal-stretch: 1;
-                        alignment: center;
-
-                        Text {
-                            text: ImageMetaData.image_name;
-                            font-size: 13px;
-                            font-weight: 500;
-                            color: Theme.text;
-                            overflow: elide;
+                    px-y := InkTextField {
+                        mono: true;
+                        label: "Pixel size Y in nm";
+                        value: ImageMetaData.pixel_size_y;
+                        accepted(t) => {
+                            ImageMetaData.pixel_size_changed(px-x.text.to-float(), t.to-float(), px-z.text.to-float());
                         }
-
-                        Text {
-                            text: (ImageMetaData.pixel_type == "" ? "-" : ImageMetaData.pixel_type) + "  ·  " + (ImageMetaData.storage_size == "" ? "-" : ImageMetaData.storage_size);
-                            font-size: 10.5px;
-                            font-family: Theme.font-mono;
-                            color: Theme.text-mute;
-                            overflow: elide;
+                    }
+                    px-z := InkTextField {
+                        mono: true;
+                        label: "Pixel size Z in nm";
+                        value: ImageMetaData.pixel_size_z;
+                        accepted(t) => {
+                            ImageMetaData.pixel_size_changed(px-x.text.to-float(), px-y.text.to-float(), t.to-float());
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    InkButton {
+                        small: true;
+                        kind: InkButtonKind.quiet;
+                        text: "Reset pixel size";
+                        clicked => {
+                            ImageMetaData.reset_pixel_sizes();
                         }
                     }
                 }
 
-                // Series indicator - only if more than one series
-                if ImageMetaData.nr_series > 1: Rectangle {
-                    height: 32px;
-                    background: Theme.bg;
-                    border-width: 1px;
-                    border-color: Theme.border-soft;
-                    border-radius: Theme.radius-sm;
+                // -- Time --
+                if ImageMetaData.nr_t_stacks > 1 || ImageMetaData.frame_interval_text != "": HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        width: Ink.label-w;
+                        text: "Frame interval (s)";
+                        font-size: Ink.fs-sm;
+                        color: Ink.text-dim;
+                        vertical-alignment: center;
+                    }
+                    InkTextField {
+                        mono: true;
+                        label: "Frame interval in seconds";
+                        placeholder: "not in the file";
+                        value: ImageMetaData.frame_interval_text;
+                        accepted(t) => {
+                            ImageMetaData.frame_interval_changed(t.to-float());
+                        }
+                    }
+                    if ImageMetaData.frame_interval_overridden: InkButton {
+                        small: true;
+                        kind: InkButtonKind.quiet;
+                        text: "Reset";
+                        clicked => {
+                            ImageMetaData.reset_frame_interval();
+                        }
+                    }
+                }
+
+                InkDivider { }
+
+                // -- Channels: color (from the emission wavelength) --
+                InkCaption {
+                    text: "CHANNELS";
+                }
+
+                FocusBanner { }
+
+                for channel in ChannelState.channels: VerticalLayout {
+                    spacing: 4px;
 
                     HorizontalLayout {
-                        padding-left: 10px;
-                        padding-right: 4px;
-                        spacing: 6px;
-                        alignment: stretch;
+                        height: 24px;
+                        spacing: 8px;
 
-                        VerticalLayout {
-                            alignment: center;
-                            Text {
-                                text: "Series " + (ChannelState.selected_series + 1) + " of " + ImageMetaData.nr_series;
-                                font-size: 11px;
-                                color: Theme.text-dim;
-                                vertical-alignment: center;
+                        // A click on the color changes it (RGB images keep theirs).
+                        swatch := Rectangle {
+                            y: (parent.height - self.height) / 2;
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 3px;
+                            background: channel.color;
+                            border-width: swatch-ta.has-hover || root.editing-channel == channel.idx ? 2px : 1px;
+                            border-color: swatch-ta.has-hover || root.editing-channel == channel.idx ? Ink.focus : Ink.shadow.with-alpha(0.25);
+                            accessible-role: button;
+                            accessible-label: "Color of " + channel.name;
+                            swatch-ta := TouchArea {
+                                enabled: !ImageMetaData.is-rgb;
+                                mouse-cursor: ImageMetaData.is-rgb ? default : pointer;
+                                clicked => {
+                                    root.editing-channel = root.editing-channel == channel.idx ? -1 : channel.idx;
+                                }
                             }
                         }
-
-                        VerticalLayout {
-                            alignment: center;
+                        Text {
                             horizontal-stretch: 1;
-                            Text {
-                                text: ImageMetaData.size;
-                                font-size: 11px;
-                                font-family: Theme.font-mono;
-                                color: Theme.text;
-                                horizontal-alignment: right;
-                                vertical-alignment: center;
-                            }
+                            text: channel.name;
+                            font-size: Ink.fs-md;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                            overflow: elide;
                         }
-                        // Prev / next series buttons
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle {
-                                width: 22px;
-                                height: 22px;
-                                border-radius: 4px;
-                                background: prev_ta.has-hover ? Theme.raised : transparent;
-                                animate background { duration: 100ms; }
-                                Image {
-                                    source: @image-url("../icons/regular-white/caret-left.svg");
-                                    width: 11px;
-                                    height: 11px;
-                                    colorize: Theme.text-dim;
-                                }
+                        if channel.wavelength_overridden: EditedTag { }
+                        Text {
+                            text: channel.emission_wave_length > 0 ? channel.emission_wave_length + " nm" : "–";
+                            font-size: Ink.fs-sm;
+                            font-family: Ink.font-mono;
+                            color: channel.wavelength_overridden ? Ink.focus : channel.emission_wave_length > 0 ? Ink.text : Ink.text-faint;
+                            vertical-alignment: center;
+                        }
+                    }
 
-                                prev_ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        if (ChannelState.selected_series > 0) {
-                                            ChannelState.selected_series -= 1;
-                                            ChannelState.trigger_active_series_changed();
+                    // Its color chooser.
+                    if root.editing-channel == channel.idx: Rectangle {
+                        height: chooser.preferred-height;
+                        border-radius: Ink.radius-md;
+                        background: Ink.raised;
+
+                        chooser := VerticalLayout {
+                            padding: 8px;
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 4px;
+                                alignment: start;
+                                for option in ImageMetaData.wavelength_options: WavelengthTile {
+                                    option: option;
+                                    selected: abs(option.nm - channel.emission_wave_length) < 0.5;
+                                    picked(nm) => {
+                                        ImageMetaData.emission_wave_length_changed(channel.idx, nm);
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Text {
+                                    text: "Emission (nm)";
+                                    font-size: Ink.fs-sm;
+                                    color: Ink.text-dim;
+                                    vertical-alignment: center;
+                                }
+                                InkTextField {
+                                    mono: true;
+                                    label: "Emission wavelength of " + channel.name + " in nm";
+                                    value: channel.emission_wave_length > 0 ? channel.emission_wave_length : "";
+                                    accepted(t) => {
+                                        if t.is-float() {
+                                            ImageMetaData.emission_wave_length_changed(channel.idx, t.to-float());
                                         }
                                     }
                                 }
-                            }
-                        }
-
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle {
-                                width: 22px;
-                                height: 22px;
-                                border-radius: 4px;
-                                background: next_ta.has-hover ? Theme.raised : transparent;
-                                animate background { duration: 100ms; }
-                                Image {
-                                    source: @image-url("../icons/regular-white/caret-right.svg");
-                                    width: 11px;
-                                    height: 11px;
-                                    colorize: Theme.text-dim;
-                                }
-
-                                next_ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        if (ChannelState.selected_series < ImageMetaData.nr_series - 1) {
-                                            ChannelState.selected_series += 1;
-                                            ChannelState.trigger_active_series_changed();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ----- ACQUISITION -----
-        VerticalLayout {
-            spacing: 0px;
-            Text {
-                text: "ACQUISITION";
-                font-size: 9.5px;
-                font-weight: 600;
-                letter-spacing: 0.8px;
-                color: Theme.text-mute;
-                vertical-alignment: center;
-                height: 22px;
-            }
-
-            MetaRow {
-                key: "Magnification";
-                value: ImageMetaData.magnification;
-            }
-
-            MetaRow {
-                key: "Channels · Z · T";
-                value: ImageMetaData.dimensions_str;
-            }
-
-            MetaRow {
-                key: "Colormode";
-                value: ImageMetaData.is-rgb ? "Color" : "Grayscale";
-                last: true;
-            }
-
-            MetaRow {
-                key: "Bit depth";
-                value: ImageMetaData.pixel_type;
-                last: true;
-            }
-        }
-
-        // ----- CHANNELS -----
-        VerticalLayout {
-            spacing: 0px;
-            Text {
-                text: "CHANNELS";
-                font-size: 9.5px;
-                font-weight: 600;
-                letter-spacing: 0.8px;
-                color: Theme.text-mute;
-                vertical-alignment: center;
-                height: 22px;
-            }
-
-            FocusBanner { }
-
-            for channel[i] in ChannelState.channels: VerticalLayout {
-                spacing: 0px;
-
-                Rectangle {
-                    height: 24px;
-
-                    HorizontalLayout {
-                        alignment: space-between;
-                        spacing: 8px;
-                        padding-top: 3px;
-                        padding-bottom: 3px;
-
-                        HorizontalLayout {
-                            spacing: 6px;
-                            alignment: start;
-
-                            // Click the swatch to change the channel's colour.
-                            Rectangle {
-                                width: 14px;
-                                height: 14px;
-                                border-radius: 3px;
-                                background: channel.color;
-                                border-width: swatch_ta.has-hover || root.editing_channel == channel.idx ? 2px : 1px;
-                                border-color: swatch_ta.has-hover || root.editing_channel == channel.idx ? Theme.accent : Theme.border;
-                                y: (parent.height - self.height) / 2;
-
-                                // RGB images keep their fixed channel colours.
-                                swatch_ta := TouchArea {
-                                    enabled: !ImageMetaData.is-rgb;
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.editing_channel = root.editing_channel == channel.idx ? -1 : channel.idx;
-                                    }
-                                }
-                            }
-
-                            Text {
-                                text: channel.name;
-                                font-size: 11.5px;
-                                color: Theme.text-dim;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 6px;
-                            alignment: end;
-
-                            // Set for the project instead of read from the image.
-                            if channel.wavelength_overridden: Text {
-                                text: "edited";
-                                font-size: 9.5px;
-                                color: Theme.accent;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                text: channel.emission_wave_length > 0 ? channel.emission_wave_length + " nm" : "-";
-                                font-size: 11.5px;
-                                font-family: Theme.font-mono;
-                                color: channel.wavelength_overridden ? Theme.accent : channel.emission_wave_length > 0 ? Theme.text : Theme.text-mute;
-                                vertical-alignment: center;
-                                horizontal-alignment: right;
-                            }
-                        }
-                    }
-
-                    if i < ChannelState.channels.length - 1 && root.editing_channel != channel.idx: Rectangle {
-                        x: 0px;
-                        y: parent.height - 1px;
-                        width: 100%;
-                        height: 1px;
-                        background: Theme.border-soft;
-                    }
-                }
-
-                // Colour chooser for this channel.
-                if root.editing_channel == channel.idx: Rectangle {
-                    background: Theme.raised;
-                    border-width: 1px;
-                    border-color: Theme.border-soft;
-                    border-radius: Theme.radius-md;
-                    height: 96px;
-
-                    VerticalLayout {
-                        padding: 8px;
-                        spacing: 8px;
-
-                        HorizontalLayout {
-                            spacing: 5px;
-                            alignment: start;
-                            for option in ImageMetaData.wavelength_options: WavelengthTile {
-                                option: option;
-                                selected: option.nm == channel.emission_wave_length;
-                                picked(nm) => {
-                                    ImageMetaData.emission_wave_length_changed(channel.idx, nm);
-                                }
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 6px;
-                            alignment: stretch;
-
-                            Text {
-                                text: "Emission (nm)";
-                                font-size: 9.5px;
-                                letter-spacing: 0.5px;
-                                color: Theme.text-mute;
-                                vertical-alignment: center;
-                            }
-
-                            LineEdit {
-                                height: 28px;
-                                width: 72px;
-                                text: channel.emission_wave_length;
-                                accepted(t) => {
-                                    if (t.is-float() && t.to-float() > 0) {
-                                        ImageMetaData.emission_wave_length_changed(channel.idx, t.to-float());
-                                    }
-                                }
-                            }
-
-                            Rectangle {
-                                horizontal-stretch: 1;
-                            }
-
-                            if channel.wavelength_overridden: Rectangle {
-                                height: 22px;
-                                min-width: 44px;
-                                border-radius: 4px;
-                                background: wl_reset_ta.has-hover ? Theme.panel : transparent;
-                                border-width: 1px;
-                                border-color: Theme.border;
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    padding-right: 8px;
-                                    Text {
-                                        text: "Reset";
-                                        font-size: 10.5px;
-                                        color: Theme.text-dim;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                wl_reset_ta := TouchArea {
-                                    mouse-cursor: pointer;
+                                if channel.wavelength_overridden: InkButton {
+                                    small: true;
+                                    kind: InkButtonKind.quiet;
+                                    text: "Reset";
                                     clicked => {
                                         ImageMetaData.reset_emission_wave_length(channel.idx);
                                     }
                                 }
-                            }
-
-                            Rectangle {
-                                height: 22px;
-                                min-width: 44px;
-                                border-radius: 4px;
-                                background: wl_done_ta.has-hover ? Theme.panel : transparent;
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    padding-right: 8px;
-                                    Text {
-                                        text: "Done";
-                                        font-size: 10.5px;
-                                        color: Theme.accent;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                wl_done_ta := TouchArea {
-                                    mouse-cursor: pointer;
+                                InkButton {
+                                    small: true;
+                                    text: "Done";
                                     clicked => {
-                                        root.editing_channel = -1;
+                                        root.editing-channel = -1;
                                     }
                                 }
                             }
                         }
-                    }
-                }
-            }
-        }
-
-        // ----- DIMENSIONS -----
-        VerticalLayout {
-            spacing: 0px;
-            Text {
-                text: "DIMENSIONS";
-                font-size: 9.5px;
-                font-weight: 600;
-                letter-spacing: 0.8px;
-                color: Theme.text-mute;
-                vertical-alignment: center;
-                height: 22px;
-            }
-
-            MetaRow {
-                key: "Width × Height";
-                value: ImageMetaData.size;
-            }
-
-            MetaRow {
-                key: "Storage size";
-                value: ImageMetaData.storage_size;
-                last: true;
-            }
-        }
-
-        // ----- CALIBRATION (with inline edit mode) -----
-        VerticalLayout {
-            spacing: 0px;
-
-            // Section head with action buttons
-            HorizontalLayout {
-                alignment: space-between;
-                height: 26px;
-                Text {
-                    text: "CALIBRATION";
-                    font-size: 9.5px;
-                    font-weight: 600;
-                    letter-spacing: 0.8px;
-                    color: Theme.text-mute;
-                    vertical-alignment: center;
-                }
-
-                HorizontalLayout {
-                    spacing: 4px;
-                    alignment: end;
-
-                    if root.editing_px: Rectangle {
-                        height: 22px;
-                        min-width: 44px;
-                        border-radius: 4px;
-                        background: reset_ta.has-hover ? Theme.raised : transparent;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        animate background { duration: 100ms; }
-                        HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            Text {
-                                text: "Reset";
-                                font-size: 10.5px;
-                                color: Theme.text-dim;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        reset_ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.editing_px = false;
-                                ImageMetaData.reset_pixel_sizes();
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        height: 22px;
-                        min-width: 44px;
-                        border-radius: 4px;
-                        background: edit_ta.has-hover ? Theme.raised : transparent;
-                        animate background { duration: 100ms; }
-                        HorizontalLayout {
-                            padding-left: 6px;
-                            padding-right: 8px;
-                            spacing: 4px;
-                            alignment: center;
-                            VerticalLayout {
-                                alignment: center;
-                                Image {
-                                    source: root.editing_px ? @image-url("../icons/regular-white/check.svg") : @image-url("../icons/regular-white/pencil-simple.svg");
-                                    width: 10px;
-                                    height: 10px;
-                                    colorize: Theme.accent;
-                                }
-                            }
-
-                            Text {
-                                text: root.editing_px ? "Done" : "Edit";
-                                font-size: 10.5px;
-                                color: Theme.accent;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        edit_ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.editing_px = !root.editing_px;
-                                if (!root.editing_px) {
-                                    ImageMetaData.pixel_size_changed(
-                                        ImageMetaData.pixel_size_x,
-                                        ImageMetaData.pixel_size_y,
-                                        ImageMetaData.pixel_size_z);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Read mode - three mono rows
-            if !root.editing_px: VerticalLayout {
-                spacing: 0px;
-                MetaRow {
-                    key: "Pixel X";
-                    value: ImageMetaData.pixel_size_x + " nm";
-                }
-
-                MetaRow {
-                    key: "Pixel Y";
-                    value: ImageMetaData.pixel_size_y + " nm";
-                }
-
-                MetaRow {
-                    key: "Pixel Z";
-                    value: ImageMetaData.pixel_size_z + " nm";
-                    mute: ImageMetaData.pixel_size_z == 0.0;
-                    last: true;
-                }
-            }
-
-            // Edit mode - three labeled LineEdits in a row
-            if root.editing_px: Rectangle {
-                background: Theme.raised;
-                border-width: 1px;
-                border-color: Theme.border-soft;
-                border-radius: Theme.radius-md;
-                height: 64px;
-
-                HorizontalLayout {
-                    padding: 8px;
-                    spacing: 6px;
-                    alignment: stretch;
-
-                    for axis[i] in [
-                        { label: "X", val: ImageMetaData.pixel_size_x },
-                        { label: "Y", val: ImageMetaData.pixel_size_y },
-                        { label: "Z", val: ImageMetaData.pixel_size_z },
-                    ]: VerticalLayout {
-                        spacing: 3px;
-                        horizontal-stretch: 1;
-
-                        Text {
-                            text: axis.label + "  (nm)";
-                            font-size: 9.5px;
-                            letter-spacing: 0.5px;
-                            color: Theme.text-mute;
-                        }
-
-                        LineEdit {
-                            height: 28px;
-                            text: axis.val;
-                            edited(t) => {
-                                if (t.is-float()) {
-                                    if (i == 0) {
-                                        ImageMetaData.pixel_size_x = t.to-float();
-                                    }
-                                    if (i == 1) {
-                                        ImageMetaData.pixel_size_y = t.to-float();
-                                    }
-                                    if (i == 2) {
-                                        ImageMetaData.pixel_size_z = t.to-float();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ----- TIME (frame interval, with inline edit mode) -----
-        VerticalLayout {
-            spacing: 0px;
-
-            HorizontalLayout {
-                alignment: space-between;
-                height: 26px;
-                Text {
-                    text: "TIME";
-                    font-size: 9.5px;
-                    font-weight: 600;
-                    letter-spacing: 0.8px;
-                    color: Theme.text-mute;
-                    vertical-alignment: center;
-                }
-
-                HorizontalLayout {
-                    spacing: 4px;
-                    alignment: end;
-
-                    if root.editing_frame_interval && ImageMetaData.frame_interval_overridden: Rectangle {
-                        height: 22px;
-                        min-width: 44px;
-                        border-radius: 4px;
-                        background: fi_reset_ta.has-hover ? Theme.raised : transparent;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        animate background { duration: 100ms; }
-                        HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            Text {
-                                text: "Reset";
-                                font-size: 10.5px;
-                                color: Theme.text-dim;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        fi_reset_ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.editing_frame_interval = false;
-                                ImageMetaData.reset_frame_interval();
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        height: 22px;
-                        min-width: 44px;
-                        border-radius: 4px;
-                        background: fi_edit_ta.has-hover ? Theme.raised : transparent;
-                        animate background { duration: 100ms; }
-                        HorizontalLayout {
-                            padding-left: 6px;
-                            padding-right: 8px;
-                            spacing: 4px;
-                            alignment: center;
-                            VerticalLayout {
-                                alignment: center;
-                                Image {
-                                    source: root.editing_frame_interval ? @image-url("../icons/regular-white/check.svg") : @image-url("../icons/regular-white/pencil-simple.svg");
-                                    width: 10px;
-                                    height: 10px;
-                                    colorize: Theme.accent;
-                                }
-                            }
-
-                            Text {
-                                text: root.editing_frame_interval ? "Done" : "Edit";
-                                font-size: 10.5px;
-                                color: Theme.accent;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        fi_edit_ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                if (root.editing_frame_interval) {
-                                    // Only a positive number is stored; anything
-                                    // else leaves the value as it was.
-                                    if (root.frame_interval_edit.is-float() && root.frame_interval_edit.to-float() > 0) {
-                                        ImageMetaData.frame_interval_changed(root.frame_interval_edit.to-float());
-                                    }
-                                } else {
-                                    root.frame_interval_edit = ImageMetaData.frame_interval_text;
-                                }
-                                root.editing_frame_interval = !root.editing_frame_interval;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Read mode - like a channel row: "edited" once set for the project.
-            if !root.editing_frame_interval: Rectangle {
-                height: 26px;
-                HorizontalLayout {
-                    alignment: space-between;
-                    spacing: 12px;
-                    padding-top: 4px;
-                    padding-bottom: 4px;
-
-                    Text {
-                        text: "Frame interval";
-                        font-size: 11.5px;
-                        color: Theme.text-dim;
-                        vertical-alignment: center;
-                    }
-
-                    HorizontalLayout {
-                        spacing: 6px;
-                        alignment: end;
-
-                        if ImageMetaData.frame_interval_overridden: Text {
-                            text: "edited";
-                            font-size: 9.5px;
-                            color: Theme.accent;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: ImageMetaData.frame_interval_text == "" ? "-" : ImageMetaData.frame_interval_text + " s";
-                            font-size: 11.5px;
-                            font-family: Theme.font-mono;
-                            color: ImageMetaData.frame_interval_overridden ? Theme.accent : ImageMetaData.frame_interval_text == "" ? Theme.text-mute : Theme.text;
-                            vertical-alignment: center;
-                            horizontal-alignment: right;
-                        }
-                    }
-                }
-            }
-
-            // Edit mode - one input in seconds.
-            if root.editing_frame_interval: Rectangle {
-                background: Theme.raised;
-                border-width: 1px;
-                border-color: Theme.border-soft;
-                border-radius: Theme.radius-md;
-                height: 64px;
-
-                VerticalLayout {
-                    padding: 8px;
-                    spacing: 3px;
-
-                    Text {
-                        text: "Frame interval  (s)";
-                        font-size: 9.5px;
-                        letter-spacing: 0.5px;
-                        color: Theme.text-mute;
-                    }
-
-                    LineEdit {
-                        height: 28px;
-                        input-type: InputType.decimal;
-                        text <=> root.frame_interval_edit;
                     }
                 }
             }

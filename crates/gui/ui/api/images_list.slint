@@ -1,6 +1,20 @@
 // api/images_list.slint — the Rust interface of editor/images_list_panel.slint: the state Rust
 // sets, the callbacks it answers.
 
+// How far the images of a well are: none there, not looked at yet, seen
+// in a preview, analysed.
+export enum WellState { empty, new, preview, analysed }
+
+// A well of the plate the images are grouped into (by the project's plate
+// settings). `row`/`col` count from 0; `name` is "C3".
+export struct PlateWell {
+    row: int,
+    col: int,
+    name: string,
+    image-count: int,
+    state: WellState,
+}
+
 // ----------------------------------------------------------
 export struct ImageItemData {
     name: string,
@@ -33,4 +47,14 @@ export global ImagesListState {
     // table or after a folder scan); -1 means "no scroll request".
     in-out property <int> scroll_to_image_index: -1;
     in property <[ImageItemData]> images_list: [];
+
+    // -- The plate view (not filled by Rust yet) --
+    in property <int> plate-rows: 0;
+    in property <int> plate-cols: 0;
+    in property <[PlateWell]> plate-wells: [];
+    // Index into `plate-wells`; -1 none.
+    in-out property <int> selected-well: -1;
+    // The images of the selected well.
+    in property <[ImageItemData]> well-images: [];
+    callback well-selected(int);
 }

@@ -11,7 +11,7 @@
 //   ┌------------------------------------------------------------------┐
 //   │  Add step               After step 4 of "Nucleus pipeline"   ✕   │   ← header strip (44)
 //   ├------------------------------------------------------------------┤
-//   │  🔍  Search commands…                              ⌘K            │   ← search (52)
+//   │  🔍  Search commands…                                            │   ← search
 //   │                                                                  │
 //   │  All · Preprocess · Segment · Instance Seg. · Measure · Object   │   ← filter chips (40)
 //   ├----------------------------┬-------------------------------------┤
@@ -39,10 +39,11 @@
 //   - insert-after-idx   : int            - 0-based slot; -1 means "append"
 //   confirm(int)  →  insert this command id at (target-pipeline, insert-after-idx)
 //   toggle-favorite(int), cancel().
+import { InkSearchField } from "../ink/ink.slint";
 import { StepCategory } from "../api/pipelines.slint";
 import { CommandDef, PickerStyle } from "../api/command_selection.slint";
 
-import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 import { Theme } from "../style.slint";
@@ -624,60 +625,16 @@ export component CommandSelectionDialog inherits Dialog {
                 background: Theme.border-soft;
             }
 
-            Rectangle {
-                height: 56px;
-                background: Theme.panel;
-                HorizontalLayout {
-                    padding-left: 16px;
-                    padding-right: 16px;
-                    padding-top: 10px;
-                    padding-bottom: 10px;
-                    Rectangle {
-                        height: 36px;
-                        border-radius: 6px;
-                        background: Theme.bg;
-                        border-width: 1px;
-                        border-color: Theme.border-soft;
-                        HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            spacing: 10px;
-                            alignment: stretch;
-                            Image {
-                                width: 14px;
-                                height: 14px;
-                                y: (parent.height - self.height) / 2;
-                                source: @image-url("../icons/regular-gray/magnifying-glass.svg");
-                                colorize: Theme.text-mute;
-                            }
-
-                            LineEdit {
-                                placeholder-text: "Search commands…";
-                                text <=> root.query;
-                                font-size: 12px;
-                                edited(t) => {
-                                    root.query-changed(t);
-                                }
-                            }
-
-                            Rectangle {
-                                width: 32px;
-                                height: 18px;
-                                y: (parent.height - 18px) / 2;
-                                border-radius: 3px;
-                                background: Theme.raised;
-                                border-width: 1px;
-                                border-color: Theme.border-soft;
-                                Text {
-                                    text: "⌘K";
-                                    color: Theme.text-mute;
-                                    font-size: 9.5px;
-                                    font-family: Theme.font-mono;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                padding-top: 10px;
+                padding-bottom: 4px;
+                InkSearchField {
+                    placeholder: "Search commands…";
+                    text <=> root.query;
+                    edited(t) => {
+                        root.query-changed(t);
                     }
                 }
             }

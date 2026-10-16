@@ -3,11 +3,16 @@
 // exist). Selecting one opens it.
 
 import { ImageItemData, ImagesListState } from "../api/images_list.slint";
+import { LayoutState } from "../api/layout.slint";
+import { PlateView } from "plate_view.slint";
 import { ListView } from "std-widgets.slint";
-import { Ink, InkIcons, InkPanelHead, InkSearchField, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkHint } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanelHead, InkSearchField, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkHint, InkSegmented, InkCaption } from "../ink/ink.slint";
 
 export component ImagesListPanel inherits Rectangle {
     property <length> row-h: 38px;
+    property <bool> plate: LayoutState.images-as-plate;
+    property <int> well: ImagesListState.selected-well;
+    property <string> well-name: root.well >= 0 && root.well < ImagesListState.plate-wells.length ? ImagesListState.plate-wells[root.well].name : "";
 
     // Ctrl+F: the search field.
     property <int> focus-search-mirror: ImagesListState.focus_search_requested;
@@ -35,6 +40,15 @@ export component ImagesListPanel inherits Rectangle {
 
             HorizontalLayout {
                 spacing: 4px;
+                InkSegmented {
+                    width: 104px;
+                    label: "Show the images as";
+                    model: ["List", "Plate"];
+                    selected: root.plate ? 1 : 0;
+                    picked(i) => {
+                        LayoutState.images-as-plate = i == 1;
+                    }
+                }
                 search := InkSearchField {
                     placeholder: "Search images";
                     text: ImagesListState.filter_text;
@@ -72,7 +86,34 @@ export component ImagesListPanel inherits Rectangle {
             }
         }
 
-        Rectangle {
+        // -- Plate: the wells, the selected well's images --
+        if root.plate: VerticalLayout {
+            vertical-stretch: 1;
+            padding-left: 10px;
+            padding-right: 10px;
+            spacing: 6px;
+            PlateView { }
+            if root.well-name != "": InkCaption {
+                text: "WELL " + root.well-name + " · " + ImagesListState.well-images.length + " IMAGES";
+            }
+            ListView {
+                vertical-stretch: 1;
+                min-height: 3 * root.row-h;
+                for data in ImagesListState.well-images: InkListRow {
+                    height: root.row-h;
+                    title: data.name;
+                    subtitle: data.image_dimension + " · " + data.image_size;
+                    mono: true;
+                    icon: InkIcons.images;
+                    mark: data.has_annotations ? Ink.focus : transparent;
+                    clicked => {
+                        ImagesListState.image_selected(data.path);
+                    }
+                }
+            }
+        }
+
+        if !root.plate: Rectangle {
             vertical-stretch: 1;
 
             property <int> scroll-index: ImagesListState.scroll_to_image_index;

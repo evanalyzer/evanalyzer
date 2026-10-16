@@ -821,11 +821,11 @@ mod tests {
 
     #[test]
     fn painting_an_annotation_updates_the_class_counts_right_away() {
-        use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+        use crate::editor::test_support::{test_ui_window, ui_state_with_window};
         use crate::helper::ui_thread::drain_ui_queue;
         use crate::{ClassificationState, ToolState, ViewportObjectState};
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, project_with_one_image());
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, project_with_one_image());
         let nuclei = {
             use evanalyzer_app::prelude::classification_ext::ClassificationExt;
             let mut project = ui_state.get_project_write();
@@ -973,7 +973,6 @@ mod tests {
 
     struct Live {
         ui: AppWindow,
-        _results_ui: crate::ResultsWindow,
         ui_state: Arc<UiState>,
         controller: Arc<ViewPortObjectController>,
     }
@@ -981,9 +980,9 @@ mod tests {
     /// A controller on a live window with its callbacks attached, an image
     /// in the cache and - with `class` - an object class selected to paint.
     fn live_controller(class: bool) -> Live {
-        use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, project_with_one_image());
+        use crate::editor::test_support::{test_ui_window, ui_state_with_window};
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, project_with_one_image());
         if class {
             let mut project = ui_state.get_project_write();
             let id = project.classification.add_class(Class {
@@ -1002,7 +1001,6 @@ mod tests {
         controller.attach_callbacks();
         Live {
             ui,
-            _results_ui: results_ui,
             ui_state,
             controller,
         }
@@ -1246,7 +1244,7 @@ mod tests {
 
     #[test]
     fn a_marker_placed_before_any_image_was_drawn_has_no_label() {
-        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui = crate::editor::test_support::test_ui_window();
         let ui_state = test_ui_state_with_project(project_with_one_image());
         let (controller, _) = controller_for(ui.as_weak(), &ui_state);
         controller.attach_callbacks();

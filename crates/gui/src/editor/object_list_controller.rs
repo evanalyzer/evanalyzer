@@ -932,11 +932,11 @@ mod tests {
     //
     // `object_list_controller.rs` was flagged (see the production-readiness
     // audit) as one of the files where a callback-wiring bug shipped
-    // specifically because it wasn't exercised through `test_ui_windows()` -
+    // specifically because it wasn't exercised through `test_ui_window()` -
     // only through pure-function tests above. These tests close that gap for
     // the four `ObjectListState` callbacks.
 
-    use crate::editor::test_support::test_ui_windows;
+    use crate::editor::test_support::test_ui_window;
     use crate::editor::viewport_controller::ViewportController;
 
     fn make_controller_with_ui(
@@ -966,7 +966,7 @@ mod tests {
             .preview_objects
             .push(object_with_class(2, 1, true)); // preview, combined index 1
 
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller_with_ui(ui.as_weak(), project);
         let controller = Arc::new(controller);
         controller.attach_callbacks();

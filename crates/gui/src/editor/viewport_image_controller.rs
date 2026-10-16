@@ -1079,7 +1079,7 @@ mod tests {
 
     // -- attach_callbacks (live AppWindow) --------------------------------------
 
-    use crate::editor::test_support::test_ui_windows;
+    use crate::editor::test_support::test_ui_window;
 
     fn make_controller_with_ui(
         ui: slint::Weak<AppWindow>,
@@ -1122,7 +1122,7 @@ mod tests {
         // `attach_callbacks` had just installed before it ever started a
         // timer, so the *first* Play click of every session silently did
         // nothing (it took a second click to actually start playback).
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 
@@ -1141,7 +1141,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_toggling_play_off_stops_the_timer() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 
@@ -1183,21 +1183,16 @@ mod tests {
         take_task(&controller.viewport_controller.drawing_tasks.low_res_task)
     }
 
-    fn attached() -> (
-        AppWindow,
-        crate::ResultsWindow,
-        Arc<UiState>,
-        Arc<ViewportImageController>,
-    ) {
-        let (ui, results_ui) = test_ui_windows();
+    fn attached() -> (AppWindow, Arc<UiState>, Arc<ViewportImageController>) {
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
-        (ui, results_ui, ui_state, controller)
+        (ui, ui_state, controller)
     }
 
     #[test]
     fn the_memory_settings_in_effect_are_shown_when_the_settings_dialog_opens() {
-        let (ui, _results_ui, _, controller) = attached();
+        let (ui, _, controller) = attached();
         let state = ui.global::<ViewportMemoryState>();
         state.set_tile_history_budget_mb(-1);
         state.set_auto_cache_note("".into());
@@ -1221,7 +1216,7 @@ mod tests {
 
     #[test]
     fn applying_the_settings_dialog_stores_and_saves_the_new_memory_settings() {
-        let (ui, _results_ui, ui_state, controller) = attached();
+        let (ui, ui_state, controller) = attached();
         let state = ui.global::<ViewportMemoryState>();
         state.set_tile_history_enabled(true);
         state.set_tile_history_budget_mb(77);
@@ -1253,7 +1248,7 @@ mod tests {
 
     #[test]
     fn applying_an_unchanged_settings_dialog_saves_nothing() {
-        let (ui, _results_ui, ui_state, _) = attached();
+        let (ui, ui_state, _) = attached();
         let before = ui_state.viewport_memory_settings();
         let mut saved = before.clone();
         saved.tile_history_budget_mb += 1;
@@ -1268,7 +1263,7 @@ mod tests {
 
     #[test]
     fn resetting_the_settings_dialog_shows_the_defaults_without_applying_them() {
-        let (ui, _results_ui, _, controller) = attached();
+        let (ui, _, controller) = attached();
         let state = ui.global::<ViewportMemoryState>();
         state.set_tile_history_budget_mb(12345);
         let before = controller.viewport_controller.memory_settings();
@@ -1284,7 +1279,7 @@ mod tests {
 
     #[test]
     fn viewport_size_pan_and_zoom_reports_reach_the_viewport_state() {
-        let (ui, _results_ui, _, controller) = attached();
+        let (ui, _, controller) = attached();
         let view = ui.global::<ViewportSlintState>();
 
         view.invoke_report_viewport_size(640.0, 480.0);
@@ -1301,6 +1296,79 @@ mod tests {
         assert_eq!(vp.zoom, 2.0);
         assert_eq!((vp.offset_x, vp.offset_y), (-3.0, 4.0));
         assert_eq!((vp.mouse_pos_x, vp.mouse_pos_y), (11.0, 12.0));
+    }
+
+    /// A click in the navigator moves the view there - centered on the
+    /// clicked point, reported like a pan on the image.
+    #[test]
+    fn a_click_in_the_navigator_centers_the_view_on_that_point() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::LogicalPosition;
+        use slint::platform::{PointerEventButton, WindowEvent};
+
+        let (ui, _, controller) = attached();
+        ui.window().set_size(slint::LogicalSize::new(1500.0, 900.0));
+        let view = ui.global::<ViewportSlintState>();
+        // A quarter of the image's width and height in view, at its top left.
+        view.set_nav_x(0.0);
+        view.set_nav_y(0.0);
+        view.set_nav_width(0.25);
+        view.set_nav_height(0.25);
+
+        let nav = ElementHandle::find_by_accessible_label(&ui, "Navigator")
+            .next()
+            .expect("shown while zoomed in");
+        let (top, size) = (nav.absolute_position(), nav.size());
+        // Its middle: the middle of the image.
+        let at = LogicalPosition::new(top.x + size.width / 2.0, top.y + size.height / 2.0);
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+
+        // The image is 4 viewports wide; its middle in the middle of the view:
+        // shifted left by 1.5 viewports.
+        let vp = controller
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap();
+        let (w, h) = (vp.viewport_width, vp.viewport_height);
+        assert!(w > 0.0 && h > 0.0, "{w} x {h}");
+        assert!(
+            (vp.offset_x + 1.5 * w).abs() < 2.0,
+            "{} for a {w} wide view",
+            vp.offset_x
+        );
+        assert!(
+            (vp.offset_y + 1.5 * h).abs() < 2.0,
+            "{} for a {h} high view",
+            vp.offset_y
+        );
+    }
+
+    #[test]
+    fn the_navigator_is_hidden_while_the_whole_image_is_in_view() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _, _controller) = attached();
+        let view = ui.global::<ViewportSlintState>();
+        let shown = || {
+            ElementHandle::find_by_accessible_label(&ui, "Navigator")
+                .next()
+                .is_some()
+        };
+
+        // No image yet.
+        assert!(!shown());
+        view.set_nav_width(1.0);
+        view.set_nav_height(1.0);
+        assert!(!shown());
+        view.set_nav_width(0.5);
+        assert!(shown());
     }
 
     #[test]
@@ -1371,7 +1439,7 @@ mod tests {
 
     #[test]
     fn channel_state_callbacks_update_the_project() {
-        let (ui, _results_ui, ui_state, _) = attached();
+        let (ui, ui_state, _) = attached();
         let state = ui.global::<ChannelState>();
 
         state.invoke_channel_state_changed(
@@ -1414,7 +1482,7 @@ mod tests {
 
     #[test]
     fn in_grayscale_the_channel_list_shows_the_one_channel_left_visible() {
-        let (ui, _results_ui, ui_state, controller) = attached();
+        let (ui, ui_state, controller) = attached();
         let state = ui.global::<ChannelState>();
         state.set_channels(
             std::rc::Rc::new(slint::VecModel::from(vec![
@@ -1502,7 +1570,7 @@ mod tests {
 
     #[test]
     fn the_pixel_info_shows_the_values_and_position_under_the_cursor() {
-        let (ui, _results_ui, ui_state, controller) = attached();
+        let (ui, ui_state, controller) = attached();
         controller.update_channel_options_in_project(
             vec![],
             2,
@@ -1534,7 +1602,7 @@ mod tests {
 
     #[test]
     fn the_pixel_info_keeps_its_last_value_while_the_cursor_is_off_the_image() {
-        let (ui, _results_ui, _, controller) = attached();
+        let (ui, _, controller) = attached();
         seed_high_res_frame(&controller, 0.5);
         ui.global::<ImagePixelInfo>().set_pixel_value("old".into());
 
@@ -1549,7 +1617,7 @@ mod tests {
 
     #[test]
     fn mouse_moves_update_the_pixel_info_at_once_then_throttled() {
-        let (ui, _results_ui, _, controller) = attached();
+        let (ui, _, controller) = attached();
         seed_high_res_frame(&controller, 0.5);
         *controller.last_pixel_info_sync.lock().unwrap() = Instant::now() - Duration::from_secs(1);
 
@@ -1580,7 +1648,7 @@ mod tests {
 
     #[test]
     fn playback_steps_through_the_frames_and_wraps_around() {
-        let (ui, _results_ui, _, _controller) = attached();
+        let (ui, _, _controller) = attached();
         let state = ui.global::<ChannelState>();
         ui.global::<ImageMetaData>().set_nr_t_stacks(3);
         state.set_play_back_speed_hz(10);
@@ -1596,7 +1664,7 @@ mod tests {
 
     #[test]
     fn playback_without_frames_stays_put() {
-        let (ui, _results_ui, _, controller) = attached();
+        let (ui, _, controller) = attached();
         let state = ui.global::<ChannelState>();
         ui.global::<ImageMetaData>().set_nr_t_stacks(0);
         // A speed of zero falls back to one frame per second.

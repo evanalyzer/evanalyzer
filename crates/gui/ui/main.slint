@@ -3,7 +3,7 @@ import { ToolbarState } from "api/toolbar.slint";
 import { RetainedTile, ToolState, ViewportObjectState, ViewportState } from "api/viewport.slint";
 import { ImageMetaData } from "api/image_meta.slint";
 import { ProjectSettingsSlint, ProjectSettingsState, ViewportMemoryState } from "api/project_settings.slint";
-import { ImageItemData, ImagesListState } from "api/images_list.slint";
+import { ImageItemData, ImagesListState, PlateWell, WellState } from "api/images_list.slint";
 import { ClassificationState } from "api/classification.slint";
 import { ClassSettingsSlint, ClassificationSettingsState } from "api/classification_class_edit.slint";
 import { ObjectItemDataSlint, ObjectListState } from "api/object_list.slint";
@@ -22,15 +22,6 @@ import { ResultsListState } from "api/results_list.slint";
 import { ResultsState } from "api/results.slint";
 import { ExportDialogState } from "api/export.slint";
 import { FileBrowserCrumb, FileBrowserEntry, FileBrowserMode, FileBrowserPlace, FileBrowserState } from "api/file_browser.slint";
-import {
-    Button,
-    ComboBox,
-    VerticalBox,
-    HorizontalBox,
-    GroupBox,
-    Switch,
-    StandardListView,
-} from "std-widgets.slint";
 
 import { GlobalShortcuts, DialogShortcuts } from "shortcuts.slint";
 
@@ -107,6 +98,8 @@ export {
     ImageMetaData,
     ImagesListState,
     ImageItemData,
+    PlateWell,
+    WellState,
     ClassificationState,
     ClassificationSettingsState,
     ClassSettingsSlint,

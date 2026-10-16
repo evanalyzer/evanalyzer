@@ -295,7 +295,7 @@ fn normalize_url(typed: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+    use crate::editor::test_support::{test_ui_window, ui_state_with_window};
     use crate::helper::ui_thread::drain_ui_queue;
     use evanalyzer_app::backends::remote::Worker;
     use std::io;
@@ -359,17 +359,15 @@ mod tests {
 
     struct Fixture {
         ui: AppWindow,
-        _results_ui: crate::ResultsWindow,
         ui_state: Arc<UiState>,
         connection: Arc<ConnectionController>,
     }
 
     fn fixture() -> Fixture {
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
         let (_, project) = crate::editor::project_controller::tests::make_controller_on(
             ui.as_weak(),
-            results_ui.as_weak(),
             ui_state.clone(),
         );
         let connection = Arc::new(ConnectionController::new(
@@ -380,7 +378,6 @@ mod tests {
         connection.attach_callbacks();
         Fixture {
             ui,
-            _results_ui: results_ui,
             ui_state,
             connection,
         }

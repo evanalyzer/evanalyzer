@@ -1369,7 +1369,7 @@ mod tests {
     // -- rendering real frames (UI updates applied via the test queue) -------
 
     use crate::editor::test_support::{
-        project_with_fixture_image, test_ui_windows, ui_state_with_windows,
+        project_with_fixture_image, test_ui_window, ui_state_with_window,
     };
     use crate::helper::ui_thread::drain_ui_queue;
     use crate::{AppWindow, ViewportState as ViewportSlintState};
@@ -1378,15 +1378,14 @@ mod tests {
 
     struct Render {
         ui: AppWindow,
-        _results_ui: crate::ResultsWindow,
         app_state: Arc<UiState>,
         worker: Arc<ViewportWorker>,
         buffers: RenderBuffers,
     }
 
     fn render_fixture(project: evanalyzer_app::project::ProjectWithRuntime) -> Render {
-        let (ui, results_ui) = test_ui_windows();
-        let app_state = ui_state_with_windows(&ui, &results_ui, project);
+        let ui = test_ui_window();
+        let app_state = ui_state_with_window(&ui, project);
         let cache = Arc::new(ViewportCache::new(app_state.clone()));
         let viewport = Arc::new(ViewportController::new(
             ui.as_weak(),
@@ -1412,7 +1411,6 @@ mod tests {
         ));
         Render {
             ui,
-            _results_ui: results_ui,
             app_state,
             worker,
             buffers: RenderBuffers::new(),

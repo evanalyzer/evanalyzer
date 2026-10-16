@@ -866,7 +866,7 @@ mod tests {
     // -- the dialog, driven through its UI callbacks -------------------------
 
     use crate::AppWindow;
-    use crate::editor::test_support::test_ui_windows;
+    use crate::editor::test_support::test_ui_window;
     use crate::helper::ui_thread::drain_ui_queue;
     use evanalyzer_app::backends::local::LocalBackend;
     use slint::Model;
@@ -887,7 +887,7 @@ mod tests {
         std::fs::write(dir.path().join(".hidden"), "").unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub").join("b.evaproj"), "{}").unwrap();
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let browser = Arc::new(FileBrowser::new(
             ui.as_weak(),
             Arc::new(LocalBackend::default()) as Arc<dyn Backend>,

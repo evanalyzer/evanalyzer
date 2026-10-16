@@ -1,13 +1,94 @@
 // results/results_view.slint — the results of an analysis, in the main
-// window's Results mode: the views (List, Plate, Charts) on the left rail,
-// the breadcrumb (with the Z/T stepper), and the view shown.
+// window's Results mode: a head with the view (List, Plate, Charts), where
+// in the plate one is (the breadcrumb), the Z/T stepper and Export; below
+// it the view.
 
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
-import { Ink, InkBanner, InkTone } from "../ink/ink.slint";
-import { ResultsRail, ResultsBreadcrumb } from "results_common.slint";
+import { Ink, InkIcons, InkBanner, InkTone, InkSegmented, InkButton } from "../ink/ink.slint";
+import { GlobalPlaneStepper } from "results_common.slint";
 import { ResultsListView } from "results_list.slint";
 import { ResultsMatrixView } from "results_matrix.slint";
 import { ResultsChartsView } from "results_charts.slint";
+
+// The head: the view, the breadcrumb, Z/T, Export.
+component ResultsHead inherits Rectangle {
+    height: Ink.head-h;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        VerticalLayout {
+            alignment: center;
+            InkSegmented {
+                width: 190px;
+                label: "Results view";
+                model: ["List", "Plate", "Charts"];
+                selected: ResultsState.rail-mode == ResultsRailMode.matrix ? 1 : ResultsState.rail-mode == ResultsRailMode.charts ? 2 : 0;
+                picked(i) => {
+                    ResultsState.rail-mode = i == 1 ? ResultsRailMode.matrix : i == 2 ? ResultsRailMode.charts : ResultsRailMode.list;
+                    ResultsState.rail-mode-selected(ResultsState.rail-mode);
+                }
+            }
+        }
+
+        // Where one is: Plate › Well C3 › D3_03.vsi - a click goes back.
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: 6px;
+            for item[i] in ResultsState.breadcrumb: HorizontalLayout {
+                spacing: 6px;
+                if i > 0: Text {
+                    text: "›";
+                    color: Ink.text-faint;
+                    font-size: Ink.fs-md;
+                    vertical-alignment: center;
+                }
+                crumb-ta := TouchArea {
+                    enabled: i < ResultsState.breadcrumb.length - 1;
+                    mouse-cursor: crumb-ta.enabled ? pointer : default;
+                    clicked => {
+                        ResultsState.breadcrumb-nav(i);
+                    }
+                    Text {
+                        text: item.label;
+                        font-size: Ink.fs-md;
+                        font-weight: i == ResultsState.breadcrumb.length - 1 ? 600 : 400;
+                        color: i == ResultsState.breadcrumb.length - 1 ? Ink.text : crumb-ta.has-hover ? Ink.text : Ink.text-dim;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            GlobalPlaneStepper { }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            InkButton {
+                text: "Export…";
+                icon: InkIcons.export;
+                clicked => {
+                    ResultsState.export-dialog-open();
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Ink.border-soft;
+    }
+}
 
 export component ResultsView inherits Rectangle {
     background: Ink.panel;
@@ -15,13 +96,11 @@ export component ResultsView inherits Rectangle {
     HorizontalLayout {
         spacing: 0px;
 
-        ResultsRail { }
-
         VerticalLayout {
             horizontal-stretch: 1;
             spacing: 0px;
 
-            ResultsBreadcrumb { }
+            ResultsHead { }
 
             // The analysis that wrote this database didn't finish: say so
             // before anyone draws conclusions from the numbers.

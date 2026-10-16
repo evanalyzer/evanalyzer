@@ -912,7 +912,7 @@ impl ProjectController {
     /// Moves the window to `backend` - a server, or back to this computer:
     /// closes the open project (its paths mean the old backend's files),
     /// points the file dialogs there, takes on that user's preferences,
-    /// closes the results window, and follows an analysis running on a
+    /// leaves the results, and follows an analysis running on a
     /// server. The old backend's connection is closed.
     pub(crate) fn switch_backend(self: &Arc<Self>, backend: Arc<dyn Backend>) {
         info!("Working on {} from now on", backend.description());
@@ -927,18 +927,14 @@ impl ProjectController {
 
         let manager = Arc::clone(self);
         crate::helper::ui_thread::invoke_from_event_loop(move || {
-            let (Some(ui), Some(results_ui)) = (
-                manager.ui.upgrade(),
-                manager.app_state.results_ui_handle.upgrade(),
-            ) else {
+            let Some(ui) = manager.ui.upgrade() else {
                 return;
             };
-            crate::apply_appearance(&ui, &results_ui, &manager.app_state);
+            crate::apply_appearance(&ui, &manager.app_state);
             // The results of the other backend's project are gone.
-            if results_ui.global::<crate::LayoutState>().get_mode() == crate::WorkspaceMode::Results {
-                results_ui
-                    .global::<crate::LayoutState>()
-                    .set_mode(crate::WorkspaceMode::Pipelines);
+            let layout = ui.global::<crate::LayoutState>();
+            if layout.get_mode() == crate::WorkspaceMode::Results {
+                layout.set_mode(crate::WorkspaceMode::Pipelines);
             }
         })
         .ok();
@@ -1348,18 +1344,13 @@ pub(crate) mod tests {
     use crate::editor::viewport_controller::ViewportController;
 
     fn make_controller() -> (Arc<UiState>, Arc<ProjectController>) {
-        make_controller_on(
-            slint::Weak::default(),
-            slint::Weak::default(),
-            test_ui_state(),
-        )
+        make_controller_on(slint::Weak::default(), test_ui_state())
     }
 
     /// All controllers wired to `ui` (a dead `Weak` for project-state-only
     /// tests, a real window for UI tests).
     pub(crate) fn make_controller_on(
         ui: slint::Weak<AppWindow>,
-        results_ui: slint::Weak<crate::ResultsWindow>,
         ui_state: Arc<UiState>,
     ) -> (Arc<UiState>, Arc<ProjectController>) {
         let viewport_controller = Arc::new(ViewportController::new(
@@ -1398,10 +1389,8 @@ pub(crate) mod tests {
                 ),
             ),
         ));
-        let project_settings_controller = Arc::new(ProjectSettingsController::new(
-            ui.clone(),
-            ui_state.clone(),
-        ));
+        let project_settings_controller =
+            Arc::new(ProjectSettingsController::new(ui.clone(), ui_state.clone()));
         let classification_controller = Arc::new(ClassificationController::new(
             ui.clone(),
             ui_state.clone(),
@@ -1423,7 +1412,7 @@ pub(crate) mod tests {
             ),
         ));
         let results_table_controller = Arc::new(ResultsStateController::new(
-            results_ui.clone(),
+            ui.clone(),
             ui_state.clone(),
             image_list_controller.clone(),
         ));
@@ -1588,13 +1577,12 @@ pub(crate) mod tests {
     #[test]
     fn opening_a_project_shows_its_images_in_the_list() {
         // What `--project` does at startup, too.
-        use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+        use crate::editor::test_support::{test_ui_window, ui_state_with_window};
         use crate::helper::ui_thread::drain_ui_queue;
         use slint::Model;
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
-        let (_, controller) =
-            make_controller_on(ui.as_weak(), results_ui.as_weak(), ui_state.clone());
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let (_, controller) = make_controller_on(ui.as_weak(), ui_state.clone());
         let image = crate::editor::test_support::fixture_image_path();
         let mut settings = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
         settings.images.root = Some(image.parent().unwrap().to_path_buf());
@@ -1810,28 +1798,25 @@ pub(crate) mod tests {
 
     // -- toolbar and dialogs, with a window ---------------------------------
 
-    use crate::editor::test_support::{choose_file, test_ui_windows, ui_state_with_windows};
+    use crate::editor::test_support::{choose_file, test_ui_window, ui_state_with_window};
     use crate::helper::ui_thread::drain_ui_queue;
     use evanalyzer_app::project::ProjectWithRuntime;
 
     struct Window {
         ui: AppWindow,
-        _results_ui: crate::ResultsWindow,
         ui_state: Arc<UiState>,
         controller: Arc<ProjectController>,
         dir: tempfile::TempDir,
     }
 
     fn with_window(project: ProjectWithRuntime) -> Window {
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, project);
-        let (ui_state, controller) =
-            make_controller_on(ui.as_weak(), results_ui.as_weak(), ui_state);
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, project);
+        let (ui_state, controller) = make_controller_on(ui.as_weak(), ui_state);
         controller.attach_callbacks();
         controller.template_controller.attach_callbacks();
         Window {
             ui,
-            _results_ui: results_ui,
             ui_state,
             controller,
             dir: tempfile::tempdir().unwrap(),

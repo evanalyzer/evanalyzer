@@ -1,5 +1,5 @@
 use crate::{
-    AppWindow, ResultsWindow, UiState,
+    AppWindow, UiState,
     editor::{
         ai_learning_controller::AiLearningController,
         classification_controller::ClassificationController, focus_controller::FocusController,
@@ -68,11 +68,7 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(
-        ui: slint::Weak<AppWindow>,
-        results_ui: slint::Weak<ResultsWindow>,
-        app_state: Arc<UiState>,
-    ) -> Self {
+    pub fn new(ui: slint::Weak<AppWindow>, app_state: Arc<UiState>) -> Self {
         let view_port_cache = Arc::new(viewport_cache::ViewportCache::new(app_state.clone()));
         let viewport_controller = Arc::new(ViewportController::new(
             ui.clone(),
@@ -124,7 +120,7 @@ impl Editor {
         ));
 
         let results_state_controller = Arc::new(ResultsStateController::new(
-            results_ui.clone(),
+            ui.clone(),
             app_state.clone(),
             image_list_controller.clone(),
         ));
@@ -283,7 +279,7 @@ impl Editor {
     }
 }
 
-/// Keeps the project settings dialog and the results window on the same
+/// Keeps the project settings dialog and the results' plate view on the same
 /// plate settings (grouping, plate size, well layout): a change in either
 /// is stored in the project and shown in the other.
 pub(crate) fn link_plate_settings(
@@ -293,7 +289,7 @@ pub(crate) fn link_plate_settings(
     let results_weak = Arc::downgrade(results);
     project_settings.on_plate_settings_changed(move || {
         let results_weak = results_weak.clone();
-        // The results window refreshes its grids on the UI thread.
+        // The results view refreshes its grids on the UI thread.
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(results) = results_weak.upgrade() {
                 results.apply_project_plate_settings();
@@ -326,6 +322,6 @@ mod editor_new_tests {
     #[test]
     fn new_wires_every_controller_without_panicking() {
         let ui_state = test_ui_state();
-        let _editor = Editor::new(slint::Weak::default(), slint::Weak::default(), ui_state);
+        let _editor = Editor::new(slint::Weak::default(), ui_state);
     }
 }

@@ -1,13 +1,7 @@
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { AiLearningState, ClassSelectionRowSlint, FeatureRowSlint, ObjectMetricRowSlint, TrainingImageRowSlint, TrainingObjectRowSlint } from "../api/ai_learning.slint";
-import {
-    LineEdit,
-    ComboBox,
-    SpinBox,
-    CheckBox,
-    ListView,
-    ScrollView,
-} from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
+import { LineEdit, ComboBox, SpinBox, CheckBox } from "../ink/std_compat.slint";
 
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";

@@ -1,0 +1,172 @@
+// editor/plate_view.slint — the images as a plate: a well per group of
+// images (the project's plate settings say which image is in which well),
+// with its image count and how far it is (new, preview, analysed). A click
+// selects a well; its images are listed below the plate.
+
+import { ImagesListState, PlateWell, WellState } from "../api/images_list.slint";
+import { Ink, InkCaption, InkHint } from "../ink/ink.slint";
+
+global PlateText {
+    // Row names: A … Z, then AA … AF (a 1536-well plate has 32 rows).
+    out property <[string]> rows: [
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P",
+        "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF",
+    ];
+}
+
+// The color of a well's state line.
+global WellColor {
+    pure public function of(s: WellState) -> color {
+        s == WellState.analysed ? Ink.ok
+            : s == WellState.preview ? Ink.warn
+            : s == WellState.new ? Ink.text-faint
+            : transparent
+    }
+}
+
+component Well inherits Rectangle {
+    in property <PlateWell> well;
+    in property <bool> selected;
+    callback clicked;
+
+    accessible-role: button;
+    accessible-label: "Well " + root.well.name + ", " + root.well.image-count + " images";
+    accessible-checked: root.selected;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : root.well.image-count > 0 ? Ink.field : transparent;
+        border-width: root.selected ? 1.5px : 1px;
+        border-color: root.selected ? Ink.focus : root.well.image-count > 0 ? Ink.border : Ink.border-soft;
+
+        Text {
+            visible: root.well.image-count > 0 && root.height >= 20px;
+            text: root.well.image-count;
+            font-size: root.height >= 28px ? Ink.fs-sm : Ink.fs-xs;
+            font-family: Ink.font-mono;
+            color: root.selected ? Ink.focus : Ink.text-dim;
+        }
+
+        // How far the well is.
+        Rectangle {
+            visible: root.well.state != WellState.empty;
+            x: 4px;
+            y: parent.height - 4px;
+            width: parent.width - 8px;
+            height: 2px;
+            border-radius: 1px;
+            background: WellColor.of(root.well.state);
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.well.image-count > 0;
+        mouse-cursor: root.well.image-count > 0 ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A legend entry: a colored line, a word.
+component Legend inherits HorizontalLayout {
+    in property <color> tint;
+    in property <string> text;
+    spacing: 4px;
+    Rectangle {
+        width: 10px;
+        Rectangle {
+            width: 10px;
+            height: 2px;
+            background: root.tint;
+        }
+    }
+    Text {
+        text: root.text;
+        font-size: Ink.fs-xs;
+        color: Ink.text-mute;
+        vertical-alignment: center;
+    }
+}
+
+export component PlateView inherits Rectangle {
+    property <length> label-w: 18px;
+    property <length> gap: 3px;
+    property <int> rows: ImagesListState.plate-rows;
+    property <int> cols: ImagesListState.plate-cols;
+    // Square wells, as large as the width allows (at most 40px).
+    property <length> cell: root.cols > 0 ? min(40px, max(8px, (root.width - root.label-w) / root.cols - root.gap)) : 0px;
+    property <length> grid-h: root.label-w + root.rows * (root.cell + root.gap);
+
+    preferred-height: layout.preferred-height;
+
+    layout := VerticalLayout {
+        spacing: 8px;
+
+        if ImagesListState.plate-wells.length == 0: InkHint {
+            text: "No plate yet. The images are put into wells by the plate settings of the project (Project settings › Plate & grouping).";
+        }
+
+        if ImagesListState.plate-wells.length > 0: Rectangle {
+            height: root.grid-h;
+
+            // Column numbers, row letters.
+            for c in root.cols: Text {
+                x: root.label-w + c * (root.cell + root.gap);
+                y: 0px;
+                width: root.cell;
+                height: root.label-w;
+                text: c + 1;
+                font-size: Ink.fs-xs;
+                font-family: Ink.font-mono;
+                color: Ink.text-mute;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            for r in root.rows: Text {
+                x: 0px;
+                y: root.label-w + r * (root.cell + root.gap);
+                width: root.label-w;
+                height: root.cell;
+                text: r < PlateText.rows.length ? PlateText.rows[r] : r + 1;
+                font-size: Ink.fs-xs;
+                font-family: Ink.font-mono;
+                color: Ink.text-mute;
+                vertical-alignment: center;
+            }
+
+            for well[i] in ImagesListState.plate-wells: Well {
+                x: root.label-w + well.col * (root.cell + root.gap);
+                y: root.label-w + well.row * (root.cell + root.gap);
+                width: root.cell;
+                height: root.cell;
+                well: well;
+                selected: ImagesListState.selected-well == i;
+                clicked => {
+                    ImagesListState.selected-well = i;
+                    ImagesListState.well-selected(i);
+                }
+            }
+        }
+
+        if ImagesListState.plate-wells.length > 0: HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
+            Legend {
+                tint: Ink.ok;
+                text: "analysed";
+            }
+            Legend {
+                tint: Ink.warn;
+                text: "preview only";
+            }
+            Legend {
+                tint: Ink.text-faint;
+                text: "new";
+            }
+        }
+    }
+}

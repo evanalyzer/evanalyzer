@@ -378,7 +378,7 @@ export component ImageControlPanel inherits Rectangle {
                         InkTextField {
                             mono: true;
                             label: "Black point";
-                            text: round(HistogramState.histogram_min_val_abs * 1000) / 1000;
+                            value: round(HistogramState.histogram_min_val_abs * 1000) / 1000;
                             accepted(t) => {
                                 root.set-black(t.to-float());
                             }
@@ -386,7 +386,7 @@ export component ImageControlPanel inherits Rectangle {
                         InkTextField {
                             mono: true;
                             label: "Axis min";
-                            text <=> HistogramState.histogram_min_lim_txt;
+                            value: HistogramState.histogram_min_lim_txt;
                             accepted(t) => {
                                 root.set-axis(t.to-float(), HistogramState.histogram_max_lim);
                             }
@@ -396,7 +396,7 @@ export component ImageControlPanel inherits Rectangle {
                         InkTextField {
                             mono: true;
                             label: "White point";
-                            text: round(HistogramState.histogram_max_val_abs * 1000) / 1000;
+                            value: round(HistogramState.histogram_max_val_abs * 1000) / 1000;
                             accepted(t) => {
                                 root.set-white(t.to-float());
                             }
@@ -404,7 +404,7 @@ export component ImageControlPanel inherits Rectangle {
                         InkTextField {
                             mono: true;
                             label: "Axis max";
-                            text <=> HistogramState.histogram_max_lim_txt;
+                            value: HistogramState.histogram_max_lim_txt;
                             accepted(t) => {
                                 root.set-axis(HistogramState.histogram_min_lim, t.to-float());
                             }

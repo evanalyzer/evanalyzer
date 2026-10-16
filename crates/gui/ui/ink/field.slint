@@ -7,8 +7,12 @@ import { Ink } from "palette.slint";
 import { InkIcons } from "icons.slint";
 
 /// One line of text. `edited` on every keystroke, `accepted` on Enter.
+/// Showing a value from elsewhere (a setting, a measurement): set `value`,
+/// not `text` - the field follows every change of it (undo, reset, another
+/// image), also after the user typed in it.
 export component InkTextField inherits Rectangle {
     in-out property <string> text;
+    in property <string> value;
     in property <string> placeholder;
     in property <bool> enabled: true;
     in property <bool> read-only: false;
@@ -28,9 +32,19 @@ export component InkTextField inherits Rectangle {
         input.select-all();
     }
 
+    init => {
+        if root.value != "" {
+            root.text = root.value;
+        }
+    }
+    changed value => {
+        root.text = root.value;
+    }
+
     height: Ink.control-h;
     min-width: 40px;
     horizontal-stretch: 1;
+    forward-focus: input;
 
     frame := Rectangle {
         border-radius: Ink.radius-sm;
@@ -243,6 +257,13 @@ export component InkNumberField inherits Rectangle {
         root.changed(input.text);
     }
 
+    // Follows `value` also after the user typed (undo, reset).
+    changed value => {
+        if input.text.to-float() != root.value {
+            input.text = root.value;
+        }
+    }
+
     height: Ink.control-h;
     min-width: root.compact ? 36px : 72px;
     horizontal-stretch: 1;
@@ -342,6 +363,9 @@ export component InkNumberField inherits Rectangle {
 export component InkSelect inherits Rectangle {
     in property <[string]> model;
     in-out property <int> selected: -1;
+    /// Choose by text instead of by index: the entry equal to `value` is
+    /// the chosen one ("" - use `selected`).
+    in property <string> value;
     /// Shown while nothing is chosen.
     in property <string> placeholder: "Choose…";
     in property <bool> enabled: true;
@@ -351,7 +375,8 @@ export component InkSelect inherits Rectangle {
     in property <string> label;
     callback picked(int, string);
 
-    property <string> current: root.selected >= 0 && root.selected < root.model.length ? root.model[root.selected] : "";
+    property <string> current: root.value != "" ? root.value
+        : root.selected >= 0 && root.selected < root.model.length ? root.model[root.selected] : "";
 
     height: Ink.control-h;
     min-width: 60px;
@@ -438,10 +463,10 @@ export component InkSelect inherits Rectangle {
                 for entry[i] in root.model: Rectangle {
                     height: 26px;
                     border-radius: Ink.radius-sm;
-                    background: item-ta.has-hover ? Ink.hover : i == root.selected ? Ink.selection : transparent;
+                    background: item-ta.has-hover ? Ink.hover : entry == root.current ? Ink.selection : transparent;
                     accessible-role: list-item;
                     accessible-label: entry;
-                    accessible-item-selected: i == root.selected;
+                    accessible-item-selected: entry == root.current;
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
@@ -451,7 +476,7 @@ export component InkSelect inherits Rectangle {
                             text: entry;
                             font-size: Ink.fs-md;
                             font-family: root.mono ? Ink.font-mono : Ink.font-sans;
-                            font-weight: i == root.selected ? 600 : 400;
+                            font-weight: entry == root.current ? 600 : 400;
                             color: Ink.text;
                             vertical-alignment: center;
                             overflow: elide;
@@ -459,7 +484,7 @@ export component InkSelect inherits Rectangle {
                         Image {
                             source: InkIcons.check;
                             width: 12px;
-                            opacity: i == root.selected ? 1 : 0;
+                            opacity: entry == root.current ? 1 : 0;
                             colorize: Ink.text;
                         }
                     }

@@ -4,7 +4,8 @@
 // current value with no way to pick another one from Slint markup alone
 // (the picking always had to happen in Rust before).
 
-import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
+import { LineEdit } from "../../ink/std_compat.slint";
 import { Theme } from "../../style.slint";
 
 export component DropdownField inherits Rectangle {

@@ -15,7 +15,7 @@ pub struct ProjectSettingsController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
     // Called after the project's settings were (re)loaded into the dialog -
-    // the results window follows the plate settings (wired in editor.rs).
+    // the results' plate view follows the plate settings (wired in editor.rs).
     plate_settings_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
@@ -240,8 +240,8 @@ impl ProjectSettingsController {
     }
 }
 
-/// Updates a single cell in the well-order model — shared by both windows'
-/// `on_well_value_changed` handlers (see the struct-level doc comment).
+/// Updates a single cell in the well-order model — used by the
+/// `on_well_value_changed` handler (see the struct-level doc comment).
 fn set_well_value(model: &ModelRc<i32>, index: i32, value: i32) {
     if let Some(vec_model) = model.as_any().downcast_ref::<slint::VecModel<i32>>() {
         let idx = index as usize;
@@ -251,9 +251,8 @@ fn set_well_value(model: &ModelRc<i32>, index: i32, value: i32) {
     }
 }
 
-/// Resizes the well-order model to match new well row/col counts — shared by
-/// both windows' `on_well_dims_changed` handlers (see the struct-level doc
-/// comment).
+/// Resizes the well-order model to match new well row/col counts — used by
+/// the `on_well_dims_changed` handler (see the struct-level doc comment).
 fn resize_well_values(model: &ModelRc<i32>, rows: i32, cols: i32) {
     let new_size = (rows * cols).max(0) as usize;
     if let Some(vec_model) = model.as_any().downcast_ref::<slint::VecModel<i32>>() {
@@ -709,12 +708,12 @@ mod tests {
 
     // -- attach_callbacks on a live window --------------------------------
 
-    use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+    use crate::editor::test_support::{test_ui_window, ui_state_with_window};
     use crate::helper::ui_thread::drain_ui_queue;
     use evanalyzer_app::project::ProjectWithRuntime;
 
     fn attached_controller(ui: &AppWindow) -> (Arc<UiState>, Arc<ProjectSettingsController>) {
-        let ui_state = ui_state_with_windows(ui, ui, ProjectWithRuntime::default());
+        let ui_state = ui_state_with_window(ui, ProjectWithRuntime::default());
         let controller = Arc::new(ProjectSettingsController::new(
             ui.as_weak(),
             ui_state.clone(),
@@ -726,8 +725,8 @@ mod tests {
 
     #[test]
     fn attach_callbacks_shows_the_remembered_author() {
-        let (ui, _) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &ui, ProjectWithRuntime::default());
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, ProjectWithRuntime::default());
         ui_state.update_app_settings(|settings| {
             settings.author = Some(UserInformation {
                 full_name: "Grace Hopper".into(),
@@ -752,7 +751,7 @@ mod tests {
 
     #[test]
     fn applying_the_settings_stores_and_shows_them() {
-        let (ui, _) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = attached_controller(&ui);
         let listened = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = listened.clone();
@@ -777,7 +776,7 @@ mod tests {
 
     #[test]
     fn cancelling_restores_the_stored_settings() {
-        let (ui, _) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, _controller) = attached_controller(&ui);
         ui_state.get_project_write().meta.name = "Stored".into();
 
@@ -802,7 +801,7 @@ mod tests {
 
     #[test]
     fn well_edits_change_the_well_order() {
-        let (ui, _) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, _controller) = attached_controller(&ui);
         let state = ui.global::<ProjectSettingsState>();
         show_two_by_two_wells(&state);
@@ -817,7 +816,7 @@ mod tests {
 
     #[test]
     fn toggling_a_tile_merge_class_flips_its_flag() {
-        let (ui, _) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, _controller) = attached_controller(&ui);
         let state = ui.global::<ProjectSettingsState>();
         let flags = state.get_settings().tile_merge_classes_to_not_merge_flags;

@@ -1,0 +1,354 @@
+// ink/std_compat.slint — Ink controls under the names and API of Slint's
+// std-widgets (`LineEdit`, `ComboBox`, `CheckBox`, `SpinBox`, `Switch`), so
+// a view not yet rebuilt on Ink only swaps its import:
+//
+//     import { LineEdit, ComboBox } from "../ink/std_compat.slint";
+//
+// The part of the API the views use; new code uses the Ink controls.
+
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
+import { InkNumberField } from "field.slint";
+
+export component LineEdit inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder-text;
+    in property <bool> enabled: true;
+    in property <bool> read-only: false;
+    in property <length> font-size: Ink.fs-md;
+    in property <string> font-family: Ink.font-sans;
+    in property <TextHorizontalAlignment> horizontal-alignment: TextHorizontalAlignment.left;
+    in property <InputType> input-type: InputType.text;
+    out property <bool> has-focus: input.has-focus;
+    callback edited(string);
+    callback accepted(string);
+
+    public function select-all() {
+        input.select-all();
+    }
+
+    height: Ink.control-h;
+    min-width: 40px;
+    horizontal-stretch: 1;
+    forward-focus: input;
+    // The field itself, for screen readers and tests (the text inside is
+    // hidden from them).
+    accessible-role: text-input;
+    accessible-value: root.text;
+    accessible-placeholder-text: root.placeholder-text;
+    accessible-enabled: root.enabled;
+    accessible-read-only: root.read-only;
+    accessible-action-set-value(v) => {
+        root.text = v;
+        root.edited(v);
+    }
+
+    frame := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: Ink.field;
+        border-width: 1px;
+        border-color: input.has-focus ? Ink.focus : ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
+        opacity: root.enabled ? 1.0 : 0.5;
+        clip: true;
+
+        ta := TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => {
+                input.focus();
+            }
+        }
+
+        Text {
+            x: 8px;
+            width: parent.width - 16px;
+            height: parent.height;
+            visible: input.text == "";
+            text: root.placeholder-text;
+            font-size: root.font-size;
+            color: Ink.text-faint;
+            horizontal-alignment: root.horizontal-alignment;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        input := TextInput {
+            x: 8px;
+            width: parent.width - 16px;
+            height: parent.height;
+            text <=> root.text;
+            enabled: root.enabled;
+            read-only: root.read-only;
+            input-type: root.input-type;
+            single-line: true;
+            vertical-alignment: center;
+            horizontal-alignment: root.horizontal-alignment;
+            font-size: root.font-size;
+            font-family: root.font-family;
+            color: Ink.text;
+            selection-background-color: Ink.focus-ring;
+            selection-foreground-color: Ink.text;
+            accessible-role: none;
+            edited => {
+                root.edited(self.text);
+            }
+            accepted => {
+                root.accepted(self.text);
+            }
+        }
+    }
+}
+
+export component ComboBox inherits Rectangle {
+    in property <[string]> model;
+    in-out property <int> current-index: -1;
+    in-out property <string> current-value: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : "";
+    in property <bool> enabled: true;
+    callback selected(string);
+
+    height: Ink.control-h;
+    min-width: 60px;
+    horizontal-stretch: 1;
+    accessible-role: combobox;
+    accessible-value: root.current-value;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        popup.show();
+    }
+
+    frame := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: ta.has-hover && root.enabled ? Ink.hover : Ink.field;
+        border-width: 1px;
+        border-color: ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
+        opacity: root.enabled ? 1.0 : 0.5;
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 6px;
+            spacing: 6px;
+            Text {
+                horizontal-stretch: 1;
+                text: root.current-value;
+                font-size: Ink.fs-md;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+            Image {
+                source: InkIcons.caret-down;
+                width: 10px;
+                colorize: Ink.text-mute;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            popup.show();
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 4px;
+        width: max(root.width, 140px);
+        height: min(list.preferred-height + 8px, 280px);
+
+        Rectangle {
+            background: Ink.panel;
+            border-radius: Ink.radius-md;
+            border-width: 1px;
+            border-color: Ink.border;
+            drop-shadow-blur: 16px;
+            drop-shadow-offset-y: 4px;
+            drop-shadow-color: Ink.shadow;
+        }
+
+        Flickable {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            content-height: list.preferred-height;
+
+            list := VerticalLayout {
+                for entry[i] in root.model: Rectangle {
+                    height: 26px;
+                    border-radius: Ink.radius-sm;
+                    background: item-ta.has-hover ? Ink.hover : i == root.current-index ? Ink.selection : transparent;
+                    accessible-role: list-item;
+                    accessible-label: entry;
+                    accessible-item-selected: i == root.current-index;
+                    Text {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        text: entry;
+                        font-size: Ink.fs-md;
+                        font-weight: i == root.current-index ? 600 : 400;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    item-ta := TouchArea {
+                        clicked => {
+                            root.current-index = i;
+                            root.current-value = entry;
+                            root.selected(entry);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component CheckBox inherits Rectangle {
+    in-out property <bool> checked;
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback toggled;
+
+    function flip() {
+        root.checked = !root.checked;
+        root.toggled();
+    }
+
+    height: 20px;
+    horizontal-stretch: 0;
+    preferred-width: 14px + (root.text == "" ? 0px : 8px + label.preferred-width);
+    accessible-role: checkbox;
+    accessible-label: root.text;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.flip();
+        }
+    }
+
+    body := Rectangle {
+        opacity: root.enabled ? 1.0 : 0.45;
+        Rectangle {
+            x: 0px;
+            width: 14px;
+            height: 14px;
+            border-radius: Ink.radius-xs;
+            border-width: root.checked ? 0px : 1px;
+            border-color: ta.has-hover ? Ink.text-mute : Ink.text-faint;
+            background: root.checked ? Ink.primary : Ink.field;
+            Image {
+                visible: root.checked;
+                source: InkIcons.check;
+                width: 10px;
+                height: 10px;
+                colorize: Ink.on-primary;
+            }
+        }
+        label := Text {
+            x: 22px;
+            height: parent.height;
+            text: root.text;
+            font-size: Ink.fs-md;
+            color: Ink.text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.flip();
+        }
+    }
+}
+
+export component Switch inherits Rectangle {
+    in-out property <bool> checked;
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback toggled;
+
+    function flip() {
+        root.checked = !root.checked;
+        root.toggled();
+    }
+
+    height: 20px;
+    horizontal-stretch: 0;
+    preferred-width: 26px + (root.text == "" ? 0px : 8px + label.preferred-width);
+    accessible-role: switch;
+    accessible-label: root.text;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        if root.enabled {
+            root.flip();
+        }
+    }
+
+    body := Rectangle {
+        opacity: root.enabled ? 1.0 : 0.45;
+        track := Rectangle {
+            x: 0px;
+            width: 26px;
+            height: 14px;
+            border-radius: 7px;
+            background: root.checked ? Ink.primary : Ink.border;
+            Rectangle {
+                x: root.checked ? 14px : 2px;
+                width: 10px;
+                height: 10px;
+                border-radius: 5px;
+                background: root.checked ? Ink.on-primary : Ink.panel;
+            }
+        }
+        label := Text {
+            x: 34px;
+            height: parent.height;
+            text: root.text;
+            font-size: Ink.fs-md;
+            color: Ink.text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.flip();
+        }
+    }
+}
+
+export component SpinBox inherits Rectangle {
+    in-out property <int> value;
+    in property <int> minimum: 0;
+    in property <int> maximum: 100;
+    in property <int> step-size: 1;
+    in property <bool> enabled: true;
+    callback edited(int);
+
+    height: Ink.control-h;
+    min-width: 72px;
+    horizontal-stretch: 1;
+
+    InkNumberField {
+        value: root.value;
+        min: root.minimum;
+        max: root.maximum;
+        step: root.step-size;
+        enabled: root.enabled;
+        changed(t) => {
+            if t.is-float() {
+                root.value = clamp(round(t.to-float()), root.minimum, root.maximum);
+                root.edited(root.value);
+            }
+        }
+    }
+}
