@@ -31,6 +31,8 @@ component ChannelLabel inherits Rectangle {
 export component ChannelPicker inherits Rectangle {
     in-out property <int> value: 0;
     in property <length> font-size: 12px;
+    // A narrow field (a table cell): the number alone, then the name.
+    in property <bool> compact: false;
     callback changed(int);
 
     property <int> channel-count: max(10, ImageMetaData.nr-c-stacks, root.value + 1);
@@ -40,7 +42,7 @@ export component ChannelPicker inherits Rectangle {
     height: 30px;
 
     PickerField {
-        label: "Channel " + root.value;
+        label: root.compact ? "\{root.value}" : "Channel " + root.value;
         font-size: root.font-size;
         clicked => {
             popup.show();

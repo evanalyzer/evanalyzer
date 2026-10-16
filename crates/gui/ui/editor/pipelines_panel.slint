@@ -3,6 +3,7 @@
 // Owns N pipelines; each pipeline is a flat, ordered list of commands.
 // Category is a property of each step (colored stripe), not a hard bucket.
 
+import { Dialog } from "../components/new_components/dialog.slint";
 import { NumberSpinner } from "../components/new_components/number_spinner.slint";
 import {
     ScrollView,
@@ -117,6 +118,41 @@ export struct ProblemItem {
         index: int,
     }
 
+// A section of a component card (see `PipelineCommand.section-views`).
+export struct SectionView {
+        name: string,
+        // Its settings' values on one line ("CY7 · 200 · ch1@coloc_ch3").
+        summary: string,
+        // Shows its settings (a collapsible section).
+        open: bool,
+        // 0: collapsible; 1: the first of a table's sections - shows table
+        // `table`; 2: another of that table's sections (shown by the first);
+        // 3: the settings without a section, always shown.
+        kind: int,
+        table: int,
+        // What a check found among its settings: 0 nothing, 1 a warning, 2 an error.
+        problem: int,
+        // Its settings.
+        params: [CommandParameter],
+    }
+
+// A row of a `CardTable`: a section, its settings as the cells.
+export struct CardTableRow {
+        name: string,
+        problem: int,
+        cells: [CommandParameter],
+    }
+
+// Sections with the same settings, as one table: a row per section, a
+// column per setting.
+export struct CardTable {
+        columns: [string],
+        rows: [CardTableRow],
+        // What the checks found about its cells, each once.
+        problems: [string],
+        problem-error: bool,
+    }
+
 export struct PipelineCommand {
         // Position in the pipeline - what the step actions (remove, move,
         // change a parameter) refer to; the list is rebuilt after each change.
@@ -147,6 +183,11 @@ export struct PipelineCommand {
         // The sections of `parameters`, in order - "" (no section) first
         // when there are such settings. The settings dialog's sections.
         sections: [string],
+        // A component card with sections: how they're shown - collapsed to a
+        // summary, open, or as a table when several have the same settings.
+        // Empty otherwise (the settings one below the other).
+        section-views: [SectionView],
+        card-tables: [CardTable],
         // What the checks found about this step.
         problems: [ProblemItem],
         // How many of `problems` are errors.
@@ -588,6 +629,8 @@ component ClassDropdown inherits Rectangle {
         in-out property <string> value: "0";
         /// Also offer the opened component's classes (`ComponentClassesState`).
         in property <bool> component-classes: false;
+        // A narrow field (a table cell): a numbered class by its number alone.
+        in property <bool> compact: false;
         callback changed(string);
 
         property <string> prefix: root.is-seg ? "Seg." : "Obj.";
@@ -603,7 +646,7 @@ component ClassDropdown inherits Rectangle {
         }
 
         PickerField {
-            label: ClassHelper.label(root.value, root.prefix);
+            label: root.compact && root.numbered ? ClassHelper.zeropad2(round(root.value.to-float())) : ClassHelper.label(root.value, root.prefix);
             mono: root.numbered || !root.value.is-float();
             clicked => {
                 popup.show();
@@ -1617,6 +1660,9 @@ component ParamLabel inherits HorizontalLayout {
 // Locked while a component is only viewed.
 component ParamControls inherits Rectangle {
         in property <CommandParameter> p;
+        // A narrow field (a table cell): the controls that have it get their
+        // compact form.
+        in property <bool> compact: false;
         callback changed(string);
         callback item-field-changed(int, string, string);
         callback add-item();
@@ -1787,6 +1833,7 @@ component ParamControls inherits Rectangle {
             if p.param-type == ParamType.spinner:
         NumberSpinner {
                 enabled: !PipelinesPanelState.open-component-read-only;
+                compact: root.compact;
                 label: p.display-name;
                 value: p.value.to-float();
                 step: p.step;
@@ -1844,6 +1891,7 @@ component ParamControls inherits Rectangle {
             if p.param-type == ParamType.obj-class:
         ClassDropdown {
                 is-seg: false;
+                compact: root.compact;
                 component-classes: true;
                 value: p.value;
                 changed(v) => {
@@ -1854,6 +1902,7 @@ component ParamControls inherits Rectangle {
             if p.param-type == ParamType.seg-class:
         ClassDropdown {
                 is-seg: true;
+                compact: root.compact;
                 value: p.value;
                 changed(v) => {
                     root.changed(v);
@@ -1906,6 +1955,7 @@ component ParamControls inherits Rectangle {
         ChannelPicker {
                 height: 24px;
                 font-size: 11px;
+                compact: root.compact;
                 value: p.value.to-float();
                 changed(v) => {
                     root.changed(v);
@@ -2283,6 +2333,230 @@ component WideParamRow inherits VerticalLayout {
 // ----------------------------------------------------------
 // Step row
 
+// A setting on one line: its name left, its control right - lists,
+// scripts and file paths need the width, so they're stacked (`ParamRow`).
+component InlineParamRow inherits VerticalLayout {
+        in property <CommandParameter> p;
+        callback changed(string);
+        callback item-field-changed(int, string, string);
+        callback add-item();
+        callback remove-item(int);
+        callback show-model-info();
+        callback toggle-exposed();
+        callback edit-exposed();
+        // A list entry's setting: entry index, setting name.
+        callback toggle-item-exposed(int, string);
+        callback edit-item-exposed(int, string);
+
+        property <bool> stacked: p.param-type == ParamType.group || p.param-type == ParamType.script || p.param-type == ParamType.file-path || p.param-type == ParamType.multi-obj-class || p.param-type == ParamType.multi-seg-class || p.param-type == ParamType.image-address || p.param-type == ParamType.slider;
+
+        spacing: 2px;
+
+        if root.stacked: ParamRow {
+            p: root.p;
+            show-section: false;
+            changed(v) => {
+                root.changed(v);
+            }
+            item-field-changed(i, n, v) => {
+                root.item-field-changed(i, n, v);
+            }
+            add-item => {
+                root.add-item();
+            }
+            remove-item(i) => {
+                root.remove-item(i);
+            }
+            show-model-info => {
+                root.show-model-info();
+            }
+            toggle-exposed => {
+                root.toggle-exposed();
+            }
+            edit-exposed => {
+                root.edit-exposed();
+            }
+            toggle-item-exposed(i, n) => {
+                root.toggle-item-exposed(i, n);
+            }
+            edit-item-exposed(i, n) => {
+                root.edit-item-exposed(i, n);
+            }
+        }
+
+        if !root.stacked: HorizontalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                width: 112px;
+                alignment: start;
+                ParamLabel {
+                    p: root.p;
+                    toggle-exposed => {
+                        root.toggle-exposed();
+                    }
+                    edit-exposed => {
+                        root.edit-exposed();
+                    }
+                }
+            }
+
+            ParamControls {
+                horizontal-stretch: 1;
+                p: root.p;
+                changed(v) => {
+                    root.changed(v);
+                }
+                item-field-changed(i, n, v) => {
+                    root.item-field-changed(i, n, v);
+                }
+                add-item => {
+                    root.add-item();
+                }
+                remove-item(i) => {
+                    root.remove-item(i);
+                }
+                show-model-info => {
+                    root.show-model-info();
+                }
+                toggle-item-exposed(i, n) => {
+                    root.toggle-item-exposed(i, n);
+                }
+                edit-item-exposed(i, n) => {
+                    root.edit-item-exposed(i, n);
+                }
+            }
+        }
+
+        if !root.stacked: ParamNotes {
+            p: root.p;
+        }
+    }
+
+// A collapsible section's head: ▸ name, and its settings' values while closed.
+component SectionHead inherits Rectangle {
+        in property <SectionView> section;
+        callback clicked;
+
+        height: 30px;
+        border-radius: 4px;
+        background: head-ta.has-hover ? Theme.raised : transparent;
+        accessible-role: button;
+        accessible-label: root.section.name;
+
+        head-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.clicked();
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 2px;
+            padding-right: 6px;
+            spacing: 6px;
+            Text {
+                width: 10px;
+                text: root.section.open ? "▾" : "▸";
+                font-size: 9px;
+                color: Theme.text-mute;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: root.section.name;
+                font-size: 11px;
+                font-weight: 600;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+
+            if root.section.problem > 0: Text {
+                text: "⚠";
+                font-size: 10px;
+                color: root.section.problem == 2 ? Theme.err : Theme.warn;
+                vertical-alignment: center;
+            }
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.section.open ? "" : root.section.summary;
+                font-size: 10.5px;
+                color: Theme.text-dim;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+// Sections with the same settings as a table: a row per section, a
+// column per setting, compact controls in the cells.
+component CardTableView inherits VerticalLayout {
+        in property <CardTable> table;
+        // A cell's setting changed: its name, the value.
+        callback changed(string, string);
+
+        spacing: 4px;
+
+        HorizontalLayout {
+            spacing: 4px;
+            Rectangle {
+                width: 64px;
+            }
+
+            for column in root.table.columns: Text {
+                horizontal-stretch: 1;
+                preferred-width: 1px;
+                min-width: 0px;
+                text: column;
+                font-size: 9.5px;
+                font-weight: 600;
+                color: Theme.text-mute;
+                overflow: elide;
+            }
+        }
+
+        for row in root.table.rows: HorizontalLayout {
+            spacing: 4px;
+            height: 26px;
+            Text {
+                width: 64px;
+                text: row.name;
+                font-size: 11px;
+                font-weight: 600;
+                color: row.problem == 2 ? Theme.err : row.problem == 1 ? Theme.warn : Theme.text;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+
+            for cell in row.cells: Rectangle {
+                horizontal-stretch: 1;
+                preferred-width: 1px;
+                min-width: 0px;
+                border-radius: 5px;
+                border-width: cell.problem != "" ? 1px : 0px;
+                border-color: cell.problem-error ? Theme.err : Theme.warn;
+                ParamControls {
+                    x: 1px;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width - 2px;
+                    p: cell;
+                    compact: true;
+                    changed(v) => {
+                        root.changed(cell.name, v);
+                    }
+                }
+            }
+        }
+
+        for problem in root.table.problems: Text {
+            text: "⚠ \{problem}";
+            font-size: 10px;
+            color: root.table.problem-error ? Theme.err : Theme.warn;
+            wrap: word-wrap;
+            height: self.preferred-height;
+        }
+    }
+
 component StepRow inherits Rectangle {
         in property <PipelineCommand> step;
         in property <int> idx;
@@ -2563,6 +2837,69 @@ component StepRow inherits Rectangle {
                         }
                     }
 
+                    // A component card with sections: collapsed to their
+                    // values, a table where sections have the same settings.
+                    // The settings as rows (name left, control right): those
+                    // without a section first, then each section - collapsed
+                    // to its values, or a table where sections have the
+                    // same settings.
+                    VerticalLayout {
+                    spacing: 0px;
+                    for section in step.section-views: VerticalLayout {
+                        // A table's other sections are its rows: nothing here.
+                        padding-bottom: section.kind == 2 ? 0px : 8px;
+                        spacing: 6px;
+                        if section.kind == 0: SectionHead {
+                            section: section;
+                            clicked => {
+                                PipelinesPanelState.toggle-section(root.idx, section.name);
+                            }
+                        }
+                        if section.kind == 1: CardTableView {
+                            table: step.card-tables[section.table];
+                            changed(name, v) => {
+                                root.param-changed(name, v);
+                            }
+                        }
+                        if section.kind == 3 || (section.kind == 0 && section.open): VerticalLayout {
+                            padding-left: section.kind == 0 ? 12px : 0px;
+                            spacing: 8px;
+                            for p in section.params: InlineParamRow {
+                                p: p;
+                                changed(v) => {
+                                    root.param-changed(p.name, v);
+                                }
+                                item-field-changed(item_idx, field_name, v) => {
+                                    root.param-changed("\{p.name}.\{item_idx}.\{field_name}", v);
+                                }
+                                add-item => {
+                                    PipelinesPanelState.add-group-item(step.id, p.name);
+                                }
+                                remove-item(idx) => {
+                                    PipelinesPanelState.remove-group-item(step.id, p.name, idx);
+                                }
+                                show-model-info => {
+                                    PipelinesPanelState.show-model-info(step.id);
+                                }
+                                toggle-exposed => {
+                                    PipelinesPanelState.toggle-exposed(step.id, p.name);
+                                }
+                                toggle-item-exposed(item_idx, field_name) => {
+                                    PipelinesPanelState.toggle-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                }
+                                edit-exposed => {
+                                    PipelinesPanelState.edit-exposed(step.id, p.name);
+                                }
+                                edit-item-exposed(item_idx, field_name) => {
+                                    PipelinesPanelState.edit-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                }
+                            }
+                        }
+                    }
+                    }
+
+                    if step.section-views.length == 0: VerticalLayout {
+                        spacing: 10px;
                     for p in step.parameters: ParamRow {
                         p: p;
                         changed(v) => {
@@ -2593,6 +2930,7 @@ component StepRow inherits Rectangle {
                             PipelinesPanelState.edit-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
                         }
                     }
+                    }
 
                     if step.advanced-count > 0: AdvancedRow {
                         count: step.advanced-count;
@@ -2607,7 +2945,7 @@ component StepRow inherits Rectangle {
                         }
                     }
 
-                    for p in step.advanced-parameters: ParamRow {
+                    for p in step.advanced-parameters: InlineParamRow {
                         p: p;
                         changed(v) => {
                             root.param-changed(p.name, v);
@@ -3111,6 +3449,8 @@ export global PipelinesPanelState {
         // How many of `project-problems` are errors.
         in property <int> project-problem-errors: 0;
         in-out property <bool> problems-expanded: false;
+        // Opens or closes a section of a component card (step index, section).
+        callback toggle-section(int, string);
         // Shows the step a problem is about (its `index`).
         callback show-problem(int);
         // Makes a problem's fix (its `index`).
@@ -4224,8 +4564,12 @@ component SectionNavItem inherits Rectangle {
 // `PipelinesPanelState.settings-step-id`, live: edits go through the same
 // callbacks as on the card. (Opening it shows the step's advanced settings,
 // so they are there to pick and to search.)
-export component StepSettingsDialog inherits Rectangle {
-        callback close();
+export component StepSettingsDialog inherits Dialog {
+        title: "Step settings";
+        dialog-width: 920px;
+        dialog-height: 660px;
+        content-padding: 0px;
+        close-on-backdrop: true;
 
         // The list is rebuilt after each change - what's chosen lives out here
     // so it stays.
@@ -4248,34 +4592,21 @@ export component StepSettingsDialog inherits Rectangle {
             root.searching ? root.matches(p) : (root.current < sections.length && p.section == sections[root.current])
         }
 
-        background: Theme.modal-overlay;
-
-        TouchArea {
-            clicked => {
-                root.close();
-            }
-        }
-
+        // The chosen step's settings - one list for all steps, so the
+        // step is found in it (the list is rebuilt after each change).
+        Rectangle {
+        vertical-stretch: 1;
         for cmd in PipelinesPanelState.active-commands: Rectangle {
             width: 100%;
             height: 100%;
             if cmd.step-id == PipelinesPanelState.settings-step-id: Rectangle {
                 property <bool> on-advanced: !root.searching && root.current >= cmd.sections.length;
 
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: min(920px, parent.width - 48px);
-                height: min(660px, parent.height - 48px);
-                background: Theme.panel;
-                border-radius: 12px;
+                width: 100%;
+                height: 100%;
                 border-width: 1px;
-                border-color: Theme.border;
-                drop-shadow-blur: 40px;
-                drop-shadow-color: Theme.shadow;
-                drop-shadow-offset-y: 12px;
+                border-color: Theme.border-soft;
                 clip: true;
-
-                TouchArea { }
 
                 HorizontalLayout {
                 // -- Left: name, search, sections --
@@ -4365,14 +4696,6 @@ export component StepSettingsDialog inherits Rectangle {
                                         font-weight: 700;
                                         color: Theme.text;
                                         vertical-alignment: center;
-                                    }
-
-                                    GhostIconBtn {
-                                        icon: @image-url("../icons/regular-white/x.svg");
-                                        icon-sz: 12px;
-                                        clicked => {
-                                            root.close();
-                                        }
                                     }
                                 }
 
@@ -4486,4 +4809,5 @@ export component StepSettingsDialog inherits Rectangle {
                 }
             }
         }
+    }
     }

@@ -1,64 +1,42 @@
-import { BaseDialog } from "dialog_base.slint";
-import { Button } from "std-widgets.slint";
-import {
-    Palette,
-} from "std-widgets.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
 import {
     GlobalAppState,
     DialogType,
 } from "../state.slint";
-
-
 import { ObjectListState } from "../editor/object_list_panel.slint";
 
-export component ConfirmDeleteObjectDialog inherits BaseDialog {
-    title-text: "Delete object";
-    icon: "⚠️";
-    main-height: 260px;
-    main-width: 440px;
+export component ConfirmDeleteObjectDialog inherits Dialog {
+    title: "Delete object \{ObjectListState.selected_object.id}?";
+    tone: DialogTone.danger;
+    dialog-width: 440px;
+    close => {
+        GlobalAppState.active_dialog = DialogType.none;
+    }
 
-    VerticalLayout {
-        spacing: 12px;
-        Text {
-            text: "This action cannot be undone. Deleting the selected object.";
-            wrap: word-wrap;
-            color: Palette.foreground;
-            font-size: 14px;
-            font-weight: 500;
-        }
+    Text {
+        text: "The selected object is deleted. This can't be undone.";
+        wrap: word-wrap;
+        color: Theme.text;
+        font-size: 13px;
+    }
 
-        Text {
-            text: "Delete object \{ObjectListState.selected_object.id}?";
-            wrap: word-wrap;
-            color: Palette.foreground.with-alpha(0.5);
-            font-size: 13px;
-        }
-
-        Rectangle {
-            vertical-stretch: 1;
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: end;
-
-            Button {
-                text: "Cancel";
-                primary: true;
-                width: 80px;
-                clicked => {
-                    GlobalAppState.active_dialog = DialogType.none;
-                }
+    DialogFooter {
+        AppButton {
+            text: "Cancel";
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
             }
+        }
 
-            Button {
-                text: "Delete";
-                width: 100px;
-                clicked => {
-                    GlobalAppState.active_dialog = DialogType.none;
-                    ObjectListState.object_delete(ObjectListState.selected_object.id);
-                    ObjectListState.selected_object = { };
-                }
+        AppButton {
+            text: "Delete";
+            danger: true;
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+                ObjectListState.object_delete(ObjectListState.selected_object.id);
+                ObjectListState.selected_object = { };
             }
         }
     }

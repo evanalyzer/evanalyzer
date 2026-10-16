@@ -1,14 +1,17 @@
-import { BaseDialog } from "dialog_base.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { GlobalAppState, DialogType, AnalysisRunningCloseState } from "../state.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Theme } from "../style.slint";
 
 // Asked when the window is closed while an analysis runs.
-export component AnalysisRunningCloseDialog inherits BaseDialog {
-    title-text: "Analysis running";
-    icon: "⚠️";
-    main-height: 230px;
-    main-width: 480px;
+export component AnalysisRunningCloseDialog inherits Dialog {
+    title: "Analysis running";
+    dialog-width: 480px;
+    tone: DialogTone.warning;
+    close => {
+        GlobalAppState.active-dialog = DialogType.none;
+        AnalysisRunningCloseState.back();
+    }
 
     VerticalLayout {
         spacing: 12px;
@@ -20,17 +23,10 @@ export component AnalysisRunningCloseDialog inherits BaseDialog {
                 : "An analysis is running on this computer. Closing EVAnalyzer stops it.";
             wrap: word-wrap;
             color: Theme.text;
-            font-size: 14px;
-            font-weight: 500;
+            font-size: 13px;
         }
 
-        Rectangle {
-            vertical-stretch: 1;
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: end;
+        DialogFooter {
 
             AppButton {
                 text: "Back";

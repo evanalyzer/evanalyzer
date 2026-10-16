@@ -2,6 +2,7 @@ import { ScrollView } from "std-widgets.slint";
 import { GlobalAppState, DialogType, AppInfoState } from "../state.slint";
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
+import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 
 component TabButton inherits Rectangle {
     in property <string> text;
@@ -10,7 +11,7 @@ component TabButton inherits Rectangle {
 
     horizontal-stretch: 1;
     height: 30px;
-    border-radius: 7px;
+    border-radius: Theme.radius-md;
     background: root.active ? Theme.accent.with-alpha(0.14) : (ta.has-hover ? Theme.hover : transparent);
     animate background { duration: 100ms; }
 
@@ -229,9 +230,16 @@ component LicenseCard inherits Rectangle {
     }
 }
 
-export component AboutDialog inherits Rectangle {
-    background: Theme.modal-overlay;
-    TouchArea { }
+export component AboutDialog inherits Dialog {
+    title: "EVA";
+    subtitle: "Version " + AppInfoState.version + " · High-throughput image analysis";
+    dialog-width: 600px;
+    dialog-height: 600px;
+    close => {
+        GlobalAppState.active-dialog = DialogType.none;
+        root.current-tab = 0;
+        root.expanded-third-party-index = -1;
+    }
 
     property <int> current-tab: 0;
     // Which license card is expanded, or -1 if none: -2 is EVAnalyzer's own
@@ -247,375 +255,306 @@ export component AboutDialog inherits Rectangle {
         AppInfoState.refresh_system_info();
     }
 
+    // -- Tab strip: equal-width tabs -----------------------------------
+    HorizontalLayout {
+        height: 30px;
+        spacing: 4px;
+
+        TabButton {
+            text: "About";
+            active: root.current-tab == 0;
+            clicked => { root.current-tab = 0; }
+        }
+
+        TabButton {
+            text: "Contributors";
+            active: root.current-tab == 1;
+            clicked => { root.current-tab = 1; }
+        }
+
+        TabButton {
+            text: "System";
+            active: root.current-tab == 2;
+            clicked => { root.current-tab = 2; }
+        }
+
+        TabButton {
+            text: "Licenses";
+            active: root.current-tab == 3;
+            clicked => { root.current-tab = 3; }
+        }
+    }
+
+    // -- Tab content -----------------------------------------------------
     Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 600px;
-        height: 600px;
-        background: Theme.panel;
-        border-radius: 14px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-blur: 48px;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-offset-y: 16px;
-        clip: true;
+        vertical-stretch: 1;
 
-        VerticalLayout {
-            padding: 28px;
-            spacing: 0px;
+        // -- About: top-aligned, link as pill ------------------------
+        if (root.current-tab == 0): VerticalLayout {
+            alignment: start;
+            spacing: 14px;
+            padding-top: 6px;
 
-            // -- Header: icon + name + version + tagline ----------------------
             HorizontalLayout {
-                height: 64px;
                 spacing: 14px;
 
                 Rectangle {
-                    width: 64px;
-                    height: 64px;
-                    border-radius: 16px;
+                    width: 48px;
+                    height: 48px;
+                    border-radius: Theme.radius-lg + 2px;
                     background: Theme.accent.with-alpha(0.12);
                     border-width: 1px;
                     border-color: Theme.accent.with-alpha(0.25);
                     Image {
                         source: @image-url("../icons/icon.png");
-                        width: 40px;
-                        height: 40px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                        width: 30px;
+                        height: 30px;
                     }
                 }
 
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 3px;
-
-                    Text {
-                        text: "EVA";
-                        font-size: 22px;
-                        font-weight: 800;
-                        color: Theme.text;
-                    }
-
-                    Text {
-                        text: "Version " + AppInfoState.version;
-                        font-size: 12px;
-                        font-weight: 500;
-                        color: Theme.accent;
-                    }
-
-                    Text {
-                        text: "High-throughput image analysis";
-                        font-size: 11.5px;
-                        color: Theme.text-mute;
-                    }
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Enhanced Visual Analazer " + AppInfoState.version + " is an application for high throughput image processing.";
+                    font-size: 13px;
+                    color: Theme.text;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
                 }
             }
 
-            Rectangle {
-                height: 18px;
+            Text {
+                text: "Copyright 2019-2026 Joachim Danmayr";
+                font-size: 12px;
+                color: Theme.text-mute;
             }
 
             Rectangle {
-                height: 1px;
-                background: Theme.border;
-            }
-
-            Rectangle {
-                height: 18px;
-            }
-
-            // -- Tab strip: equal-width tabs -----------------------------------
-            HorizontalLayout {
+                width: link-text.preferred-width + 28px;
                 height: 30px;
-                spacing: 4px;
+                border-radius: 15px;
+                background: Theme.raised;
+                border-width: 1px;
+                border-color: Theme.border;
 
-                TabButton {
-                    text: "About";
-                    active: root.current-tab == 0;
-                    clicked => { root.current-tab = 0; }
-                }
-
-                TabButton {
-                    text: "Contributors";
-                    active: root.current-tab == 1;
-                    clicked => { root.current-tab = 1; }
-                }
-
-                TabButton {
-                    text: "System";
-                    active: root.current-tab == 2;
-                    clicked => { root.current-tab = 2; }
-                }
-
-                TabButton {
-                    text: "Licenses";
-                    active: root.current-tab == 3;
-                    clicked => { root.current-tab = 3; }
+                link-text := Text {
+                    text: "evanalyzer.org ↗";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.accent;
+                    x: 14px;
+                    y: (parent.height - self.height) / 2;
                 }
             }
 
-            Rectangle {
-                height: 16px;
-            }
-
-            // -- Tab content -----------------------------------------------------
             Rectangle {
                 vertical-stretch: 1;
+            }
 
-                // -- About: top-aligned, link as pill ------------------------
-                if (root.current-tab == 0): VerticalLayout {
-                    alignment: start;
-                    spacing: 14px;
-                    padding-top: 6px;
+            Text {
+                text: "ALL RIGHTS RESERVED";
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 1px;
+                color: Theme.text-faint;
+            }
+        }
 
-                    Text {
-                        text: "Enhanced Visual Analazer " + AppInfoState.version + " is an application for high throughput image processing.";
-                        font-size: 13px;
+        // -- Contributors: divider rows + initial avatars ---------------
+        if (root.current-tab == 1): ScrollView {
+            width: 100%;
+            height: 100%;
+
+            VerticalLayout {
+                padding-right: 10px;
+                spacing: 0px;
+                alignment: start;
+
+                ContributorRow {
+                    person_name: "Joachim Danmayr";
+                    role: "Creator, Programming, Documentation, Testing";
+                    initials: "JD";
+                }
+
+                ContributorRow {
+                    person_name: "Melanie Schuerz";
+                    role: "Co-Creator, Conceptualization, Testing, AI-Training";
+                    initials: "MS";
+                }
+
+                ContributorRow {
+                    person_name: "Tanja Plank";
+                    role: "Testing";
+                    initials: "TP";
+                }
+
+                ContributorRow {
+                    person_name: "Maria Jaritsch";
+                    role: "Testing";
+                    initials: "MJ";
+                }
+
+                ContributorRow {
+                    person_name: "Patricia Hrasnova";
+                    role: "Testing";
+                    initials: "PH";
+                }
+
+                ContributorRow {
+                    person_name: "Anna Dlugosch";
+                    role: "Testing";
+                    initials: "AD";
+                    is_last: true;
+                }
+            }
+        }
+
+        // -- System: where the work runs + 4-column stat grid ---------------
+        if (root.current-tab == 2): VerticalLayout {
+            alignment: start;
+            spacing: 10px;
+
+            Text {
+                text: "Computing on: " + AppInfoState.system_source;
+                font-size: 11px;
+                color: Theme.text-mute;
+                wrap: word-wrap;
+            }
+
+            if AppInfoState.system_error != "": Text {
+                text: AppInfoState.system_error;
+                font-size: 11px;
+                color: Theme.warn;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                InfoStat {
+                    label: "OPERATING SYSTEM";
+                    value: AppInfoState.system_loading ? "…" : AppInfoState.system_os;
+                }
+
+                InfoStat {
+                    label: "CPU CORES";
+                    value: AppInfoState.system_loading ? "…" : "\{AppInfoState.cpu_cores}";
+                }
+
+                InfoStat {
+                    label: "AVAILABLE RAM";
+                    value: AppInfoState.system_loading ? "…" : AppInfoState.ram_total;
+                }
+
+                InfoStat {
+                    label: "CUDA (GPU)";
+                    value: AppInfoState.system_loading ? "Checking…" : (AppInfoState.cuda_available ? "Available" : "Not available");
+                    value_color: AppInfoState.cuda_available && !AppInfoState.system_loading ? Theme.ok : Theme.text-mute;
+                }
+            }
+        }
+
+        // -- Licenses: chevron + capped inner-scroll body ---------------
+        if (root.current-tab == 3): ScrollView {
+            width: 100%;
+            height: 100%;
+
+            VerticalLayout {
+                padding-right: 10px;
+                spacing: 8px;
+                alignment: start;
+
+                Text {
+                    text: "Tap a license to view its full text.";
+                    font-size: 11px;
+                    color: Theme.text-mute;
+                }
+
+                Rectangle {
+                    height: 4px;
+                }
+
+                // -- EVAnalyzer's own license - same card style as the
+                // third-party entries below, just pinned first and
+                // driven off its own sentinel (-2) rather than the
+                // model index.
+                LicenseCard {
+                    title: "EVAnalyzer  (AGPL-3.0)";
+                    subtitle: "This application's own license";
+                    expanded: root.expanded-third-party-index == -2;
+                    toggled => {
+                        root.expanded-third-party-index = (root.expanded-third-party-index == -2) ? -1 : -2;
+                    }
+
+                    for paragraph in AppInfoState.license_paragraphs: Text {
+                        text: paragraph;
+                        font-family: Theme.font-mono;
+                        font-size: 10px;
                         color: Theme.text-dim;
                         wrap: word-wrap;
                     }
-
-                    Text {
-                        text: "Copyright 2019-2026 Joachim Danmayr";
-                        font-size: 12px;
-                        color: Theme.text-mute;
-                    }
-
-                    Rectangle {
-                        width: link-text.preferred-width + 28px;
-                        height: 30px;
-                        border-radius: 15px;
-                        background: Theme.raised;
-                        border-width: 1px;
-                        border-color: Theme.border;
-
-                        link-text := Text {
-                            text: "evanalyzer.org ↗";
-                            font-size: 12px;
-                            font-weight: 600;
-                            color: Theme.accent;
-                            x: 14px;
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-
-                    Rectangle {
-                        vertical-stretch: 1;
-                    }
-
-                    Text {
-                        text: "ALL RIGHTS RESERVED";
-                        font-size: 11px;
-                        font-weight: 700;
-                        letter-spacing: 1px;
-                        color: Theme.text-faint;
-                    }
                 }
 
-                // -- Contributors: divider rows + initial avatars ---------------
-                if (root.current-tab == 1): ScrollView {
-                    width: 100%;
-                    height: 100%;
-
-                    VerticalLayout {
-                        padding-right: 10px;
-                        spacing: 0px;
-                        alignment: start;
-
-                        ContributorRow {
-                            person_name: "Joachim Danmayr";
-                            role: "Creator, Programming, Documentation, Testing";
-                            initials: "JD";
-                        }
-
-                        ContributorRow {
-                            person_name: "Melanie Schuerz";
-                            role: "Co-Creator, Conceptualization, Testing, AI-Training";
-                            initials: "MS";
-                        }
-
-                        ContributorRow {
-                            person_name: "Tanja Plank";
-                            role: "Testing";
-                            initials: "TP";
-                        }
-
-                        ContributorRow {
-                            person_name: "Maria Jaritsch";
-                            role: "Testing";
-                            initials: "MJ";
-                        }
-
-                        ContributorRow {
-                            person_name: "Patricia Hrasnova";
-                            role: "Testing";
-                            initials: "PH";
-                        }
-
-                        ContributorRow {
-                            person_name: "Anna Dlugosch";
-                            role: "Testing";
-                            initials: "AD";
-                            is_last: true;
-                        }
-                    }
+                Rectangle {
+                    height: 10px;
                 }
 
-                // -- System: where the work runs + 4-column stat grid ---------------
-                if (root.current-tab == 2): VerticalLayout {
+                // Logos of third-party libraries whose license requires
+                // displaying them (just Slint for now).
+                HorizontalLayout {
+                    height: 20px;
                     alignment: start;
-                    spacing: 10px;
+                    spacing: 12px;
 
-                    Text {
-                        text: "Computing on: " + AppInfoState.system_source;
-                        font-size: 11px;
-                        color: Theme.text-mute;
-                        wrap: word-wrap;
-                    }
-
-                    if AppInfoState.system_error != "": Text {
-                        text: AppInfoState.system_error;
-                        font-size: 11px;
-                        color: Theme.warn;
-                        wrap: word-wrap;
-                    }
-
-                    HorizontalLayout {
-                        spacing: 10px;
-
-                        InfoStat {
-                            label: "OPERATING SYSTEM";
-                            value: AppInfoState.system_loading ? "…" : AppInfoState.system_os;
-                        }
-
-                        InfoStat {
-                            label: "CPU CORES";
-                            value: AppInfoState.system_loading ? "…" : "\{AppInfoState.cpu_cores}";
-                        }
-
-                        InfoStat {
-                            label: "AVAILABLE RAM";
-                            value: AppInfoState.system_loading ? "…" : AppInfoState.ram_total;
-                        }
-
-                        InfoStat {
-                            label: "CUDA (GPU)";
-                            value: AppInfoState.system_loading ? "Checking…" : (AppInfoState.cuda_available ? "Available" : "Not available");
-                            value_color: AppInfoState.cuda_available && !AppInfoState.system_loading ? Theme.ok : Theme.text-mute;
-                        }
+                    AttributionLogo {
+                        logo-dark: @image-url("../icons/madewithslint-dark.svg");
+                        logo-light: @image-url("../icons/madewithslint-light.svg");
+                        url: "https://slint.dev";
+                        logo-width: 48px;
+                        logo-height: 20px;
                     }
                 }
 
-                // -- Licenses: chevron + capped inner-scroll body ---------------
-                if (root.current-tab == 3): ScrollView {
-                    width: 100%;
-                    height: 100%;
+                Rectangle {
+                    height: 10px;
+                }
 
-                    VerticalLayout {
-                        padding-right: 10px;
-                        spacing: 8px;
-                        alignment: start;
+                Text {
+                    text: "Third-party open-source packages (" + AppInfoState.third_party_package_count + ")";
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
 
-                        Text {
-                            text: "Tap a license to view its full text.";
-                            font-size: 11px;
-                            color: Theme.text-mute;
-                        }
+                Rectangle {
+                    height: 4px;
+                }
 
-                        Rectangle {
-                            height: 4px;
-                        }
+                for group[i] in AppInfoState.third_party_licenses: LicenseCard {
+                    title: group.name + "  (" + group.id + ")";
+                    subtitle: group.crates;
+                    expanded: root.expanded-third-party-index == i;
+                    toggled => {
+                        root.expanded-third-party-index = (root.expanded-third-party-index == i) ? -1 : i;
+                    }
 
-                        // -- EVAnalyzer's own license - same card style as the
-                        // third-party entries below, just pinned first and
-                        // driven off its own sentinel (-2) rather than the
-                        // model index.
-                        LicenseCard {
-                            title: "EVAnalyzer  (AGPL-3.0)";
-                            subtitle: "This application's own license";
-                            expanded: root.expanded-third-party-index == -2;
-                            toggled => {
-                                root.expanded-third-party-index = (root.expanded-third-party-index == -2) ? -1 : -2;
-                            }
-
-                            for paragraph in AppInfoState.license_paragraphs: Text {
-                                text: paragraph;
-                                font-family: Theme.font-mono;
-                                font-size: 10px;
-                                color: Theme.text-dim;
-                                wrap: word-wrap;
-                            }
-                        }
-
-                        Rectangle {
-                            height: 10px;
-                        }
-
-                        // Logos of third-party libraries whose license requires
-                        // displaying them (just Slint for now).
-                        HorizontalLayout {
-                            height: 20px;
-                            alignment: start;
-                            spacing: 12px;
-
-                            AttributionLogo {
-                                logo-dark: @image-url("../icons/madewithslint-dark.svg");
-                                logo-light: @image-url("../icons/madewithslint-light.svg");
-                                url: "https://slint.dev";
-                                logo-width: 48px;
-                                logo-height: 20px;
-                            }
-                        }
-
-                        Rectangle {
-                            height: 10px;
-                        }
-
-                        Text {
-                            text: "Third-party open-source packages (" + AppInfoState.third_party_package_count + ")";
-                            font-size: 13px;
-                            font-weight: 700;
-                            color: Theme.text;
-                        }
-
-                        Rectangle {
-                            height: 4px;
-                        }
-
-                        for group[i] in AppInfoState.third_party_licenses: LicenseCard {
-                            title: group.name + "  (" + group.id + ")";
-                            subtitle: group.crates;
-                            expanded: root.expanded-third-party-index == i;
-                            toggled => {
-                                root.expanded-third-party-index = (root.expanded-third-party-index == i) ? -1 : i;
-                            }
-
-                            for paragraph in group.text_paragraphs: Text {
-                                text: paragraph;
-                                font-family: Theme.font-mono;
-                                font-size: 10px;
-                                color: Theme.text-dim;
-                                wrap: word-wrap;
-                            }
-                        }
+                    for paragraph in group.text_paragraphs: Text {
+                        text: paragraph;
+                        font-family: Theme.font-mono;
+                        font-size: 10px;
+                        color: Theme.text-dim;
+                        wrap: word-wrap;
                     }
                 }
             }
+        }
+    }
 
-            // -- Close button ------------------------------------------------
-            Rectangle {
-                height: 20px;
-            }
-
-            AppButton {
-                text: "Close";
-                primary: false;
-                clicked => {
-                    GlobalAppState.active-dialog = DialogType.none;
-                    root.current-tab = 0;
-                    root.expanded-third-party-index = -1;
-                }
+    DialogFooter {
+        AppButton {
+            text: "Close";
+            primary: true;
+            clicked => {
+                root.close();
             }
         }
     }

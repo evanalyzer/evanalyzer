@@ -1,5 +1,6 @@
 import { LineEdit, ComboBox } from "std-widgets.slint";
 import { AppButton } from "../components/app_button.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { Theme } from "../style.slint";
 import { GlobalAppState, DialogType } from "../state.slint";
 import { ImageMetaData } from "../editor/image_meta_panel.slint";
@@ -115,204 +116,140 @@ component LabeledInput inherits VerticalLayout {
 
 // -- Dialog component -----------------------------------------
 
-export component PipelineEditDialog inherits Rectangle {
-    background: Theme.modal-overlay;
+export component PipelineEditDialog inherits Dialog {
+    title: "Edit Pipeline";
+    dialog-width: 420px;
+    close-on-backdrop: true;
+    close => {
+        PipelineEditState.cancel();
+    }
 
-    // Click outside = cancel
-    TouchArea {
-        clicked => {
-            PipelineEditState.cancel();
+    // -- Name --
+    LabeledInput {
+        label: "Pipeline name";
+        value: PipelineEditState.pipeline-name;
+        placeholder: "e.g. Cell detection";
+        edited(t) => {
+            PipelineEditState.pipeline-name = t;
         }
     }
 
-    // Centered card
-    card := Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 420px;
-        background: Theme.panel;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-offset-y: 12px;
-        clip: true;
+    // -- Image source --
+    VerticalLayout {
+        spacing: 8px;
+        Text {
+            text: "Image source";
+            font-size: 11px;
+            color: Theme.text-dim;
+        }
 
-        // Eat clicks inside so scrim doesn't fire
-        TouchArea { }
+        VerticalLayout {
+            spacing: 4px;
 
-        layout := VerticalLayout {
-            padding: 24px;
-            spacing: 18px;
-
-            // -- Title --
-            HorizontalLayout {
-                alignment: space-between;
-                Text {
-                    text: "Edit Pipeline";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: Theme.text;
-                }
-
-                Rectangle {
-                    width: 22px;
-                    height: 22px;
-                    border-radius: 4px;
-                    background: close-ta.has-hover ? Theme.raised : transparent;
-                    animate background { duration: 80ms; }
-                    Text {
-                        text: "✕";
-                        font-size: 12px;
-                        color: Theme.text-dim;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+            SourceOption {
+                label: ImageMetaData.is-rgb == false ? "Channel" : "Image";
+                description: ImageMetaData.is-rgb == false ? "Read directly from an image channel (0-based)" : "Read directly from the RGB image";
+                selected: PipelineEditState.source-type == 2;
+                clicked => {
+                    // For RGB images only source 0 is setup
+                    if ImageMetaData.is-rgb == true {
+                        PipelineEditState.source-channel = 0;
                     }
-
-                    close-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            PipelineEditState.cancel();
-                        }
-                    }
+                    PipelineEditState.source-type = 2;
                 }
             }
 
-            // -- Name --
-            LabeledInput {
-                label: "Pipeline name";
-                value: PipelineEditState.pipeline-name;
-                placeholder: "e.g. Cell detection";
-                edited(t) => {
-                    PipelineEditState.pipeline-name = t;
-                }
-            }
-
-            // -- Image source --
-            VerticalLayout {
+            if PipelineEditState.source-type == 2 && ImageMetaData.is-rgb == false: HorizontalLayout {
+                padding-left: 26px;
+                padding-top: 2px;
+                padding-bottom: 4px;
                 spacing: 8px;
+                alignment: start;
                 Text {
-                    text: "Image source";
+                    text: "Channel";
                     font-size: 11px;
                     color: Theme.text-dim;
+                    vertical-alignment: center;
+                    width: 52px;
                 }
 
-                VerticalLayout {
-                    spacing: 4px;
-
-                    SourceOption {
-                        label: ImageMetaData.is-rgb == false ? "Channel" : "Image";
-                        description: ImageMetaData.is-rgb == false ? "Read directly from an image channel (0-based)" : "Read directly from the RGB image";
-                        selected: PipelineEditState.source-type == 2;
-                        clicked => {
-                            // For RGB images only source 0 is setup
-                            if ImageMetaData.is-rgb == true {
-                                PipelineEditState.source-channel = 0;
-                            }
-                            PipelineEditState.source-type = 2;
-                        }
-                    }
-
-                    if PipelineEditState.source-type == 2 && ImageMetaData.is-rgb == false: HorizontalLayout {
-                        padding-left: 26px;
-                        padding-top: 2px;
-                        padding-bottom: 4px;
-                        spacing: 8px;
-                        alignment: start;
-                        Text {
-                            text: "Channel";
-                            font-size: 11px;
-                            color: Theme.text-dim;
-                            vertical-alignment: center;
-                            width: 52px;
-                        }
-
-                        ChannelPicker {
-                            width: 250px;
-                            value: PipelineEditState.source-channel;
-                            changed(v) => {
-                                PipelineEditState.source-channel = v;
-                            }
-                        }
-                    }
-
-                    SourceOption {
-                        label: "None";
-                        description: "No image - the first step loads one (Load Image Channel)";
-                        selected: PipelineEditState.source-type == 3;
-                        clicked => {
-                            PipelineEditState.source-type = 3;
-                        }
-                    }
-
-                    SourceOption {
-                        label: "Scratchpad";
-                        description: "Start with an empty image";
-                        selected: PipelineEditState.source-type == 0;
-                        clicked => {
-                            PipelineEditState.source-type = 0;
-                        }
-                    }
-
-                    SourceOption {
-                        label: "Shared memory slot";
-                        description: "The image an earlier pipeline stored (Image Cache → Shared)";
-                        selected: PipelineEditState.source-type == 1;
-                        clicked => {
-                            PipelineEditState.source-type = 1;
-                        }
-                    }
-
-                    if PipelineEditState.source-type == 1: HorizontalLayout {
-                        padding-left: 26px;
-                        padding-top: 2px;
-                        padding-bottom: 4px;
-                        spacing: 8px;
-                        alignment: start;
-                        Text {
-                            text: "Slot";
-                            font-size: 11px;
-                            color: Theme.text-dim;
-                            vertical-alignment: center;
-                            width: 30px;
-                        }
-
-                        ComboBox {
-                            width: 80px;
-                            model: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
-                            current-index: PipelineEditState.source-slot;
-                            selected(v) => {
-                                PipelineEditState.source-slot = round(v.to-float());
-                            }
-                        }
+                ChannelPicker {
+                    width: 250px;
+                    value: PipelineEditState.source-channel;
+                    changed(v) => {
+                        PipelineEditState.source-channel = v;
                     }
                 }
             }
 
-            // -- Footer --
-            HorizontalLayout {
+            SourceOption {
+                label: "None";
+                description: "No image - the first step loads one (Load Image Channel)";
+                selected: PipelineEditState.source-type == 3;
+                clicked => {
+                    PipelineEditState.source-type = 3;
+                }
+            }
+
+            SourceOption {
+                label: "Scratchpad";
+                description: "Start with an empty image";
+                selected: PipelineEditState.source-type == 0;
+                clicked => {
+                    PipelineEditState.source-type = 0;
+                }
+            }
+
+            SourceOption {
+                label: "Shared memory slot";
+                description: "The image an earlier pipeline stored (Image Cache → Shared)";
+                selected: PipelineEditState.source-type == 1;
+                clicked => {
+                    PipelineEditState.source-type = 1;
+                }
+            }
+
+            if PipelineEditState.source-type == 1: HorizontalLayout {
+                padding-left: 26px;
+                padding-top: 2px;
+                padding-bottom: 4px;
                 spacing: 8px;
-                alignment: end;
-                AppButton {
-                    text: "Cancel";
-                    clicked => {
-                        PipelineEditState.cancel();
-                    }
+                alignment: start;
+                Text {
+                    text: "Slot";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                    width: 30px;
                 }
 
-                AppButton {
-                    text: "Save";
-                    primary: true;
-                    clicked => {
-                        PipelineEditState.confirm();
+                ComboBox {
+                    width: 80px;
+                    model: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+                    current-index: PipelineEditState.source-slot;
+                    selected(v) => {
+                        PipelineEditState.source-slot = round(v.to-float());
                     }
                 }
             }
         }
+    }
 
-        // Height = content height
-        height: layout.preferred-height;
+    DialogFooter {
+        AppButton {
+            text: "Cancel";
+            clicked => {
+                PipelineEditState.cancel();
+            }
+        }
+
+        AppButton {
+            text: "Save";
+            primary: true;
+            clicked => {
+                PipelineEditState.confirm();
+            }
+        }
     }
 }
 
@@ -325,109 +262,36 @@ export global PipelineDeleteConfirmState {
     callback cancel();
 }
 
-export component PipelineDeleteConfirmDialog inherits Rectangle {
-    background: Theme.modal-overlay;
-    TouchArea {
-        clicked => {
-            PipelineDeleteConfirmState.cancel();
-        }
+export component PipelineDeleteConfirmDialog inherits Dialog {
+    title: "Delete pipeline?";
+    tone: DialogTone.danger;
+    dialog-width: 380px;
+    close-on-backdrop: true;
+    close => {
+        PipelineDeleteConfirmState.cancel();
     }
 
-    Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 380px;
-        background: Theme.panel;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.err.with-alpha(0.4);
-        drop-shadow-blur: 40px;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-offset-y: 12px;
+    Text {
+        text: "\"" + PipelineDeleteConfirmState.pipeline-name + "\" and all its steps will be permanently removed.";
+        font-size: 13px;
+        color: Theme.text;
+        wrap: word-wrap;
+    }
 
-        TouchArea { }
-
-        inner-layout := VerticalLayout {
-            padding: 24px;
-            spacing: 16px;
-
-            // Icon + title
-            HorizontalLayout {
-                spacing: 12px;
-                alignment: start;
-                Rectangle {
-                    width: 36px;
-                    height: 36px;
-                    border-radius: 8px;
-                    background: Theme.err.with-alpha(0.14);
-                    Text {
-                        text: "🗑";
-                        font-size: 16px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 2px;
-                    Text {
-                        text: "Delete pipeline?";
-                        font-size: 15px;
-                        font-weight: 700;
-                        color: Theme.text;
-                    }
-                }
-            }
-
-            // Message
-            Text {
-                text: "\"" + PipelineDeleteConfirmState.pipeline-name + "\" and all its steps will be permanently removed.";
-                font-size: 12px;
-                color: Theme.text-dim;
-                wrap: word-wrap;
-            }
-
-            // Buttons
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: end;
-                AppButton {
-                    text: "Cancel";
-                    clicked => {
-                        PipelineDeleteConfirmState.cancel();
-                    }
-                }
-
-                Rectangle {
-                    height: 34px;
-                    width: del-layout.preferred-width + 24px;
-                    border-radius: 6px;
-                    background: del-ta.has-hover ? Theme.err : Theme.err.with-alpha(0.85);
-                    animate background { duration: 80ms; }
-                    del-layout := HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        alignment: center;
-                        Text {
-                            text: "Delete";
-                            font-size: 12.5px;
-                            font-weight: 600;
-                            color: #ffffff;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    del-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            PipelineDeleteConfirmState.confirm();
-                        }
-                    }
-                }
+    DialogFooter {
+        AppButton {
+            text: "Cancel";
+            clicked => {
+                PipelineDeleteConfirmState.cancel();
             }
         }
 
-        height: inner-layout.preferred-height;
+        AppButton {
+            text: "Delete";
+            danger: true;
+            clicked => {
+                PipelineDeleteConfirmState.confirm();
+            }
+        }
     }
 }

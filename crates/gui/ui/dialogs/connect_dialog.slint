@@ -1,5 +1,5 @@
 import { LineEdit } from "std-widgets.slint";
-import { BaseDialog } from "dialog_base.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { GlobalAppState, DialogType, ConnectState } from "../state.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Theme } from "../style.slint";
@@ -7,13 +7,16 @@ import { Theme } from "../style.slint";
 // "File > Connect to server": address, user and password, the servers used
 // before - and, on the first connection to a server, its certificate to
 // confirm (step 1), or a warning that it changed (step 2).
-export component ConnectDialog inherits BaseDialog {
-    title-text: ConnectState.step == 0 ? "Connect to server"
+export component ConnectDialog inherits Dialog {
+    title: ConnectState.step == 0 ? "Connect to server"
         : ConnectState.step == 1 ? "Is this your server?"
         : "The server's certificate has changed";
-    icon: ConnectState.step == 2 ? "⚠️" : "ℹ️";
-    main-width: 520px;
-    main-height: ConnectState.step == 0 ? 470px : 360px;
+    dialog-width: 520px;
+    tone: ConnectState.step == 2 ? DialogTone.warning : DialogTone.info;
+    close => {
+        ConnectState.cancel();
+        GlobalAppState.active-dialog = DialogType.none;
+    }
 
     // -- step 0: address, user, password ------------------------------------
     if ConnectState.step == 0: VerticalLayout {
@@ -91,13 +94,7 @@ export component ConnectDialog inherits BaseDialog {
             color: ConnectState.busy ? Theme.text-dim : Theme.err;
         }
 
-        Rectangle {
-            vertical-stretch: 1;
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: end;
+        DialogFooter {
             AppButton {
                 text: "Cancel";
                 clicked => {
@@ -149,13 +146,7 @@ export component ConnectDialog inherits BaseDialog {
             color: ConnectState.busy ? Theme.text-dim : Theme.err;
         }
 
-        Rectangle {
-            vertical-stretch: 1;
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: end;
+        DialogFooter {
             AppButton {
                 text: "Back";
                 enabled: !ConnectState.busy;

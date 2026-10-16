@@ -1,7 +1,6 @@
-import { BaseDialog } from "dialog_base.slint";
-import { Button } from "std-widgets.slint";
-import { Palette } from "std-widgets.slint";
 import { ScrollView } from "std-widgets.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
+import { AppButton } from "../components/app_button.slint";
 import { Theme } from "../style.slint";
 import {
     GlobalAppState,
@@ -9,40 +8,35 @@ import {
     WarningState,
 } from "../state.slint";
 
-export component WarningDialog inherits BaseDialog {
-    title-text: WarningState.title;
-    icon: WarningState.info ? "ℹ️" : "⚠️";
-    icon-bg-color: WarningState.info ? Theme.accent.with-alpha(0.18) : Theme.icon-bg-default;
-    main-width: 440px;
-    // Grow with the message, but never taller than the viewport, so the OK
-    // button is always reachable; long messages scroll inside the panel instead.
-    main-height: min(msg.preferred-height + 150px, root.height - 48px);
+export component WarningDialog inherits Dialog {
+    title: WarningState.title;
+    tone: WarningState.info ? DialogTone.info : DialogTone.warning;
+    dialog-width: 440px;
+    // Grow with the message - a long one scrolls inside (the dialog is never
+    // taller than the window, so OK stays reachable).
+    dialog-height: msg.preferred-height + 150px;
+    close => {
+        GlobalAppState.active_dialog = DialogType.none;
+    }
 
-    VerticalLayout {
-        spacing: 12px;
+    ScrollView {
+        vertical-stretch: 1;
 
-        ScrollView {
-            vertical-stretch: 1;
-
-            msg := Text {
-                width: root.main-width - 56px;
-                text: WarningState.message;
-                wrap: word-wrap;
-                color: Palette.foreground;
-                font-size: 14px;
-                font-weight: 500;
-            }
+        msg := Text {
+            width: root.dialog-width - 64px;
+            text: WarningState.message;
+            wrap: word-wrap;
+            color: Theme.text;
+            font-size: 13px;
         }
+    }
 
-        HorizontalLayout {
-            alignment: end;
-            Button {
-                text: "OK";
-                primary: true;
-                width: 100px;
-                clicked => {
-                    GlobalAppState.active_dialog = DialogType.none;
-                }
+    DialogFooter {
+        AppButton {
+            text: "OK";
+            primary: true;
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
             }
         }
     }
