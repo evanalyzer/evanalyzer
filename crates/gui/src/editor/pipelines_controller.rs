@@ -7766,6 +7766,37 @@ mod tests {
             .collect()
     }
 
+    /// A number with − / + (a spinner setting): + steps it up by its step,
+    /// − back down, and the step's setting takes the value.
+    #[test]
+    fn a_spinners_buttons_step_the_setting() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, ui_state, _controller) = selected(vec![step("Blur")]);
+        ui.window()
+            .set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = commands.row_data(0).unwrap();
+        card.expanded = true;
+        commands.set_row_data(0, card);
+        let size = || match ui_state.get_project().pipelines[0].steps[0].command() {
+            Some(PipelineCommand::Blur(blur)) => blur.kernel_size,
+            other => panic!("{other:?}"),
+        };
+        let before = size();
+        let button = |label: &str| {
+            ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+        };
+        button("Increase").invoke_accessible_default_action();
+        drain_ui_queue();
+        assert!(size() > before, "{} > {before}", size());
+        button("Decrease").invoke_accessible_default_action();
+        drain_ui_queue();
+        assert_eq!(size(), before);
+    }
+
     /// A channel and a single class are picked with the same field (label, swatch
     /// and name, "↓") - only a class list has its own (chips).
     #[test]
