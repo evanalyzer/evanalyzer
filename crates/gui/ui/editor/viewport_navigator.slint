@@ -1,79 +1,68 @@
+// editor/viewport_navigator.slint — the mini-map at the bottom right of the
+// image: the whole image as a small frame, the part in view outlined. A
+// click or a drag in it moves the view there. Shown only while the view
+// doesn't show the whole image.
+
 import { ViewportState } from "../api/viewport.slint";
+import { Ink } from "../ink/palette.slint";
 
 export component Navigator inherits Rectangle {
-    in property <float> view_x;
-    in property <float> view_y;
-    in property <float> view_width;
-    in property <float> view_height;
-    width: 150px;
-    height: 40px;
+    // The viewport's size: with `nav_width`/`nav_height` (the part of the
+    // image in view, 0…1) it gives the image's size on screen.
+    in property <length> viewport-width;
+    in property <length> viewport-height;
 
-    pure function skewed_path(nx: float, ny: float, nw: float, nh: float) -> string {
-        let w = root.width / 1px;
-        let h = root.height / 1px;
-        let lean_factor = 0.4;
-        let current_lean = lean_factor * w;
+    property <float> nav-w: ViewportState.nav_width;
+    property <float> nav-h: ViewportState.nav_height;
+    property <bool> has-image: root.nav-w > 0 && root.nav-h > 0;
+    // The image's width / height.
+    property <float> aspect: root.has-image ? (root.viewport-width / root.nav-w) / (root.viewport-height / root.nav-h) : 1;
+    property <length> max-side: 140px;
 
-        let x1 = (nx * w) + (nh * current_lean);
-        let y1 = ny * h;
-        let x4 = (nx + nw) * w;
-        let y4 = ny * h;
-
-        let x2 = (nx * w);
-        let x3 = ((nx + nw) * w) - (nh * current_lean);
-        let y_bot = (ny + nh) * h;
-
-        return "M \{x1} \{y1} L \{x2} \{y_bot} L \{x3} \{y_bot} L \{x4} \{y1} Z";
+    // Moves the view so that the point (u, v) of the image (0…1) is in its
+    // middle - the same way a drag on the image pans it.
+    function center-on(u: float, v: float) {
+        ViewportState.offset_x = -(u - root.nav-w / 2) * root.viewport-width / root.nav-w;
+        ViewportState.offset_y = -(v - root.nav-h / 2) * root.viewport-height / root.nav-h;
+        ViewportState.report_viewport_moved(ViewportState.offset_x / 1px, ViewportState.offset_y / 1px);
     }
 
-    pure function skewed_path_moved(nx: float, ny: float, nw: float, nh: float) -> string {
-        let w = root.width / 1px;
-        let h = root.height / 1px;
-        let lean_factor = 0.4;
-        let current_lean = lean_factor * w;
+    width: root.aspect >= 1 ? root.max-side : root.max-side * root.aspect;
+    height: root.aspect >= 1 ? root.max-side / root.aspect : root.max-side;
+    visible: root.has-image && (root.nav-w < 0.999 || root.nav-h < 0.999);
+    accessible-role: slider;
+    accessible-label: "Navigator";
 
-        let x1_fixed = current_lean;
-        let y1_fixed = 1;
+    frame := Rectangle {
+        background: #000000.with-alpha(0.45);
+        border-radius: Ink.radius-sm;
+        border-width: 1px;
+        border-color: #FFFFFF.with-alpha(0.35);
+        clip: true;
 
-        // y = k*x+d
-        let pos_correct = x1_fixed - (nh * current_lean) - ny * current_lean - nx * current_lean;
-
-        let x1 = (nx * w) + (nh * current_lean) + pos_correct;
-        let y1 = ny * h;
-        let x4 = (nx + nw) * w + pos_correct;
-        let y4 = ny * h;
-
-        let x2 = (nx * w) + pos_correct;
-        let x3 = ((nx + nw) * w) - (nh * current_lean) + pos_correct;
-        let y_bot = (ny + nh) * h;
-
-        return "M \{x1} \{y1} L \{x2} \{y_bot} L \{x3} \{y_bot} L \{x4} \{y1} Z";
-    }
-
-    // 1. The FULL IMAGE Area (orange - FIXED)
-    Rectangle {
-        border-width: 0px;
-
-        Path {
-            commands: root.skewed_path(0, 0, 1, 1);
-            stroke: orange;
-            stroke-width: 1px;
-
-            viewbox-width: 150;
-            viewbox-height: 40;
+        // The part in view.
+        Rectangle {
+            x: ViewportState.nav_x * parent.width;
+            y: ViewportState.nav_y * parent.height;
+            width: max(4px, root.nav-w * parent.width);
+            height: max(4px, root.nav-h * parent.height);
+            background: Ink.focus.with-alpha(0.18);
+            border-width: 1.5px;
+            border-color: Ink.focus;
         }
-    }
 
-    // 2. The VIEWPORT (MOVING)
-        Path {
-        commands: root.skewed_path_moved(ViewportState.nav_x, ViewportState.nav_y, ViewportState.nav_width, ViewportState.nav_height);
-        stroke: white;
-        stroke-width: 1px;
-
-        viewbox-width: 150;
-        viewbox-height: 40;
-
-        //viewbox-width: 120;
-        //viewbox-height: 120;
+        TouchArea {
+            mouse-cursor: pointer;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                    root.center-on(self.mouse-x / self.width, self.mouse-y / self.height);
+                }
+            }
+            moved => {
+                if self.pressed {
+                    root.center-on(clamp(self.mouse-x / self.width, 0, 1), clamp(self.mouse-y / self.height, 0, 1));
+                }
+            }
+        }
     }
 }

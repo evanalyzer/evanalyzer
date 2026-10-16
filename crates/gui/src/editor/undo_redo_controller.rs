@@ -119,7 +119,7 @@ mod tests {
     use crate::editor::pipelines_controller::PipelinesController;
     use crate::editor::template_controller::TemplateController;
     use crate::editor::test_support::{
-        project_with_one_image, test_ui_state_with_project, test_ui_windows,
+        project_with_one_image, test_ui_state_with_project, test_ui_window,
     };
 
     fn make_controller() -> (Arc<UiState>, Arc<UndoRedoController>) {
@@ -180,10 +180,8 @@ mod tests {
                 ),
             ),
         ));
-        let project_settings_controller = Arc::new(ProjectSettingsController::new(
-            ui.clone(),
-            ui_state.clone(),
-        ));
+        let project_settings_controller =
+            Arc::new(ProjectSettingsController::new(ui.clone(), ui_state.clone()));
         let classification_controller = Arc::new(ClassificationController::new(
             ui.clone(),
             ui_state.clone(),
@@ -220,7 +218,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_wires_the_toolbars_undo_and_redo_buttons_to_ui_state() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 
@@ -245,7 +243,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_undo_with_nothing_to_undo_does_not_panic_or_change_project_state() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 

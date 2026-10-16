@@ -346,13 +346,13 @@ mod tests {
 
     // -- the save flow, with a window ---------------------------------------
 
-    use crate::editor::test_support::{choose_file, test_ui_windows, ui_state_with_windows};
+    use crate::editor::test_support::{choose_file, test_ui_window, ui_state_with_window};
     use crate::helper::ui_thread::drain_ui_queue;
     use evanalyzer_cfg::core_types::ImageAddress;
     use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
 
     fn controller() -> (crate::AppWindow, Arc<UiState>, Arc<TemplateController>) {
-        let (ui, results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let mut project = evanalyzer_app::project::ProjectWithRuntime::default();
         project.add_pipeline(PipelineSettings {
             id: PipelineId(1),
@@ -362,7 +362,7 @@ mod tests {
             enabled: true,
             steps: vec![],
         });
-        let ui_state = ui_state_with_windows(&ui, &results_ui, project);
+        let ui_state = ui_state_with_window(&ui, project);
         let controller = Arc::new(TemplateController::new(ui.as_weak(), ui_state.clone()));
         controller.attach_callbacks();
         (ui, ui_state, controller)

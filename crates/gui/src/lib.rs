@@ -2,11 +2,6 @@
 
 pub use evanalyzer_gui_slint::*;
 
-/// The results are shown in the main window now (its Results mode). Code
-/// that still names a separate results window gets the main window.
-// TODO(one-window): drop the `results_ui` handles and parameters.
-pub type ResultsWindow = AppWindow;
-
 use evanalyzer_app::backends::{Backend, ConnectionSecurity};
 use evanalyzer_app::global::{AppHandle, ColorScheme, Frontend};
 use evanalyzer_app::images::ImageMeta;
@@ -51,7 +46,6 @@ mod third_party_licenses;
 pub struct UiState {
     pub app: AppHandle, // cloneable handle - no Arc needed, AppHandle is already Arc inside
     pub ui_handle: slint::Weak<AppWindow>,
-    pub results_ui_handle: slint::Weak<ResultsWindow>,
     /// The in-app open/save dialog - browses the backend's files, so remote
     /// mode shows the server's folders.
     pub file_browser: Arc<FileBrowser<AppWindow>>,
@@ -95,11 +89,7 @@ pub struct UiState {
 }
 
 impl UiState {
-    pub fn new(
-        app: AppHandle,
-        handle: slint::Weak<AppWindow>,
-        results_handle: slint::Weak<ResultsWindow>,
-    ) -> Self {
+    pub fn new(app: AppHandle, handle: slint::Weak<AppWindow>) -> Self {
         let backend = app.backend();
         let app_settings = backend.load_app_settings().unwrap_or_else(|e| {
             log::warn!("Could not load the app settings, using defaults: {e}");
@@ -114,7 +104,6 @@ impl UiState {
             file_browser: Arc::new(FileBrowser::new(handle.clone(), Arc::clone(&backend))),
             app,
             ui_handle: handle,
-            results_ui_handle: results_handle,
             dirty: AtomicBool::new(false),
             undo_stack: Mutex::new(VecDeque::new()),
             redo_stack: Mutex::new(VecDeque::new()),
@@ -519,24 +508,18 @@ fn run(
 
     let ui = AppWindow::new()?;
     let ui_handle = ui.as_weak();
-    let results_ui = ui.clone_strong();
-    let results_ui_handle = results_ui.as_weak();
 
     load_about_dialog_information(&ui);
 
     // Build AppHandle from owner - shares the same Arc<RwLock<ProjectSettings>>
     let app_handle = owner.handle();
-    let ui_state = Arc::new(UiState::new(
-        app_handle,
-        ui_handle.clone(),
-        results_ui_handle.clone(),
-    ));
+    let ui_state = Arc::new(UiState::new(app_handle, ui_handle.clone()));
     // Reflects whatever project state already exists at startup — either the
     // blank default project, or one passed via a CLI `--project` argument
     // (loaded into `owner` before the GUI was created, so it's already
     // sitting in the shared `ProjectWithRuntime` `ui_state` now points at).
     ui_state.set_window_title(false);
-    apply_user_settings(&ui, &results_ui, &ui_state);
+    apply_user_settings(&ui, &ui_state);
     attach_system_info(&ui, Arc::clone(&ui_state));
     ui_state.file_browser.attach(&ui);
 
@@ -544,11 +527,7 @@ fn run(
     // Using invoke_from_event_loop here caused the initial `changed width/height`
     // layout events to fire before the Rust callbacks were registered, so the
     // viewport size was never reported to Rust until the user manually resized.
-    let editor = Arc::new(editor::Editor::new(
-        ui_handle.clone(),
-        results_ui_handle.clone(),
-        ui_state.clone(),
-    ));
+    let editor = Arc::new(editor::Editor::new(ui_handle.clone(), ui_state.clone()));
     editor.attach_callbacks();
     // `--project`: opened like "File > Open" - a file that can't be read
     // shows the usual warning in the window.
@@ -557,12 +536,7 @@ fn run(
     }
     // Kept alive until the window closes.
     let app = ui_state.app.clone();
-    let _connection_watch = show_connection(
-        &ui,
-        Some(results_ui_handle.clone()),
-        move || app.backend(),
-        editor.on_reconnected(),
-    );
+    let _connection_watch = show_connection(&ui, move || app.backend(), editor.on_reconnected());
 
     ui.run()
 }
@@ -658,9 +632,6 @@ fn format_ram(bytes: u64) -> String {
     format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
 }
 
-/// Apply the persisted dark/light preference to both windows. Each window
-/// owns its own `Appearance`/`Palette` instance, so this has to be done
-/// for both explicitly - see the comment on `Appearance` in style.slint.
 /// "alice @ workstation:7400" for a server, "This computer" otherwise.
 pub fn connection_label(backend: &dyn Backend) -> String {
     if !backend.is_remote() {
@@ -684,10 +655,8 @@ pub fn connection_label(backend: &dyn Backend) -> String {
 /// connection is reconnected in the background (see [`Reconnector`]);
 /// `on_reconnected` runs once it's back. Returns the timer, which must stay
 /// alive as long as the window.
-/// `results_ui`: the results window's status bar shows the same connection.
 fn show_connection(
     ui: &AppWindow,
-    results_ui: Option<slint::Weak<ResultsWindow>>,
     current: impl Fn() -> Arc<dyn Backend> + 'static,
     on_reconnected: impl Fn() + Send + Sync + 'static,
 ) -> slint::Timer {
@@ -735,9 +704,6 @@ fn show_connection(
             if state.get_connected() != connected {
                 state.set_connected(connected);
             }
-            if let Some(results_ui) = results_ui.as_ref().and_then(|r| r.upgrade()) {
-                copy_connection_state(&state, &results_ui.global::<ConnectionState>());
-            }
             if !connected && let Some(reconnector) = reconnector.lock().unwrap().as_ref() {
                 reconnector.start();
             }
@@ -747,16 +713,6 @@ fn show_connection(
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), update);
     timer
-}
-
-/// Mirrors what the main window's connection badge shows into another
-/// window's `ConnectionState` (globals are per window).
-fn copy_connection_state(from: &ConnectionState<'_>, to: &ConnectionState<'_>) {
-    to.set_remote(from.get_remote());
-    to.set_label(from.get_label());
-    to.set_connected(from.get_connected());
-    to.set_encrypted(from.get_encrypted());
-    to.set_verified(from.get_verified());
 }
 
 /// `ConnectionState` for `backend`, as long as nothing changes.
@@ -776,27 +732,22 @@ fn fill_connection_state(state: &ConnectionState<'_>, backend: &dyn Backend) {
     state.set_verified(security != ConnectionSecurity::EncryptedUnverified);
 }
 
-/// Applies the remembered appearance to both windows and saves the color
-/// scheme the user picks - through `ui_state`, so in remote mode it lives
-/// on the worker.
-fn apply_user_settings(ui: &AppWindow, results_ui: &ResultsWindow, ui_state: &Arc<UiState>) {
-    apply_appearance(ui, results_ui, ui_state);
+/// Applies the remembered appearance and saves the color scheme the user
+/// picks - through `ui_state`, so in remote mode it lives on the worker.
+fn apply_user_settings(ui: &AppWindow, ui_state: &Arc<UiState>) {
+    apply_appearance(ui, ui_state);
 
-    let results_ui_handle = results_ui.as_weak();
     let ui_state = Arc::clone(ui_state);
     ui.global::<Appearance>().on_scheme_changed(move |scheme| {
-        ui_state.update_app_settings(|settings| settings.color_scheme = color_scheme_from_ui(scheme));
-        if let Some(results_ui) = results_ui_handle.upgrade() {
-            results_ui.global::<Appearance>().invoke_apply(scheme);
-        }
+        ui_state
+            .update_app_settings(|settings| settings.color_scheme = color_scheme_from_ui(scheme));
     });
 }
 
-/// The remembered color scheme, on both windows.
-pub(crate) fn apply_appearance(ui: &AppWindow, results_ui: &ResultsWindow, ui_state: &UiState) {
+/// The remembered color scheme.
+pub(crate) fn apply_appearance(ui: &AppWindow, ui_state: &UiState) {
     let scheme = color_scheme_to_ui(ui_state.load_app_settings().color_scheme);
     ui.global::<Appearance>().invoke_apply(scheme);
-    results_ui.global::<Appearance>().invoke_apply(scheme);
 }
 
 fn color_scheme_to_ui(scheme: ColorScheme) -> InkScheme {
@@ -848,7 +799,7 @@ mod ui_state_tests {
 
         let ui = AppWindow::new().unwrap();
         let shown = Arc::clone(&backend);
-        let _timer = show_connection(&ui, None, move || Arc::clone(&shown), || {});
+        let _timer = show_connection(&ui, move || Arc::clone(&shown), || {});
         let state = ui.global::<ConnectionState>();
         assert!(!state.get_remote());
         assert!(state.get_connected());
@@ -877,35 +828,21 @@ mod ui_state_tests {
         let current = Arc::new(Mutex::new(Arc::clone(&local)));
 
         let ui = AppWindow::new().unwrap();
-        let results_ui = ui.clone_strong();
         let shown = Arc::clone(&current);
-        let _timer = show_connection(
-            &ui,
-            Some(results_ui.as_weak()),
-            move || Arc::clone(&shown.lock().unwrap()),
-            || {},
-        );
+        let _timer = show_connection(&ui, move || Arc::clone(&shown.lock().unwrap()), || {});
         let state = ui.global::<ConnectionState>();
-        // The results window's status bar shows the same connection.
-        let results_state = results_ui.global::<ConnectionState>();
         assert!(!state.get_remote());
-        assert_eq!(results_state.get_label(), "This computer");
 
         *current.lock().unwrap() = Arc::clone(&remote);
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1100));
         assert!(state.get_remote());
         assert_eq!(state.get_label(), addr.to_string());
         assert!(!state.get_encrypted(), "ws://");
-        assert!(results_state.get_remote());
-        assert_eq!(results_state.get_label(), addr.to_string());
-        assert!(!results_state.get_encrypted());
 
         *current.lock().unwrap() = local;
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1100));
         assert!(!state.get_remote());
         assert_eq!(state.get_label(), "This computer");
-        assert!(!results_state.get_remote());
-        assert_eq!(results_state.get_label(), "This computer");
     }
 
     #[test]
@@ -1120,11 +1057,7 @@ mod ui_state_tests {
             .with_home(&home)
             .expect("backend");
         let owner = ProjectOwner::with_backend(Arc::new(backend));
-        Arc::new(UiState::new(
-            owner.handle(),
-            slint::Weak::default(),
-            slint::Weak::default(),
-        ))
+        Arc::new(UiState::new(owner.handle(), slint::Weak::default()))
     }
 
     #[test]
@@ -1174,7 +1107,7 @@ mod ui_state_tests {
 
     #[test]
     fn the_about_dialog_shows_the_crate_version_and_the_licenses() {
-        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui = crate::editor::test_support::test_ui_window();
 
         load_about_dialog_information(&ui);
 
@@ -1190,12 +1123,9 @@ mod ui_state_tests {
     #[test]
     fn opening_the_about_dialog_shows_this_computers_system() {
         use crate::helper::ui_thread::drain_ui_queue;
-        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
-        let ui_state = crate::editor::test_support::ui_state_with_windows(
-            &ui,
-            &results_ui,
-            ProjectWithRuntime::default(),
-        );
+        let ui = crate::editor::test_support::test_ui_window();
+        let ui_state =
+            crate::editor::test_support::ui_state_with_window(&ui, ProjectWithRuntime::default());
         attach_system_info(&ui, Arc::clone(&ui_state));
         let info = ui.global::<AppInfoState>();
 
@@ -1214,7 +1144,7 @@ mod ui_state_tests {
     #[test]
     fn refreshing_the_system_info_after_the_window_closed_does_nothing() {
         use crate::helper::ui_thread::drain_ui_queue;
-        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui = crate::editor::test_support::test_ui_window();
         let ui_state = test_ui_state();
         attach_system_info(&ui, ui_state);
         let info = ui.global::<AppInfoState>();
@@ -1233,13 +1163,10 @@ mod ui_state_tests {
 
     #[test]
     fn a_picked_color_scheme_is_remembered_and_applied_to_the_results_window() {
-        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
-        let ui_state = crate::editor::test_support::ui_state_with_windows(
-            &ui,
-            &results_ui,
-            ProjectWithRuntime::default(),
-        );
-        apply_user_settings(&ui, &results_ui, &ui_state);
+        let ui = crate::editor::test_support::test_ui_window();
+        let ui_state =
+            crate::editor::test_support::ui_state_with_window(&ui, ProjectWithRuntime::default());
+        apply_user_settings(&ui, &ui_state);
 
         for (picked, saved) in [
             (InkScheme::Dark, ColorScheme::Dark),
@@ -1248,37 +1175,32 @@ mod ui_state_tests {
         ] {
             ui.global::<Appearance>().invoke_pick(picked);
             assert_eq!(ui_state.load_app_settings().color_scheme, saved);
-            assert_eq!(results_ui.global::<Ink>().get_scheme(), picked);
+            assert_eq!(ui.global::<Ink>().get_scheme(), picked);
             assert_eq!(ui.global::<Ink>().get_scheme(), picked);
         }
-
-        drop(results_ui);
         ui.global::<Appearance>().invoke_pick(InkScheme::Dark);
         assert_eq!(ui_state.load_app_settings().color_scheme, ColorScheme::Dark);
     }
 
     #[test]
     fn the_remembered_color_scheme_is_applied_at_start() {
-        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
-        let ui_state = crate::editor::test_support::ui_state_with_windows(
-            &ui,
-            &results_ui,
-            ProjectWithRuntime::default(),
-        );
+        let ui = crate::editor::test_support::test_ui_window();
+        let ui_state =
+            crate::editor::test_support::ui_state_with_window(&ui, ProjectWithRuntime::default());
         ui_state.update_app_settings(|settings| settings.color_scheme = ColorScheme::Dim);
 
-        apply_user_settings(&ui, &results_ui, &ui_state);
+        apply_user_settings(&ui, &ui_state);
 
         assert_eq!(ui.global::<Ink>().get_scheme(), InkScheme::Dim);
-        assert_eq!(results_ui.global::<Ink>().get_scheme(), InkScheme::Dim);
+        assert_eq!(ui.global::<Ink>().get_scheme(), InkScheme::Dim);
     }
 
     #[test]
     fn reconnect_now_on_this_computer_does_nothing() {
-        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui = crate::editor::test_support::test_ui_window();
         let backend: Arc<dyn Backend> =
             Arc::new(evanalyzer_app::backends::local::LocalBackend::default());
-        let _timer = show_connection(&ui, None, move || Arc::clone(&backend), || {});
+        let _timer = show_connection(&ui, move || Arc::clone(&backend), || {});
 
         ui.global::<ConnectionState>().invoke_reconnect_now();
 
@@ -1313,7 +1235,7 @@ mod ui_state_tests {
         use slint::platform::{PointerEventButton, WindowEvent};
 
         for height in [720.0, 500.0] {
-            let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+            let ui = crate::editor::test_support::test_ui_window();
             let window = ui.window();
             window.set_size(slint::LogicalSize::new(1280.0, height));
             ui.global::<GlobalAppState>()

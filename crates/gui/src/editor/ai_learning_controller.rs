@@ -1826,11 +1826,11 @@ mod tests {
     // These handlers mutate `AiLearningState` directly (no
     // `invoke_from_event_loop`, unlike the `sync_*_to_slint` methods above),
     // so their effect is observable synchronously right after invoking the
-    // wired callback - see `crate::editor::test_support::test_ui_windows`'s
+    // wired callback - see `crate::editor::test_support::test_ui_window`'s
     // doc comment for why this headless harness doesn't need a real display.
 
     use crate::editor::test_support::{
-        project_with_one_image, test_ui_state_with_project, test_ui_windows,
+        project_with_one_image, test_ui_state_with_project, test_ui_window,
     };
     use evanalyzer_app::project::ProjectExt;
     use evanalyzer_cfg::core_types::ObjectId;
@@ -1845,7 +1845,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_add_feature_row_appends_a_default_row() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let controller =
             make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
         controller.attach_callbacks();
@@ -1864,7 +1864,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_remove_feature_row_drops_the_given_index() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let controller =
             make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
         controller.attach_callbacks();
@@ -1889,7 +1889,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_remove_feature_row_out_of_range_is_a_no_op() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let controller =
             make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
         controller.attach_callbacks();
@@ -1903,7 +1903,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_add_gaussian_scales_parses_a_csv_list_and_skips_unparsable_entries() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let controller =
             make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
         controller.attach_callbacks();
@@ -1926,7 +1926,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_toggle_image_selected_flips_only_the_given_row() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let controller =
             make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
         controller.attach_callbacks();
@@ -1955,7 +1955,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_assign_object_class_labels_the_project_object_and_updates_the_row() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let mut project = project_with_one_image();
         project.classification.classes_mut().push(Class {
             id: 1,
@@ -1996,7 +1996,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_toggle_object_excluded_flips_the_flag_on_the_project_object() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let mut project = project_with_one_image();
         let object_id = ObjectId(1);
         project.add_object(&ObjectMetricSettings {
@@ -2036,7 +2036,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_assign_object_class_with_an_unknown_row_index_is_a_no_op() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let ui_state = crate::editor::test_support::test_ui_state();
         let controller = make_controller_with_ui(ui.as_weak(), ui_state);
         controller.attach_callbacks();
@@ -2168,7 +2168,7 @@ mod tests {
 
     // -- dialog sync and training, with a window -----------------------------
 
-    use crate::editor::test_support::{choose_file, ui_state_with_windows};
+    use crate::editor::test_support::{choose_file, ui_state_with_window};
     use crate::helper::ui_thread::drain_ui_queue;
 
     const CELL: ObjectClass = ObjectClass::Global(1);
@@ -2212,14 +2212,13 @@ mod tests {
 
     struct Dialog {
         ui: AppWindow,
-        _results_ui: crate::ResultsWindow,
         ui_state: Arc<UiState>,
         controller: Arc<AiLearningController>,
     }
 
     fn opened(project: evanalyzer_app::project::ProjectWithRuntime) -> Dialog {
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, project);
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, project);
         let controller = make_controller_with_ui(ui.as_weak(), ui_state.clone());
         controller.attach_callbacks();
         ui.global::<ChannelState>()
@@ -2235,7 +2234,6 @@ mod tests {
         drain_ui_queue();
         Dialog {
             ui,
-            _results_ui: results_ui,
             ui_state,
             controller,
         }

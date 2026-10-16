@@ -8,15 +8,8 @@ import { ScriptEditorState, ScriptFont } from "../api/script_editor.slint";
 import { CardTable, Cat, ClassHelper, CommandParameter, ComponentClassesState, LeafParam, ParamType, Pipeline, PipelineCommand, PipelinesPanelState, ProblemItem, SectionView, Status, StepCategory } from "../api/pipelines.slint";
 
 import { Dialog } from "../components/new_components/dialog.slint";
-import { NumberSpinner } from "../components/new_components/number_spinner.slint";
-import {
-    ScrollView,
-    LineEdit,
-    ComboBox,
-    Slider,
-    CheckBox,
-    Palette,
-} from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
+import { LineEdit, ComboBox, CheckBox } from "../ink/std_compat.slint";
 import { Theme } from "../style.slint";
 import {
     ImageAddressPicker,
@@ -25,7 +18,7 @@ import {
 import { PickerField, PickerRow, SwatchName } from "../components/picker_field.slint";
 
 import { FocusModeButton } from "pipeline_focus.slint";
-import { Ink, InkIcons, InkIconButton, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
+import { Ink, InkIcons, InkIconButton, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkTextField, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
 
 // ----------------------------------------------------------
 // Data model
@@ -1080,7 +1073,7 @@ component LeafParamRow inherits VerticalLayout {
         }
 
         if p.param-type == ParamType.spinner:
-    NumberSpinner {
+    InkNumberField {
             enabled: !PipelinesPanelState.open-component-read-only;
             label: p.display-name;
             value: p.value.to-float();
@@ -1102,27 +1095,17 @@ component LeafParamRow inherits VerticalLayout {
             }
         }
 
-        if p.param-type == ParamType.slider: HorizontalLayout {
-            spacing: 8px;
-            Slider {
-                enabled: !PipelinesPanelState.open-component-read-only;
-                minimum: p.min;
-                maximum: p.max;
-                value: p.value.to-float();
-                horizontal-stretch: 1;
-                changed(v) => {
-                    root.changed("\{v}");
-                }
-            }
-
-            Text {
-                text: p.value;
-                font-size: 11px;
-                font-family: Theme.font-mono;
-                color: Theme.text;
-                vertical-alignment: center;
-                width: 36px;
-                horizontal-alignment: right;
+        // A value in a range: a spinner, not a slider - a dedicated value is
+        // easier to set.
+        if p.param-type == ParamType.slider: InkNumberField {
+            enabled: !PipelinesPanelState.open-component-read-only;
+            label: p.display-name;
+            value: p.value.to-float();
+            step: p.step > 0 ? p.step : (p.max - p.min) / 100;
+            min: p.min;
+            max: p.max;
+            changed(v) => {
+                root.changed(v);
             }
         }
 
@@ -1426,12 +1409,11 @@ component ParamControls inherits Rectangle {
                 }
             }
 
-            if p.param-type == ParamType.number || p.param-type == ParamType.text:
-        LineEdit {
+            if p.param-type == ParamType.number || p.param-type == ParamType.text: InkTextField {
                 enabled: !PipelinesPanelState.open-component-read-only;
-                height: 26px;
-                text: p.value;
-                font-size: 11px;
+                label: p.display-name;
+                mono: p.param-type == ParamType.number;
+                value: p.value;
                 edited(t) => {
                     root.changed(t);
                 }
@@ -1449,79 +1431,50 @@ component ParamControls inherits Rectangle {
                 }
 
                 spacing: 4px;
-                fp-input := LineEdit {
+                fp-input := InkTextField {
                     enabled: !PipelinesPanelState.open-component-read-only;
-                    height: 26px;
-                    horizontal-stretch: 1;
-                    text: p.value;
-                    font-size: 11px;
+                    label: p.display-name;
+                    mono: true;
+                    value: p.value;
                     edited(t) => {
                         root.changed(t);
                     }
                 }
 
-                Rectangle {
-                    width: 26px;
-                    height: 26px;
-                    border-radius: 4px;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    background: browse-ta.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
-                    Image {
-                        source: @image-url("../icons/regular-white/folder-open.svg");
-                        width: 14px;
-                        height: 14px;
-                        colorize: Theme.text-dim;
-                    }
-
-                    browse-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            PipelinesPanelState.browse-token-counter += 1;
-                            root.browse-token = PipelinesPanelState.browse-token-counter;
-                            PipelinesPanelState.browse-file(
+                InkIconButton {
+                    size: Ink.control-h;
+                    icon: InkIcons.open;
+                    label: "Browse…";
+                    enabled: !PipelinesPanelState.open-component-read-only;
+                    clicked => {
+                        PipelinesPanelState.browse-token-counter += 1;
+                        root.browse-token = PipelinesPanelState.browse-token-counter;
+                        PipelinesPanelState.browse-file(
                             p.options.length > 0 ? p.options[0] : "",
                             fp-input.text,
                             root.browse-token);
-                        }
                     }
                 }
 
-                if p.has-model-info: Rectangle {
-                    width: 26px;
-                    height: 26px;
-                    border-radius: 4px;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    background: info-ta.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
-                    Text {
-                        text: "i";
-                        font-size: 12px;
-                        font-weight: 700;
-                        color: Theme.text-dim;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    info-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.show-model-info();
-                        }
+                if p.has-model-info: InkIconButton {
+                    size: Ink.control-h;
+                    icon: InkIcons.info;
+                    label: "About the model";
+                    clicked => {
+                        root.show-model-info();
                     }
                 }
             }
 
             if p.param-type == ParamType.label: Text {
                 text: p.value;
-                font-size: 11px;
-                font-family: Theme.font-mono;
-                color: Theme.text-dim;
+                font-size: Ink.fs-sm;
+                font-family: Ink.font-mono;
+                color: Ink.text-dim;
                 vertical-alignment: center;
             }
 
-            if p.param-type == ParamType.spinner:
-        NumberSpinner {
+            if p.param-type == ParamType.spinner: InkNumberField {
                 enabled: !PipelinesPanelState.open-component-read-only;
                 compact: root.compact;
                 label: p.display-name;
@@ -1534,46 +1487,37 @@ component ParamControls inherits Rectangle {
                 }
             }
 
-            if p.param-type == ParamType.dropdown:
-        ComboBox {
+            if p.param-type == ParamType.dropdown: InkSelect {
                 enabled: !PipelinesPanelState.open-component-read-only;
+                label: p.display-name;
                 model: p.options;
-                current-value: p.value;
-                selected(v) => {
+                value: p.value;
+                picked(i, v) => {
                     root.changed(v);
                 }
             }
 
-            if p.param-type == ParamType.slider: HorizontalLayout {
-                spacing: 8px;
-                Slider {
-                    enabled: !PipelinesPanelState.open-component-read-only;
-                    minimum: p.min;
-                    maximum: p.max;
-                    value: p.value.to-float();
-                    horizontal-stretch: 1;
-                    changed(v) => {
-                        root.changed("\{v}");
-                    }
-                }
-
-                Text {
-                    text: p.value;
-                    font-size: 11px;
-                    font-family: Theme.font-mono;
-                    color: Theme.text;
-                    vertical-alignment: center;
-                    width: 36px;
-                    horizontal-alignment: right;
+            // A value in a range: a spinner - a dedicated value is easier to
+            // set than with a slider.
+            if p.param-type == ParamType.slider: InkNumberField {
+                enabled: !PipelinesPanelState.open-component-read-only;
+                compact: root.compact;
+                label: p.display-name;
+                value: p.value.to-float();
+                step: p.step > 0 ? p.step : (p.max - p.min) / 100;
+                min: p.min;
+                max: p.max;
+                changed(v) => {
+                    root.changed(v);
                 }
             }
 
             if p.param-type == ParamType.toggle: HorizontalLayout {
-                CheckBox {
+                InkCheckbox {
                     enabled: !PipelinesPanelState.open-component-read-only;
                     checked: p.value == "true";
-                    toggled => {
-                        root.changed(self.checked ? "true" : "false");
+                    toggled(on) => {
+                        root.changed(on ? "true" : "false");
                     }
                 }
             }
@@ -1620,12 +1564,12 @@ component ParamControls inherits Rectangle {
                 }
             }
 
-            if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units:
-        ComboBox {
+            if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units: InkSelect {
                 enabled: !PipelinesPanelState.open-component-read-only;
+                label: p.display-name;
                 model: p.options;
-                current-value: p.value;
-                selected(v) => {
+                value: p.value;
+                picked(i, v) => {
                     root.changed(v);
                 }
             }
@@ -2265,20 +2209,25 @@ component StepRow inherits Rectangle {
         callback toggle-breakpoint;
         callback open-settings;
 
-        background: Theme.raised;
-        border-width: 1px;
-        border-color: step.expanded ? Cat.color(step.category) : (head-ta.has-hover ? Theme.border : Theme.border-soft);
-        border-radius: 6px;
+        // Collapsed: a line. Expanded: a card around the settings.
+        property <bool> hovered: head-ta.has-hover;
+        property <bool> editable: !PipelinesPanelState.open-component-read-only;
+        // 0 = off, 1 = stop, 2 = snapshot - for this step.
+        property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
+
+        background: step.expanded ? Ink.panel : head-ta.has-hover ? Ink.hover : transparent;
+        border-width: step.expanded ? 1px : 0px;
+        border-color: Ink.border;
+        border-radius: Ink.radius-md;
         clip: true;
-        opacity: step.enabled ? 1.0 : 0.55;
-        animate border-color { duration: 100ms; }
 
         VerticalLayout {
             spacing: 0px;
 
-            // -- Header row --
-        Rectangle {
-                height: 40px;
+            // -- The line --
+            Rectangle {
+                height: 34px;
+                opacity: step.enabled ? 1.0 : 0.5;
                 head-ta := TouchArea {
                     clicked => {
                         root.toggle-expanded();
@@ -2287,212 +2236,182 @@ component StepRow inherits Rectangle {
 
                 HorizontalLayout {
                     spacing: 0px;
-                    alignment: stretch;
 
-                    // 3px category stripe
-                Rectangle {
+                    // Category stripe.
+                    Rectangle {
                         width: 3px;
-                        background: Cat.color(step.category);
-                    }
-
-                    // Grip
-                VerticalLayout {
-                        alignment: center;
-                        padding-left: 6px;
-                        padding-right: 2px;
-                        Image {
-                            source: @image-url("../icons/regular-white/dots-six-vertical.svg");
-                            width: 10px;
-                            height: 10px;
-                            colorize: Theme.text-mute;
-                        }
-                    }
-
-                    // Number chip
-                VerticalLayout {
-                        alignment: center;
-                        padding-right: 8px;
-                        // The step's id - what "#2 EV Detection" elsewhere refers to
-                        // (equal steps are told apart by it; it stays when steps
-                        // are added, moved or removed).
                         Rectangle {
-                            width: max(20px, step-number.preferred-width + 8px);
                             height: 18px;
-                            border-radius: 4px;
-                            background: Theme.bg;
-                            border-width: 1px;
-                            border-color: Theme.border-soft;
-                            step-number := Text {
-                                text: root.step.step-id;
-                                color: Theme.text-dim;
-                                font-size: 10px;
-                                font-weight: 600;
-                                font-family: Theme.font-mono;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
+                            width: 3px;
+                            border-radius: 1.5px;
+                            background: Cat.color(step.category);
                         }
                     }
 
-                    // Name + mono summary
-                VerticalLayout {
-                        alignment: center;
-                        spacing: 1px;
-                        horizontal-stretch: 1;
-                        padding-right: 8px;
+                    // The step's id - what "#2 EV Detection" elsewhere refers to.
+                    step-number := Text {
+                        width: max(26px, self.preferred-width + 10px);
+                        text: root.step.step-id;
+                        color: Ink.text-faint;
+                        font-size: Ink.fs-sm;
+                        font-family: Ink.font-mono;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
 
-                        HorizontalLayout {
-                            spacing: 5px;
+                    HorizontalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 6px;
+                        padding-right: 6px;
+
+                        Text {
+                            text: step.name;
+                            color: Ink.text;
+                            font-size: Ink.fs-lg;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        if step.help != "": Rectangle {
+                            y: (parent.height - self.height) / 2;
+                            width: 15px;
+                            height: 15px;
+                            border-radius: 7.5px;
+                            background: step-help-ta.has-hover ? Ink.focus-ring : Ink.raised;
+                            accessible-role: button;
+                            accessible-label: "About \{step.name}";
                             Text {
-                                text: step.name;
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 500;
-                                overflow: elide;
+                                text: "?";
+                                font-size: 9px;
+                                font-weight: 600;
+                                color: Ink.text-dim;
                             }
 
-                            if step.help != "": Rectangle {
-                                y: (parent.height - self.height) / 2;
-                                width: 14px;
-                                height: 14px;
-                                border-radius: 7px;
-                                background: step-help-ta.has-hover ? Theme.accent.with-alpha(0.3) : Theme.border-soft;
-                                accessible-role: button;
-                                accessible-label: "About \{step.name}";
-                                Text {
-                                    text: "?";
-                                    font-size: 8px;
-                                    color: Theme.text-dim;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
+                            step-help-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    step-help-popup.show();
                                 }
+                            }
 
-                                step-help-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        step-help-popup.show();
-                                    }
-                                }
-
-                                step-help-popup := PopupWindow {
-                                    x: 0px;
-                                    y: parent.height + 3px;
-                                    width: 300px;
-                                    Rectangle {
-                                        background: Theme.panel;
-                                        border-width: 1px;
-                                        border-color: Theme.border;
-                                        border-radius: 6px;
-                                        drop-shadow-blur: 10px;
-                                        drop-shadow-color: #000000.with-alpha(0.35);
-                                        VerticalLayout {
-                                            padding: 10px;
-                                            Text {
-                                                text: step.help;
-                                                font-size: 11px;
-                                                color: Theme.text;
-                                                wrap: word-wrap;
-                                            }
+                            step-help-popup := PopupWindow {
+                                x: 0px;
+                                y: parent.height + 4px;
+                                width: 300px;
+                                Rectangle {
+                                    background: Ink.panel;
+                                    border-width: 1px;
+                                    border-color: Ink.border;
+                                    border-radius: Ink.radius-md;
+                                    drop-shadow-blur: 16px;
+                                    drop-shadow-offset-y: 4px;
+                                    drop-shadow-color: Ink.shadow;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        Text {
+                                            text: step.help;
+                                            font-size: Ink.fs-sm;
+                                            color: Ink.text;
+                                            wrap: word-wrap;
                                         }
                                     }
                                 }
                             }
+                        }
 
-                            if step.problems.length > 0: Rectangle {
-                                y: (parent.height - self.height) / 2;
-                                height: 14px;
-                                width: badge-text.preferred-width + 8px;
-                                border-radius: 7px;
-                                background: (step.problem-errors > 0 ? Theme.err : Theme.warn).with-alpha(0.2);
-                                accessible-role: text;
-                                accessible-label: "\{step.problems.length} problems";
-                                badge-text := Text {
-                                    text: "⚠ \{step.problems.length}";
-                                    font-size: 9px;
-                                    font-weight: 600;
-                                    color: step.problem-errors > 0 ? Theme.err : Theme.warn;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Rectangle {
-                                horizontal-stretch: 1;
+                        if step.problems.length > 0: Rectangle {
+                            y: (parent.height - self.height) / 2;
+                            height: 16px;
+                            width: badge-text.preferred-width + 10px;
+                            border-radius: 8px;
+                            background: step.problem-errors > 0 ? Ink.err-tint : Ink.warn-tint;
+                            accessible-role: text;
+                            accessible-label: "\{step.problems.length} problems";
+                            badge-text := Text {
+                                text: "⚠ \{step.problems.length}";
+                                font-size: Ink.fs-xs;
+                                font-weight: 600;
+                                color: step.problem-errors > 0 ? Ink.err : Ink.warn;
                             }
                         }
 
+                        // What it's set to, like a line of code.
                         Text {
+                            horizontal-stretch: 1;
                             text: step.summary;
-                            color: Theme.text-mute;
-                            font-size: 10px;
-                            font-family: Theme.font-mono;
+                            color: Ink.text-mute;
+                            font-size: Ink.fs-sm;
+                            font-family: Ink.font-mono;
+                            vertical-alignment: center;
                             overflow: elide;
                         }
                     }
 
-                    // Controls
-                VerticalLayout {
-                        alignment: center;
-                        padding-right: 6px;
-                        HorizontalLayout {
-                            spacing: 2px;
+                    // -- Controls: on hover, while open, or when set --
+                    HorizontalLayout {
+                        spacing: 0px;
+                        padding-right: 4px;
 
-                            // Breakpoint dot: gray=off, red=Stop, orange=Snapshot
-                        // Click cycles: off → stop → snapshot → off
+                        // Breakpoint: off → stop (red) → snapshot (orange) → off.
                         bp-btn := Rectangle {
+                            y: (parent.height - self.height) / 2;
                             // Inner steps of a component can't be breakpoint targets.
-                            visible: PipelinesPanelState.open-component-name == "";
-                            // 0=off, 1=stop, 2=snapshot for this specific step
-                            property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
-                                width: 22px;
-                                height: 22px;
-                                border-radius: 4px;
-                                background: bp-btn-ta.has-hover ? Theme.raised : transparent;
-                                animate background { duration: 100ms; }
-                                Rectangle {
-                                    width: 10px;
-                                    height: 10px;
-                                    border-radius: 5px;
-                                    background: bp-btn.bp-state == 1 ? #e53e3e : bp-btn.bp-state == 2 ? #ed8936 : Theme.text-faint;
-                                    border-width: bp-btn.bp-state == 0 ? 1.5px : 0px;
-                                    border-color: Theme.text-faint;
-                                }
-
-                                bp-btn-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.toggle-breakpoint();
-                                    }
+                            visible: PipelinesPanelState.open-component-name == "" && (root.hovered || step.expanded || root.bp-state != 0);
+                            width: 22px;
+                            height: 22px;
+                            border-radius: Ink.radius-sm;
+                            background: bp-btn-ta.has-hover ? Ink.border-soft : transparent;
+                            accessible-role: button;
+                            accessible-label: "Breakpoint";
+                            Rectangle {
+                                width: 9px;
+                                height: 9px;
+                                border-radius: 4.5px;
+                                background: root.bp-state == 1 ? Ink.err : root.bp-state == 2 ? Ink.warn : transparent;
+                                border-width: root.bp-state == 0 ? 1.5px : 0px;
+                                border-color: Ink.text-faint;
+                            }
+                            bp-btn-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.toggle-breakpoint();
                                 }
                             }
+                        }
 
-                            GhostIconBtn {
-                                icon: step.enabled ? @image-url("../icons/regular-white/check-square.svg") : @image-url("../icons/regular-white/selection-slash.svg");
-                                icon-sz: 13px;
-                                tint: step.enabled ? Theme.text-dim : Theme.text-faint;
-                                clicked => {
-                                    if !PipelinesPanelState.open-component-read-only {
-                                        root.toggle-enabled();
-                                    }
-                                }
+                        InkIconButton {
+                            y: (parent.height - self.height) / 2;
+                            visible: root.hovered || step.expanded || !step.enabled;
+                            size: 22px;
+                            icon: step.enabled ? InkIcons.visible : InkIcons.hidden;
+                            label: step.enabled ? "Switch the step off" : "Switch the step on";
+                            enabled: root.editable;
+                            clicked => {
+                                root.toggle-enabled();
                             }
+                        }
 
-                            // Opens the settings in the larger dialog.
-                            if step.parameters.length > 0 || step.advanced-count > 0: GhostIconBtn {
-                                icon: @image-url("../icons/regular-white/arrows-out-simple.svg");
-                                icon-sz: 12px;
-                                tint: Theme.text-dim;
-                                clicked => {
-                                    root.open-settings();
-                                }
+                        // The settings in the larger dialog.
+                        InkIconButton {
+                            y: (parent.height - self.height) / 2;
+                            visible: (root.hovered || step.expanded) && (step.parameters.length > 0 || step.advanced-count > 0);
+                            size: 22px;
+                            icon: InkIcons.expand;
+                            label: "Open the settings";
+                            clicked => {
+                                root.open-settings();
                             }
+                        }
 
-                            GhostIconBtn {
-                                icon: step.expanded ? @image-url("../icons/regular-white/caret-up.svg") : @image-url("../icons/regular-white/caret-down.svg");
-                                icon-sz: 12px;
-                                clicked => {
-                                    root.toggle-expanded();
-                                }
+                        InkIconButton {
+                            y: (parent.height - self.height) / 2;
+                            visible: root.hovered || step.expanded;
+                            size: 22px;
+                            icon: InkIcons.more;
+                            label: "Step actions";
+                            clicked => {
+                                step-menu.show();
                             }
                         }
                     }
@@ -2501,7 +2420,6 @@ component StepRow inherits Rectangle {
 
             // -- Expanded body --
         if step.expanded: Rectangle {
-                background: Theme.bg;
 
                 // Top hairline separator inside the card
             Rectangle {
@@ -2666,294 +2584,34 @@ component StepRow inherits Rectangle {
                         }
                     }
 
-                    // A component's own actions, in a row of their own - with
-                    // the step actions they'd be wider than the card. While
-                    // viewing, only "View" (a nested component).
-                    if root.step.category == StepCategory.component: HorizontalLayout {
+                    // A component's own actions; the step's actions are in ⋯.
+                    if root.step.category == StepCategory.component || root.step.update-version != "": HorizontalLayout {
                         spacing: 6px;
                         padding-top: 2px;
                         alignment: start;
-
-                        Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: Theme.cat-component;
-                            background: view-ta.has-hover ? Theme.cat-component.with-alpha(0.15) : transparent;
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                alignment: center;
-                                Text {
-                                    text: "View";
-                                    font-size: 11px;
-                                    color: Theme.cat-component;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            view-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.view-component();
-                                }
+                        if root.step.category == StepCategory.component: InkButton {
+                            small: true;
+                            text: "View";
+                            clicked => {
+                                root.view-component();
                             }
                         }
-
-                        if !PipelinesPanelState.open-component-read-only: Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            background: open-ta.has-hover ? Theme.raised : transparent;
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                alignment: center;
-                                Text {
-                                    text: "Edit";
-                                    font-size: 11px;
-                                    color: Theme.text-dim;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            open-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.open-component();
-                                }
+                        if root.step.category == StepCategory.component && root.editable: InkButton {
+                            small: true;
+                            text: "Edit";
+                            clicked => {
+                                root.open-component();
                             }
                         }
-
-                        if !PipelinesPanelState.open-component-read-only: Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            background: expand-ta.has-hover ? Theme.raised : transparent;
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                alignment: center;
-                                Text {
-                                    text: "Expand";
-                                    font-size: 11px;
-                                    color: Theme.text-dim;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            expand-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.expand-component();
-                                }
-                            }
-                        }
-
-                        // Into a new component that contains this one (nested).
-                        if !PipelinesPanelState.open-component-read-only: Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            background: bundle-component-ta.has-hover ? Theme.raised : transparent;
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                alignment: center;
-                                Text {
-                                    text: "Bundle";
-                                    font-size: 11px;
-                                    color: Theme.text-dim;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            bundle-component-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.create-component();
-                                }
-                            }
-                        }
-
-                        if root.step.update-version != "": Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            background: update-ta.has-hover ? Theme.cat-component : Theme.cat-component.with-alpha(0.8);
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                alignment: center;
-                                Text {
-                                    text: "Update to v\{root.step.update-version}";
-                                    font-size: 11px;
-                                    color: Theme.panel;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            update-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.update-component();
-                                }
+                        if root.step.update-version != "": InkButton {
+                            small: true;
+                            kind: InkButtonKind.primary;
+                            text: "Update to v\{root.step.update-version}";
+                            clicked => {
+                                root.update-component();
                             }
                         }
                     }
-
-                    if !PipelinesPanelState.open-component-read-only: HorizontalLayout {
-                        spacing: 6px;
-                        padding-top: 2px;
-
-                        Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            background: dup-ta.has-hover ? Theme.raised : transparent;
-                            animate background { duration: 100ms; }
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 5px;
-                                alignment: center;
-                                VerticalLayout {
-                                    alignment: center;
-                                    Image {
-                                        source: @image-url("../icons/regular-white/copy.svg");
-                                        width: 11px;
-                                        height: 11px;
-                                        colorize: Theme.text-dim;
-                                    }
-                                }
-
-                                Text {
-                                    text: "Duplicate";
-                                    font-size: 11px;
-                                    color: Theme.text-dim;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            dup-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.duplicate();
-                                }
-                            }
-                        }
-
-                        if root.step.category == StepCategory.component && PipelinesPanelState.open-component-name == "": Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            background: library-ta.has-hover ? Theme.raised : transparent;
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                alignment: center;
-                                Text {
-                                    text: "Save as";
-                                    font-size: 11px;
-                                    color: Theme.text-dim;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            library-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.save-to-library();
-                                }
-                            }
-                        }
-
-                        // A component card has it in its own row (no room here).
-                        if root.step.category != StepCategory.component: Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            background: component-ta.has-hover ? Theme.raised : transparent;
-                            animate background { duration: 100ms; }
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 5px;
-                                alignment: center;
-                                VerticalLayout {
-                                    alignment: center;
-                                    Image {
-                                        source: @image-url("../icons/regular-white/brackets-square.svg");
-                                        width: 11px;
-                                        height: 11px;
-                                        colorize: Theme.text-dim;
-                                    }
-                                }
-
-                                Text {
-                                    text: "Bundle";
-                                    font-size: 11px;
-                                    color: Theme.text-dim;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            component-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.create-component();
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                        }
-
-                        Rectangle {
-                            height: 26px;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: Theme.err.with-alpha(0.3);
-                            background: rm-ta.has-hover ? Theme.err.with-alpha(0.1) : transparent;
-                            animate background { duration: 100ms; }
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 5px;
-                                alignment: center;
-                                VerticalLayout {
-                                    alignment: center;
-                                    Image {
-                                        source: @image-url("../icons/regular-white/trash-simple.svg");
-                                        width: 11px;
-                                        height: 11px;
-                                        colorize: Theme.err;
-                                    }
-                                }
-
-                                Text {
-                                    text: "Remove";
-                                    font-size: 11px;
-                                    color: Theme.err;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            rm-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.remove();
-                                }
-                            }
-                        }
-                    }
-
                     // YODA
                 Rectangle {
                         vertical-stretch: 1;
@@ -2961,51 +2619,100 @@ component StepRow inherits Rectangle {
                 }
             }
         }
+    
+    step-menu := PopupWindow {
+        x: root.width - 220px;
+        y: 32px;
+        InkMenuFrame {
+            menu-width: 220px;
+            InkMenuCaption { text: root.step.name; }
+            InkMenuItem {
+                icon: InkIcons.copy;
+                text: "Duplicate";
+                enabled: root.editable;
+                clicked => {
+                    root.duplicate();
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.component;
+                text: "Bundle into a component…";
+                enabled: root.editable;
+                clicked => {
+                    root.create-component();
+                }
+            }
+            if root.step.category == StepCategory.component && root.editable: InkMenuItem {
+                text: "Expand into its steps";
+                clicked => {
+                    root.expand-component();
+                }
+            }
+            if root.step.category == StepCategory.component && PipelinesPanelState.open-component-name == "": InkMenuItem {
+                icon: InkIcons.save;
+                text: "Save to the library…";
+                clicked => {
+                    root.save-to-library();
+                }
+            }
+            InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.delete;
+                text: "Remove step";
+                danger: true;
+                enabled: root.editable;
+                clicked => {
+                    root.remove();
+                }
+            }
+        }
     }
+}
 
 // ----------------------------------------------------------
 // Insertion point between rows
 
 component InsertPoint inherits Rectangle {
-        callback insert;
+    callback insert;
+
+    height: 8px;
+    accessible-role: button;
+    accessible-label: "Insert a step here";
+    accessible-action-default => {
+        root.insert();
+    }
+
+    // Shown on hover: a line and a +, where the step goes.
+    Rectangle {
+        visible: ta.has-hover;
+        x: 8px;
+        y: (parent.height - 1px) / 2;
+        width: parent.width - 16px;
+        height: 1px;
+        background: Ink.focus;
+    }
+    Rectangle {
+        visible: ta.has-hover;
+        x: (parent.width - 16px) / 2;
+        y: (parent.height - 16px) / 2;
+        width: 16px;
         height: 16px;
-
-        // hairline
-    Rectangle {
-            x: 12px;
-            y: (parent.height - 1px) / 2;
-            width: parent.width - 24px;
-            height: 1px;
-            background: Theme.border-soft;
-        }
-
-        // round + button
-    Rectangle {
-            x: (parent.width - 18px) / 2;
-            y: (parent.height - 18px) / 2;
-            width: 18px;
-            height: 18px;
-            border-radius: 9px;
-            background: ta.has-hover ? Theme.accent : Theme.panel;
-            border-width: 1px;
-            border-color: ta.has-hover ? Theme.accent : Theme.border;
-            animate background { duration: 100ms; }
-
-            Image {
-                source: @image-url("../icons/regular-white/plus.svg");
-                width: 10px;
-                height: 10px;
-                colorize: ta.has-hover ? #ffffff : Theme.text-mute;
-            }
-
-            ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.insert();
-                }
-            }
+        border-radius: 8px;
+        background: Ink.focus;
+        Image {
+            source: InkIcons.add;
+            width: 10px;
+            colorize: #FFFFFF;
         }
     }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.insert();
+        }
+    }
+}
 
 // ----------------------------------------------------------
 // Category filter chip

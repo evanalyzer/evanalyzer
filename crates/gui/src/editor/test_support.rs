@@ -11,7 +11,7 @@
 //! afterwards. The Slint-sync half of the method still runs - it just
 //! becomes a no-op, exactly like it does in production when the window is
 //! gone.
-use crate::{AppWindow, ResultsWindow, UiState};
+use crate::{AppWindow, UiState};
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_app::project::ProjectOwner;
 use evanalyzer_app::project::ProjectWithRuntime;
@@ -77,11 +77,7 @@ pub(crate) fn test_ui_state_with_project(project: ProjectWithRuntime) -> Arc<UiS
     let owner = test_project_owner();
     let handle = owner.handle();
     *handle.get_project_write() = project;
-    Arc::new(UiState::new(
-        handle,
-        slint::Weak::default(),
-        slint::Weak::default(),
-    ))
+    Arc::new(UiState::new(handle, slint::Weak::default()))
 }
 
 /// A minimal project with one 2x2, 2-channel image set as "current" (i.e.
@@ -180,7 +176,7 @@ pub(crate) fn project_with_image_file(path: PathBuf) -> ProjectWithRuntime {
 }
 
 /// Ensures the Slint headless testing platform is set up on the *calling
-/// thread* before constructing a real `AppWindow`/`ResultsWindow`.
+/// thread* before constructing a real `AppWindow`.
 ///
 /// `i_slint_backend_testing::init_no_event_loop()` panics
 /// ("platform already initialized") if called twice on the same OS thread,
@@ -204,45 +200,37 @@ pub(crate) fn ensure_slint_test_platform() {
     });
 }
 
-/// Builds real, headless `AppWindow`/`ResultsWindow` instances - unlike
-/// [`test_ui_state`]'s dead `Weak::default()`, these support
+/// Builds a real, headless `AppWindow` - unlike
+/// [`test_ui_state`]'s dead `Weak::default()`, it supports
 /// `controller.attach_callbacks()` followed by firing the registered
 /// callback through Slint's generated `ui.global::<X>().invoke_y(...)`
 /// methods, and reading back whatever properties the callback set. No real
 /// window system or renderer is involved (see
 /// [`ensure_slint_test_platform`]), so this is safe and fast to call from
 /// any number of unit tests.
-pub(crate) fn test_ui_windows() -> (AppWindow, ResultsWindow) {
+pub(crate) fn test_ui_window() -> AppWindow {
     ensure_slint_test_platform();
     crate::helper::ui_thread::fresh_test_queue();
-    let ui =
-        AppWindow::new().expect("AppWindow::new must succeed under the headless test platform");
-    let results_ui = slint::ComponentHandle::clone_strong(&ui);
-    (ui, results_ui)
+    AppWindow::new().expect("AppWindow::new must succeed under the headless test platform")
 }
 
-/// A [`UiState`] wired to real windows (see [`test_ui_windows`]), with both
-/// file browsers attached - so dialogs a controller opens can be driven with
+/// A [`UiState`] wired to a real window (see [`test_ui_window`]), with the
+/// file browser attached - so dialogs a controller opens can be driven with
 /// [`choose_file`].
-pub(crate) fn ui_state_with_windows(
-    ui: &AppWindow,
-    results_ui: &ResultsWindow,
-    project: ProjectWithRuntime,
-) -> Arc<UiState> {
-    ui_state_with_windows_on(ui, results_ui, project, test_project_owner())
+pub(crate) fn ui_state_with_window(ui: &AppWindow, project: ProjectWithRuntime) -> Arc<UiState> {
+    ui_state_with_window_on(ui, project, test_project_owner())
 }
 
-/// [`ui_state_with_windows`] on `owner`'s backend - e.g. a remote one.
-pub(crate) fn ui_state_with_windows_on(
+/// [`ui_state_with_window`] on `owner`'s backend - e.g. a remote one.
+pub(crate) fn ui_state_with_window_on(
     ui: &AppWindow,
-    results_ui: &ResultsWindow,
     project: ProjectWithRuntime,
     owner: ProjectOwner,
 ) -> Arc<UiState> {
     let handle = owner.handle();
     *handle.get_project_write() = project;
     use slint::ComponentHandle;
-    let ui_state = Arc::new(UiState::new(handle, ui.as_weak(), results_ui.as_weak()));
+    let ui_state = Arc::new(UiState::new(handle, ui.as_weak()));
     ui_state.file_browser.attach(ui);
     ui_state
 }

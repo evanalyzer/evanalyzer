@@ -6767,7 +6767,7 @@ mod tests {
         use evanalyzer_cfg::settings::pipeline_command_settings::{
             ThresholdEntrySettings, ThresholdSettings,
         };
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller(ui.as_weak());
         {
             let mut project = ui_state.get_project_write();
@@ -6812,7 +6812,7 @@ mod tests {
         use evanalyzer_cfg::settings::pipeline_command_settings::{
             ThresholdEntrySettings, ThresholdSettings,
         };
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller(ui.as_weak());
         {
             let mut project = ui_state.get_project_write();
@@ -6859,7 +6859,7 @@ mod tests {
 
     #[test]
     fn apply_picker_filter_with_an_empty_query_shows_every_built_in_command_by_category() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, controller) = make_controller(ui.as_weak());
 
         controller.apply_picker_filter(&ui, "");
@@ -6883,7 +6883,7 @@ mod tests {
 
     #[test]
     fn apply_picker_filter_by_text_query_matches_name_or_summary_case_insensitively() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, controller) = make_controller(ui.as_weak());
         let meta = all_command_meta()
             .into_iter()
@@ -6904,7 +6904,7 @@ mod tests {
 
     #[test]
     fn apply_picker_filter_with_no_query_match_shows_nothing() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, controller) = make_controller(ui.as_weak());
 
         controller.apply_picker_filter(&ui, "no-such-command-exists-xyz");
@@ -6916,7 +6916,7 @@ mod tests {
 
     #[test]
     fn apply_picker_filter_restricts_to_the_active_category_chips() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, controller) = make_controller(ui.as_weak());
         ui.global::<CommandPickerState>().set_fcat_seg(true);
 
@@ -6951,7 +6951,7 @@ mod tests {
 
     #[test]
     fn the_projects_components_show_with_their_chip_or_when_searching() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller(ui.as_weak());
         ui_state.get_project_write().components = vec![
             component_definition("CELLS", "Cell reconstruction"),
@@ -7038,7 +7038,7 @@ mod tests {
     #[test]
     fn the_picker_details_author_and_creation_date_stay_together() {
         use i_slint_backend_testing::ElementHandle;
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, _controller) = make_controller(ui.as_weak());
         ui.window().set_size(slint::LogicalSize::new(1280.0, 800.0));
         let mut definition = component_definition("CELLS", "Cell reconstruction");
@@ -7072,7 +7072,7 @@ mod tests {
 
     // -- attach_callbacks (live AppWindow) -----------------------------------------
 
-    use crate::editor::test_support::{test_ui_state, test_ui_windows};
+    use crate::editor::test_support::{test_ui_state, test_ui_window};
 
     fn make_controller(ui: slint::Weak<AppWindow>) -> (Arc<UiState>, Arc<PipelinesController>) {
         let ui_state = test_ui_state();
@@ -7119,7 +7119,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_auto_preview_toggle_stores_the_flag() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, controller) = make_controller(ui.as_weak());
         controller.attach_callbacks();
 
@@ -7133,7 +7133,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_set_and_clear_breakpoint() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, controller) = make_controller(ui.as_weak());
         controller.attach_callbacks();
 
@@ -7163,7 +7163,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_breakpoint_image_and_view_mode_forward_to_the_viewport_controller() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (_ui_state, controller) = make_controller(ui.as_weak());
         controller.attach_callbacks();
 
@@ -7186,7 +7186,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_toggle_pipeline_flips_enabled_and_resyncs() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller(ui.as_weak());
         add_pipeline(&ui_state, 1);
         controller.attach_callbacks();
@@ -7206,7 +7206,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_move_pipeline_up_and_down_reorder_the_list() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller(ui.as_weak());
         add_pipeline(&ui_state, 1);
         add_pipeline(&ui_state, 2);
@@ -7227,7 +7227,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_new_pipeline_adds_a_pipeline_with_the_next_free_id() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller(ui.as_weak());
         add_pipeline(&ui_state, 5);
         controller.attach_callbacks();
@@ -7279,7 +7279,7 @@ mod tests {
     fn selected(
         steps: Vec<PipelineStepSettings>,
     ) -> (AppWindow, Arc<UiState>, Arc<PipelinesController>) {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller(ui.as_weak());
         add_pipeline_with(&ui_state, 1, ImageAddress::Channel(0), steps);
         controller.attach_callbacks();
@@ -7598,7 +7598,7 @@ mod tests {
 
     #[test]
     fn pipeline_list_shows_each_image_source_kind() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller(ui.as_weak());
         add_pipeline_with(&ui_state, 1, ImageAddress::Scratchpad, vec![]);
         add_pipeline_with(
@@ -7645,7 +7645,7 @@ mod tests {
 
     #[test]
     fn pipeline_more_fills_the_edit_dialog_for_every_source_kind() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller(ui.as_weak());
         add_pipeline_with(&ui_state, 1, ImageAddress::Scratchpad, vec![]);
         add_pipeline_with(
@@ -9444,16 +9444,9 @@ mod tests {
                 "{label:?} ends at {right}, the step list at {edge}"
             );
         };
-        for label in [
-            "View",
-            "Edit",
-            "Expand",
-            "Save as",
-            "Duplicate",
-            "Bundle",
-            "Remove",
-            "About Threshold",
-        ] {
+        // Duplicate, Bundle, Expand, Save as and Remove are in the card's
+        // ⋯ menu ("Step actions").
+        for label in ["View", "Edit", "Step actions", "About Threshold"] {
             fits(label);
         }
 

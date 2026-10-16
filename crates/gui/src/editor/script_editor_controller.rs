@@ -1030,7 +1030,7 @@ mod tests {
     use slint::Model as _;
 
     fn attached_state() -> AppWindow {
-        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui = crate::editor::test_support::test_ui_window();
         ScriptEditorController::new(ui.as_weak()).attach_callbacks();
         ui
     }

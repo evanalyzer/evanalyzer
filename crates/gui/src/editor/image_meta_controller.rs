@@ -609,7 +609,7 @@ mod tests {
 
     #[test]
     fn editing_and_resetting_in_the_panel_reaches_the_project_and_the_panel() {
-        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui = crate::editor::test_support::test_ui_window();
         let ui_state = test_ui_state();
         let viewport_controller = Arc::new(ViewportController::new(
             ui.as_weak(),
@@ -722,14 +722,14 @@ mod tests {
     // -- with a window (UI updates applied via the test UI queue) ------------
 
     use crate::editor::test_support::{
-        project_with_fixture_image, test_ui_state_with_project, test_ui_windows,
+        project_with_fixture_image, test_ui_state_with_project, test_ui_window,
     };
     use crate::helper::ui_thread::drain_ui_queue;
 
     fn with_window(
         project: evanalyzer_app::project::ProjectWithRuntime,
     ) -> (AppWindow, Arc<UiState>, Arc<ImageMetaController>) {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let ui_state = test_ui_state_with_project(project);
         let viewport_controller = Arc::new(ViewportController::new(
             ui.as_weak(),
@@ -873,6 +873,38 @@ mod tests {
         controller.sync_image_meta_to_slint().unwrap();
         drain_ui_queue();
         assert_eq!(ui.global::<ImageMetaData>().get_image_name(), "untouched");
+    }
+
+    /// A pixel size field shows the reset value also after the user typed
+    /// into it.
+    #[test]
+    fn the_pixel_size_field_follows_a_reset_after_typing() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _ui_state, _controller) = with_window(project_with_fixture_image());
+        ui.window().set_size(slint::LogicalSize::new(1500.0, 900.0));
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Images);
+        let meta_ui = ui.global::<ImageMetaData>();
+        let field = || {
+            ElementHandle::find_by_accessible_label(&ui, "Pixel size X in nm")
+                .next()
+                .expect("the pixel size field")
+        };
+        // `changed` handlers run between frames - as after each step here.
+        let frame = slint::platform::update_timers_and_animations;
+        frame();
+        field().set_accessible_value("7");
+        assert_eq!(field().accessible_value().unwrap(), "7");
+        meta_ui.invoke_pixel_size_changed(7.0, 3.0, 4.0);
+        drain_ui_queue();
+        frame();
+        meta_ui.invoke_reset_pixel_sizes();
+        drain_ui_queue();
+        frame();
+
+        // The image's own size (0.5), not what was typed.
+        assert_eq!(meta_ui.get_pixel_size_x(), 0.5);
+        assert_eq!(field().accessible_value().unwrap(), "0.5");
     }
 
     #[test]

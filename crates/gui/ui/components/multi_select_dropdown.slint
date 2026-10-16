@@ -11,7 +11,8 @@
 // number of items at once (it has no loops/array push in expressions), so
 // `select-all`/`select-none` still fire a callback for Rust to rebuild and
 // hand back `items`.
-import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
+import { LineEdit } from "../ink/std_compat.slint";
 import { Theme } from "../style.slint";
 
 export struct MultiSelectItem {

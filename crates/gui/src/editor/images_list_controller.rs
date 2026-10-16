@@ -583,7 +583,7 @@ impl ImagesListController {
 /// surviving entry to an `ImageItemData`. Pulled out as a pure function so
 /// it can be tested directly - unlike the rest of `sync_image_list_to_slint`,
 /// this doesn't touch Slint's event loop, which the headless
-/// `init_no_event_loop()` testing platform (see `test_ui_windows`) never
+/// `init_no_event_loop()` testing platform (see `test_ui_window`) never
 /// actually drains.
 fn build_image_list_items(
     images: &indexmap::IndexMap<PathBuf, evanalyzer_cfg::settings::images_settings::ImageEntry>,
@@ -734,7 +734,7 @@ mod tests {
 
     // -- attach_callbacks (live AppWindow) -----------------------------------------
 
-    use crate::editor::test_support::test_ui_windows;
+    use crate::editor::test_support::test_ui_window;
     use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
     use std::collections::BTreeMap;
@@ -783,7 +783,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_image_filter_text_changed_stores_the_text_and_resyncs() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
         controller.attach_callbacks();
 
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_image_selected_opens_the_matching_image() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
         {
             let mut project = controller.app_state.get_project_write();
@@ -832,7 +832,7 @@ mod tests {
         use crate::ClassificationState;
         use crate::helper::ui_thread::drain_ui_queue;
         use evanalyzer_cfg::core_types::ObjectClass;
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
         let classified = || {
             let mut object = ObjectMetricSettings::default();
@@ -886,7 +886,7 @@ mod tests {
         // permanently disabling this indicator. Exercises `sync_image_list_to_slint`'s
         // item-building logic through `build_image_list_items` directly rather than
         // reading it back off the live Slint model: the headless test platform (see
-        // `test_ui_windows`) uses `init_no_event_loop()`, under which
+        // `test_ui_window`) uses `init_no_event_loop()`, under which
         // `slint::invoke_from_event_loop` - the mechanism `sync_image_list_to_slint`
         // uses for its actual UI write - has no event loop to run on and always
         // returns `Err(NoEventLoopProvider)` without invoking the closure, so nothing

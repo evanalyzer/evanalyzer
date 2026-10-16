@@ -196,7 +196,7 @@ fn pipeline_id_of(id: i32) -> PipelineId {
 mod tests {
     use super::*;
     use crate::editor::object_list_controller::ObjectListController;
-    use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+    use crate::editor::test_support::{test_ui_window, ui_state_with_window};
     use crate::helper::ui_thread::drain_ui_queue;
     use evanalyzer_app::project::ProjectWithRuntime;
     use evanalyzer_cfg::core_types::{ImageAddress, ObjectClass};
@@ -227,17 +227,16 @@ mod tests {
 
     struct Fixture {
         ui: AppWindow,
-        _results_ui: crate::ResultsWindow,
         ui_state: Arc<UiState>,
         controller: Arc<FocusController>,
     }
 
     fn fixture(initial_mode: bool) -> Fixture {
-        let (ui, results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let mut project = ProjectWithRuntime::default();
         project.pipelines.push(pipeline(1, "Nuclei", 3));
         project.pipelines.push(pipeline(2, "Cells", 4));
-        let ui_state = ui_state_with_windows(&ui, &results_ui, project);
+        let ui_state = ui_state_with_window(&ui, project);
         let weak = ui.as_weak();
         let viewport = Arc::new(ViewportController::new(
             weak.clone(),
@@ -274,7 +273,6 @@ mod tests {
         controller.attach_callbacks();
         Fixture {
             ui,
-            _results_ui: results_ui,
             ui_state,
             controller,
         }

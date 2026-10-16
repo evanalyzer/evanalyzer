@@ -495,20 +495,19 @@ mod tests {
 
     // -- running real jobs (UI updates applied via the test queue) -----------
 
+    use crate::AppWindow;
     use crate::editor::histogram_controller::HistogramController;
     use crate::editor::image_meta_controller::ImageMetaController;
     use crate::editor::images_list_controller::ImagesListController;
     use crate::editor::results_state_controller::ResultsStateController;
     use crate::editor::template_controller::TemplateController;
-    use crate::editor::test_support::{fixture_image_path, test_ui_windows};
+    use crate::editor::test_support::{fixture_image_path, test_ui_window};
     use crate::helper::ui_thread::drain_ui_queue;
-    use crate::{AppWindow, ResultsWindow};
     use evanalyzer_app::backends::local::LocalBackend;
     use evanalyzer_app::project::{ProjectExt, ProjectWithRuntime};
 
     struct Fixture {
         ui: AppWindow,
-        _results_ui: ResultsWindow,
         worker: Arc<PipelineWorker>,
         dir: tempfile::TempDir,
         settings: evanalyzer_cfg::settings::project_settings::ProjectSettings,
@@ -531,9 +530,8 @@ mod tests {
         project.scan_image_folder_and_add(&LocalBackend::default());
         let settings = project.settings.clone();
 
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state =
-            crate::editor::test_support::ui_state_with_windows_on(&ui, &results_ui, project, owner);
+        let ui = test_ui_window();
+        let ui_state = crate::editor::test_support::ui_state_with_window_on(&ui, project, owner);
         let w = ui.as_weak();
         let viewport = Arc::new(ViewportController::new(
             w.clone(),
@@ -585,7 +583,7 @@ mod tests {
             classification.clone(),
         ));
         let results_state = Arc::new(ResultsStateController::new(
-            results_ui.as_weak(),
+            ui.as_weak(),
             ui_state.clone(),
             images_list,
         ));
@@ -610,7 +608,6 @@ mod tests {
         ));
         Fixture {
             ui,
-            _results_ui: results_ui,
             worker,
             dir,
             settings,

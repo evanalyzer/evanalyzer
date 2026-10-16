@@ -373,7 +373,6 @@ mod tests {
     #[test]
     fn open_results_folder_test() {
         let ui = slint::Weak::default();
-        let results_ui = slint::Weak::default();
         let ui_state: Arc<UiState> = test_ui_state_with_project(ProjectWithRuntime::default());
 
         let viewport_controller = Arc::new(ViewportController::new(
@@ -415,7 +414,7 @@ mod tests {
         ));
 
         let results_table_controller = Arc::new(ResultsStateController::new(
-            results_ui.clone(),
+            ui.clone(),
             ui_state.clone(),
             image_list_controller.clone(),
         ));

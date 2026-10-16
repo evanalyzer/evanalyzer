@@ -616,8 +616,8 @@ mod tests {
             name: "Nuclei".into(),
             notes: String::new(),
         });
-        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
-        let (ui_state, controller) = classification_on_windows(&ui, &results_ui, project);
+        let ui = crate::editor::test_support::test_ui_window();
+        let (ui_state, controller) = classification_on_windows(&ui, project);
         controller.attach_callbacks();
         controller.sync_classification_to_slint();
         drain_ui_queue();
@@ -820,12 +820,12 @@ mod tests {
 
     // -- attach_callbacks (live AppWindow) -----------------------------------------
 
-    use crate::editor::test_support::{project_with_one_image, test_ui_windows};
+    use crate::editor::test_support::{project_with_one_image, test_ui_window};
     use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 
     #[test]
     fn attach_callbacks_class_selected_stores_the_selected_object_class() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_class_delete_removes_the_class_and_clears_selection() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
         controller.attach_callbacks();
@@ -860,7 +860,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_class_move_up_and_down_reorder_the_list() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.update_class_settings_in_project(settings(-1, "A"));
         controller.update_class_settings_in_project(settings(-1, "B"));
@@ -878,7 +878,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_class_visibility_toggled_flips_visibility() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
         controller.attach_callbacks();
@@ -895,7 +895,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_hide_unclassified_toggled_flips_the_flag() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
         let initial = ui_state.get_project().hide_unclassified_objects();
@@ -908,7 +908,7 @@ mod tests {
 
     #[test]
     fn attach_callbacks_apply_classification_settings_adds_a_class_via_the_wired_callback() {
-        let (ui, _results_ui) = test_ui_windows();
+        let ui = test_ui_window();
         let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 
@@ -938,10 +938,9 @@ mod tests {
     /// A classification controller on real windows, for `project`.
     fn classification_on_windows(
         ui: &AppWindow,
-        results_ui: &crate::ResultsWindow,
         project: evanalyzer_app::project::ProjectWithRuntime,
     ) -> (Arc<UiState>, Arc<ClassificationController>) {
-        let ui_state = crate::editor::test_support::ui_state_with_windows(ui, results_ui, project);
+        let ui_state = crate::editor::test_support::ui_state_with_window(ui, project);
         let weak = ui.as_weak();
         let viewport = Arc::new(ViewportController::new(
             weak.clone(),
@@ -981,8 +980,8 @@ mod tests {
         use crate::helper::ui_thread::drain_ui_queue;
         let mut project = with_nuclei_class(crate::editor::test_support::project_with_one_image());
         project.add_object(&object_with_class(1, false));
-        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
-        let (ui_state, controller) = classification_on_windows(&ui, &results_ui, project);
+        let ui = crate::editor::test_support::test_ui_window();
+        let (ui_state, controller) = classification_on_windows(&ui, project);
         controller.attach_callbacks();
         ui_state
             .get_project_write()
@@ -1007,8 +1006,8 @@ mod tests {
         use crate::helper::ui_thread::drain_ui_queue;
         let mut project = with_nuclei_class(crate::editor::test_support::project_with_one_image());
         project.add_object(&object_with_class(1, true));
-        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
-        let (_ui_state, controller) = classification_on_windows(&ui, &results_ui, project);
+        let ui = crate::editor::test_support::test_ui_window();
+        let (_ui_state, controller) = classification_on_windows(&ui, project);
         controller.attach_callbacks();
         controller.sync_classification_to_slint();
         drain_ui_queue();
@@ -1032,8 +1031,8 @@ mod tests {
             .preview_objects
             .push(object_with_class(2, true)); // preview, combined index 1
 
-        let (ui, _results_ui) = test_ui_windows();
-        let (ui_state, controller) = classification_on_windows(&ui, &_results_ui, project);
+        let ui = test_ui_window();
+        let (ui_state, controller) = classification_on_windows(&ui, project);
         controller.attach_callbacks();
         ui_state
             .get_project_write()
@@ -1062,8 +1061,8 @@ mod tests {
             .preview_objects
             .push(object_with_class(2, true)); // preview, combined index 1
 
-        let (ui, _results_ui) = test_ui_windows();
-        let (ui_state, controller) = classification_on_windows(&ui, &_results_ui, project);
+        let ui = test_ui_window();
+        let (ui_state, controller) = classification_on_windows(&ui, project);
         controller.attach_callbacks();
 
         ui.global::<ObjectListState>().invoke_object_delete(1);

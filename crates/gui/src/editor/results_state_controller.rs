@@ -1,8 +1,8 @@
 use crate::editor::images_list_controller::ImagesListController;
 use crate::{
-    BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ExportDialogState, MatrixCell, MatrixLevel,
-    MultiSelectItem, ResultRow, ResultsChartKind2, ResultsListState, ResultsRailMode, ResultsState,
-    UiState,
+    AppWindow, BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ExportDialogState, MatrixCell,
+    MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2, ResultsListState, ResultsRailMode,
+    ResultsState, UiState,
 };
 use evanalyzer_app::results::CellValue;
 use evanalyzer_app::results::ColorScale;
@@ -27,7 +27,6 @@ use evanalyzer_app::results::{Grouping, PlateSize};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings, WellLayout};
-use crate::ResultsWindow;
 use log::{error, info, warn};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use std::collections::{HashMap, HashSet};
@@ -172,7 +171,7 @@ struct MatrixFilter {
 }
 
 pub struct ResultsStateController {
-    pub(crate) ui: slint::Weak<ResultsWindow>,
+    pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) _app_state: Arc<UiState>,
     /// The open results database - on the server in remote mode.
     result_generator: Mutex<Option<Arc<dyn ResultsSource>>>,
@@ -244,14 +243,14 @@ pub struct ResultsStateController {
     rail_mode: Mutex<ResultsRailMode>,
     list_stale: AtomicBool,
     charts_stale: AtomicBool,
-    // Called after the results window changed the project's plate settings,
+    // Called after the results' plate view changed the project's plate settings,
     // so the project settings dialog shows them too (wired in editor.rs).
     plate_settings_written: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl ResultsStateController {
     pub fn new(
-        ui: slint::Weak<ResultsWindow>,
+        ui: slint::Weak<AppWindow>,
         app_state: Arc<UiState>,
         image_list_controller: Arc<ImagesListController>,
     ) -> Self {
@@ -295,7 +294,7 @@ impl ResultsStateController {
             ui.global::<ResultsListState>()
                 .on_open_folder_clicked(move || {});
 
-            // -------- ResultsState (results_state.slint) --------
+            // -------- ResultsState (api/results.slint) --------
             // Prototypes only for now - wire up the real behavior next.
 
             // -- Navigation --
@@ -1486,7 +1485,7 @@ impl ResultsStateController {
         }
     }
 
-    /// `f` runs whenever the results window changed the project's plate
+    /// `f` runs whenever the results' plate view changed the project's plate
     /// settings.
     pub fn on_plate_settings_written(&self, f: impl Fn() + Send + Sync + 'static) {
         *self.plate_settings_written.lock().expect("Poisoned") = Some(Box::new(f));
@@ -1512,7 +1511,7 @@ impl ResultsStateController {
             .ok()
     }
 
-    /// Changes the plate settings from the results window: in the Matrix
+    /// Changes the plate settings from the results' plate view: in the Matrix
     /// view, in the project (marked unsaved, and shown in the project
     /// settings) and on screen.
     fn edit_plate_settings(&self, edit: impl FnOnce(&mut PlateSettings)) {
@@ -1703,7 +1702,7 @@ impl ResultsStateController {
     /// tile (Object level) is a region of a single image, so the count is
     /// just the count. At the Plate level Count is aggregated over the
     /// per-image counts of a well, so the picker stays enabled there.
-    fn apply_matrix_aggregate_enabled(&self, ui: &ResultsWindow, level: MatrixLevel) {
+    fn apply_matrix_aggregate_enabled(&self, ui: &AppWindow, level: MatrixLevel) {
         let is_count = self
             .matrix_filter
             .lock()
@@ -1927,7 +1926,7 @@ impl ResultsStateController {
                     .global::<crate::LayoutState>()
                     .set_mode(crate::WorkspaceMode::Results);
             } else {
-                warn!("Failed to upgrade UI handle in open_database, cannot show results window!");
+                warn!("Failed to upgrade UI handle, cannot show the results");
             }
         })
         .ok();
@@ -3184,7 +3183,7 @@ impl ResultsStateController {
     // `on_export_dialog_open`). Runs directly on the UI thread (it's called
     // from a Slint callback), so it pushes into `ExportDialogState` right
     // away rather than through `invoke_from_event_loop`.
-    fn populate_export_defaults(&self, ui_ready: &ResultsWindow) {
+    fn populate_export_defaults(&self, ui_ready: &AppWindow) {
         let rail_mode = ui_ready.global::<ResultsState>().get_rail_mode();
         let z_stack_max = ui_ready.global::<ResultsState>().get_z_stack_max().max(0) as u32;
         let t_stack_max = ui_ready.global::<ResultsState>().get_t_stack_max().max(0) as u32;
@@ -3351,7 +3350,7 @@ impl ResultsStateController {
     // showing only the images matching the picker's search text, and
     // refreshes its summary. Runs on the UI thread (called from Slint
     // callbacks), so it pushes into `ExportDialogState` directly.
-    fn push_export_image_items(&self, ui_ready: &ResultsWindow) {
+    fn push_export_image_items(&self, ui_ready: &AppWindow) {
         let state = ui_ready.global::<ExportDialogState>();
         let query = state.get_image_filter_text();
         let images = self.images.lock().expect("Poisened");
@@ -3363,7 +3362,7 @@ impl ResultsStateController {
         self.push_export_image_summary(ui_ready);
     }
 
-    fn push_export_image_summary(&self, ui_ready: &ResultsWindow) {
+    fn push_export_image_summary(&self, ui_ready: &AppWindow) {
         let total = self.images.lock().expect("Poisened").len();
         let selected = self.export_image_selection.lock().expect("Poisened").len();
         ui_ready
@@ -3379,7 +3378,7 @@ impl ResultsStateController {
     // (blank output folder, unrecognized dropdown key, non-numeric range
     // field) — shown in the dialog's error area rather than silently
     // falling back to a default the user didn't ask for.
-    fn read_export_settings(&self, ui_ready: &ResultsWindow) -> Result<ResultExport, String> {
+    fn read_export_settings(&self, ui_ready: &AppWindow) -> Result<ResultExport, String> {
         let state = ui_ready.global::<ExportDialogState>();
         let classes = self.classes.lock().expect("Poisened");
 
@@ -4200,19 +4199,15 @@ mod tests {
     use crate::editor::histogram_controller::HistogramController;
     use crate::editor::image_meta_controller::ImageMetaController;
     use crate::editor::object_list_controller::ObjectListController;
-    use crate::editor::test_support::{test_ui_state, test_ui_windows};
+    use crate::editor::test_support::{test_ui_state, test_ui_window};
     use crate::editor::viewport_controller::ViewportController;
 
-    fn make_controller_with_ui(
-        ui: slint::Weak<AppWindow>,
-        results_ui: slint::Weak<ResultsWindow>,
-    ) -> Arc<ResultsStateController> {
-        make_controller_with_state(ui, results_ui, test_ui_state())
+    fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> Arc<ResultsStateController> {
+        make_controller_with_state(ui, test_ui_state())
     }
 
     fn make_controller_with_state(
         ui: slint::Weak<AppWindow>,
-        results_ui: slint::Weak<ResultsWindow>,
         ui_state: Arc<UiState>,
     ) -> Arc<ResultsStateController> {
         let viewport_controller = Arc::new(ViewportController::new(
@@ -4254,7 +4249,7 @@ mod tests {
             ),
         ));
         Arc::new(ResultsStateController::new(
-            results_ui,
+            ui,
             ui_state,
             image_list_controller,
         ))
@@ -4265,23 +4260,21 @@ mod tests {
     // Rust binding at all - it wasn't re-exported from main.slint's own
     // top-level `export { ... }` block, the same way every other dialog
     // global there is, see main.slint). Exercises the actual callback
-    // wiring end to end against a real (headless) `ResultsWindow`, with no
+    // wiring end to end against a real (headless) `AppWindow`, with no
     // database open - the state every dialog control's defaults must still
     // fall back to sanely (an empty images/classes list, no matrix filter
     // set yet).
     #[test]
     fn attach_callbacks_export_dialog_open_populates_defaults_and_activates() {
-        let (ui, results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 
-        assert!(!results_ui.global::<ExportDialogState>().get_active());
+        assert!(!ui.global::<ExportDialogState>().get_active());
 
-        results_ui
-            .global::<ResultsState>()
-            .invoke_export_dialog_open();
+        ui.global::<ResultsState>().invoke_export_dialog_open();
 
-        let state = results_ui.global::<ExportDialogState>();
+        let state = ui.global::<ExportDialogState>();
         assert!(state.get_active(), "dialog should activate on open");
         // See `populate_export_defaults`: the Object list starts unchecked
         // (one-file-per-image and the Image/Grouped-by-image list start
@@ -4301,7 +4294,7 @@ mod tests {
         // at 0, and past whatever `ResultsState.z-stack-max`/`t-stack-max`
         // are currently set to (their own default, before any real database
         // has been opened, is a temporary design-preview placeholder - see
-        // that property's doc comment in results_state.slint - so this only
+        // that property's doc comment in api/results.slint - so this only
         // checks the *shape* of the range, not its exact placeholder bound).
         assert_eq!(state.get_z_start(), "0");
         assert_eq!(state.get_t_start(), "0");
@@ -4349,23 +4342,17 @@ mod tests {
     // `export_populated`).
     #[test]
     fn attach_callbacks_export_dialog_reopen_keeps_user_changes() {
-        let (ui, results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 
-        results_ui
-            .global::<ResultsState>()
-            .invoke_export_dialog_open();
-        results_ui
-            .global::<ExportDialogState>()
-            .set_with_list_view(false);
-        results_ui.global::<ExportDialogState>().set_active(false);
+        ui.global::<ResultsState>().invoke_export_dialog_open();
+        ui.global::<ExportDialogState>().set_with_list_view(false);
+        ui.global::<ExportDialogState>().set_active(false);
 
-        results_ui
-            .global::<ResultsState>()
-            .invoke_export_dialog_open();
+        ui.global::<ResultsState>().invoke_export_dialog_open();
 
-        let state = results_ui.global::<ExportDialogState>();
+        let state = ui.global::<ExportDialogState>();
         assert!(state.get_active());
         assert!(
             !state.get_with_list_view(),
@@ -4380,18 +4367,14 @@ mod tests {
     // touches `result_generator`).
     #[test]
     fn attach_callbacks_export_start_without_output_dir_reports_an_error() {
-        let (ui, results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 
-        results_ui
-            .global::<ResultsState>()
-            .invoke_export_dialog_open();
-        results_ui
-            .global::<ExportDialogState>()
-            .invoke_start_clicked();
+        ui.global::<ResultsState>().invoke_export_dialog_open();
+        ui.global::<ExportDialogState>().invoke_start_clicked();
 
-        let state = results_ui.global::<ExportDialogState>();
+        let state = ui.global::<ExportDialogState>();
         assert!(state.get_has_error());
         assert!(!state.get_is_exporting());
         assert!(!state.get_error_message().is_empty());
@@ -4399,22 +4382,20 @@ mod tests {
 
     #[test]
     fn on_cancel_clicked_does_nothing_when_no_export_is_running() {
-        let (ui, results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 
         assert!(controller.export_cancel_flag.lock().unwrap().is_none());
         // Must not panic even though no export ever set the flag.
-        results_ui
-            .global::<ExportDialogState>()
-            .invoke_cancel_clicked();
+        ui.global::<ExportDialogState>().invoke_cancel_clicked();
         assert!(controller.export_cancel_flag.lock().unwrap().is_none());
     }
 
     #[test]
     fn on_cancel_clicked_signals_the_flag_stored_for_the_running_export() {
-        let (ui, results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
 
         // Simulate `run_export` having just started a background export -
@@ -4422,9 +4403,7 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         *controller.export_cancel_flag.lock().unwrap() = Some(flag.clone());
 
-        results_ui
-            .global::<ExportDialogState>()
-            .invoke_cancel_clicked();
+        ui.global::<ExportDialogState>().invoke_cancel_clicked();
 
         assert!(
             flag.load(Ordering::Relaxed),
@@ -4573,27 +4552,27 @@ mod tests {
         }
     }
 
-    /// Builds a real, headless `(AppWindow, ResultsWindow)` pair with
+    /// Builds a real, headless `AppWindow` with
     /// callbacks attached and a real seeded `.evadb` already opened via
     /// `open_database` - the common setup every test below this point
     /// shares. Leaks the backing `TempDir` (only the file path is needed
     /// afterwards) - acceptable for a short-lived test process.
-    fn controller_with_open_database() -> (AppWindow, ResultsWindow, Arc<ResultsStateController>) {
+    fn controller_with_open_database() -> (AppWindow, Arc<ResultsStateController>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("results.evadb");
         seed_test_db(&path);
         std::mem::forget(dir);
 
-        let (ui, results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
         controller.attach_callbacks();
         controller.open_database(path);
-        (ui, results_ui, controller)
+        (ui, controller)
     }
 
     #[test]
     fn open_database_populates_classes_columns_images_and_default_filters() {
-        let (_ui, _results_ui, controller) = controller_with_open_database();
+        let (ui, controller) = controller_with_open_database();
 
         let classes = controller.classes.lock().unwrap();
         assert_eq!(classes.len(), 2);
@@ -4623,8 +4602,7 @@ mod tests {
         // tab wasn't, until it's shown: then both seeded wells get a cell.
         assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
         assert!(controller.matrix_cells.lock().unwrap().is_empty());
-        _results_ui
-            .global::<ResultsState>()
+        ui.global::<ResultsState>()
             .invoke_rail_mode_selected(ResultsRailMode::Matrix);
         let matrix_cells = controller.matrix_cells.lock().unwrap();
         assert!(matrix_cells.contains_key("A1"));
@@ -4633,8 +4611,8 @@ mod tests {
 
     #[test]
     fn list_image_and_class_filters_narrow_the_cached_row_locations() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let state = results_ui.global::<ResultsState>();
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
 
         state.invoke_list_image_selected("A1_01.tif".into(), true);
         assert_eq!(controller.list_row_locations.lock().unwrap().len(), 1);
@@ -4692,8 +4670,8 @@ mod tests {
         // panic, and narrowing the dropdown's visible rows doesn't touch
         // the real query filter or the row cache it drives. The actual
         // filtering logic is unit-tested directly below instead.
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let state = results_ui.global::<ResultsState>();
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
 
         state.invoke_list_image_filter_changed("A1".into());
         assert!(
@@ -4711,9 +4689,9 @@ mod tests {
     fn export_dialog_open_seeds_image_selection_from_the_list_filter() {
         // Seeded images, alphabetically ("A1_01.tif" first) - see
         // `seed_test_db`.
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let list_state = results_ui.global::<ResultsState>();
-        let export_state = results_ui.global::<ExportDialogState>();
+        let (ui, controller) = controller_with_open_database();
+        let list_state = ui.global::<ResultsState>();
+        let export_state = ui.global::<ExportDialogState>();
 
         let selected_keys = |export_state: &ExportDialogState| -> Vec<String> {
             export_state
@@ -4728,27 +4706,27 @@ mod tests {
         // the alphabetically-first one) -> the export dialog starts with
         // exactly those checked, not just the first.
         list_state.invoke_list_image_selected("A2_01.tif".into(), true);
-        controller.populate_export_defaults(&results_ui);
+        controller.populate_export_defaults(&ui);
         assert_eq!(selected_keys(&export_state), vec!["A2_01.tif".to_string()]);
 
         // Every image selected -> too many to usefully pre-check, defaults
         // back to just the first.
         list_state.invoke_list_image_select_all();
-        controller.populate_export_defaults(&results_ui);
+        controller.populate_export_defaults(&ui);
         assert_eq!(selected_keys(&export_state), vec!["A1_01.tif".to_string()]);
 
         // Nothing selected (= all images) -> same "just the
         // first" default, rather than a picker with nothing checked at all.
         list_state.invoke_list_image_select_none();
-        controller.populate_export_defaults(&results_ui);
+        controller.populate_export_defaults(&ui);
         assert_eq!(selected_keys(&export_state), vec!["A1_01.tif".to_string()]);
     }
 
     #[test]
     fn export_dialog_image_filter_changed_narrows_items_without_touching_selection() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let export_state = results_ui.global::<ExportDialogState>();
-        controller.populate_export_defaults(&results_ui);
+        let (ui, controller) = controller_with_open_database();
+        let export_state = ui.global::<ExportDialogState>();
+        controller.populate_export_defaults(&ui);
 
         // Starts with just "A1_01.tif" selected (the default - see the
         // test above), and, unlike the main List view's search box, this
@@ -4789,12 +4767,9 @@ mod tests {
         state.invoke_image_item_selected(key.into(), selected);
     }
 
-    fn exported_images(
-        controller: &ResultsStateController,
-        results_ui: &ResultsWindow,
-    ) -> Vec<String> {
+    fn exported_images(controller: &ResultsStateController, ui: &AppWindow) -> Vec<String> {
         let mut paths = controller
-            .read_export_settings(results_ui)
+            .read_export_settings(ui)
             .expect("valid export settings")
             .image_rel_paths;
         paths.sort();
@@ -4806,9 +4781,9 @@ mod tests {
         // Regression: the picker's selection used to be read back from its
         // search-narrowed rows, so images checked under one search were
         // dropped from the export (and the "N of M" count) by the next.
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        controller.populate_export_defaults(&results_ui);
-        let state = results_ui.global::<ExportDialogState>();
+        let (ui, controller) = controller_with_open_database();
+        controller.populate_export_defaults(&ui);
+        let state = ui.global::<ExportDialogState>();
         state.set_output_dir("out".into());
         state.set_with_list_view(true);
 
@@ -4821,18 +4796,18 @@ mod tests {
 
         let all = vec!["A1_01.tif", "A1_02.tif", "A2_01.tif"];
         assert_eq!(state.get_image_summary(), image_summary_text(3, 3));
-        assert_eq!(exported_images(&controller, &results_ui), all);
+        assert_eq!(exported_images(&controller, &ui), all);
 
         // Clearing the search shows every checkmark again.
         state.invoke_image_filter_changed("".into());
         assert!(state.get_image_items().iter().all(|item| item.selected));
-        assert_eq!(exported_images(&controller, &results_ui), all);
+        assert_eq!(exported_images(&controller, &ui), all);
 
         // Unchecking a visible row leaves the hidden selections alone.
         state.invoke_image_filter_changed("A2".into());
         click_export_image(&state, "A2_01.tif", false);
         assert_eq!(
-            exported_images(&controller, &results_ui),
+            exported_images(&controller, &ui),
             vec!["A1_01.tif", "A1_02.tif"]
         );
         assert_eq!(state.get_image_summary(), image_summary_text(2, 3));
@@ -4840,9 +4815,9 @@ mod tests {
 
     #[test]
     fn export_dialog_select_all_and_none_keep_the_current_search() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        controller.populate_export_defaults(&results_ui);
-        let state = results_ui.global::<ExportDialogState>();
+        let (ui, controller) = controller_with_open_database();
+        controller.populate_export_defaults(&ui);
+        let state = ui.global::<ExportDialogState>();
         state.set_output_dir("out".into());
 
         state.invoke_image_filter_changed("A1".into());
@@ -4854,7 +4829,7 @@ mod tests {
             .collect();
         assert_eq!(shown, vec!["A1_01.tif", "A1_02.tif"]);
         assert_eq!(
-            exported_images(&controller, &results_ui),
+            exported_images(&controller, &ui),
             vec!["A1_01.tif", "A1_02.tif", "A2_01.tif"]
         );
 
@@ -4866,16 +4841,16 @@ mod tests {
 
     #[test]
     fn export_dialog_with_no_image_selected_exports_all_images() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        controller.populate_export_defaults(&results_ui);
-        let state = results_ui.global::<ExportDialogState>();
+        let (ui, controller) = controller_with_open_database();
+        controller.populate_export_defaults(&ui);
+        let state = ui.global::<ExportDialogState>();
         state.set_output_dir("out".into());
         state.set_with_list_view(true);
         state.invoke_image_select_none();
 
         assert_eq!(state.get_image_summary(), "All Images");
         // An empty list is the exporter's "every image".
-        assert!(exported_images(&controller, &results_ui).is_empty());
+        assert!(exported_images(&controller, &ui).is_empty());
     }
 
     #[test]
@@ -4948,8 +4923,8 @@ mod tests {
 
     #[test]
     fn list_columns_group_by_coloc_details_and_pagination_do_not_panic() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let state = results_ui.global::<ResultsState>();
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
 
         state.invoke_list_columns_item_selected("area_px".into(), true);
         assert!(
@@ -4999,8 +4974,8 @@ mod tests {
 
     #[test]
     fn matrix_toolbar_callbacks_update_the_filter_and_refresh_the_grid() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let state = results_ui.global::<ResultsState>();
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
 
         state.invoke_matrix_value_clicked();
         state.invoke_matrix_aggregate_selected("Minimum".into());
@@ -5080,8 +5055,8 @@ mod tests {
 
     #[test]
     fn plate_well_and_image_heatmap_drill_down_all_the_way() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let state = results_ui.global::<ResultsState>();
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
 
         state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
         state.invoke_plate_cell_clicked("A1".into());
@@ -5135,8 +5110,8 @@ mod tests {
     /// without recoloring it.
     #[test]
     fn breadcrumb_nav_back_to_plate_refreshes_stale_plate_cells() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let state = results_ui.global::<ResultsState>();
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
 
         state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
         // Count/Avg is the same (1.0) with or without A1_01 (one object per
@@ -5188,11 +5163,11 @@ mod tests {
         let Ok(path) = std::env::var("EVADB") else {
             return;
         };
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
-        let controller = make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state);
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
         controller.attach_callbacks();
-        let state = results_ui.global::<ResultsState>();
+        let state = ui.global::<ResultsState>();
         for i in 0..3 {
             let start = Instant::now();
             controller.open_database(PathBuf::from(&path));
@@ -5224,8 +5199,8 @@ mod tests {
 
     #[test]
     fn toggle_active_well_disabled_flips_the_database_and_refreshes_the_well_grid() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let state = results_ui.global::<ResultsState>();
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
 
         state.invoke_plate_cell_clicked("A1".into());
         state.invoke_open_well_clicked("A1".into());
@@ -5272,16 +5247,15 @@ mod tests {
 
     #[test]
     fn toggle_active_well_disabled_with_nothing_selected_does_not_panic() {
-        let (_ui, results_ui, _controller) = controller_with_open_database();
-        results_ui
-            .global::<ResultsState>()
+        let (ui, _controller) = controller_with_open_database();
+        ui.global::<ResultsState>()
             .invoke_toggle_active_well_disabled();
     }
 
     #[test]
     fn well_cell_and_image_heatmap_cell_click_with_an_unknown_key_warns_but_does_not_panic() {
-        let (_ui, results_ui, _controller) = controller_with_open_database();
-        let state = results_ui.global::<ResultsState>();
+        let (ui, _controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
         state.invoke_plate_cell_clicked("Z99".into());
         state.invoke_well_cell_clicked("does-not-exist.tif".into());
         state.invoke_well_field_clicked("does-not-exist.tif".into());
@@ -5290,8 +5264,8 @@ mod tests {
 
     #[test]
     fn chart_callbacks_switch_kind_and_axes_without_panicking() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let state = results_ui.global::<ResultsState>();
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
 
         state.invoke_chart_column_selected("area_px".into());
         assert_eq!(
@@ -5318,11 +5292,9 @@ mod tests {
 
     #[test]
     fn export_dialog_select_all_and_select_none_callbacks_do_not_panic() {
-        let (_ui, results_ui, _controller) = controller_with_open_database();
-        results_ui
-            .global::<ResultsState>()
-            .invoke_export_dialog_open();
-        let state = results_ui.global::<ExportDialogState>();
+        let (ui, _controller) = controller_with_open_database();
+        ui.global::<ResultsState>().invoke_export_dialog_open();
+        let state = ui.global::<ExportDialogState>();
 
         state.invoke_image_select_all();
         state.invoke_image_select_none();
@@ -5348,8 +5320,8 @@ mod tests {
 
     #[test]
     fn z_and_t_changed_update_the_plane_filter_and_refresh() {
-        let (_ui, results_ui, controller) = controller_with_open_database();
-        let state = results_ui.global::<ResultsState>();
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
         state.invoke_z_changed(2);
         state.invoke_t_changed(3);
         let plane = controller.plane_filter.lock().unwrap();
@@ -5357,9 +5329,9 @@ mod tests {
         assert_eq!(plane.selected_t_stack, 3);
     }
 
-    // -- what the results window shows (UI updates applied) ------------------
+    // -- what the results view shows (UI updates applied) --------------------
 
-    use crate::editor::test_support::{choose_file, ui_state_with_windows};
+    use crate::editor::test_support::{choose_file, ui_state_with_window};
     use crate::helper::ui_thread::drain_ui_queue;
 
     // -- plate settings: shared with the project ------------------------------
@@ -5375,11 +5347,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("results.evadb");
         seed_test_db(&path);
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
         ui_state.get_project_write().plate = plate;
-        let controller =
-            make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state.clone());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state.clone());
         let project_settings = Arc::new(
             crate::editor::project_settings_controller::ProjectSettingsController::new(
                 ui.as_weak(),
@@ -5392,8 +5363,7 @@ mod tests {
         drain_ui_queue();
         (
             Opened {
-                _ui: ui,
-                results_ui,
+                ui,
                 controller,
                 _dir: dir,
             },
@@ -5460,7 +5430,7 @@ mod tests {
         assert!(ui_state.is_dirty(), "an unsaved change of the project");
 
         // The project settings dialog shows it too.
-        let dialog = o._ui.global::<crate::ProjectSettingsState>().get_settings();
+        let dialog = o.ui.global::<crate::ProjectSettingsState>().get_settings();
         assert_eq!(
             dialog.plate_size_index,
             PlateSize::ALL
@@ -5614,14 +5584,14 @@ mod tests {
 
         let (o, _project_settings) = opened_with_plate(PlateSettings::default());
         let s = o.state();
-        let window = o.results_ui.window();
+        let window = o.ui.window();
         window.set_size(slint::LogicalSize::new(1500.0, 900.0));
         s.set_rail_mode(ResultsRailMode::Matrix);
         s.invoke_rail_mode_selected(ResultsRailMode::Matrix);
         drain_ui_queue();
 
         let tiles = || -> Vec<(String, LogicalPosition)> {
-            ElementHandle::find_by_element_type_name(&o.results_ui, "MatrixCellView")
+            ElementHandle::find_by_element_type_name(&o.ui, "MatrixCellView")
                 .filter(|tile| tile.size().width > 0.0)
                 .map(|tile| {
                     let p = tile.absolute_position();
@@ -5711,10 +5681,9 @@ mod tests {
         let (o, _project_settings) = opened_with_plate(plate);
         o.state().invoke_export_dialog_open();
         drain_ui_queue();
-        o.results_ui
-            .global::<ExportDialogState>()
+        o.ui.global::<ExportDialogState>()
             .set_output_dir("/tmp".into());
-        let export = o.controller.read_export_settings(&o.results_ui).unwrap();
+        let export = o.controller.read_export_settings(&o.ui).unwrap();
         assert_eq!(export.grouping, Grouping::Folder);
         assert_eq!(export.plate_size, PlateSize::Plate6x8);
         assert_eq!(export.well_size, Some(WellSize { rows: 2, cols: 2 }));
@@ -5722,8 +5691,7 @@ mod tests {
     }
 
     struct Opened {
-        _ui: AppWindow,
-        results_ui: ResultsWindow,
+        ui: AppWindow,
         controller: Arc<ResultsStateController>,
         _dir: tempfile::TempDir,
     }
@@ -5734,15 +5702,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("results.evadb");
         seed_test_db(&path);
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
-        let controller = make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state);
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
         controller.attach_callbacks();
         controller.open_database(path);
         drain_ui_queue();
         Opened {
-            _ui: ui,
-            results_ui,
+            ui,
             controller,
             _dir: dir,
         }
@@ -5750,10 +5717,10 @@ mod tests {
 
     impl Opened {
         fn state(&self) -> ResultsState<'_> {
-            self.results_ui.global::<ResultsState>()
+            self.ui.global::<ResultsState>()
         }
         fn export(&self) -> ExportDialogState<'_> {
-            self.results_ui.global::<ExportDialogState>()
+            self.ui.global::<ExportDialogState>()
         }
     }
 
@@ -5825,12 +5792,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("results.evadb");
         seed_test_db(&path);
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, Default::default());
-        let controller = make_controller_with_state(ui.as_weak(), results_ui.as_weak(), ui_state);
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
         controller.db_worker.inline.store(false, Ordering::SeqCst);
         controller.attach_callbacks();
-        let s = results_ui.global::<ResultsState>();
+        let s = ui.global::<ResultsState>();
 
         controller.open_database(path);
         drain_ui_queue();
@@ -5968,7 +5935,7 @@ mod tests {
         o.state().invoke_export_dialog_open();
         drain_ui_queue();
         export.invoke_pick_output_dir();
-        choose_file(&o.results_ui, folder);
+        choose_file(&o.ui, folder);
         assert_eq!(export.get_output_dir(), folder.to_string_lossy().as_ref());
         export.invoke_start_clicked();
         drain_ui_queue();
@@ -6026,11 +5993,11 @@ mod tests {
 
     #[test]
     fn export_without_an_open_database_reports_it() {
-        let (_ui, results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(slint::Weak::default(), results_ui.as_weak());
+        let ui = test_ui_window();
+        let controller = make_controller_with_ui(ui.as_weak());
         controller.run_export(ResultExport::default());
         drain_ui_queue();
-        let export = results_ui.global::<ExportDialogState>();
+        let export = ui.global::<ExportDialogState>();
         assert!(export.get_has_error());
         assert_eq!(export.get_error_message(), "No database is open.");
     }
@@ -6329,9 +6296,7 @@ mod tests {
 
         export.invoke_pick_output_dir();
         drain_ui_queue();
-        o.results_ui
-            .global::<crate::FileBrowserState>()
-            .invoke_cancel();
+        o.ui.global::<crate::FileBrowserState>().invoke_cancel();
         drain_ui_queue();
 
         assert_eq!(export.get_output_dir(), "/kept");
@@ -6391,7 +6356,7 @@ mod tests {
 
     fn closed_window_controller() -> Arc<ResultsStateController> {
         crate::helper::ui_thread::fresh_test_queue();
-        make_controller_with_ui(slint::Weak::default(), slint::Weak::default())
+        make_controller_with_ui(slint::Weak::default())
     }
 
     #[test]

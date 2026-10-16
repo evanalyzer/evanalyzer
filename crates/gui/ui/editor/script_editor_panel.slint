@@ -10,7 +10,8 @@
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ScriptCommandDoc, ScriptDiagnostic, ScriptEdit, ScriptEditorState, ScriptFont, ScriptHighlight } from "../api/script_editor.slint";
 
-import { LineEdit, ListView } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
+import { LineEdit } from "../ink/std_compat.slint";
 import { Theme } from "../style.slint";
 // Embedded so the editor is monospace on every system - the highlight layers
 // only line up with the text when every character has the same width.

@@ -291,18 +291,6 @@ export component Viewport inherits Rectangle {
         }
     }
 
-    Navigator {
-        // Position it in the bottom right corner
-        x: parent.width - self.width - 15px - root.inset-right;
-        y: parent.height - self.height - 15px;
-
-        // Bind to your ViewportState properties
-        view_x: ViewportState.nav_x;
-        view_y: ViewportState.nav_y;
-        view_width: ViewportState.nav_width;
-        view_height: ViewportState.nav_height;
-    }
-
     changed width => {
         ViewportState.report_viewport_size(root.width / 1px, root.height / 1px);
     }
@@ -424,5 +412,13 @@ export component Viewport inherits Rectangle {
 
             accept
         }
+    }
+
+    // Above the image's touch area: clicks in it move the view.
+    Navigator {
+        x: parent.width - self.width - 12px - root.inset-right;
+        y: parent.height - self.height - 12px;
+        viewport-width: root.width;
+        viewport-height: root.height;
     }
 }
