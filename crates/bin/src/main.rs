@@ -292,3 +292,177 @@ fn init_logger(log_level: &str) {
     builder.parse_filters(log_level);
     builder.init();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A file of its own in the temp folder, removed again on drop.
+    struct TempFile(PathBuf);
+
+    impl TempFile {
+        fn with(name: &str, contents: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("evanalyzer-bin-test-{}-{name}", std::process::id()));
+            std::fs::write(&path, contents).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn without_remote_the_analysis_runs_on_this_machine() {
+        let backend =
+            generate_backend(None, None, None, None, TlsTrust::PublicAuthorities).unwrap();
+
+        assert!(!backend.is_remote());
+    }
+
+    #[test]
+    fn remote_without_user_or_token_is_an_error_naming_both() {
+        let Err(e) = generate_backend(
+            Some("ws://127.0.0.1:1".into()),
+            None,
+            None,
+            None,
+            TlsTrust::PublicAuthorities,
+        ) else {
+            panic!("expected an error");
+        };
+
+        let message = e.to_string();
+        assert!(message.contains("--user") && message.contains("--remote-token"));
+    }
+
+    #[test]
+    fn remote_with_a_token_connects_to_the_worker_directly() {
+        let worker =
+            evanalyzer_app::backends::remote::Worker::bind("127.0.0.1:0", "token".into()).unwrap();
+        let url = format!("ws://{}", worker.local_addr().unwrap());
+        std::thread::spawn(move || worker.run(Arc::new(LocalBackend::default())));
+
+        let backend = generate_backend(
+            Some(url.clone()),
+            Some("token".into()),
+            None,
+            None,
+            TlsTrust::PublicAuthorities,
+        )
+        .unwrap();
+
+        assert!(backend.is_remote());
+        assert!(
+            backend.description().contains(&url),
+            "{}",
+            backend.description()
+        );
+    }
+
+    #[test]
+    fn a_cli_command_that_succeeds_returns_ok() {
+        let backend: Arc<dyn Backend> = Arc::new(LocalBackend::default());
+
+        assert!(start_cli(&backend, CliCommand::Jobs).is_ok());
+    }
+
+    #[test]
+    fn a_worker_that_cannot_listen_fails_with_or_without_a_token() {
+        for token in [Some("token".to_string()), None] {
+            let result = start_worker("not an address".into(), token, Vec::new(), None, Some(1));
+
+            let message = result.unwrap_err().to_string();
+            assert!(message.contains("Could not listen on"), "{message}");
+        }
+    }
+
+    #[test]
+    fn without_a_file_the_server_uses_defaults_and_the_command_line() {
+        let config = server_config(
+            None,
+            Some("0.0.0.0:9000".into()),
+            Some("/tmp/sessions.json".into()),
+            Some("debug".into()),
+            &Some(AiDeviceSelection::Cpu),
+            Some(2),
+        )
+        .unwrap();
+
+        assert_eq!(config.listen, "0.0.0.0:9000");
+        assert_eq!(config.session_store, Some("/tmp/sessions.json".into()));
+        assert_eq!(config.log_level, "debug");
+        assert_eq!(config.workers.ai_devices.as_deref(), Some("cpu"));
+        assert_eq!(config.workers.gpu_slots, Some(2));
+    }
+
+    #[test]
+    fn no_settings_at_all_give_the_default_server_config() {
+        let config = server_config(None, None, None, None, &None, None).unwrap();
+
+        assert_eq!(config, ServerConfig::default());
+    }
+
+    #[test]
+    fn the_command_line_wins_over_the_config_file() {
+        let file = TempFile::with(
+            "override.toml",
+            "listen = \"127.0.0.1:7500\"\nlog_level = \"warn\"\n",
+        );
+
+        let from_file = server_config(Some(&file.0), None, None, None, &None, None).unwrap();
+        let overridden = server_config(
+            Some(&file.0),
+            Some("127.0.0.1:7600".into()),
+            None,
+            None,
+            &None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            (from_file.listen.as_str(), from_file.log_level.as_str()),
+            ("127.0.0.1:7500", "warn")
+        );
+        assert_eq!(overridden.listen, "127.0.0.1:7600");
+        assert_eq!(overridden.log_level, "warn", "kept from the file");
+    }
+
+    #[test]
+    fn a_missing_config_file_is_an_error() {
+        let missing = std::env::temp_dir().join("evanalyzer-bin-test-does-not-exist.toml");
+
+        assert!(server_config(Some(&missing), None, None, None, &None, None).is_err());
+    }
+
+    #[test]
+    fn a_misspelled_ai_device_list_in_the_file_fails_at_startup() {
+        let file = TempFile::with("devices.toml", "[workers]\nai_devices = \"gpu\"\n");
+
+        let e = server_config(Some(&file.0), None, None, None, &None, None).unwrap_err();
+
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(e.to_string().starts_with("workers.ai_devices:"), "{e}");
+    }
+
+    #[test]
+    fn zero_gpu_slots_are_refused() {
+        let file = TempFile::with("slots.toml", "[workers]\ngpu_slots = 0\n");
+
+        let from_file = server_config(Some(&file.0), None, None, None, &None, None);
+        let from_command_line = server_config(None, None, None, None, &None, Some(0));
+
+        for result in [from_file, from_command_line] {
+            let e = result.unwrap_err();
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(
+                e.to_string().contains("gpu_slots must be at least 1"),
+                "{e}"
+            );
+        }
+    }
+}

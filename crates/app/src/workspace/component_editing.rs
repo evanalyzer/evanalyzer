@@ -1502,7 +1502,8 @@ pub fn step_settings(
 
 /// The settings of component `key`'s steps its parameter `parameter` could
 /// also set: (step, path, label) - those with its control (see
-/// [`compatible_parameters`]) no parameter sets yet.
+/// [`compatible_parameters`]) no parameter sets yet, and class lists it
+/// doesn't set yet (one several parameters set gets all their classes).
 pub fn bindable_settings(
     definitions: &[ComponentDefinition],
     key: &str,
@@ -1534,8 +1535,24 @@ pub fn bindable_settings(
             step_settings(definitions, step)
                 .into_iter()
                 .filter(|(path, setting, _)| {
+                    let list = matches!(
+                        setting.param_type,
+                        ParamType::MultiObjClass | ParamType::MultiSegClass
+                    );
+                    let sets_it = |p: &ComponentParameterDef| {
+                        p.bindings
+                            .iter()
+                            .any(|b| b.step == step.id && &b.param == path)
+                    };
                     same_kind(&shown, setting)
-                        && parameter_for_setting(definition, step.id, path).is_none()
+                        && if list {
+                            !definition
+                                .parameters
+                                .iter()
+                                .any(|p| &p.key == parameter && sets_it(p))
+                        } else {
+                            !definition.parameters.iter().any(sets_it)
+                        }
                 })
                 .map(|(path, _, label)| (step.id, path, label))
                 .collect::<Vec<_>>()
@@ -1664,6 +1681,20 @@ pub fn bound_setting_edited(
     let Some(key) = parameter_for_setting(definition, step_id, path) else {
         return false;
     };
+    // A class list several parameters set holds their classes - none of
+    // them takes it as its default.
+    let setting_parameters = definition
+        .parameters
+        .iter()
+        .filter(|p| {
+            p.bindings
+                .iter()
+                .any(|b| b.step == step_id && b.param == path)
+        })
+        .count();
+    if setting_parameters > 1 {
+        return false;
+    }
     let Some(value) = definition
         .steps
         .iter()
@@ -3020,6 +3051,63 @@ mod tests {
     }
 
     #[test]
+    fn a_class_list_another_parameter_sets_can_be_set_too_a_single_class_cant() {
+        let mut project = with_outer_component();
+        let outer = project
+            .components
+            .iter_mut()
+            .find(|d| d.key == "OUTER")
+            .unwrap();
+        // "Cells" sets the Voronoi's class; "Seeds class" a classify's input list.
+        assert!(toggle_exposed(
+            outer,
+            StepId(4),
+            "input_classes",
+            "Seeds class",
+            "L1"
+        ));
+        let cells = ComponentParamKey::from("cells");
+        let seeds = outer.parameters[1].key.clone();
+
+        let bindable = |project: &ProjectSettings, key: &ComponentParamKey| {
+            bindable_settings(&project.components, "OUTER", key)
+                .into_iter()
+                .map(|(step, path, _)| (step, path))
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            bindable(&project, &cells).contains(&(StepId(4), "input_classes".into())),
+            "a class list \"Seeds class\" sets: \"Cells\" can add its class"
+        );
+        assert!(
+            !bindable(&project, &seeds).contains(&(StepId(4), "input_classes".into())),
+            "not twice by the same parameter"
+        );
+        assert!(
+            !bindable(&project, &seeds).contains(&(StepId(5), "output_class".into())),
+            "a single class \"Cells\" sets: one value only"
+        );
+
+        // Both on the list: editing it there changes neither default.
+        let outer = project
+            .components
+            .iter_mut()
+            .find(|d| d.key == "OUTER")
+            .unwrap();
+        add_binding(outer, &cells, StepId(4), "input_classes").unwrap();
+        let defaults: Vec<ParamValue> =
+            outer.parameters.iter().map(|p| p.default.clone()).collect();
+        assert!(!bound_setting_edited(
+            outer,
+            &[],
+            StepId(4),
+            "input_classes"
+        ));
+        let after: Vec<ParamValue> = outer.parameters.iter().map(|p| p.default.clone()).collect();
+        assert_eq!(after, defaults);
+    }
+
+    #[test]
     fn an_outer_components_class_cant_stay_as_it_is_in_the_new_one() {
         let mut project = with_outer_component();
         let list = StepList::Component("OUTER".into());
@@ -3596,5 +3684,80 @@ mod tests {
         assert_eq!(remove_unused_components(&mut project), ["OUTER"]);
         let keys: Vec<&str> = project.components.iter().map(|d| d.key.as_str()).collect();
         assert_eq!(keys, ["CELL_RECONSTRUCTION"]);
+    }
+
+    #[test]
+    fn only_component_steps_can_be_expanded_or_get_a_copy() {
+        let mut project = with_component();
+
+        let expand = expand_component(&mut project, PipelineId(1), 0)
+            .unwrap_err()
+            .to_string();
+        let copy = clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 0)
+            .unwrap_err()
+            .to_string();
+
+        assert!(expand.contains("step 1 isn't a component"), "{expand}");
+        assert!(copy.contains("step 1 isn't a component"), "{copy}");
+    }
+
+    #[test]
+    fn a_missing_pipeline_step_is_named_in_the_error() {
+        let mut project = with_component();
+
+        let past_the_end = expand_component(&mut project, PipelineId(1), 9)
+            .unwrap_err()
+            .to_string();
+        let no_pipeline = expand_component(&mut project, PipelineId(7), 0)
+            .unwrap_err()
+            .to_string();
+
+        assert!(past_the_end.contains("has no step 10"), "{past_the_end}");
+        assert!(no_pipeline.contains("has no step 1"), "{no_pipeline}");
+    }
+
+    #[test]
+    fn a_step_whose_component_is_missing_gets_no_copy() {
+        let mut project = with_component();
+        project.components.clear();
+
+        let error = clone_component_for_step(&mut project, &StepList::Pipeline(PipelineId(1)), 2)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("no component CELL_RECONSTRUCTION"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_name_without_letters_or_digits_gets_a_generic_numbered_key() {
+        let mut project = ProjectSettings::default();
+        assert_eq!(unique_key(&project, " -- "), "COMPONENT");
+
+        let mut taken = with_component().components.remove(0);
+        taken.key = "COMPONENT".into();
+        project.components.push(taken);
+
+        assert_eq!(unique_key(&project, "!!"), "COMPONENT_2");
+        assert_eq!(unique_key(&project, "a  b--c"), "A_B_C", "runs collapse");
+    }
+
+    #[test]
+    fn moving_or_unbinding_an_unknown_parameter_changes_nothing() {
+        let mut project = with_component();
+        let definition = &mut project.components[0];
+        let before = definition.parameters.len();
+        let unknown = ComponentParamKey::from("999");
+
+        assert!(!move_parameter(definition, &unknown, 1));
+        assert!(!remove_binding(
+            definition,
+            &unknown,
+            StepId(1),
+            "output_class"
+        ));
+        assert_eq!(definition.parameters.len(), before);
     }
 }

@@ -54,8 +54,9 @@ pub use crate::algos::{
 };
 pub use crate::job::algos_from_config::{into_algorithm, into_pipeline_step};
 pub use crate::job::components::{
-    ExpandedCommand, ScopeCounter, UseEnd, UseId, component_parameters, own_numbers, renumbered,
-    component_steps_with_values, expand_step, set_component_parameter, value_from_text,
+    ExpandedCommand, ScopeCounter, UseEnd, UseId, component_parameters,
+    component_steps_with_values, expand_step, own_numbers, renumbered, set_component_parameter,
+    value_from_text,
 };
 pub use crate::job::job_executor::JobExecutor;
 pub use crate::job::job_executor::PreviewTileSettings;

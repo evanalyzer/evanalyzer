@@ -908,4 +908,135 @@ mod tests {
         };
         assert_eq!(cmd.name(), "Illumination Correction");
     }
+
+    fn cmd(smoothing: SmoothingMethod, apply_method: ApplyMethod) -> IlluminationCorrection {
+        IlluminationCorrection {
+            method: CorrectionMethod::Regular,
+            block_size: 4,
+            smoothing,
+            apply_method,
+            rescale: false,
+        }
+    }
+
+    #[test]
+    fn a_label_image_is_refused_as_input() {
+        let mut ctx = PipelineContext::new_from_u32_image_test(
+            Image::<u32, 1>::new(
+                ImageSize {
+                    width: 2,
+                    height: 1,
+                },
+                vec![1, 2],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let err = cmd(SmoothingMethod::None, ApplyMethod::Divide)
+            .execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::FormatMismatch { expected, .. } if expected.contains("F32Rgb or F32Gray")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_channel_is_left_alone() {
+        let mut data: Vec<f32> = vec![];
+        cmd(SmoothingMethod::None, ApplyMethod::Divide)
+            .correct_channel(&mut data, 0, 0)
+            .unwrap();
+        assert!(data.is_empty());
+    }
+
+    /// An all-black image has a field averaging to 0: `Divide` must not turn
+    /// that into NaN.
+    #[test]
+    fn divide_keeps_an_all_black_image_black_instead_of_nan() {
+        let mut ctx = ctx_from_gray(8, 8, vec![0.0f32; 64]);
+        cmd(SmoothingMethod::None, ApplyMethod::Divide)
+            .execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        let ImageContainer::F32Gray(out) = ctx.image.as_ref() else {
+            panic!("expected F32Gray output");
+        };
+        assert!(out.as_slice().iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn median_smoothing_replaces_a_single_outlier_block_with_its_neighbourhood_median() {
+        // 3x3 grid, outlier in the centre: its 3x3 window's median is 1.0.
+        let mut field = vec![1.0, 1.0, 1.0, 1.0, 9.0, 1.0, 1.0, 2.0, 1.0];
+        IlluminationCorrection::median_smooth_grid(&mut field, 3, 3, 1);
+        assert_eq!(field[4], 1.0, "outlier removed");
+        // The corner window (2x2 at the edge) is clamped to the grid.
+        assert_eq!(field[0], 1.0);
+        assert!(field.iter().all(|&v| v < 9.0));
+    }
+
+    /// End to end: one bright block (a large object) is smoothed away by
+    /// the median, so the field stays flat and the image is left unchanged.
+    #[test]
+    fn median_smoothing_keeps_a_single_bright_block_out_of_the_field() {
+        let (width, height) = (12, 12);
+        let mut data = vec![0.4f32; width * height];
+        for y in 4..8 {
+            for x in 4..8 {
+                data[y * width + x] = 0.8;
+            }
+        }
+        let mut ctx = ctx_from_gray(width, height, data.clone());
+        cmd(SmoothingMethod::Median { radius: 1 }, ApplyMethod::Subtract)
+            .execute(&mut ctx, &mut GlobalPipelineCache::default())
+            .unwrap();
+        let ImageContainer::F32Gray(out) = ctx.image.as_ref() else {
+            panic!("expected F32Gray output");
+        };
+        for (i, (&o, &d)) in out.as_slice().iter().zip(&data).enumerate() {
+            assert!((o - d).abs() < 1e-5, "pixel {i}: {d} became {o}");
+        }
+    }
+
+    #[test]
+    fn smoothing_an_empty_grid_is_a_noop() {
+        let mut field: Vec<f32> = vec![];
+        IlluminationCorrection::median_smooth_grid(&mut field, 0, 3, 1);
+        IlluminationCorrection::gaussian_smooth_grid(&mut field, 3, 0, 1.0);
+        IlluminationCorrection::fit_polynomial_grid(&mut field, 0, 0);
+        assert!(field.is_empty());
+    }
+
+    /// A single row of blocks can't determine the `y` terms: the system is
+    /// singular, so the grid is left unsmoothed (as documented).
+    #[test]
+    fn fit_polynomial_leaves_a_degenerate_grid_unchanged() {
+        let mut row = vec![0.1, 0.5, 0.2, 0.9];
+        IlluminationCorrection::fit_polynomial_grid(&mut row, 4, 1);
+        assert_eq!(row, vec![0.1, 0.5, 0.2, 0.9]);
+        let mut column = vec![0.3, 0.7, 0.4];
+        IlluminationCorrection::fit_polynomial_grid(&mut column, 1, 3);
+        assert_eq!(column, vec![0.3, 0.7, 0.4]);
+    }
+
+    #[test]
+    fn solve_6x6_pivots_rows_to_solve_a_permuted_system() {
+        // A permutation matrix: every column's pivot sits below the diagonal
+        // somewhere, so partial pivoting has to swap rows.
+        let mut a = [[0.0f64; 6]; 6];
+        let perm = [5, 0, 1, 2, 3, 4];
+        for (row, &col) in perm.iter().enumerate() {
+            a[row][col] = 2.0;
+        }
+        let x_expected = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut b = [0.0f64; 6];
+        for row in 0..6 {
+            b[row] = (0..6).map(|col| a[row][col] * x_expected[col]).sum();
+        }
+        let x = IlluminationCorrection::solve_6x6(a, b).expect("the system is regular");
+        for (got, want) in x.iter().zip(x_expected) {
+            assert!((got - want).abs() < 1e-9, "{x:?}");
+        }
+        assert!(IlluminationCorrection::solve_6x6([[0.0; 6]; 6], b).is_none());
+    }
 }

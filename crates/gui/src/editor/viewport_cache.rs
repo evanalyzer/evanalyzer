@@ -1844,4 +1844,350 @@ mod tests {
         assert!(cache.find_in_cache(&k, true).is_none());
         assert!(cache.find_in_cache(&k, false).is_some());
     }
+
+    // -- other sample layouts (RGB, labels, 16 bit) -------------------------------
+
+    fn rgb_channel(w: usize, h: usize, offset: Point2d) -> ImageChannel {
+        // Pixel i holds (i, i + 0.25, i + 0.5) / 1000.
+        let data = (0..w * h)
+            .flat_map(|i| {
+                let v = i as f32 / 1000.0;
+                [v, v + 0.00025, v + 0.0005]
+            })
+            .collect();
+        ImageChannel {
+            image: Arc::new(ImageContainer::F32Rgb(ManagedImage {
+                data: Image::<f32, 3>::new(
+                    ImageSize {
+                        width: w,
+                        height: h,
+                    },
+                    data,
+                )
+                .unwrap(),
+                tile_offset: offset,
+                plane: None,
+            })),
+            color: [1.0, 1.0, 1.0],
+            is_visible: true,
+            c_stack: 0,
+            name: "rgb".into(),
+            is_rgb: true,
+        }
+    }
+
+    fn label_channel(w: usize, h: usize) -> ImageChannel {
+        ImageChannel {
+            image: Arc::new(ImageContainer::U32(ManagedImage {
+                data: Image::<u32, 1>::new(
+                    ImageSize {
+                        width: w,
+                        height: h,
+                    },
+                    (0..(w * h) as u32).collect(),
+                )
+                .unwrap(),
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: None,
+            })),
+            color: [1.0, 1.0, 1.0],
+            is_visible: true,
+            c_stack: 1,
+            name: "labels".into(),
+            is_rgb: false,
+        }
+    }
+
+    /// A virtual image whose tiles are RGB and/or label channels.
+    struct LayoutSource {
+        meta: evanalyzer_app::images::ImageMeta,
+        rgb: bool,
+        labels: bool,
+    }
+
+    impl ImageSource for LayoutSource {
+        fn meta(&self) -> &evanalyzer_app::images::ImageMeta {
+            &self.meta
+        }
+
+        fn read_tile(&self, req: &TileRequest) -> Result<Vec<ImageChannel>, InternalErrors> {
+            let t = req.tile;
+            let mut channels = Vec::new();
+            if self.rgb {
+                channels.push(rgb_channel(
+                    t.width,
+                    t.height,
+                    Point2d {
+                        x: t.offset_x,
+                        y: t.offset_y,
+                    },
+                ));
+            }
+            if self.labels {
+                channels.push(label_channel(t.width, t.height));
+            }
+            Ok(channels)
+        }
+    }
+
+    fn layout_source(rgb: bool, labels: bool) -> LayoutSource {
+        LayoutSource {
+            meta: Default::default(),
+            rgb,
+            labels,
+        }
+    }
+
+    #[test]
+    fn a_subsampled_rgb_read_keeps_all_three_samples_of_every_kept_pixel() {
+        let source = layout_source(true, false);
+        let channels = read_subsampled(&source, &pattern_request(4, 6, 10, 6), 2).unwrap();
+
+        let ImageContainer::F32Rgb(img) = &*channels[0].image else {
+            panic!("RGB stays RGB");
+        };
+        assert_eq!((img.width(), img.height()), (5, 3));
+        assert_eq!(channels[0].image.tile_offset(), Point2d { x: 4, y: 6 });
+        assert!(channels[0].is_rgb);
+        let px = img.as_slice();
+        // Output (1, 1) is source pixel (2, 2) of the 10 px wide region.
+        let i = 2 * 10 + 2;
+        let v = i as f32 / 1000.0;
+        assert_eq!(
+            &px[(5 + 1) * 3..(5 + 1) * 3 + 3],
+            &[v, v + 0.00025, v + 0.0005]
+        );
+    }
+
+    #[test]
+    fn a_subsampled_read_of_a_label_channel_keeps_its_size_without_copying_its_values() {
+        let source = layout_source(false, true);
+        let channels = read_subsampled(&source, &pattern_request(0, 0, 9, 4), 3).unwrap();
+
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].c_stack, 1);
+        let size = channels[0].image.size();
+        assert_eq!((size.width, size.height), (3, 2));
+    }
+
+    #[test]
+    fn blocks_holding_no_pixel_of_the_sampling_grid_are_never_read() {
+        let source = PatternSource::default();
+        // One column past the first block column, one row past the first
+        // block row - neither holds a pixel of the every-3rd grid.
+        let (w, h) = (SUBSAMPLE_BLOCK_W + 1, SUBSAMPLE_BLOCK_H + 1);
+        let channels = read_subsampled(&source, &pattern_request(0, 0, w, h), 3).unwrap();
+
+        let size = channels[0].image.size();
+        assert_eq!((size.width, size.height), (w.div_ceil(3), h.div_ceil(3)));
+        assert_eq!(
+            *source.pixels_read.lock().unwrap(),
+            SUBSAMPLE_BLOCK_W * SUBSAMPLE_BLOCK_H,
+            "only the first block is read"
+        );
+    }
+
+    #[test]
+    fn cropping_rgb_columns_keeps_whole_pixels_and_moves_the_offset() {
+        let channel = rgb_channel(4, 2, Point2d { x: 10, y: 20 });
+
+        let cropped = crop_columns(&channel, 1, 2).unwrap();
+
+        let ImageContainer::F32Rgb(img) = &*cropped.image else {
+            panic!("RGB stays RGB");
+        };
+        assert_eq!((img.width(), img.height()), (2, 2));
+        assert_eq!(cropped.image.tile_offset(), Point2d { x: 11, y: 20 });
+        // Row 1, column 0 of the crop = source pixel 1 * 4 + 1.
+        let v = 5.0 / 1000.0;
+        assert_eq!(&img.as_slice()[6..9], &[v, v + 0.00025, v + 0.0005]);
+        assert_eq!(cropped.name, "rgb");
+        assert!(cropped.is_rgb);
+    }
+
+    #[test]
+    fn scaling_keeps_rgb_channels_rgb_and_label_channels_untouched() {
+        let channels = vec![
+            rgb_channel(4, 4, Point2d { x: 3, y: 5 }),
+            label_channel(4, 4),
+        ];
+
+        let scaled = scale_image(channels, 2, 2).unwrap();
+
+        let ImageContainer::F32Rgb(rgb) = &*scaled[0].image else {
+            panic!("RGB stays RGB");
+        };
+        assert_eq!((rgb.width(), rgb.height()), (2, 2));
+        assert_eq!(scaled[0].image.tile_offset(), Point2d { x: 3, y: 5 });
+        let ImageContainer::U32(labels) = &*scaled[1].image else {
+            panic!("labels stay labels");
+        };
+        assert_eq!((labels.width(), labels.height()), (4, 4), "never resampled");
+        assert_eq!(scaled[1].c_stack, 1);
+    }
+
+    fn view_cell(samples: Samples, w: usize, h: usize) -> Arc<CachedTile> {
+        Arc::new(CachedTile {
+            data: Arc::new(vec![ViewChannel {
+                samples,
+                width: w,
+                height: h,
+                tile_offset: Point2d { x: 0, y: 0 },
+                color: [0.0, 1.0, 0.0],
+                c_stack: 2,
+                name: "c".into(),
+                is_rgb: false,
+            }]),
+        })
+    }
+
+    fn u16_cell(values: &[u16]) -> Arc<CachedTile> {
+        view_cell(
+            Samples::U16 {
+                data: values.into(),
+                inv: 1.0 / 65535.0,
+            },
+            2,
+            2,
+        )
+    }
+
+    #[test]
+    fn sixteen_bit_cells_are_assembled_without_widening_them() {
+        let cells = vec![vec![u16_cell(&[1, 2, 3, 4]), u16_cell(&[5, 6, 7, 8])]];
+
+        let assembled = assemble_channel(&cells, 0, 2, 4, 2).unwrap();
+
+        let Samples::U16 { data, inv } = &assembled.samples else {
+            panic!("16-bit stays compact");
+        };
+        assert_eq!(&data[..], &[1, 2, 5, 6, 3, 4, 7, 8]);
+        assert_eq!(*inv, 1.0 / 65535.0);
+        assert_eq!((assembled.width, assembled.height), (4, 2));
+        assert_eq!(assembled.c_stack, 2);
+        assert_eq!(assembled.color, [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn cells_of_mixed_sample_types_are_assembled_as_floats() {
+        let u8_cell = view_cell(
+            Samples::U8 {
+                data: vec![255u8, 0, 0, 255].into(),
+                inv: 1.0 / 255.0,
+            },
+            2,
+            2,
+        );
+        let cells = vec![vec![u8_cell, u16_cell(&[0, 65535, 65535, 0])]];
+
+        let assembled = assemble_channel(&cells, 0, 2, 4, 2).unwrap();
+
+        assert!(matches!(assembled.samples, Samples::Image(_)));
+        let s = assembled.slice().unwrap();
+        let values: Vec<f32> = (0..s.len()).map(|i| s.get(i)).collect();
+        assert_eq!(values, vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn cells_that_cannot_be_rendered_fail_the_assembly_instead_of_panicking() {
+        let rgb = ViewChannel::wrap(&rgb_channel(2, 2, Point2d { x: 0, y: 0 }));
+        let cells = vec![vec![Arc::new(CachedTile {
+            data: Arc::new(vec![rgb]),
+        })]];
+
+        assert!(assemble_channel(&cells, 0, 2, 2, 2).is_err());
+    }
+
+    #[test]
+    fn a_view_too_big_for_the_cache_is_still_returned_just_not_kept() {
+        let cache = Mutex::new(IndexedTileCache::new(NonZeroUsize::new(1).unwrap()));
+        let source = PatternSource::default();
+
+        let (data, region) =
+            read_grid_view(&cache, &source, &grid_view(1, [0.0, 0.0, 600.0, 100.0]), 8).unwrap();
+
+        assert_eq!((region.out_w, region.out_h), (1024, 512));
+        let (w, values) = view_values(&data);
+        assert_eq!(values[3 * w + 700], pattern_value(700, 3));
+        assert_eq!(cache.lock().unwrap().weight(), 0, "nothing cached");
+    }
+
+    // -- read_image_tile_combined (fixture image file) ----------------------------
+
+    fn fixture_cache() -> ViewportCache {
+        ViewportCache::new(crate::editor::test_support::test_ui_state_with_project(
+            crate::editor::test_support::project_with_fixture_image(),
+        ))
+    }
+
+    fn viewport(width: f32, height: f32, zoom: f32) -> ViewportState {
+        ViewportState {
+            viewport_width: width,
+            viewport_height: height,
+            zoom,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            mouse_pos_x: 0.0,
+            mouse_pos_y: 0.0,
+        }
+    }
+
+    fn read(
+        cache: &ViewportCache,
+        fit_to_screen: bool,
+        is_low_res: bool,
+        state: &ViewportState,
+    ) -> Result<(RenderSource, ReadContext), InternalErrors> {
+        cache.read_image_tile_combined(
+            0,
+            ZProjection::None,
+            Some(0..=0),
+            0,
+            fit_to_screen,
+            false,
+            is_low_res,
+            state,
+        )
+    }
+
+    fn error_of(result: Result<(RenderSource, ReadContext), InternalErrors>) -> String {
+        match result {
+            Ok(_) => panic!("an error expected"),
+            Err(e) => format!("{e:?}"),
+        }
+    }
+
+    #[test]
+    fn fitting_to_a_viewport_not_yet_laid_out_is_deferred() {
+        let cache = fixture_cache();
+        for is_low_res in [false, true] {
+            for state in [viewport(0.0, 300.0, 1.0), viewport(400.0, 0.0, 1.0)] {
+                let error = error_of(read(&cache, true, is_low_res, &state));
+                assert!(error.contains("not yet sized"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_zoom_of_zero_is_refused_rather_than_drawn() {
+        let cache = fixture_cache();
+        let state = viewport(400.0, 300.0, 0.0);
+        let sharp = error_of(read(&cache, false, false, &state));
+        assert!(sharp.contains("Degenerate high-res"), "{sharp}");
+        let overview = error_of(read(&cache, false, true, &state));
+        assert!(overview.contains("Degenerate low-res"), "{overview}");
+        assert_eq!(cache.held_bytes(), (0, 0));
+    }
+
+    #[test]
+    fn an_overview_too_big_for_the_cache_is_still_drawn() {
+        let cache = fixture_cache();
+        *cache.cache_low_res.lock().unwrap() = IndexedTileCache::new(NonZeroUsize::new(1).unwrap());
+
+        let (data, ctx) = read(&cache, true, true, &viewport(400.0, 300.0, 1.0)).unwrap();
+
+        assert!(!data.is_empty());
+        assert!(ctx.image_w > 0 && ctx.image_h > 0);
+        assert_eq!(cache.held_bytes().1, 0, "not kept");
+    }
 }

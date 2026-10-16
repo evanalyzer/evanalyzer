@@ -405,4 +405,38 @@ mod tests {
     fn parse_json_object_keys_empty_object_has_no_keys() {
         assert!(parse_json_object_keys("{}").is_empty());
     }
+
+    #[test]
+    fn the_synthetic_database_holds_every_image_class_and_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.evadb");
+
+        seed_synthetic_db(&path, 2, 3, 4);
+
+        let generator = super::super::results_generator::ResultsGenerator::open_database(path)
+            .expect("a valid results database");
+        let images: Vec<String> = generator
+            .get_images()
+            .unwrap()
+            .into_iter()
+            .map(|image| image.rel_path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(images, ["img_00000.tif", "img_00001.tif"]);
+        let classes: Vec<String> = generator
+            .get_object_classes()
+            .unwrap()
+            .into_iter()
+            .map(|class| class.name)
+            .collect();
+        assert_eq!(classes, ["class_1", "class_2", "class_3"]);
+        let objects: (i64, i64) = generator
+            .connection()
+            .query_row(
+                "SELECT count(*), count(DISTINCT object_id) FROM objects",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(objects, (2 * 3 * 4, 2 * 3 * 4), "unique object ids");
+    }
 }

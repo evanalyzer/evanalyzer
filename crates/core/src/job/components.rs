@@ -13,7 +13,7 @@ use evanalyzer_cfg::{
         components::{
             ComponentDefinition, ComponentInstance, ComponentParameterDef, ParamBinding, ParamValue,
         },
-        parameter_def::ParameterDef,
+        parameter_def::{ParamType, ParameterDef},
         pipeline_command::{CommandCategory, PipelineCommand},
         pipeline_command_settings::{
             ObjectAiObjectClassifierAiClassifyMatchHandlingSettings,
@@ -472,12 +472,32 @@ fn steps_with_values(
     definition: &ComponentDefinition,
 ) -> Result<Vec<PipelineStepSettings>, InternalErrors> {
     let mut steps = definition.steps.clone();
+    // A class list several parameters set gets all their classes (in
+    // parameter order, each once): (step, setting) → classes.
+    let mut lists: Vec<((StepId, String), Vec<String>)> = Vec::new();
     for parameter in &definition.parameters {
-        let value = instance
-            .values
-            .get(&parameter.key)
-            .unwrap_or(&parameter.default);
+        let value = own_value(instance, parameter);
         for binding in &parameter.bindings {
+            if is_class_list(&definition.steps, binding) {
+                let target = (binding.step, binding.param.clone());
+                let index = match lists.iter().position(|(t, _)| *t == target) {
+                    Some(index) => index,
+                    None => {
+                        lists.push((target, Vec::new()));
+                        lists.len() - 1
+                    }
+                };
+                for class in value_text(value).split(',').map(str::trim) {
+                    let class = class.to_string();
+                    if !class.is_empty()
+                        && class != ObjectClass::Unset.to_text()
+                        && !lists[index].1.contains(&class)
+                    {
+                        lists[index].1.push(class);
+                    }
+                }
+                continue;
+            }
             let step = steps
                 .iter_mut()
                 .find(|s| s.id == binding.step)
@@ -501,7 +521,48 @@ fn steps_with_values(
             })?;
         }
     }
+    for ((step_id, path), classes) in lists {
+        let step = steps
+            .iter_mut()
+            .find(|s| s.id == step_id)
+            .expect("found by is_class_list");
+        set_bound_value(step, &path, &ParamValue::Text(classes.join(","))).map_err(|why| {
+            component_error(
+                &definition.key,
+                format!("its parameters can't set {path} of step {step_id}: {why}"),
+            )
+        })?;
+    }
     Ok(steps)
+}
+
+/// The value `instance` gives `parameter`: its own, else the default.
+fn own_value<'a>(
+    instance: &'a ComponentInstance,
+    parameter: &'a ComponentParameterDef,
+) -> &'a ParamValue {
+    instance
+        .values
+        .get(&parameter.key)
+        .unwrap_or(&parameter.default)
+}
+
+/// Whether `binding` sets a class list of a command among `steps` - a
+/// setting every parameter bound to it adds its classes to.
+fn is_class_list(steps: &[PipelineStepSettings], binding: &ParamBinding) -> bool {
+    steps
+        .iter()
+        .find(|s| s.id == binding.step)
+        .and_then(|s| s.command())
+        .and_then(|command| {
+            find_param(&crate::algos::command_parameters(command), &binding.param).map(|p| {
+                matches!(
+                    p.param_type,
+                    ParamType::MultiObjClass | ParamType::MultiSegClass
+                )
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// `instance`'s component's steps with the instance's values applied - what
@@ -539,6 +600,17 @@ pub fn component_parameters(
                 .find(|s| s.id == binding.step)
                 .ok_or_else(|| missing_step(definition, parameter, binding))?;
             let bound = match &step.content {
+                // A class list shows the parameter's own classes - not those
+                // other parameters add to it.
+                StepContent::Command(command) if is_class_list(&definition.steps, binding) => {
+                    let mut own = command.clone();
+                    crate::algos::apply_command_param(
+                        &mut own,
+                        &binding.param,
+                        &value_text(own_value(instance, parameter)),
+                    );
+                    find_param(&crate::algos::command_parameters(&own), &binding.param).cloned()
+                }
                 StepContent::Command(command) => {
                     find_param(&crate::algos::command_parameters(command), &binding.param).cloned()
                 }
@@ -597,6 +669,13 @@ pub fn set_component_parameter(
         .ok_or_else(|| missing_step(definition, parameter, binding))?;
     let value = match &mut step.content {
         StepContent::Command(command) => {
+            // From the parameter's own value - a class list may hold other
+            // parameters' classes too.
+            crate::algos::apply_command_param(
+                command,
+                &binding.param,
+                &value_text(own_value(instance, parameter)),
+            );
             crate::algos::apply_command_param(command, &binding.param, text);
             let now = find_param(&crate::algos::command_parameters(command), &binding.param)
                 .map(|p| p.value.clone())
@@ -1172,6 +1251,97 @@ mod tests {
         let second = expand_step(&component, &definitions, &mut scopes).unwrap();
         assert!(first.iter().all(|c| c.scope == scope(1)));
         assert!(second.iter().all(|c| c.scope == scope(2)));
+    }
+
+    /// One parameter can set a single class (one value) and add its class to a
+    /// class list several parameters set - the list gets all their classes.
+    #[test]
+    fn a_class_list_several_parameters_set_gets_all_their_classes() {
+        let classify = |output: ObjectClass, inputs: Vec<ObjectClass>| {
+            PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                input_classes: inputs,
+                output_class: output,
+                ..Default::default()
+            })
+        };
+        let definition = definition(
+            "COLOC",
+            vec![
+                command_step(1, classify(ObjectClass::Global(1), vec![])),
+                command_step(2, classify(ObjectClass::Global(2), vec![])),
+                command_step(
+                    3,
+                    classify(ObjectClass::Unset, vec![ObjectClass::Global(9)]),
+                ),
+            ],
+            vec![
+                parameter(
+                    1,
+                    ParamValue::Int(4),
+                    &[(1, "output_class"), (3, "input_classes")],
+                ),
+                parameter(
+                    2,
+                    ParamValue::Int(5),
+                    &[(2, "output_class"), (3, "input_classes")],
+                ),
+                // Only on the list, its own classes.
+                parameter(3, ParamValue::Int(7), &[(3, "input_classes")]),
+            ],
+        );
+        let definitions = [definition];
+        let classes = |commands: &[ExpandedCommand]| -> Vec<(ObjectClass, Vec<ObjectClass>)> {
+            commands
+                .iter()
+                .map(|c| match &c.command {
+                    PipelineCommand::ClassifyObjects(s) => {
+                        (s.output_class, s.input_classes.clone())
+                    }
+                    _ => panic!("classify"),
+                })
+                .collect()
+        };
+
+        let commands = expand(
+            &component_step(1, "COLOC", &[(2, ParamValue::Int(6))]),
+            &definitions,
+        )
+        .unwrap();
+        let g = ObjectClass::Global;
+        assert_eq!(
+            classes(&commands),
+            [
+                (g(4), vec![]),
+                (g(6), vec![]),
+                (ObjectClass::Unset, vec![g(4), g(6), g(7)])
+            ],
+            "single classes one value each, the list all of them in parameter order"
+        );
+
+        // Each card shows the parameter's own value, not the list's.
+        let mut instance = instance("COLOC", &[(2, ParamValue::Int(6))]);
+        let shown = component_parameters(&instance, &definitions).unwrap();
+        assert_eq!(shown[2].value, "7");
+
+        // Changing one changes only its part of the list.
+        set_component_parameter(
+            &mut instance,
+            &definitions,
+            &ComponentParamKey::from("1"),
+            "8",
+        )
+        .unwrap();
+        let commands = expand_step(
+            &PipelineStepSettings {
+                id: StepId(1),
+                enabled: true,
+                content: StepContent::Component(instance),
+            },
+            &definitions,
+            &mut ScopeCounter::default(),
+        )
+        .unwrap();
+        assert_eq!(classes(&commands)[2].1, [g(8), g(6), g(7)]);
     }
 
     #[test]

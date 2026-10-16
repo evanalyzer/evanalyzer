@@ -1126,4 +1126,121 @@ mod tests {
             "{differing} pixels differ from YOLOv5's own result"
         );
     }
+
+    #[test]
+    fn yolov5_is_named_cites_its_paper_and_runs_per_tile() {
+        let cmd = yolo();
+        assert_eq!(cmd.name(), "YOLOv5");
+        assert_eq!(cmd.execution_scope(), ExecutionScope::Tile);
+        let cites = cmd.cite();
+        assert_eq!(cites.len(), 1);
+        assert_eq!(cites[0].cite_key, "jocher2022yolov5");
+    }
+
+    #[test]
+    fn rgb_planes_rejects_a_label_image() {
+        let size = ImageSize {
+            width: 2,
+            height: 2,
+        };
+        let labels = ImageContainer::U32(crate::ManagedImage {
+            data: Image::<u32, 1>::new(size, vec![1; 4]).unwrap(),
+            tile_offset: crate::image::Point2d { x: 0, y: 0 },
+            plane: None,
+        });
+        let err = Yolov5::rgb_planes(&labels).unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::FormatMismatch { expected, .. } if expected.contains("F32Gray or F32Rgb")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn split_outputs_skips_values_that_are_not_tensors() {
+        let output = IValue::Tuple(vec![
+            IValue::Int(7),
+            IValue::GenericList(vec![IValue::Tensor(pred(&[vec![0.0; 6]]))]),
+            IValue::Double(1.5),
+        ]);
+        let (p, prototypes) = Yolov5::split_outputs(output).unwrap();
+        assert_eq!(p.dim(), 3);
+        assert!(prototypes.is_none());
+    }
+
+    #[test]
+    fn iou_of_zero_area_boxes_is_zero_not_nan() {
+        let point = [5.0, 5.0, 5.0, 5.0];
+        assert_eq!(iou(&point, &point), 0.0);
+        let line = [0.0, 0.0, 10.0, 0.0];
+        assert_eq!(iou(&line, &line), 0.0);
+    }
+
+    #[test]
+    fn decode_window_keeps_at_most_max_detections_per_window() {
+        // 21 x 21 = 441 separate 10x10 boxes (30 px apart, so NMS keeps all),
+        // more than YOLOv5's `max_det`: only the most confident 300 stay.
+        let mut rows = Vec::new();
+        for gy in 0..21 {
+            for gx in 0..21 {
+                let i = gy * 21 + gx;
+                let obj = 0.99 - i as f32 * 0.001;
+                rows.push(row(
+                    15.0 + gx as f32 * 30.0,
+                    15.0 + gy as f32 * 30.0,
+                    10.0,
+                    10.0,
+                    obj,
+                    &[1.0],
+                    &[],
+                ));
+            }
+        }
+        let out = yolo()
+            .decode_window(&pred(&rows), None, 0, 0, 640, 640)
+            .unwrap();
+        assert_eq!(out.len(), Yolov5::MAX_DETECTIONS);
+        let lowest_kept = out.iter().map(|d| d.score).fold(f32::MAX, f32::min);
+        assert!(
+            (lowest_kept - (0.99 - 299.0 * 0.001)).abs() < 1e-5,
+            "the 300 most confident are kept, lowest {lowest_kept}"
+        );
+    }
+
+    #[test]
+    fn decode_window_drops_a_box_lying_entirely_in_the_padding() {
+        // A 300x200 tile in a padded window: a box at x 400..440 is past the
+        // tile's right border, so nothing of it is left to rasterize.
+        let p = pred(&[row(420.0, 100.0, 40.0, 40.0, 0.9, &[0.9], &[])]);
+        assert!(
+            yolo()
+                .decode_window(&p, None, 0, 0, 300, 200)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn execute_reports_a_model_whose_prediction_has_too_few_columns() {
+        // A model returning `[1, 1, 5]`: a box and objectness, no class score.
+        let (_dir, model_path) =
+            crate::algos::ai_segmentation::test_support::trace_and_save_model(3, 640, 640, |x| {
+                let one = x.mean(Kind::Float) * 0.0 + 1.0;
+                let columns: Vec<Tensor> = [320.0, 320.0, 100.0, 100.0, 0.9]
+                    .iter()
+                    .map(|&v| &one * v)
+                    .collect();
+                Tensor::stack(&columns, 0).reshape([1, 1, 5])
+            });
+        let cmd = Yolov5 {
+            model_path,
+            ..yolo()
+        };
+        let err = cmd
+            .execute(&mut gray(64, 64), &mut GlobalPipelineCache::default())
+            .unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::Generic(msg) if msg.contains("too few")),
+            "{err:?}"
+        );
+    }
 }

@@ -6062,4 +6062,419 @@ mod tests {
         drain_ui_queue();
         assert!(export.get_has_error());
     }
+
+    // -- unknown, deselected and out-of-range input -------------------------
+
+    #[test]
+    fn list_filters_ignore_unknown_entries_and_toggle_known_ones() {
+        let o = opened();
+        let state = o.state();
+        let classes = |o: &Opened| {
+            o.controller
+                .list_filter
+                .lock()
+                .unwrap()
+                .object_classes
+                .clone()
+        };
+
+        o.controller
+            .list_filter
+            .lock()
+            .unwrap()
+            .object_classes
+            .clear();
+        state.invoke_list_class_selected("No such class".into(), true);
+        assert!(classes(&o).is_empty());
+        state.invoke_list_class_selected("ClassA".into(), true);
+        state.invoke_list_class_selected("ClassA".into(), true);
+        assert_eq!(classes(&o), vec![ObjectClass::Global(1)]);
+        state.invoke_list_class_selected("ClassA".into(), false);
+        assert!(classes(&o).is_empty());
+
+        let columns = |o: &Opened| o.controller.list_filter.lock().unwrap().columns.clone();
+        let before = columns(&o);
+        state.invoke_list_columns_item_selected("no_such_column".into(), true);
+        assert_eq!(columns(&o), before);
+        state.invoke_list_columns_select_none();
+        state.invoke_list_columns_item_selected("area_px".into(), true);
+        state.invoke_list_columns_item_selected("area_px".into(), true);
+        assert_eq!(columns(&o), vec![Column::AreaSizePx]);
+        state.invoke_list_columns_item_selected("area_px".into(), false);
+        assert!(columns(&o).is_empty());
+
+        let aggregations = |o: &Opened| {
+            o.controller
+                .list_filter
+                .lock()
+                .unwrap()
+                .aggregations
+                .clone()
+        };
+        state.invoke_list_aggregation_select_none();
+        state.invoke_list_aggregation_item_selected("no such aggregation".into(), true);
+        assert!(aggregations(&o).is_empty());
+        let key = aggregation_display_name(&AGGREGATIONS[0]);
+        state.invoke_list_aggregation_item_selected(key.into(), true);
+        state.invoke_list_aggregation_item_selected(key.into(), true);
+        assert_eq!(aggregations(&o), vec![AGGREGATIONS[0].clone()]);
+        state.invoke_list_aggregation_item_selected(key.into(), false);
+        assert!(aggregations(&o).is_empty());
+
+        // A row that isn't on the page.
+        state.invoke_list_row_clicked(9999);
+        drain_ui_queue();
+    }
+
+    fn matrix_filter_value<T>(o: &Opened, read: impl Fn(&MatrixFilter) -> T) -> T {
+        read(o.controller.matrix_filter.lock().unwrap().as_ref().unwrap())
+    }
+
+    #[test]
+    fn matrix_toolbar_picks_every_aggregate_and_ignores_unknown_entries() {
+        let o = opened();
+        let state = o.state();
+        state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        state.invoke_matrix_aggregate_selected("Sum".into());
+
+        for (name, aggregation) in [
+            ("Average", Aggregation::Avg),
+            ("Maximum", Aggregation::Max),
+            ("Std Dev", Aggregation::Stddev),
+            ("Stddev", Aggregation::Stddev),
+            ("Sum", Aggregation::Sum),
+            ("Median", Aggregation::Median),
+            ("Skewness", Aggregation::Skewness),
+            ("Minimum", Aggregation::Min),
+        ] {
+            state.invoke_matrix_aggregate_selected(name.into());
+            assert_eq!(
+                matrix_filter_value(&o, |f| f.aggregation.clone()),
+                aggregation
+            );
+        }
+        state.invoke_matrix_aggregate_selected("Mode".into());
+        assert_eq!(
+            matrix_filter_value(&o, |f| f.aggregation.clone()),
+            Aggregation::Min
+        );
+
+        let class = matrix_filter_value(&o, |f| f.object_classe.clone());
+        state.invoke_matrix_class_selected("ClassB".into(), false);
+        state.invoke_matrix_class_selected("No such class".into(), true);
+        assert_eq!(matrix_filter_value(&o, |f| f.object_classe.clone()), class);
+
+        let mode = matrix_filter_value(&o, |f| f.plate.grouping_mode);
+        state.invoke_matrix_grouping_selected("Folder".into(), false);
+        state.invoke_matrix_grouping_selected("By color".into(), true);
+        assert_eq!(matrix_filter_value(&o, |f| f.plate.grouping_mode), mode);
+
+        state.invoke_matrix_color_schema_selected("Viridis".into(), false);
+        state.invoke_matrix_color_schema_selected("No such schema".into(), true);
+
+        let plate = matrix_filter_value(&o, |f| f.plate.clone());
+        state.invoke_matrix_plate_size_selected("96 Well (8 x 12)".into(), false);
+        state.invoke_matrix_plate_size_selected("7 Well".into(), true);
+        state.invoke_matrix_well_layout_selected("Custom".into(), false);
+        state.invoke_matrix_well_rows_changed("many".into());
+        state.invoke_matrix_well_cols_changed("-1".into());
+        assert_eq!(matrix_filter_value(&o, |f| f.plate.clone()), plate);
+
+        let square = matrix_filter_value(&o, |f| f.square_size);
+        state.invoke_matrix_square_size_selected("128".into(), false);
+        state.invoke_matrix_square_size_selected("big".into(), true);
+        assert_eq!(matrix_filter_value(&o, |f| f.square_size), square);
+
+        // A negative grid position (nothing dragged) is ignored.
+        state.invoke_well_image_moved(-1, 0);
+        assert_eq!(matrix_filter_value(&o, |f| f.plate.clone()), plate);
+        drain_ui_queue();
+    }
+
+    #[test]
+    fn well_rows_and_cols_typed_with_an_auto_layout_start_from_four() {
+        let o = opened();
+        let state = o.state();
+        state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        state.invoke_matrix_aggregate_selected("Sum".into());
+        state.invoke_matrix_well_layout_selected(WELL_LAYOUT_AUTO.into(), true);
+        assert_eq!(
+            matrix_filter_value(&o, |f| f.plate.well_layout),
+            WellLayout::Auto
+        );
+
+        state.invoke_matrix_well_rows_changed("3".into());
+        assert_eq!(
+            matrix_filter_value(&o, |f| f.plate.well_layout),
+            WellLayout::Fixed { rows: 3, cols: 4 }
+        );
+
+        state.invoke_matrix_well_layout_selected(WELL_LAYOUT_AUTO.into(), true);
+        state.invoke_matrix_well_cols_changed("2".into());
+        assert_eq!(
+            matrix_filter_value(&o, |f| f.plate.well_layout),
+            WellLayout::Fixed { rows: 4, cols: 2 }
+        );
+        drain_ui_queue();
+    }
+
+    #[test]
+    fn matrix_column_picker_without_a_known_selection_keeps_the_column() {
+        let o = opened();
+        let state = o.state();
+        state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        state.invoke_matrix_aggregate_selected("Sum".into());
+        let column = matrix_filter_value(&o, |f| f.column.clone());
+
+        let item = |key: &str, selected: bool| MultiSelectItem {
+            key: key.into(),
+            selected,
+            ..Default::default()
+        };
+        state.set_matrix_column_items(ModelRc::new(VecModel::from(vec![item("area_px", false)])));
+        state.invoke_matrix_value_clicked();
+        state.set_matrix_column_items(ModelRc::new(VecModel::from(vec![item(
+            "no_such_column",
+            true,
+        )])));
+        state.invoke_matrix_value_clicked();
+
+        assert_eq!(matrix_filter_value(&o, |f| f.column.clone()), column);
+    }
+
+    #[test]
+    fn chart_pickers_ignore_unknown_and_deselected_entries() {
+        let o = opened();
+        let state = o.state();
+        state.invoke_chart_column_selected("area_px".into());
+        state.invoke_chart_y_column_selected("area_px".into());
+        state.invoke_chart_class_selected("ClassA".into(), true);
+
+        state.invoke_chart_column_selected("no_such_column".into());
+        state.invoke_chart_y_column_selected("no_such_column".into());
+        state.invoke_chart_class_selected("ClassB".into(), false);
+        state.invoke_chart_class_selected("No such class".into(), true);
+
+        let chart = o.controller.chart_filter.lock().unwrap().clone();
+        assert_eq!(chart.column, Column::AreaSizePx);
+        assert_eq!(chart.y_column, Column::AreaSizePx);
+        assert_eq!(chart.object_class, Some(ObjectClass::Global(1)));
+    }
+
+    #[test]
+    fn breadcrumb_back_to_the_well_shows_the_well_grid_again() {
+        let o = opened();
+        let state = o.state();
+        state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        state.invoke_matrix_aggregate_selected("Sum".into());
+        state.invoke_plate_cell_clicked("A1".into());
+        state.invoke_open_well_clicked("A1".into());
+        state.invoke_well_field_clicked("A1_01.tif".into());
+        drain_ui_queue();
+
+        // ["All results", "Plate", "Well A1", "Image"]: index 2 is the well.
+        state.invoke_breadcrumb_nav(2);
+        drain_ui_queue();
+
+        assert_eq!(state.get_matrix_level(), MatrixLevel::Well);
+        assert_eq!(o.controller.current_image.lock().unwrap().as_deref(), None);
+        assert_eq!(
+            o.controller.current_well.lock().unwrap().as_deref(),
+            Some("A1")
+        );
+        assert_eq!(state.get_breadcrumb().row_count(), 3);
+    }
+
+    #[test]
+    fn heatmap_tiles_without_an_open_image_or_with_a_bad_key_are_only_selected() {
+        let o = opened();
+        let state = o.state();
+        o.controller
+            .image_heatmap_cells
+            .lock()
+            .unwrap()
+            .insert("not-a-tile".into(), MatrixCell::default());
+
+        state.invoke_image_heatmap_cell_clicked("not-a-tile".into());
+        assert_eq!(state.get_active_well(), "not-a-tile");
+
+        *o.controller.current_image.lock().unwrap() = Some("A1_01.tif".into());
+        state.invoke_image_heatmap_cell_clicked("not-a-tile".into());
+        drain_ui_queue();
+        assert_eq!(state.get_active_well(), "not-a-tile");
+    }
+
+    #[test]
+    fn toggling_an_unknown_image_or_without_a_database_keeps_it_enabled() {
+        let o = opened();
+        let state = o.state();
+        state.set_active_well("no-such-image.tif".into());
+        state.invoke_toggle_active_well_disabled();
+        assert!(!state.get_active_well_disabled());
+
+        // The database went away: the toggle shown right away is undone.
+        state.set_active_well("A1_01.tif".into());
+        *o.controller.result_generator.lock().unwrap() = None;
+        state.invoke_toggle_active_well_disabled();
+        drain_ui_queue();
+        assert!(!state.get_active_well_disabled());
+    }
+
+    #[test]
+    fn cancelling_the_export_folder_picker_keeps_the_folder() {
+        let o = opened();
+        let export = o.export();
+        o.state().invoke_export_dialog_open();
+        export.set_output_dir("/kept".into());
+
+        export.invoke_pick_output_dir();
+        drain_ui_queue();
+        o.results_ui
+            .global::<crate::FileBrowserState>()
+            .invoke_cancel();
+        drain_ui_queue();
+
+        assert_eq!(export.get_output_dir(), "/kept");
+    }
+
+    #[test]
+    fn export_reports_unknown_selections_instead_of_starting() {
+        let o = opened();
+        let export = o.export();
+        let unknown = || {
+            ModelRc::new(VecModel::from(vec![MultiSelectItem {
+                key: "no such entry".into(),
+                selected: true,
+                ..Default::default()
+            }]))
+        };
+        let cases: [(&str, &dyn Fn(&ExportDialogState)); 5] = [
+            ("Unknown class", &|e| e.set_class_items(unknown())),
+            ("Unknown column", &|e| e.set_column_items(unknown())),
+            ("Unknown aggregation", &|e| {
+                e.set_aggregation_items(unknown())
+            }),
+            ("Unknown color schema", &|e| {
+                e.set_color_schema_items(unknown())
+            }),
+            ("Unknown export format", &|e| e.set_format_items(unknown())),
+        ];
+        o.state().invoke_export_dialog_open();
+        drain_ui_queue();
+        let originals = (
+            export.get_class_items(),
+            export.get_column_items(),
+            export.get_aggregation_items(),
+            export.get_color_schema_items(),
+            export.get_format_items(),
+        );
+        for (message, break_it) in cases {
+            export.set_class_items(originals.0.clone());
+            export.set_column_items(originals.1.clone());
+            export.set_aggregation_items(originals.2.clone());
+            export.set_color_schema_items(originals.3.clone());
+            export.set_format_items(originals.4.clone());
+            export.set_output_dir("/tmp".into());
+            break_it(&export);
+            export.invoke_start_clicked();
+            assert!(export.get_has_error(), "{message}");
+            assert!(
+                export.get_error_message().starts_with(message),
+                "{}",
+                export.get_error_message()
+            );
+            export.set_has_error(false);
+        }
+    }
+
+    // -- the window closed / nothing to show ----------------------------------
+
+    fn closed_window_controller() -> Arc<ResultsStateController> {
+        crate::helper::ui_thread::fresh_test_queue();
+        make_controller_with_ui(slint::Weak::default(), slint::Weak::default())
+    }
+
+    #[test]
+    fn views_without_a_database_have_nothing_to_show() {
+        let controller = closed_window_controller();
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::Matrix;
+        controller.update_matrix_view();
+        controller.update_well_view("A1");
+        controller.update_image_heatmap_view("A1_01.tif");
+        *controller.current_image.lock().unwrap() = Some("A1_01.tif".into());
+        controller.refresh_matrix_view_at(MatrixLevel::Object);
+        *controller.current_well.lock().unwrap() = Some("A1".into());
+        controller.refresh_matrix_view_at(MatrixLevel::Well);
+        controller.refresh_active_matrix_view();
+
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::List;
+        controller.refresh_list();
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::Charts;
+        controller.refresh_charts();
+        drain_ui_queue();
+
+        assert!(controller.matrix_cells.lock().unwrap().is_empty());
+        assert!(controller.well_cells.lock().unwrap().is_empty());
+        assert!(controller.list_row_locations.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn results_for_a_closed_window_are_dropped_without_panicking() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        let controller = closed_window_controller();
+
+        controller.open_database(path);
+        drain_ui_queue();
+        assert_eq!(controller.classes.lock().unwrap().len(), 2);
+        assert!(!controller.images.lock().unwrap().is_empty());
+
+        // No Matrix filter chosen: nothing to aggregate.
+        *controller.matrix_filter.lock().unwrap() = None;
+        controller.matrix_cells.lock().unwrap().clear();
+        controller.well_cells.lock().unwrap().clear();
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::Matrix;
+        controller.update_matrix_view();
+        controller.update_well_view("A1");
+        controller.update_image_heatmap_view("A1_01.tif");
+        assert!(controller.matrix_cells.lock().unwrap().is_empty());
+
+        *controller.matrix_filter.lock().unwrap() = Some(MatrixFilter {
+            aggregation: Aggregation::Sum,
+            ..Default::default()
+        });
+        controller.update_matrix_view();
+        controller.update_well_view("A1");
+        controller.update_image_heatmap_view("A1_01.tif");
+        controller.show_results_window();
+
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::List;
+        controller.refresh_list();
+        controller.select_all_images();
+        controller.select_none_images();
+        controller.filter_images("A1");
+        controller.select_all_classes();
+        controller.select_none_classes();
+        controller.select_all_columns();
+        controller.select_none_columns();
+        controller.select_all_aggregations();
+        controller.select_none_aggregations();
+
+        *controller.rail_mode.lock().unwrap() = ResultsRailMode::Charts;
+        for kind in [ChartKind::Histogram, ChartKind::Scatter, ChartKind::Boxplot] {
+            controller.chart_filter.lock().unwrap().kind = kind;
+            controller.refresh_charts();
+        }
+        controller.push_chart_error("broken".into());
+        controller.set_max_z_and_t_stack_in_slint(2, 3);
+        controller.push_export_progress("Working".into(), 1, 2);
+        controller.push_export_done();
+        controller.push_export_error("failed".into());
+        controller.push_export_cancelled();
+        drain_ui_queue();
+
+        assert!(controller.matrix_cells.lock().unwrap().contains_key("A1"));
+        assert!(!controller.well_cells.lock().unwrap().is_empty());
+    }
 }

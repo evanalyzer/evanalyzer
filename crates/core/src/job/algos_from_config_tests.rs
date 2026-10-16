@@ -1211,3 +1211,341 @@ fn every_command_cites_something() {
         "only {checked} commands could be built from their defaults"
     );
 }
+
+// ---- Remaining enum variants -------------------------------------
+
+#[cfg(feature = "ai")]
+#[test]
+fn ai_classify_match_handling_settings_convert_both_variants() {
+    let add: AiClassifyMatchHandling =
+        ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch.into();
+    assert!(matches!(
+        add,
+        AiClassifyMatchHandling::AddOutputClassIfMatch
+    ));
+    let reclassify: AiClassifyMatchHandling =
+        ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch.into();
+    assert!(matches!(
+        reclassify,
+        AiClassifyMatchHandling::ReclassifyIfMatch
+    ));
+}
+
+#[test]
+fn illumination_correction_apply_and_correction_methods_convert_every_variant() {
+    assert_eq!(
+        ApplyMethod::from(FiltersIlluminationCorrectionApplyMethodSettings::Divide),
+        ApplyMethod::Divide
+    );
+    assert_eq!(
+        ApplyMethod::from(FiltersIlluminationCorrectionApplyMethodSettings::Subtract),
+        ApplyMethod::Subtract
+    );
+    assert_eq!(
+        CorrectionMethod::from(FiltersIlluminationCorrectionCorrectionMethodSettings::Regular),
+        CorrectionMethod::Regular
+    );
+    assert_eq!(
+        CorrectionMethod::from(FiltersIlluminationCorrectionCorrectionMethodSettings::Background),
+        CorrectionMethod::Background
+    );
+}
+
+#[test]
+fn illumination_correction_smoothing_methods_convert_and_clamp_sigma() {
+    assert_eq!(
+        SmoothingMethod::from(FiltersIlluminationCorrectionSmoothingMethodSettings::None),
+        SmoothingMethod::None
+    );
+    assert_eq!(
+        SmoothingMethod::from(
+            FiltersIlluminationCorrectionSmoothingMethodSettings::Gaussian { sigma: 3.5 }
+        ),
+        SmoothingMethod::Gaussian { sigma: 3.5 }
+    );
+    assert_eq!(
+        SmoothingMethod::from(
+            FiltersIlluminationCorrectionSmoothingMethodSettings::Gaussian { sigma: 100.0 }
+        ),
+        SmoothingMethod::Gaussian { sigma: 20.0 },
+        "sigma above the schema range is clamped to its max"
+    );
+    assert_eq!(
+        SmoothingMethod::from(
+            FiltersIlluminationCorrectionSmoothingMethodSettings::Gaussian { sigma: 0.0 }
+        ),
+        SmoothingMethod::Gaussian { sigma: 0.1 },
+        "sigma below the schema range is clamped to its min"
+    );
+    assert_eq!(
+        SmoothingMethod::from(
+            FiltersIlluminationCorrectionSmoothingMethodSettings::Median { radius: 7 }
+        ),
+        SmoothingMethod::Median { radius: 7 }
+    );
+    assert_eq!(
+        SmoothingMethod::from(FiltersIlluminationCorrectionSmoothingMethodSettings::FitPolynomial),
+        SmoothingMethod::FitPolynomial
+    );
+}
+
+#[test]
+fn threshold_averaging_settings_convert_both_variants() {
+    assert_eq!(
+        Averaging::from(SegmentationThresholdAveragingSettings::Mean),
+        Averaging::Mean
+    );
+    assert_eq!(
+        Averaging::from(SegmentationThresholdAveragingSettings::Median),
+        Averaging::Median
+    );
+}
+
+#[test]
+fn classify_match_handling_every_remaining_variant_converts() {
+    use ObjectClassifyObjectsClassifyMatchHandlingSettings as S;
+    let cases = [
+        (S::AddOutputClassIfNotMatch, "AddOutputClassIfNotMatch"),
+        (S::RemoveInputClassIfMatch, "RemoveInputClassIfMatch"),
+        (S::RemoveInputClassIfNotMatch, "RemoveInputClassIfNotMatch"),
+        (S::RemoveOutputClassIfMatch, "RemoveOutputClassIfMatch"),
+        (
+            S::RemoveOutputClassIfNotMatch,
+            "RemoveOutputClassIfNotMatch",
+        ),
+        (S::RemoveAllClassesIfNotMatch, "RemoveAllClassesIfNotMatch"),
+        (S::ReclassifyIfMatch, "ReclassifyIfMatch"),
+    ];
+    for (setting, name) in cases {
+        let result = ClassifyMatchHandling::from(setting);
+        let matched = match result {
+            ClassifyMatchHandling::AddOutputClassIfNotMatch => "AddOutputClassIfNotMatch",
+            ClassifyMatchHandling::RemoveInputClassIfMatch => "RemoveInputClassIfMatch",
+            ClassifyMatchHandling::RemoveInputClassIfNotMatch => "RemoveInputClassIfNotMatch",
+            ClassifyMatchHandling::RemoveOutputClassIfMatch => "RemoveOutputClassIfMatch",
+            ClassifyMatchHandling::RemoveOutputClassIfNotMatch => "RemoveOutputClassIfNotMatch",
+            ClassifyMatchHandling::RemoveAllClassesIfNotMatch => "RemoveAllClassesIfNotMatch",
+            ClassifyMatchHandling::ReclassifyIfMatch => "ReclassifyIfMatch",
+            _ => "other",
+        };
+        assert_eq!(matched, name);
+    }
+}
+
+#[test]
+fn coloc_multiplicity_settings_convert_every_variant_and_keep_multi_for_classes() {
+    assert_eq!(
+        ColocMultiplicity::from(ObjectColocObjectsColocMultiplicitySettings::OneToOne),
+        ColocMultiplicity::OneToOne
+    );
+    assert_eq!(
+        ColocMultiplicity::from(ObjectColocObjectsColocMultiplicitySettings::ManyToMany),
+        ColocMultiplicity::ManyToMany
+    );
+    assert_eq!(
+        ColocMultiplicity::from(ObjectColocObjectsColocMultiplicitySettings::MultiFor(vec![
+            ObjectClass::Global(2),
+            ObjectClass::Local(1),
+        ])),
+        ColocMultiplicity::MultiFor(vec![ObjectClass::Global(2), ObjectClass::Local(1)])
+    );
+}
+
+#[test]
+fn intensity_filter_settings_convert_metric_comparison_and_clamp_threshold() {
+    use evanalyzer_cfg::core_types::ImageChannelIdx;
+    let metrics = [
+        ObjectClassifyObjectsIntensityMetricSettings::Avg,
+        ObjectClassifyObjectsIntensityMetricSettings::Sum,
+        ObjectClassifyObjectsIntensityMetricSettings::Min,
+        ObjectClassifyObjectsIntensityMetricSettings::Max,
+    ];
+    for (i, metric) in metrics.into_iter().enumerate() {
+        let comparison = if i % 2 == 0 {
+            ObjectClassifyObjectsIntensityComparisonSettings::Above
+        } else {
+            ObjectClassifyObjectsIntensityComparisonSettings::Below
+        };
+        let filter = IntensityFilter::from(IntensityFilterSettings {
+            channel: ImageChannelIdx(i as u32),
+            metric,
+            comparison,
+            threshold: -5.0,
+            unit: PixelUnits::Bit,
+        });
+        assert_eq!(filter.channel, ImageChannelIdx(i as u32));
+        let metric_ok = match (i, &filter.metric) {
+            (0, IntensityMetric::Avg) => true,
+            (1, IntensityMetric::Sum) => true,
+            (2, IntensityMetric::Min) => true,
+            (3, IntensityMetric::Max) => true,
+            _ => false,
+        };
+        assert!(metric_ok, "metric #{i} converted to the wrong variant");
+        if i % 2 == 0 {
+            assert!(matches!(filter.comparison, IntensityComparison::Above));
+        } else {
+            assert!(matches!(filter.comparison, IntensityComparison::Below));
+        }
+        assert_eq!(
+            filter.threshold, 0.0,
+            "a negative threshold is clamped to 0"
+        );
+        assert_eq!(filter.unit, PixelUnits::Bit);
+    }
+}
+
+#[test]
+fn operand_every_remaining_variant_converts() {
+    use MathImageMathOperandSettings as S;
+    let cases = [
+        (S::Invert, Operand::Invert),
+        (S::Add, Operand::Add),
+        (S::Multiply, Operand::Multiply),
+        (S::Divide, Operand::Divide),
+        (S::And, Operand::And),
+        (S::Or, Operand::Or),
+        (S::Xor, Operand::Xor),
+        (S::Min, Operand::Min),
+        (S::Max, Operand::Max),
+        (S::Average, Operand::Average),
+    ];
+    for (setting, expected) in cases {
+        assert_eq!(Operand::from(setting), expected);
+    }
+}
+
+#[test]
+fn otsu_middle_class_settings_convert_both_variants() {
+    assert_eq!(
+        OtsuMiddleClass::from(SegmentationThresholdOtsuMiddleClassSettings::Foreground),
+        OtsuMiddleClass::Foreground
+    );
+    assert_eq!(
+        OtsuMiddleClass::from(SegmentationThresholdOtsuMiddleClassSettings::Background),
+        OtsuMiddleClass::Background
+    );
+}
+
+#[test]
+fn rank_filter_type_min_and_max_settings_convert() {
+    assert_eq!(
+        RankFilterType::from(FiltersRankFilterRankFilterTypeSettings::Min),
+        RankFilterType::Min
+    );
+    assert_eq!(
+        RankFilterType::from(FiltersRankFilterRankFilterTypeSettings::Max),
+        RankFilterType::Max
+    );
+}
+
+#[test]
+fn watershed_seed_source_settings_convert_both_variants() {
+    assert!(
+        SeedSource::from(SegmentationWatershedSeedSourceSettings::DistanceMap)
+            == SeedSource::DistanceMap
+    );
+    assert!(
+        SeedSource::from(SegmentationWatershedSeedSourceSettings::Intensity)
+            == SeedSource::Intensity
+    );
+}
+
+#[test]
+fn threshold_method_every_remaining_variant_converts() {
+    use SegmentationThresholdThresholdMethodSettings as S;
+    let cases = [
+        (S::Manual, ThresholdMethod::Manual),
+        (S::Li, ThresholdMethod::Li),
+        (S::MinError, ThresholdMethod::MinError),
+        (S::Triangle, ThresholdMethod::Triangle),
+        (S::Moments, ThresholdMethod::Moments),
+        (S::Huang, ThresholdMethod::Huang),
+        (S::Intermodes, ThresholdMethod::Intermodes),
+        (S::IsoData, ThresholdMethod::IsoData),
+        (S::MaxEntropy, ThresholdMethod::MaxEntropy),
+        (S::Mean, ThresholdMethod::Mean),
+        (S::Minimum, ThresholdMethod::Minimum),
+        (S::Percentile, ThresholdMethod::Percentile),
+        (S::RenyiEntropy, ThresholdMethod::RenyiEntropy),
+        (S::Shanbhag, ThresholdMethod::Shanbhag),
+    ];
+    for (setting, expected) in cases {
+        assert_eq!(ThresholdMethod::from(setting), expected);
+    }
+}
+
+#[test]
+fn threshold_method_robust_background_setting_carries_every_field() {
+    let result = ThresholdMethod::from(
+        SegmentationThresholdThresholdMethodSettings::RobustBackground {
+            lower_outlier_fraction: 0.1,
+            upper_outlier_fraction: 0.2,
+            averaging_method: SegmentationThresholdAveragingSettings::Median,
+            deviations_above_average: 3.0,
+        },
+    );
+    assert_eq!(
+        result,
+        ThresholdMethod::RobustBackground {
+            lower_outlier_fraction: 0.1,
+            upper_outlier_fraction: 0.2,
+            averaging_method: Averaging::Median,
+            deviations_above_average: 3.0,
+        }
+    );
+}
+
+#[test]
+fn threshold_value_source_settings_convert_every_variant() {
+    use evanalyzer_cfg::core_types::MemoryId;
+    assert_eq!(
+        ThresholdValueSource::from(SegmentationThresholdThresholdValueSourceSettings::ActualImage),
+        ThresholdValueSource::ActualImage
+    );
+    assert_eq!(
+        ThresholdValueSource::from(SegmentationThresholdThresholdValueSourceSettings::RawImage),
+        ThresholdValueSource::RawImage
+    );
+    assert_eq!(
+        ThresholdValueSource::from(SegmentationThresholdThresholdValueSourceSettings::Memory(
+            MemoryId::PipelineContext(3)
+        )),
+        ThresholdValueSource::Memory(MemoryId::PipelineContext(3))
+    );
+}
+
+// ---- Remaining mapping structs (AI) ------------------------------
+
+#[cfg(feature = "ai")]
+#[test]
+fn classification_mapping_settings_convert_both_classes() {
+    let mapping = ClassificationMapping::from(ClassificationMappingSettings {
+        object_class: ObjectClass::Global(4),
+        output_class: ObjectClass::Local(2),
+    });
+    assert_eq!(mapping.object_class, ObjectClass::Global(4));
+    assert_eq!(mapping.output_class, ObjectClass::Local(2));
+}
+
+#[cfg(feature = "ai")]
+#[test]
+fn segmentation_mapping_settings_convert_both_classes() {
+    let mapping = SegmentationMapping::from(SegmentationMappingSettings {
+        model_class: SegmentationClass(3),
+        segmentation_class: SegmentationClass(7),
+    });
+    assert_eq!(mapping.model_class, SegmentationClass(3));
+    assert_eq!(mapping.segmentation_class, SegmentationClass(7));
+}
+
+#[cfg(feature = "ai")]
+#[test]
+fn yolo_class_mapping_settings_convert_both_classes() {
+    let mapping = YoloClassMapping::from(YoloClassMappingSettings {
+        model_class: 12,
+        segmentation_class: SegmentationClass(5),
+    });
+    assert_eq!(mapping.model_class, 12);
+    assert_eq!(mapping.segmentation_class, SegmentationClass(5));
+}

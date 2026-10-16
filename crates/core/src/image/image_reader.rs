@@ -2338,4 +2338,135 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn get_current_image_path_returns_the_path_the_reader_was_opened_with() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        assert_eq!(reader.get_current_image_path(), &fixture_path());
+    }
+
+    #[test]
+    fn get_image_size_errors_when_the_series_has_no_full_resolution_level() {
+        let mut reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let meta = Arc::make_mut(&mut reader.image_meta);
+        meta.series.get_mut(&0).unwrap().resolutions.remove(&0);
+        let err = reader.get_image_size(0).unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("Pyramid 0 does not exist in series 0")),
+            "{err:?}"
+        );
+    }
+
+    /// `read_image_tile` checks series, channel and resolution itself - the
+    /// public entry points filter most of these out before calling it, so
+    /// its own guards are exercised directly.
+    #[test]
+    fn read_image_tile_errors_for_a_nonexistent_series_channel_or_resolution() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let plane = |c| ImagePlane { z: 0, c, t: 0 };
+        let mut scratch = Vec::new();
+
+        let err = reader
+            .read_image_tile(99, 0, &plane(0), &full_tile(), &mut scratch)
+            .unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("Series 99 does not exist")),
+            "{err:?}"
+        );
+
+        let err = reader
+            .read_image_tile(0, 0, &plane(99), &full_tile(), &mut scratch)
+            .unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("Channel 99 does not exist in series 0")),
+            "{err:?}"
+        );
+
+        let err = reader
+            .read_image_tile(0, 99, &plane(0), &full_tile(), &mut scratch)
+            .unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::ImageReadError(msg) if msg.contains("Pyramid 99 does not exist in series 0")),
+            "{err:?}"
+        );
+    }
+
+    /// The plane index is the inverse of Bio-Formats' `getIndex`: the first
+    /// axis after XY varies fastest. Coordinates are chosen so every order
+    /// yields a different index.
+    #[test]
+    fn zct_to_plane_index_lets_the_first_axis_vary_fastest_for_every_dimension_order() {
+        use bioformats::DimensionOrder::*;
+        let (size_z, size_c, size_t) = (2, 3, 4);
+        let (z, c, t) = (1, 0, 2);
+        let cases = [
+            (XYZCT, z + size_z * (c + size_c * t)),
+            (XYZTC, z + size_z * (t + size_t * c)),
+            (XYCZT, c + size_c * (z + size_z * t)),
+            (XYCTZ, c + size_c * (t + size_t * z)),
+            (XYTCZ, t + size_t * (c + size_c * z)),
+            (XYTZC, t + size_t * (z + size_z * c)),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for (order, expected) in cases {
+            let index = zct_to_plane_index(order, size_z, size_c, size_t, z, c, t);
+            assert_eq!(index, expected, "{order:?}");
+            assert!(seen.insert(index), "{order:?} collides with another order");
+        }
+        // A size of 0 counts as 1, so a missing axis never zeroes the index.
+        assert_eq!(zct_to_plane_index(XYZCT, 0, 0, 0, 0, 0, 0), 0);
+        assert_eq!(zct_to_plane_index(XYCZT, 0, 3, 0, 0, 2, 0), 2);
+    }
+
+    /// An RGB series in `ReadMode::Default` exposes one packed channel:
+    /// requested channels past 0 are dropped, and no Z projection is applied
+    /// (the first plane of the Z range is returned as is).
+    #[test]
+    fn an_rgb_series_in_default_mode_reads_only_channel_zero_without_z_projection() {
+        let plain = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        assert!(
+            plain.get_image_meta().series[&0].nr_c_stacks >= 2
+                && plain.get_image_meta().series[&0].nr_z_stacks >= 2,
+            "the fixture must have several channels and Z planes"
+        );
+        let first_plane = plain
+            .read_image_tile_combined(
+                0,
+                0,
+                ZProjection::None,
+                &None,
+                0,
+                Some(&vec![0]),
+                &full_tile(),
+            )
+            .unwrap();
+
+        let mut rgb = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let meta = Arc::make_mut(&mut rgb.image_meta);
+        for info in meta.series.values_mut() {
+            for resolution in info.resolutions.values_mut() {
+                resolution.is_rgb = true;
+            }
+        }
+        let result = rgb
+            .read_image_tile_combined(
+                0,
+                0,
+                ZProjection::MaxIntensity,
+                &None,
+                0,
+                Some(&vec![0, 1]),
+                &full_tile(),
+            )
+            .unwrap();
+
+        assert_eq!(result.len(), 1, "only the packed channel 0 is read");
+        assert_eq!(result[0].c_stack, 0);
+        assert!(result[0].is_rgb);
+        assert_eq!(
+            result[0].image.as_f32_slice().unwrap(),
+            first_plane[0].image.as_f32_slice().unwrap(),
+            "an RGB series is never Z-projected"
+        );
+    }
 }

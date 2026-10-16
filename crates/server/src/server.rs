@@ -1148,5 +1148,156 @@ mod tests {
                 .unwrap();
             assert!(tungstenite::client(url.as_str(), plain).is_err());
         }
+
+        /// A connection handled directly, without a socket, logging in
+        /// through `session_management`.
+        fn connection(session_management: SessionManagement) -> Connection {
+            Connection {
+                session_id: 1,
+                sessions: Arc::default(),
+                user_management: Arc::new(SingleUser::for_tests()),
+                session_management: Arc::new(session_management),
+                state: State::WaitingForLogin,
+                user_id: None,
+                session_token: None,
+                worker_port: None,
+            }
+        }
+
+        const LOGIN: &str = r#"{"cmd":"login","username":"admin","password":"1234"}"#;
+
+        #[test]
+        fn a_login_beyond_the_worker_limit_is_told_to_try_again_later() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut sessions = SessionManagement::with_store(
+                dir.path().join("sessions.json"),
+                fake_worker(dir.path()),
+            )
+            .unwrap();
+            sessions.max_workers = Some(0);
+            let mut connection = connection(sessions);
+
+            let answer = connection.state_machine(LOGIN.into());
+
+            assert!(matches!(answer.response, crate::api::ResponseState::Error));
+            assert!(answer.msg.contains("try again later"), "{}", answer.msg);
+            assert!(connection.worker_port.is_none(), "still logged out");
+        }
+
+        #[test]
+        fn a_worker_that_cannot_start_fails_the_login_without_details() {
+            let dir = tempfile::tempdir().unwrap();
+            let sessions = SessionManagement::with_store(
+                dir.path().join("sessions.json"),
+                dir.path().join("no-such-worker"),
+            )
+            .unwrap();
+            let mut connection = connection(sessions);
+
+            let answer = connection.state_machine(LOGIN.into());
+
+            assert!(matches!(answer.response, crate::api::ResponseState::Error));
+            assert_eq!(answer.msg, "Could not start EVAnalyzer for this user");
+            assert!(connection.worker_port.is_none(), "still logged out");
+        }
+
+        #[test]
+        fn after_login_the_first_binary_message_goes_to_the_worker() {
+            let dir = tempfile::tempdir().unwrap();
+            let url = start_server(dir.path());
+            let mut client = connect(&url);
+            let reply = ask(&mut client, text(LOGIN));
+            assert_eq!(reply["response"], "Accepted");
+
+            // The stand-in worker is no WebSocket server, so forwarding
+            // fails - and the server closes the client's connection
+            // instead of answering it as a command.
+            client.send(Message::binary(vec![1, 2, 3])).unwrap();
+
+            let answer = loop {
+                match client.read() {
+                    Ok(Message::Text(text)) => break Some(text.to_string()),
+                    Ok(_) => continue,
+                    Err(_) => break None,
+                }
+            };
+            assert_eq!(answer, None, "no answer, the connection is closed");
+        }
+
+        /// The address of a free port on this machine.
+        fn free_port() -> u16 {
+            TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        }
+
+        fn wait_for(addr: SocketAddr) {
+            for _ in 0..500 {
+                if TcpStream::connect(addr).is_ok() {
+                    return;
+                }
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("server did not start");
+        }
+
+        /// A config for a server on this machine keeping everything in `dir`.
+        fn config_in(dir: &std::path::Path, port: u16) -> ServerConfig {
+            let home = dir.join("home");
+            std::fs::create_dir_all(&home).unwrap();
+            let mut config = ServerConfig::default();
+            config.listen = format!("127.0.0.1:{port}");
+            config.session_store = Some(dir.join("sessions.json"));
+            config.users.single.password = Some("plain:1234".into());
+            config.users.single.home = Some(home);
+            config.tls.self_signed_dir = Some(dir.join("tls"));
+            config
+        }
+
+        #[test]
+        fn a_server_started_from_its_config_greets_clients_and_checks_passwords() {
+            let dir = tempfile::tempdir().unwrap();
+            let port = free_port();
+            let mut config = config_in(dir.path(), port);
+            config.tls.enabled = false;
+            thread::spawn(move || serve(config));
+            wait_for(SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
+
+            let mut client = connect(&format!("ws://127.0.0.1:{port}"));
+            let reply = ask(
+                &mut client,
+                text(r#"{"cmd":"login","username":"admin","password":"nope"}"#),
+            );
+
+            assert_eq!(reply["msg"], "Invalid username or password");
+        }
+
+        #[test]
+        fn a_server_started_from_its_config_encrypts_with_its_self_signed_certificate() {
+            let dir = tempfile::tempdir().unwrap();
+            let port = free_port();
+            let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+            let config = config_in(dir.path(), port);
+            thread::spawn(move || serve(config));
+            wait_for(addr);
+            // Loads the certificate the server created there.
+            let tls = super::test_tls(dir.path());
+
+            let mut client = super::connect_tls(addr, &tls.fingerprint);
+            let greeting = client.read().unwrap().into_text().unwrap();
+
+            assert!(greeting.starts_with("Welcome"), "{greeting}");
+        }
+
+        #[test]
+        fn only_loopback_addresses_count_as_this_machine_only() {
+            assert!(is_loopback("127.0.0.1:7400"));
+            assert!(is_loopback("[::1]:7400"));
+            assert!(!is_loopback("0.0.0.0:7400"));
+            assert!(!is_loopback("192.168.1.20:7400"));
+            assert!(!is_loopback("localhost:7400"), "not parsed as an address");
+        }
     }
 }

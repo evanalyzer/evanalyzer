@@ -944,3 +944,524 @@ mod version_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+    use crate::api::{
+        AnalysisRequest, DirEntry, FileSystem, ImageChannel, ImageMeta, PreviewRequest, RunningJob,
+        RunningTraining, SystemInfo, TemplateFolders, TileRequest, TrainingRequest,
+    };
+    use crate::workspace::settings::AppSettings;
+    use evanalyzer_cfg::settings::ai_learning_settings::{
+        AiLearningBackendSettings, AiLearningClassifierSettings, AiLearningSettings,
+    };
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc::Receiver;
+
+    fn broken(what: &str) -> InternalErrors {
+        InternalErrors::Internal(format!("{what} is broken"))
+    }
+
+    /// A backend whose every operation fails - except opening an image,
+    /// which gives one whose tiles can't be read.
+    struct FailingBackend {
+        preview_tiles: Option<usize>,
+    }
+
+    struct UnreadableImage(ImageMeta);
+
+    impl ImageSource for UnreadableImage {
+        fn meta(&self) -> &ImageMeta {
+            &self.0
+        }
+        fn read_tile(&self, _: &TileRequest) -> Result<Vec<ImageChannel>, InternalErrors> {
+            Err(broken("the tile"))
+        }
+    }
+
+    impl FileSystem for FailingBackend {
+        fn places(&self) -> Result<Vec<crate::api::Place>, InternalErrors> {
+            Err(broken("places"))
+        }
+        fn list_dir(&self, _: &Path) -> Result<Vec<DirEntry>, InternalErrors> {
+            Err(broken("list_dir"))
+        }
+        fn stat(&self, _: &Path) -> Result<Option<DirEntry>, InternalErrors> {
+            Err(broken("stat"))
+        }
+        fn read_file(&self, _: &Path) -> Result<Vec<u8>, InternalErrors> {
+            Err(broken("read_file"))
+        }
+        fn write_file(&self, _: &Path, _: &[u8]) -> Result<(), InternalErrors> {
+            Err(broken("write_file"))
+        }
+        fn create_dir_all(&self, _: &Path) -> Result<(), InternalErrors> {
+            Err(broken("create_dir_all"))
+        }
+        fn rename(&self, _: &Path, _: &Path) -> Result<(), InternalErrors> {
+            Err(broken("rename"))
+        }
+        fn remove_all(&self, _: &Path) -> Result<(), InternalErrors> {
+            Err(broken("remove_all"))
+        }
+    }
+
+    impl Backend for FailingBackend {
+        fn start_analysis(&self, _: AnalysisRequest) -> Result<RunningJob, InternalErrors> {
+            Err(broken("analysis"))
+        }
+        fn start_preview(&self, _: PreviewRequest) -> Result<RunningJob, StartPreviewError> {
+            Err(match self.preview_tiles {
+                Some(tiles) => StartPreviewError::TooManyTiles { tiles },
+                None => StartPreviewError::Failed(broken("preview")),
+            })
+        }
+        fn start_training(
+            &self,
+            _: TrainingRequest,
+        ) -> Result<RunningTraining, StartTrainingError> {
+            Err(StartTrainingError::Failed(broken("training")))
+        }
+        fn open_image(&self, _: &Path) -> Result<Arc<dyn ImageSource>, InternalErrors> {
+            Ok(Arc::new(UnreadableImage(ImageMeta::default())))
+        }
+        fn open_results(&self, _: &Path) -> Result<Arc<dyn ResultsSource>, InternalErrors> {
+            Err(broken("open_results"))
+        }
+        fn read_image_meta(&self, _: &Path) -> Result<ImageMeta, InternalErrors> {
+            Err(broken("read_image_meta"))
+        }
+        fn template_folders(&self) -> Result<TemplateFolders, InternalErrors> {
+            Err(broken("template_folders"))
+        }
+        fn files(&self) -> &dyn FileSystem {
+            self
+        }
+        fn description(&self) -> String {
+            "failing".into()
+        }
+        fn system_info(&self) -> Result<SystemInfo, InternalErrors> {
+            Err(broken("system_info"))
+        }
+        fn image_formats(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn load_app_settings(&self) -> Result<AppSettings, InternalErrors> {
+            Err(broken("load_app_settings"))
+        }
+        fn save_app_settings(&self, _: &AppSettings) -> Result<(), InternalErrors> {
+            Err(broken("save_app_settings"))
+        }
+    }
+
+    fn session_with(backend: FailingBackend) -> (Arc<Session>, Receiver<Vec<u8>>) {
+        let (outgoing, outgoing_rx) = mpsc::channel();
+        let session = Arc::new(Session {
+            backend: Arc::new(backend),
+            jobs: Arc::new(JobRegistry::default()),
+            outgoing,
+            running: Mutex::new(HashMap::new()),
+            analyses: Mutex::new(HashMap::new()),
+            background: Mutex::new(HashMap::new()),
+            disconnected: AtomicBool::new(false),
+            images: Mutex::new(HashMap::new()),
+            results: Mutex::new(HashMap::new()),
+            next_handle: AtomicU64::new(1),
+        });
+        (session, outgoing_rx)
+    }
+
+    fn failing_session() -> (Arc<Session>, Receiver<Vec<u8>>) {
+        session_with(FailingBackend {
+            preview_tiles: None,
+        })
+    }
+
+    /// The one reply `request` gets, handled synchronously.
+    fn reply_to(session: &Session, rx: &Receiver<Vec<u8>>, request: Request) -> (u64, Reply) {
+        session.handle(7, request, Vec::new());
+        let ServerMsg::Reply { id, reply } = frame::decode::<ServerMsg>(&rx.try_recv().unwrap())
+            .unwrap()
+            .msg
+        else {
+            panic!("expected a reply");
+        };
+        assert!(rx.try_recv().is_err(), "exactly one reply");
+        (id, reply)
+    }
+
+    fn failure_text(reply: Reply) -> String {
+        match reply {
+            Reply::Failed(e) => e.text().to_string(),
+            _ => panic!("expected a failure"),
+        }
+    }
+
+    #[test]
+    fn every_failing_backend_call_is_answered_with_its_error() {
+        let (session, rx) = failing_session();
+        let path = || PathBuf::from("/data/x");
+        for (request, expected) in [
+            (Request::ReadImageMeta { path: path() }, "read_image_meta"),
+            (Request::OpenResults { path: path() }, "open_results"),
+            (Request::TemplateFolders, "template_folders"),
+            (Request::Places, "places"),
+            (Request::SystemInfo, "system_info"),
+            (Request::LoadAppSettings, "load_app_settings"),
+            (
+                Request::SaveAppSettings(AppSettings::default()),
+                "save_app_settings",
+            ),
+            (Request::ListDir { path: path() }, "list_dir"),
+            (Request::Stat { path: path() }, "stat"),
+            (Request::ReadFile { path: path() }, "read_file"),
+            (Request::CreateDir { path: path() }, "create_dir_all"),
+            (
+                Request::Rename {
+                    from: path(),
+                    to: path(),
+                },
+                "rename",
+            ),
+            (Request::RemoveAll { path: path() }, "remove_all"),
+        ] {
+            let (id, reply) = reply_to(&session, &rx, request);
+            assert_eq!(id, 7);
+            let text = failure_text(reply);
+            assert!(text.contains(&format!("{expected} is broken")), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_failing_write_and_a_write_without_contents_are_errors() {
+        let (session, rx) = failing_session();
+
+        let (_, reply) = reply_to(
+            &session,
+            &rx,
+            Request::WriteFile {
+                path: PathBuf::from("/data/x"),
+            },
+        );
+        assert_eq!(failure_text(reply), "no file contents sent");
+
+        session.handle(
+            8,
+            Request::WriteFile {
+                path: PathBuf::from("/data/x"),
+            },
+            vec![b"contents".to_vec()],
+        );
+        let ServerMsg::Reply { id, reply } = frame::decode::<ServerMsg>(&rx.try_recv().unwrap())
+            .unwrap()
+            .msg
+        else {
+            panic!("expected a reply");
+        };
+        assert_eq!(id, 8);
+        assert!(failure_text(reply).contains("write_file is broken"));
+    }
+
+    #[test]
+    fn a_remove_all_path_from_a_windows_client_is_converted() {
+        let Request::RemoveAll { path } = native_paths(Request::RemoveAll {
+            path: PathBuf::from(r"/data\old"),
+        }) else {
+            panic!("expected a remove");
+        };
+        assert_eq!(path, PathBuf::from("/data/old"));
+    }
+
+    #[test]
+    fn queries_and_exports_on_a_results_handle_that_is_not_open_fail() {
+        let (session, rx) = failing_session();
+        for request in [
+            Request::QueryResults { handle: 42 },
+            Request::ExportResults { handle: 42 },
+        ] {
+            let (_, reply) = reply_to(&session, &rx, request);
+            assert!(
+                failure_text(reply).contains("results database is not open on the server"),
+                "a not opened handle"
+            );
+        }
+    }
+
+    #[test]
+    fn reading_a_tile_needs_an_open_image_and_reports_read_errors() {
+        let (session, rx) = failing_session();
+        let tile = TileRequest {
+            series: 0,
+            resolution_idx: 0,
+            z_projection: Default::default(),
+            z_range: None,
+            t_stack: 0,
+            tile: Default::default(),
+        };
+
+        let (_, reply) = reply_to(
+            &session,
+            &rx,
+            Request::ReadTile {
+                handle: 99,
+                tile: tile.clone(),
+            },
+        );
+        assert_eq!(failure_text(reply), "image is not open on the server");
+
+        let (_, reply) = reply_to(
+            &session,
+            &rx,
+            Request::OpenImage {
+                path: PathBuf::from("/data/a.tif"),
+            },
+        );
+        let Reply::ImageOpened { handle, .. } = reply else {
+            panic!("expected the image to open");
+        };
+        let (_, reply) = reply_to(&session, &rx, Request::ReadTile { handle, tile });
+        assert!(failure_text(reply).contains("the tile is broken"));
+    }
+
+    #[test]
+    fn a_closed_image_can_no_longer_be_read() {
+        let (session, rx) = failing_session();
+        let (_, reply) = reply_to(
+            &session,
+            &rx,
+            Request::OpenImage {
+                path: PathBuf::from("/data/a.tif"),
+            },
+        );
+        let Reply::ImageOpened { handle, .. } = reply else {
+            panic!("expected the image to open");
+        };
+        let close = frame::encode(&ClientMsg::CloseImage { handle }, &[]).unwrap();
+
+        assert!(session.on_frame(&close));
+
+        assert!(session.images.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_preview_with_too_many_tiles_or_a_failed_start_is_reported() {
+        let preview = || {
+            Request::StartPreview(PreviewRequest {
+                settings: ProjectSettings::default(),
+                project_path: PathBuf::from("/data/project"),
+                viewport: Default::default(),
+                breakpoint: None,
+            })
+        };
+        let (session, rx) = session_with(FailingBackend {
+            preview_tiles: Some(1234),
+        });
+        let (_, reply) = reply_to(&session, &rx, preview());
+        assert!(matches!(reply, Reply::PreviewTooManyTiles { tiles: 1234 }));
+
+        let (session, rx) = failing_session();
+        let (_, reply) = reply_to(&session, &rx, preview());
+        assert!(failure_text(reply).contains("preview is broken"));
+    }
+
+    #[test]
+    fn a_training_that_cannot_start_is_reported() {
+        let (session, rx) = failing_session();
+        let (_, reply) = reply_to(
+            &session,
+            &rx,
+            Request::StartTraining(TrainingRequest {
+                project: ProjectSettings::default(),
+                settings: AiLearningSettings {
+                    schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
+                    meta: Default::default(),
+                    backend: AiLearningBackendSettings::RandomForest(Default::default()),
+                    classifier: AiLearningClassifierSettings::Object {
+                        feature_spec: evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings { metrics: Vec::new() },
+                        class_labels: Vec::new(),
+                    },
+                },
+                pixel_params: Default::default(),
+                save_to: None,
+            }),
+        );
+        assert!(failure_text(reply).contains("training is broken"));
+    }
+
+    #[test]
+    fn an_analysis_that_cannot_start_is_reported() {
+        let (session, rx) = failing_session();
+        let (_, reply) = reply_to(
+            &session,
+            &rx,
+            Request::StartAnalysis(AnalysisRequest {
+                settings: ProjectSettings::default(),
+                project_path: PathBuf::from("/data/project"),
+                job_name: None,
+                threads: None,
+                base_results: None,
+            }),
+        );
+        assert!(failure_text(reply).contains("analysis is broken"));
+    }
+
+    #[test]
+    fn a_cancel_reaches_running_and_background_work() {
+        let (session, _rx) = failing_session();
+        let running = Arc::new(AtomicBool::new(false));
+        let background = Arc::new(AtomicBool::new(false));
+        session
+            .running
+            .lock()
+            .unwrap()
+            .insert(1, CancelHandle::new(Arc::clone(&running)));
+        session
+            .background
+            .lock()
+            .unwrap()
+            .insert(2, CancelHandle::new(Arc::clone(&background)));
+
+        for id in [1, 2] {
+            let cancel = frame::encode(&ClientMsg::Cancel { id }, &[]).unwrap();
+            assert!(session.on_frame(&cancel));
+        }
+
+        assert!(running.load(Ordering::SeqCst));
+        assert!(background.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_cancel_for_unknown_work_and_a_repeated_hello_are_ignored() {
+        let (session, rx) = failing_session();
+        let cancel = frame::encode(&ClientMsg::Cancel { id: 5 }, &[]).unwrap();
+        let hello = frame::encode(
+            &ClientMsg::Hello {
+                protocol_version: PROTOCOL_VERSION,
+                app_version: APP_VERSION.into(),
+                token: "t".into(),
+            },
+            &[],
+        )
+        .unwrap();
+
+        assert!(session.on_frame(&cancel));
+        assert!(session.on_frame(&hello));
+
+        assert!(rx.try_recv().is_err(), "nothing to answer");
+    }
+
+    #[test]
+    fn a_malformed_message_drops_the_client() {
+        let (session, _rx) = failing_session();
+
+        assert!(!session.on_frame(b"not a frame"));
+    }
+
+    #[test]
+    fn an_empty_token_is_refused() {
+        let Err(InternalErrors::InvalidArgument(message)) = Worker::bind("127.0.0.1:0", "".into())
+        else {
+            panic!("expected an invalid argument");
+        };
+        assert!(message.contains("token must not be empty"), "{message}");
+    }
+
+    #[test]
+    fn an_address_that_cannot_be_bound_is_an_io_error() {
+        assert!(matches!(
+            Worker::bind("not an address", "t".into()),
+            Err(InternalErrors::Io(_))
+        ));
+    }
+
+    #[test]
+    fn generated_tokens_are_long_random_hex() {
+        let first = generate_token().unwrap();
+        let second = generate_token().unwrap();
+
+        assert_eq!(first.len(), 48);
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn the_idle_timeout_is_kept_until_the_worker_runs() {
+        let worker = Worker::bind("127.0.0.1:0", "t".into())
+            .unwrap()
+            .with_idle_timeout(Duration::from_secs(60));
+
+        assert_eq!(worker.idle_timeout, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn tokens_are_compared_by_content_and_length() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+        assert!(!constant_time_eq(b"secret", b"secret2"));
+    }
+}
+
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+    use crate::backend::local::LocalBackend;
+
+    fn start_worker() -> String {
+        let worker = Worker::bind("127.0.0.1:0", "t".into()).unwrap();
+        let addr = worker.local_addr().unwrap();
+        std::thread::spawn(move || worker.run(Arc::new(LocalBackend::default())));
+        addr.to_string()
+    }
+
+    /// What the worker answers `first`, sent as the first message.
+    fn answer_to(addr: &str, first: Vec<u8>) -> ServerMsg {
+        let (mut ws, _) = tungstenite::connect(format!("ws://{addr}/")).unwrap();
+        ws.send(tungstenite::Message::Binary(first.into())).unwrap();
+        let answer = loop {
+            match ws.read().unwrap() {
+                tungstenite::Message::Binary(bytes) => break bytes,
+                _ => continue,
+            }
+        };
+        frame::decode::<ServerMsg>(&answer).unwrap().msg
+    }
+
+    #[test]
+    fn a_first_message_other_than_hello_is_rejected() {
+        let addr = start_worker();
+        let cancel = frame::encode(&ClientMsg::Cancel { id: 1 }, &[]).unwrap();
+
+        let ServerMsg::Rejected { reason } = answer_to(&addr, cancel) else {
+            panic!("expected a rejection");
+        };
+        assert_eq!(reason, "expected a Hello message");
+    }
+
+    #[test]
+    fn an_undecodable_first_message_is_rejected() {
+        let addr = start_worker();
+
+        let answer = answer_to(&addr, b"garbage".to_vec());
+
+        assert!(matches!(answer, ServerMsg::Rejected { .. }));
+    }
+
+    #[test]
+    fn a_port_check_does_not_stop_the_worker_from_serving_clients() {
+        let addr = start_worker();
+        drop(TcpStream::connect(&addr).unwrap());
+        let hello = frame::encode(
+            &ClientMsg::Hello {
+                protocol_version: PROTOCOL_VERSION,
+                app_version: APP_VERSION.into(),
+                token: "t".into(),
+            },
+            &[],
+        )
+        .unwrap();
+
+        assert!(matches!(answer_to(&addr, hello), ServerMsg::Welcome { .. }));
+    }
+}

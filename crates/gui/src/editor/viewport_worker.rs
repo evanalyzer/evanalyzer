@@ -1127,6 +1127,24 @@ mod tests {
     }
 
     #[test]
+    fn auto_adjust_without_samples_keeps_the_default_window() {
+        assert_eq!(auto_adjust_range(None, false), (0.0, 1.0, 0.0, 1.0));
+        let labels = ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1>::new(
+                ImageSize {
+                    width: 2,
+                    height: 1,
+                },
+                vec![1, 2],
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        });
+        assert_eq!(apply_auto_adjust(&labels, false), (0.0, 1.0, 0.0, 1.0));
+    }
+
+    #[test]
     fn apply_auto_adjust_rgb_images_always_use_the_full_fixed_range() {
         let img = gray_container(vec![0.1, 0.9]);
         assert_eq!(apply_auto_adjust(&img, true), (0.0, 1.0, 0.0, 1.0));
@@ -1240,6 +1258,46 @@ mod tests {
         compact.image_data = SampleSlice::U8(&raw, inv);
 
         assert_eq!(render(compact), render(ctx_for(&floats)));
+    }
+
+    #[test]
+    fn sixteen_bit_samples_render_like_their_float_values() {
+        let inv = 1.0 / 65535.0f32;
+        let raw: Vec<u16> = (0..=64).map(|i| i * 1023).collect();
+        let floats: Vec<f32> = raw.iter().map(|&q| q as f32 * inv).collect();
+
+        let render = |ctx: ChannelCtx| {
+            let mut dest = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; raw.len()];
+            let hists =
+                prepare_image_channels_for_slint(&[ctx], &mut dest, 16, true, &vec![0], false);
+            (dest, hists)
+        };
+        let mut compact = ctx_for(&floats);
+        compact.image_data = SampleSlice::U16(&raw, inv);
+
+        let (pixels, hists) = render(compact);
+        assert_eq!((pixels.clone(), hists), render(ctx_for(&floats)));
+        assert!(
+            pixels.iter().any(|p| p.r > 200),
+            "bright samples drawn bright"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Memory alignment error")]
+    fn a_channel_not_matching_the_frame_size_is_a_loud_error() {
+        let data = [0.0f32, 0.5, 1.0];
+        let mut dest = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; 2];
+        prepare_image_channels_for_slint(&[ctx_for(&data)], &mut dest, 4, false, &vec![0], false);
+    }
+
+    #[test]
+    fn a_hidden_misaligned_channel_is_never_looked_at() {
+        let data = [0.0f32, 0.5, 1.0];
+        let mut dest = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; 2];
+        let hists =
+            prepare_image_channels_for_slint(&[ctx_for(&data)], &mut dest, 4, true, &vec![], false);
+        assert_eq!(hists, vec![vec![0.0; 4]], "an empty curve for it");
     }
 
     #[test]
@@ -2024,5 +2082,106 @@ mod tests {
             total.as_secs_f64() * 1000.0,
             peak - rss_start
         );
+    }
+
+    // -- worker threads and further frame kinds ---------------------------------
+
+    #[test]
+    fn started_workers_take_every_posted_task() {
+        let app_state = crate::editor::test_support::test_ui_state();
+        let cache = Arc::new(ViewportCache::new(app_state.clone()));
+        let viewport = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            app_state.clone(),
+            cache.clone(),
+        ));
+        let histogram = Arc::new(HistogramController::new(
+            slint::Weak::default(),
+            app_state.clone(),
+            viewport.clone(),
+        ));
+        let worker = Arc::new(ViewportWorker::new(
+            app_state,
+            viewport.clone(),
+            histogram,
+            cache,
+        ));
+        worker.start_worker();
+
+        // High-res, low-res and objects - one task per worker.
+        viewport.trigger_new_image_redraw();
+
+        let tasks = &viewport.drawing_tasks;
+        let pending = || {
+            [
+                &tasks.high_res_task,
+                &tasks.low_res_task,
+                &tasks.object_task,
+            ]
+            .iter()
+            .filter(|c| c.task_request.0.lock().unwrap().is_some())
+            .count()
+        };
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while pending() > 0 {
+            assert!(Instant::now() < deadline, "{} tasks never taken", pending());
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn a_new_series_shows_its_histogram_settings_without_auto_adjusting() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(
+            TaskDispatch::HighRes,
+            DrawingTask {
+                is_new_series: true,
+                fit_to_screen: true,
+                ..Default::default()
+            },
+        );
+        assert!(r.ui.get_display_image().size().width > 0);
+        let histograms = r.app_state.get_project().get_image_channel_histograms();
+        assert!(histograms.values().all(|h| h.is_none()), "{histograms:?}");
+    }
+
+    #[test]
+    fn a_breakpoint_image_is_drawn_through_its_channels_histogram_window_in_gray() {
+        let mut r = render_fixture(project_with_fixture_image());
+        r.draw(TaskDispatch::HighRes, new_image_task());
+        assert!(
+            matches!(
+                r.app_state
+                    .get_project()
+                    .get_image_channel_histograms()
+                    .get(&0),
+                Some(Some(_))
+            ),
+            "channel 0 has a histogram window"
+        );
+        r.worker.viewport_controller.set_show_breakpoint(true);
+        r.worker.viewport_controller.set_breakpoint_channel(
+            gray_container(vec![0.1, 0.5, 0.9, 0.2, 0.3, 0.4, 0.6, 1.0]),
+            None,
+            None,
+            0,
+            0,
+            8,
+            1,
+            8,
+            Some(0),
+        );
+        drain_ui_queue();
+
+        r.draw(TaskDispatch::HighRes, DrawingTask::default());
+        r.draw(TaskDispatch::LowRes, DrawingTask::default());
+
+        for image in [r.ui.get_display_image(), r.ui.get_ghost_image()] {
+            let pixels = image.to_rgb8().expect("an RGB8 frame");
+            assert_eq!(pixels.width(), 8);
+            let pixels = pixels.as_slice();
+            assert!(pixels.iter().any(|p| p.r > 0), "something was drawn");
+            assert!(pixels.iter().all(|p| p.r == p.g && p.g == p.b), "in gray");
+        }
     }
 }

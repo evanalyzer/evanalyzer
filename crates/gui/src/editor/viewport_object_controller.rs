@@ -966,4 +966,337 @@ mod tests {
         assert_eq!(objects[0].object_class.len(), 1);
         assert!(objects[0].area > 0, "the triangle interior must be filled");
     }
+
+    // -- attach_callbacks (live AppWindow) ------------------------------------------
+
+    struct Live {
+        ui: AppWindow,
+        _results_ui: crate::ResultsWindow,
+        ui_state: Arc<UiState>,
+        controller: Arc<ViewPortObjectController>,
+    }
+
+    /// A controller on a live window with its callbacks attached, an image
+    /// in the cache and - with `class` - an object class selected to paint.
+    fn live_controller(class: bool) -> Live {
+        use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, project_with_one_image());
+        if class {
+            let mut project = ui_state.get_project_write();
+            let id = project.classification.add_class(Class {
+                name: "Nuclei".into(),
+                ..Default::default()
+            });
+            project.set_selected_object_class(id);
+        }
+        let (controller, viewport_cache) = controller_for(ui.as_weak(), &ui_state);
+        seed_image_cache(&viewport_cache);
+        // Drawn 1:1 at the origin.
+        if let Some((_, ctx)) = &mut *viewport_cache.active_high_res_data.write().unwrap() {
+            ctx.zoomed_w = 20.0;
+            ctx.zoomed_h = 20.0;
+        }
+        controller.attach_callbacks();
+        Live {
+            ui,
+            _results_ui: results_ui,
+            ui_state,
+            controller,
+        }
+    }
+
+    impl Live {
+        fn object_state(&self) -> ViewportObjectState<'_> {
+            self.ui.global::<ViewportObjectState>()
+        }
+
+        fn object_count(&self) -> usize {
+            self.ui_state
+                .get_project()
+                .get_objects()
+                .map_or(0, |o| o.len())
+        }
+
+        fn markers(&self) -> Vec<MarkerData> {
+            self.object_state().get_markers().iter().collect()
+        }
+    }
+
+    #[test]
+    fn finishing_a_gesture_with_a_non_painting_tool_adds_no_object() {
+        let live = live_controller(true);
+        for tool in [ToolState::Move, ToolState::Select, ToolState::PaintMarker] {
+            live.object_state().invoke_object_paint_finished(
+                points(&[(2.0, 2.0), (5.0, 5.0), (2.0, 8.0)]),
+                tool,
+                3,
+            );
+        }
+        crate::helper::ui_thread::drain_ui_queue();
+        assert_eq!(live.object_count(), 0);
+    }
+
+    #[test]
+    fn painting_an_oval_adds_an_elliptic_object() {
+        let live = live_controller(true);
+
+        live.object_state().invoke_object_paint_finished(
+            points(&[(2.0, 2.0), (12.0, 8.0)]),
+            ToolState::PaintOval,
+            0,
+        );
+        crate::helper::ui_thread::drain_ui_queue();
+
+        let project = live.ui_state.get_project();
+        let objects = project.get_objects().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].bbox, [2, 2, 12, 8]);
+        // The ends of both axes are part of the ellipse.
+        assert!(objects[0].is_part_of(2, 5) && objects[0].is_part_of(12, 5));
+        assert!(objects[0].is_part_of(7, 2) && objects[0].is_part_of(7, 8));
+        assert!(!objects[0].is_part_of(2, 2), "corner");
+    }
+
+    #[test]
+    fn painting_a_polygon_adds_an_object_of_its_outline() {
+        let live = live_controller(true);
+
+        live.object_state().invoke_object_paint_finished(
+            points(&[(2.0, 2.0), (10.0, 2.0), (10.0, 10.0), (2.0, 10.0)]),
+            ToolState::PaintPolygon,
+            4,
+        );
+        crate::helper::ui_thread::drain_ui_queue();
+
+        let project = live.ui_state.get_project();
+        let objects = project.get_objects().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].bbox, [2, 2, 10, 10]);
+    }
+
+    #[test]
+    fn a_polygon_with_fewer_points_than_announced_is_a_no_op() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+        let class = ui_state
+            .get_project_write()
+            .classification
+            .add_class(Class {
+                name: "c".into(),
+                ..Default::default()
+            });
+        ui_state
+            .get_project_write()
+            .set_selected_object_class(class);
+
+        controller.add_polygon_from_rect(&points(&[(2.0, 2.0), (10.0, 2.0)]), 3);
+
+        assert_eq!(
+            ui_state.get_project().get_objects().map(|o| o.len()),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn an_oval_with_a_selected_class_is_added_without_a_window() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+        let class = ui_state
+            .get_project_write()
+            .classification
+            .add_class(Class {
+                name: "c".into(),
+                ..Default::default()
+            });
+        ui_state
+            .get_project_write()
+            .set_selected_object_class(class);
+
+        controller.add_oval_from_rect(&points(&[(8.0, 8.0), (4.0, 4.0)]));
+
+        let project = ui_state.get_project();
+        let objects = project.get_objects().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].bbox, [4, 4, 8, 8], "corners in any order");
+    }
+
+    #[test]
+    fn clicking_in_the_viewport_selects_the_object_under_the_cursor() {
+        let live = live_controller(false);
+        {
+            let mut project = live.ui_state.get_project_write();
+            project.toggle_hide_unclassified_objects();
+            project.add_object(&object_with_bbox(1, [10, 10, 15, 15]));
+        }
+
+        live.object_state().invoke_viewport_clicked(12.0, 12.0);
+        crate::helper::ui_thread::drain_ui_queue();
+        assert_eq!(
+            live.ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(1))
+        );
+
+        live.object_state().invoke_viewport_clicked(30.0, 30.0);
+        crate::helper::ui_thread::drain_ui_queue();
+        assert_eq!(live.ui_state.get_project().get_selected_object_id(), None);
+    }
+
+    #[test]
+    fn clicking_left_of_or_above_the_image_never_picks_an_object_at_its_origin() {
+        let (ui_state, controller, _) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.toggle_hide_unclassified_objects();
+            project.add_object(&object_with_bbox(1, [0, 0, 5, 5]));
+            project.set_selected_object(Some(ObjectId(1)));
+        }
+
+        controller.find_object_from_clicked_coordinates(-3.0, 2.0);
+        assert_eq!(ui_state.get_project().get_selected_object_id(), None);
+
+        controller.find_object_from_clicked_coordinates(2.0, -3.0);
+        assert_eq!(ui_state.get_project().get_selected_object_id(), None);
+    }
+
+    #[test]
+    fn clicking_without_a_current_image_selects_nothing() {
+        let ui_state = crate::editor::test_support::test_ui_state();
+        let (controller, _) = controller_for(slint::Weak::default(), &ui_state);
+
+        controller.find_object_from_clicked_coordinates(1.0, 1.0);
+
+        assert_eq!(ui_state.get_project().get_selected_object_id(), None);
+    }
+
+    #[test]
+    fn a_transparency_change_reaches_the_overlay_after_a_short_debounce() {
+        let live = live_controller(false);
+        let transparency = || {
+            live.controller
+                .viewport_controller
+                .overlay_state
+                .read()
+                .unwrap()
+                .object_transparency
+        };
+        let before = transparency();
+
+        live.object_state().invoke_object_transparency_changed(0.3);
+        live.object_state().invoke_object_transparency_changed(0.25);
+        assert_eq!(transparency(), before, "debounced");
+
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(10));
+        assert_eq!(transparency(), 0.25, "the last value wins");
+    }
+
+    #[test]
+    fn a_placed_marker_is_labelled_with_the_intensities_under_it() {
+        let live = live_controller(false);
+
+        live.object_state().invoke_marker_placed(3.0, 4.0);
+
+        let markers = live.markers();
+        assert_eq!(markers.len(), 1);
+        assert_eq!((markers[0].image_x, markers[0].image_y), (3.0, 4.0));
+        // 0.5 of an 8-bit range.
+        assert_eq!(markers[0].label, "ch0: 128");
+    }
+
+    #[test]
+    fn a_marker_is_placed_in_image_coordinates_of_the_current_view() {
+        let live = live_controller(false);
+        {
+            let mut vp = live
+                .controller
+                .viewport_controller
+                .viewport_state
+                .write()
+                .unwrap();
+            vp.zoom = 2.0;
+            vp.offset_x = 10.0;
+            vp.offset_y = -6.0;
+        }
+
+        live.object_state().invoke_marker_placed(30.0, 14.0);
+
+        let markers = live.markers();
+        assert_eq!((markers[0].image_x, markers[0].image_y), (10.0, 10.0));
+    }
+
+    #[test]
+    fn a_marker_placed_outside_the_image_has_no_label() {
+        let live = live_controller(false);
+
+        live.object_state().invoke_marker_placed(50.0, 3.0);
+        live.object_state().invoke_marker_placed(3.0, -1.0);
+
+        let markers = live.markers();
+        assert_eq!(markers.len(), 2);
+        assert!(markers.iter().all(|m| m.label.is_empty()));
+    }
+
+    #[test]
+    fn a_marker_placed_before_any_image_was_drawn_has_no_label() {
+        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let (controller, _) = controller_for(ui.as_weak(), &ui_state);
+        controller.attach_callbacks();
+
+        ui.global::<ViewportObjectState>()
+            .invoke_marker_placed(3.0, 4.0);
+
+        let markers: Vec<MarkerData> = ui
+            .global::<ViewportObjectState>()
+            .get_markers()
+            .iter()
+            .collect();
+        assert_eq!(markers.len(), 1);
+        assert!(markers[0].label.is_empty());
+    }
+
+    #[test]
+    fn removing_at_a_point_drops_the_closest_marker_within_reach_only() {
+        let live = live_controller(false);
+        live.object_state().invoke_marker_placed(3.0, 3.0);
+        live.object_state().invoke_marker_placed(10.0, 3.0);
+        live.object_state().invoke_marker_placed(40.0, 40.0);
+
+        // Nothing within 12 px.
+        live.object_state().invoke_marker_remove_at(100.0, 100.0);
+        assert_eq!(live.markers().len(), 3);
+
+        // Both of the first two are within reach - the closer one goes.
+        live.object_state().invoke_marker_remove_at(8.0, 3.0);
+        let left: Vec<(f32, f32)> = live
+            .markers()
+            .iter()
+            .map(|m| (m.image_x, m.image_y))
+            .collect();
+        assert_eq!(left, vec![(3.0, 3.0), (40.0, 40.0)]);
+    }
+
+    #[test]
+    fn markers_are_removed_where_they_are_shown_in_the_current_view() {
+        let live = live_controller(false);
+        live.object_state().invoke_marker_placed(3.0, 3.0);
+        {
+            let mut vp = live
+                .controller
+                .viewport_controller
+                .viewport_state
+                .write()
+                .unwrap();
+            vp.zoom = 4.0;
+            vp.offset_x = 100.0;
+            vp.offset_y = 50.0;
+        }
+
+        // The marker's old screen position is far from where it is now.
+        live.object_state().invoke_marker_remove_at(3.0, 3.0);
+        assert_eq!(live.markers().len(), 1);
+
+        live.object_state().invoke_marker_remove_at(112.0, 62.0);
+        assert!(live.markers().is_empty());
+    }
 }

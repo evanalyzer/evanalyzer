@@ -647,4 +647,107 @@ mod tests {
         .unwrap();
         assert_eq!(file.users.source, UserSource::File);
     }
+
+    #[test]
+    fn a_config_file_is_loaded_and_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.toml");
+        std::fs::write(&path, "listen = \"127.0.0.1:7500\"\n").unwrap();
+
+        assert_eq!(ServerConfig::load(&path).unwrap().listen, "127.0.0.1:7500");
+
+        std::fs::write(&path, "[limits]\nmax_connections = 0\n").unwrap();
+        let error = ServerConfig::load(&path).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("max_connections"), "{error}");
+    }
+
+    #[test]
+    fn an_unreadable_or_malformed_config_file_names_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.toml");
+        let error = ServerConfig::load(&missing).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(error.to_string().contains("missing.toml"), "{error}");
+
+        let broken = dir.path().join("broken.toml");
+        std::fs::write(&broken, "listen = ").unwrap();
+        let error = ServerConfig::load(&broken).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().starts_with("Invalid server config"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn every_command_line_override_replaces_the_file_s_value() {
+        let config = ServerConfig::default()
+            .with_overrides(
+                None,
+                Some("/run/eva/sessions.json".into()),
+                Some("debug".into()),
+            )
+            .with_worker_ai_overrides(Some("cpu".into()), None);
+
+        assert_eq!(config.listen, "127.0.0.1:7400", "not given");
+        assert_eq!(
+            config.session_store,
+            Some(PathBuf::from("/run/eva/sessions.json"))
+        );
+        assert_eq!(config.log_level, "debug");
+        assert_eq!(config.workers.ai_devices.as_deref(), Some("cpu"));
+        assert_eq!(config.workers.gpu_slots, None);
+    }
+
+    #[test]
+    fn linux_users_are_looked_up_in_the_configured_files() {
+        use crate::user_management::AuthenticationStatus;
+        let dir = tempfile::tempdir().unwrap();
+        let (shadow, passwd) = (dir.path().join("shadow"), dir.path().join("passwd"));
+        std::fs::write(&shadow, "").unwrap();
+        std::fs::write(&passwd, "").unwrap();
+        let mut config = ServerConfig::default();
+        config.users.source = UserSource::Linux;
+        config.users.linux.shadow_file = shadow;
+        config.users.linux.passwd_file = passwd;
+
+        let users = config.user_management().unwrap();
+
+        assert!(matches!(
+            users.login("alice".into(), "secret".into()),
+            AuthenticationStatus::PasswordWrong
+        ));
+    }
+
+    #[test]
+    fn file_users_come_from_the_users_file() {
+        use crate::user_management::AuthenticationStatus;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("users.toml");
+        std::fs::write(&path, include_str!("../../../docs/server-users.toml")).unwrap();
+        let mut config = ServerConfig::default();
+        config.users.source = UserSource::File;
+        config.users.file.path = Some(path);
+
+        let users = config.user_management().unwrap();
+
+        assert!(matches!(
+            users.login("alice".into(), "correct horse".into()),
+            AuthenticationStatus::Authenticated(_)
+        ));
+    }
+
+    #[test]
+    fn file_users_without_a_users_file_are_an_error() {
+        let mut config = ServerConfig::default();
+        config.users.source = UserSource::File;
+
+        let Err(error) = config.user_management() else {
+            panic!("expected an error");
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("users.file.path"), "{error}");
+    }
 }
