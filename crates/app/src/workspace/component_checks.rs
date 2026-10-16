@@ -11,8 +11,8 @@
 
 use crate::workspace::component_editing::{remove_binding, same_kind, setting_at};
 use crate::workspace::component_insights::{
-    ResolvedCommand, channels_read, classes_in, created_classes, creates_objects, image_channels,
-    parameters_setting, resolved_commands,
+    ResolvedCommand, assigned_classes, channels_read, classes_in, created_classes, creates_objects,
+    image_channels, parameters_setting, read_classes, resolved_commands,
 };
 use crate::workspace::extensions::classification_ext::ClassificationExt;
 use evanalyzer_cfg::{
@@ -50,6 +50,10 @@ pub struct ComponentProblem {
     pub parameters: Vec<ComponentParamKey>,
     /// What fixes it with one click, if anything does.
     pub fix: Option<ProblemFix>,
+    /// Where inside the step's component it is ("LoadChannel (its step
+    /// 9)"), for those who look into components (debug mode); empty if
+    /// the message says it all.
+    pub detail: String,
 }
 
 /// A fix [`apply_fix`] makes.
@@ -121,7 +125,13 @@ impl ComponentProblem {
             message,
             parameters: Vec::new(),
             fix: None,
+            detail: String::new(),
         }
+    }
+
+    fn inside(mut self, detail: String) -> Self {
+        self.detail = detail;
+        self
     }
 
     fn about(mut self, parameters: Vec<ComponentParamKey>) -> Self {
@@ -296,12 +306,71 @@ fn parameter_label(definition: &ComponentDefinition, key: &ComponentParamKey) ->
         )
 }
 
+/// Names joined for a message: "A", "A and B", "A, B and C".
+fn joined(names: Vec<String>) -> String {
+    match names.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
+    }
+}
+
+/// Who a message about a command of a pipeline step says does something:
+/// the parameters of the step's component setting it (“Channel” (Bead)),
+/// else the command (a command step) or the component ("“Spots” … inside").
+struct Subject {
+    /// The parameters, named - empty if none sets it.
+    parameters: String,
+    /// The command's or component's name.
+    name: String,
+    /// The command is inside a component.
+    inside: bool,
+}
+
+impl Subject {
+    /// "{the parameters} is {value}" - or "{name} {verb}[ inside]".
+    fn says(&self, is: &str, verb: &str) -> String {
+        if !self.parameters.is_empty() {
+            let be = if self.parameters.contains(" and ") {
+                "are"
+            } else {
+                "is"
+            };
+            format!("{} {be} {is}", self.parameters)
+        } else if self.inside {
+            format!("“{}” {verb} inside", self.name)
+        } else {
+            format!("{} {verb}", self.name)
+        }
+    }
+}
+
 /// What [`check_project`] adds to [`check_components`].
 fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
     let mut problems = Vec::new();
     let channels = image_channels(project);
-    // Each project class created: by which step (pipeline, step, a label).
-    let mut creators: Vec<(u32, (PipelineId, StepId), String)> = Vec::new();
+    // Each project class created: by which step (pipeline, step), a label
+    // for it, and the step's parameters giving it.
+    let mut creators: Vec<(u32, (PipelineId, StepId), String, String)> = Vec::new();
+    // The project classes some step of an enabled pipeline gives objects -
+    // `None` if one may give any (annotations loaded with their classes).
+    let mut assigned: Option<Vec<u32>> = Some(Vec::new());
+    for pipeline in project.pipelines.iter().filter(|p| p.enabled) {
+        for step in &pipeline.steps {
+            for command in resolved_commands(step, &project.components) {
+                let (classes, any) = assigned_classes(&command.command);
+                if any {
+                    assigned = None;
+                }
+                if let Some(assigned) = &mut assigned {
+                    assigned.extend(classes.into_iter().filter_map(|c| match c {
+                        ObjectClass::Global(n) => Some(n),
+                        _ => None,
+                    }));
+                }
+            }
+        }
+    }
 
     for pipeline in &project.pipelines {
         if let (Some(channels), ImageAddress::Channel(channel)) = (&channels, pipeline.image_source)
@@ -317,6 +386,18 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                 ),
             ));
         }
+
+        // This pipeline's classes worked on that no step gives any object.
+        struct Unmade {
+            class: u32,
+            /// The steps working on it, in order - the warning is at the first.
+            steps: Vec<Option<(PipelineId, StepId)>>,
+            /// "ClassifyObjects works on class 15" - as the first step says it.
+            says: String,
+            keys: Vec<ComponentParamKey>,
+            detail: String,
+        }
+        let mut unmade: Vec<Unmade> = Vec::new();
 
         for (index, step) in pipeline.steps.iter().enumerate() {
             let at = Some((pipeline.id, step.id));
@@ -334,10 +415,21 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                 }
                 None => Vec::new(),
             };
-            // "ClassifyObjects (its step 14)" - "(its step 8 › 7)" nested -
-            // or the command's name.
-            let what = |command: &ResolvedCommand| match command.steps.as_slice() {
-                [] => command.command.name().to_string(),
+            let subject = |command: &ResolvedCommand, keys: &[ComponentParamKey]| Subject {
+                parameters: match definition {
+                    Some(d) => joined(keys.iter().map(|k| parameter_label(d, k)).collect()),
+                    None => String::new(),
+                },
+                name: definition.map_or_else(
+                    || command.command.name().to_string(),
+                    |d| d.meta.name.clone(),
+                ),
+                inside: definition.is_some(),
+            };
+            // Where inside the component: "ClassifyObjects (its step 14)",
+            // "(its step 8 › 7)" nested. Empty for a command step.
+            let detail = |command: &ResolvedCommand| match command.steps.as_slice() {
+                [] => String::new(),
                 steps => format!(
                     "{} (its step {})",
                     command.command.name(),
@@ -367,17 +459,23 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                 if let Some(channels) = &channels {
                     for (path, channel) in channels_read(&command.command) {
                         if channel as usize >= channels.fewest {
+                            let keys = setting(command, &path);
+                            let who = subject(command, &keys);
                             problems.push(
                                 ComponentProblem::error(
                                     None,
                                     at,
                                     format!(
-                                        "{} reads channel {channel}, but {}",
-                                        what(command),
+                                        "{}, but {}",
+                                        who.says(
+                                            &format!("channel {channel}"),
+                                            &format!("reads channel {channel}")
+                                        ),
                                         channels.describe()
                                     ),
                                 )
-                                .about(setting(command, &path)),
+                                .about(keys)
+                                .inside(detail(command)),
                             );
                         }
                     }
@@ -387,34 +485,111 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                     && classify.overlapping_with != ObjectClass::Unset
                     && classify.input_classes.contains(&classify.overlapping_with)
                 {
-                    let mut about = setting(command, "overlapping_with");
-                    about.extend(setting(command, "input_classes"));
-                    about.dedup();
-                    problems.push(
-                        ComponentProblem::warning(
-                            None,
-                            at,
-                            format!(
-                                "{} looks at class {} objects overlapping another class {} \
-                                 object - “Overlapping with” is usually another class",
-                                what(command),
-                                class_label(project, classify.overlapping_with),
-                                class_label(project, classify.overlapping_with),
-                            ),
+                    let mut keys = setting(command, "overlapping_with");
+                    keys.extend(setting(command, "input_classes"));
+                    keys.dedup();
+                    let class = class_label(project, classify.overlapping_with);
+                    let who = subject(command, &keys);
+                    let message = if who.parameters.is_empty() {
+                        format!(
+                            "{} for class {class} objects overlapping other class {class} \
+                             objects - “Overlapping with” is usually another class",
+                            who.says("", "looks")
                         )
-                        .about(about),
+                    } else {
+                        format!(
+                            "{} - a step then looks for class {class} objects overlapping \
+                             other class {class} objects; usually another class is meant",
+                            who.says(&format!("class {class}"), "")
+                        )
+                    };
+                    problems.push(
+                        ComponentProblem::warning(None, at, message)
+                            .about(keys)
+                            .inside(detail(command)),
                     );
+                }
+
+                if let PipelineCommand::ExtractObjects(extract) = &command.command
+                    && extract.class_mapping.is_empty()
+                {
+                    let message = if definition.is_some() {
+                        format!(
+                            "“{}” has an Extract Objects step that maps no segmentation class \
+                             to an object class - it creates no objects",
+                            subject(command, &[]).name
+                        )
+                    } else {
+                        "Maps no segmentation class to an object class - it creates no objects; \
+                         add a class mapping"
+                            .to_string()
+                    };
+                    problems
+                        .push(ComponentProblem::warning(None, at, message).inside(detail(command)));
+                }
+
+                // Classes worked on that no step gives any object - one
+                // warning per class and pipeline, at the first step.
+                if pipeline.enabled
+                    && let Some(assigned) = &assigned
+                {
+                    for (path, class) in read_classes(&command.command) {
+                        let ObjectClass::Global(n) = class else {
+                            continue;
+                        };
+                        if assigned.contains(&n) {
+                            continue;
+                        }
+                        match unmade.iter_mut().find(|u| u.class == n) {
+                            Some(first) => {
+                                if !first.steps.contains(&at) {
+                                    first.steps.push(at);
+                                }
+                            }
+                            None => {
+                                let keys = setting(command, &path);
+                                unmade.push(Unmade {
+                                    class: n,
+                                    steps: vec![at],
+                                    says: subject(command, &keys).says(
+                                        &format!(
+                                            "class {}",
+                                            class_label(project, ObjectClass::Global(n))
+                                        ),
+                                        &format!(
+                                            "works on class {}",
+                                            class_label(project, ObjectClass::Global(n))
+                                        ),
+                                    ),
+                                    keys,
+                                    detail: detail(command),
+                                })
+                            }
+                        }
+                    }
                 }
 
                 for (path, class) in created_classes(&command.command) {
                     let ObjectClass::Global(n) = class else {
                         continue;
                     };
-                    if !creators
-                        .iter()
-                        .any(|(c, s, _)| *c == n && *s == (pipeline.id, step.id))
+                    let keys = setting(command, &path);
+                    let who = subject(command, &keys);
+                    match creators
+                        .iter_mut()
+                        .find(|(c, s, _, _)| *c == n && *s == (pipeline.id, step.id))
                     {
-                        creators.push((n, (pipeline.id, step.id), this_step.clone()));
+                        Some((_, _, _, named)) => {
+                            if named.is_empty() {
+                                named.clone_from(&who.parameters);
+                            }
+                        }
+                        None => creators.push((
+                            n,
+                            (pipeline.id, step.id),
+                            this_step.clone(),
+                            who.parameters.clone(),
+                        )),
                     }
                     // A command step's are reported by `check_components`.
                     if definition.is_some()
@@ -428,12 +603,15 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                                 None,
                                 at,
                                 format!(
-                                    "{} creates objects of class {n}, which the project \
-                                     doesn't have",
-                                    what(command)
+                                    "{}, which the project doesn't have",
+                                    who.says(
+                                        &format!("class {n}"),
+                                        &format!("creates objects of class {n}")
+                                    )
                                 ),
                             )
-                            .about(setting(command, &path))
+                            .about(keys)
+                            .inside(detail(command))
                             .fixed_by(ProblemFix::AddClass(n)),
                         );
                     }
@@ -445,26 +623,53 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                 problems.extend(colliding_parameters(project, definition, instance, at));
             }
         }
+
+        for u in unmade {
+            let also = match u.steps.len() - 1 {
+                0 => String::new(),
+                1 => " - 1 more step of this pipeline works on it too".to_string(),
+                n => format!(" - {n} more steps of this pipeline work on it too"),
+            };
+            problems.push(
+                ComponentProblem::warning(
+                    None,
+                    u.steps[0],
+                    format!(
+                        "{}, but no step gives any object that class - there's nothing to \
+                         work on{also}",
+                        u.says
+                    ),
+                )
+                .about(u.keys)
+                .inside(u.detail),
+            );
+        }
     }
 
     // The same class created by different steps.
-    for (n, at, _) in &creators {
-        let others: Vec<&str> = creators
+    for (n, at, _, named) in &creators {
+        let others: Vec<String> = creators
             .iter()
-            .filter(|(m, other, _)| m == n && other != at)
-            .map(|(_, _, label)| label.as_str())
+            .filter(|(m, other, _, _)| m == n && other != at)
+            .map(|(_, _, label, _)| label.clone())
             .collect();
-        if !others.is_empty() {
-            problems.push(ComponentProblem::warning(
-                None,
-                Some(*at),
-                format!(
-                    "Class {} is also created by {} - objects of both end up in one class",
-                    class_label(project, ObjectClass::Global(*n)),
-                    others.join(", ")
-                ),
-            ));
+        if others.is_empty() {
+            continue;
         }
+        let class = class_label(project, ObjectClass::Global(*n));
+        let message = if named.is_empty() {
+            format!(
+                "Class {class} is also created by {} - objects of both end up in one class",
+                joined(others)
+            )
+        } else {
+            format!(
+                "{named} is class {class}, which {} creates too - objects of both end up in \
+                 one class",
+                joined(others)
+            )
+        };
+        problems.push(ComponentProblem::warning(None, Some(*at), message));
     }
     problems
 }
@@ -502,11 +707,7 @@ fn colliding_parameters(
                 .iter()
                 .map(|k| parameter_label(definition, k))
                 .collect();
-            let names = match names.split_last() {
-                Some((last, [])) => last.clone(),
-                Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
-                None => String::new(),
-            };
+            let names = joined(names);
             ComponentProblem::warning(
                 Some(&definition.key),
                 at,
@@ -1149,13 +1350,19 @@ mod tests {
         );
         let overlap = problems
             .iter()
-            .find(|p| p.message.contains("overlapping another class 1"))
+            .find(|p| {
+                p.message
+                    .contains("overlapping other class 1 “Spot” objects")
+            })
             .unwrap_or_else(|| panic!("{:?}", messages(&problems)));
         assert!(
-            overlap.message.starts_with("ClassifyObjects (its step 5)"),
+            overlap
+                .message
+                .starts_with("“Output class” (Bead) and “Output class” (Spot) are class 1"),
             "{}",
             overlap.message
         );
+        assert_eq!(overlap.detail, "ClassifyObjects (its step 5)");
         assert_eq!(
             overlap.parameters,
             [
@@ -1184,8 +1391,12 @@ mod tests {
         assert_eq!(errors[0].step, Some((PipelineId(1), StepId::UNASSIGNED)));
         assert_eq!(
             errors[1].message,
-            "LoadChannel (its step 3) reads channel 3, but the images have only \
-             channels 0–1 (CY5, FITC)"
+            "“Channel” (Bead) is channel 3, but the images have only channels 0–1 (CY5, FITC)",
+            "named as the step's card shows it"
+        );
+        assert_eq!(
+            errors[1].detail, "LoadChannel (its step 3)",
+            "for debug mode"
         );
         assert_eq!(
             errors[1].parameters,
@@ -1209,7 +1420,7 @@ mod tests {
         let problems = check_project(&project);
         let at: Vec<Option<(PipelineId, StepId)>> = problems
             .iter()
-            .filter(|p| p.message.starts_with("Class 2 “Bead” is also created by"))
+            .filter(|p| p.message.contains("“Bead”") && p.message.contains("one class"))
             .map(|p| p.step)
             .collect();
         assert_eq!(
@@ -1223,8 +1434,15 @@ mod tests {
         );
         assert!(
             problems.iter().any(|p| p.message
-                == "Class 2 “Bead” is also created by step 2 (ExtractObjects) of “Spots” - \
-                    objects of both end up in one class"),
+                == "“Output class” (Bead) is class 2 “Bead”, which step 2 (ExtractObjects) of \
+                    “Spots” creates too - objects of both end up in one class"),
+            "the component step names its parameter: {:?}",
+            messages(&problems)
+        );
+        assert!(
+            problems.iter().any(|p| p.message
+                == "Class 2 “Bead” is also created by step 1 “Spots” of “Spots” - objects of \
+                    both end up in one class"),
             "{:?}",
             messages(&problems)
         );
@@ -1252,5 +1470,98 @@ mod tests {
             !apply_fix(&mut project, &ProblemFix::AddClass(7)),
             "added already"
         );
+    }
+
+    #[test]
+    fn a_class_worked_on_that_no_step_gives_objects_is_reported() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ClassifyObjectsSettings, LoadAnnotatedObjectsSettings,
+        };
+        let classify = |input: u32, output: ObjectClass| {
+            PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                input_classes: vec![ObjectClass::Global(input)],
+                output_class: output,
+                ..Default::default()
+            })
+        };
+        let mut project = spots_project();
+        project.classification.classes_mut().push(Class {
+            id: 9,
+            name: "Dim".into(),
+            ..Default::default()
+        });
+        project.pipelines[0]
+            .steps
+            .push(step(2, classify(9, ObjectClass::Unset)));
+        let unmade = |project: &ProjectSettings| -> Vec<String> {
+            check_project(project)
+                .into_iter()
+                .filter(|p| p.message.contains("nothing to work on"))
+                .map(|p| p.message)
+                .collect()
+        };
+        assert_eq!(
+            unmade(&project),
+            [
+                "ClassifyObjects works on class 9 “Dim”, but no step gives any object that \
+              class - there's nothing to work on"
+            ]
+        );
+
+        // A second step working on it: still one warning, at the first.
+        project.pipelines[0]
+            .steps
+            .push(step(3, classify(9, ObjectClass::Unset)));
+        let grouped = unmade(&project);
+        assert_eq!(grouped.len(), 1, "{grouped:?}");
+        assert!(
+            grouped[0].ends_with("- 1 more step of this pipeline works on it too"),
+            "{}",
+            grouped[0]
+        );
+        project.pipelines[0].steps.pop();
+
+        // Given by a step of a disabled pipeline: still nothing when run.
+        project.pipelines.push(PipelineSettings {
+            id: PipelineId(2),
+            name: "Off".into(),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: false,
+            steps: vec![step(1, classify(1, ObjectClass::Global(9)))],
+        });
+        assert_eq!(unmade(&project).len(), 1);
+        // Enabled: spots are classified as class 9.
+        project.pipelines[1].enabled = true;
+        assert_eq!(unmade(&project), Vec::<String>::new());
+
+        // Annotations loaded with their classes may bring any class.
+        project.pipelines[1].steps = vec![step(
+            1,
+            PipelineCommand::LoadAnnotatedObjects(LoadAnnotatedObjectsSettings {
+                keep_annotated_classes: true,
+                ..Default::default()
+            }),
+        )];
+        assert_eq!(unmade(&project), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_extract_objects_without_a_class_mapping_is_reported() {
+        let mut project = spots_project();
+        project.pipelines[0].steps.push(step(
+            2,
+            PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+                class_mapping: vec![],
+                ..Default::default()
+            }),
+        ));
+        let problems = check_project(&project);
+        let empty = problems
+            .iter()
+            .find(|p| p.message.contains("creates no objects"))
+            .unwrap_or_else(|| panic!("{:?}", messages(&problems)));
+        assert_eq!(empty.step, Some((PipelineId(1), StepId(2))));
+        assert_eq!(empty.severity, Severity::Warning);
     }
 }

@@ -3224,6 +3224,10 @@ export global PipelinesPanelState {
         callback add-group-item(int, string);    // step-id, param-name
         // Expands/collapses a step's advanced settings (step-id).
         callback toggle-advanced(int);
+        // Debug mode (user preference, toolbar): settings show what they're
+        // wired to inside components.
+        in-out property <bool> debug-mode: false;
+        callback debug-mode-toggled(bool);
         // "Always show advanced settings" (user preference, every step).
         in-out property <bool> always-show-advanced: false;
         callback always-show-advanced-toggled(bool);
@@ -3505,7 +3509,11 @@ export component PipelinesPanel inherits Rectangle {
             // --- 3b. The project's problems ---
             if PipelinesPanelState.project-problems.length > 0: Rectangle {
                 background: Theme.bg;
-                VerticalLayout {
+                // As high as its content - a Rectangle would stretch and take
+                // height from the step list.
+                height: strip.preferred-height;
+                vertical-stretch: 0;
+                strip := VerticalLayout {
                     padding-left: 14px;
                     padding-right: 10px;
                     padding-top: 6px;
