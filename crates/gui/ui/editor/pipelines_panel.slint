@@ -3,6 +3,7 @@
 // Owns N pipelines; each pipeline is a flat, ordered list of commands.
 // Category is a property of each step (colored stripe), not a hard bucket.
 
+import { NumberSpinner } from "../components/new_components/number_spinner.slint";
 import {
     ScrollView,
     LineEdit,
@@ -1164,90 +1165,6 @@ export component MultiClassDropdown inherits Rectangle {
     }
 
 // ----------------------------------------------------------
-// Spinner input: integer value with − / + step buttons
-
-component SpinnerInput inherits HorizontalLayout {
-        in property <float> value;
-        in property <float> step: 1;
-        in property <float> min: 0;
-        in property <float> max: 100;
-        in property <bool> enabled: true;
-        callback changed(string);
-
-        spacing: 2px;
-        height: 26px;
-
-        // Pattern: Rectangle with explicit size → Text (visual) → TouchArea LAST (no children,
-    // so Slint auto-sizes it to fill the Rectangle, and being last it sits on top and
-    // receives events while text remains visible underneath it).
-    Rectangle {
-            width: 26px;
-            height: 26px;
-            border-radius: 4px;
-            border-width: 1px;
-            border-color: Theme.border;
-            background: dec.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
-            Text {
-                text: "−";
-                font-size: 13px;
-                font-weight: 700;
-                color: Theme.text;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            dec := TouchArea {
-                enabled: root.enabled;
-                mouse-cursor: pointer;
-                clicked => {
-                // Read current displayed text (user may have typed a value different from root.value),
-                // compute the new value, write it back to input.text so the display updates,
-                // then notify the backend. Writing input.text here is intentional: after user typing,
-                // the text: binding on LineEdit is broken, so only a direct write keeps it in sync.
-                input.text = input.text.to-float() - root.step >= root.min ? "\{input.text.to-float() - root.step}" : "\{root.min}";
-                    root.changed(input.text);
-                }
-            }
-        }
-
-        input := LineEdit {
-            enabled: root.enabled;
-            horizontal-stretch: 1;
-            text: "\{root.value}";
-            font-size: 11px;
-            edited(t) => {
-                root.changed(t);
-            }
-        }
-
-        Rectangle {
-            width: 26px;
-            height: 26px;
-            border-radius: 4px;
-            border-width: 1px;
-            border-color: Theme.border;
-            background: inc.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
-            Text {
-                text: "+";
-                font-size: 13px;
-                font-weight: 700;
-                color: Theme.text;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            inc := TouchArea {
-                enabled: root.enabled;
-                mouse-cursor: pointer;
-                clicked => {
-                    input.text = input.text.to-float() + root.step <= root.max ? "\{input.text.to-float() + root.step}" : "\{root.max}";
-                    root.changed(input.text);
-                }
-            }
-        }
-    }
-
-// ----------------------------------------------------------
 // Leaf parameter row (used inside group items)
 
 component LeafParamRow inherits VerticalLayout {
@@ -1430,8 +1347,9 @@ component LeafParamRow inherits VerticalLayout {
         }
 
         if p.param-type == ParamType.spinner:
-    SpinnerInput {
+    NumberSpinner {
             enabled: !PipelinesPanelState.open-component-read-only;
+            label: p.display-name;
             value: p.value.to-float();
             step: p.step;
             min: p.min;
@@ -1867,8 +1785,9 @@ component ParamControls inherits Rectangle {
             }
 
             if p.param-type == ParamType.spinner:
-        SpinnerInput {
+        NumberSpinner {
                 enabled: !PipelinesPanelState.open-component-read-only;
+                label: p.display-name;
                 value: p.value.to-float();
                 step: p.step;
                 min: p.min;

@@ -1,0 +1,150 @@
+// components/number_spinner.slint — a number field with − / + inside it:
+// one frame, styled like TextField. Typing works as in a text field (only
+// a number goes in); − / +, and ↑ / ↓ while it has focus, step by `step`,
+// kept within `min`…`max`. Reports every change as text - what was typed,
+// or the stepped number.
+
+import { Theme } from "../../style.slint";
+
+// A − or + of the field: an icon on the field's background, lighter on hover.
+component StepButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    width: 26px;
+    background: ta.pressed && root.enabled ? Theme.border-soft : (ta.has-hover && root.enabled ? Theme.hover : transparent);
+    animate background { duration: 80ms; }
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    Image {
+        source: root.icon;
+        width: 10px;
+        height: 10px;
+        colorize: root.enabled ? Theme.text-dim : Theme.text-mute.with-alpha(0.5);
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component NumberSpinner inherits Rectangle {
+    in property <float> value;
+    in property <float> step: 1;
+    in property <float> min: 0;
+    in property <float> max: 100;
+    in property <bool> enabled: true;
+    // What the field is for, for screen readers ("Min Threshold").
+    in property <string> label;
+    callback changed(string);
+
+    // Digits after the point a stepped number gets: as many as `step` has
+    // (1 → 0, 0.5 → 1, 0.01 → 2).
+    property <int> decimals: root.step == round(root.step) ? 0 : (root.step * 10 == round(root.step * 10) ? 1 : (root.step * 100 == round(root.step * 100) ? 2 : 3));
+    // The number shown - typed, or `value`.
+    property <float> shown: input.text.to-float();
+
+    // Steps `n` steps (−1 down, +1 up) from the number shown. Writes the
+    // text itself: once typed in, it's no longer bound to `value`.
+    function step-by(n: float) {
+        input.text = clamp(root.shown + n * root.step, root.min, root.max).to-fixed(root.decimals);
+        root.changed(input.text);
+    }
+
+    height: 28px;
+    border-radius: Theme.radius-sm;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : (frame-ta.has-hover && root.enabled ? Theme.border : Theme.border-soft);
+    animate border-color { duration: 80ms; }
+    opacity: root.enabled ? 1.0 : 0.55;
+    clip: true;
+
+    // Under the text: a click anywhere left of − / + puts the caret in.
+    frame-ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: text;
+        clicked => {
+            input.focus();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 9px;
+        spacing: 0px;
+
+        keys := FocusScope {
+            horizontal-stretch: 1;
+            enabled: root.enabled;
+            // ↑ / ↓ step, everything else is typing.
+            key-pressed(event) => {
+                if event.text == Key.UpArrow {
+                    root.step-by(1);
+                    return accept;
+                }
+                if event.text == Key.DownArrow {
+                    root.step-by(-1);
+                    return accept;
+                }
+                reject
+            }
+
+            input := TextInput {
+                enabled: root.enabled;
+                text: "\{root.value}";
+                input-type: decimal;
+                single-line: true;
+                vertical-alignment: center;
+                font-size: 11.5px;
+                font-family: Theme.font-mono;
+                color: Theme.text;
+                selection-background-color: Theme.accent.with-alpha(0.35);
+                selection-foreground-color: Theme.text;
+                accessible-role: spinbox;
+                accessible-label: root.label;
+                edited => {
+                    root.changed(self.text);
+                }
+            }
+        }
+
+        Rectangle {
+            width: 1px;
+            background: Theme.border-soft;
+        }
+
+        StepButton {
+            icon: @image-url("../../icons/regular-white/minus.svg");
+            label: "Decrease";
+            enabled: root.enabled && root.shown > root.min;
+            clicked => {
+                root.step-by(-1);
+            }
+        }
+
+        Rectangle {
+            width: 1px;
+            background: Theme.border-soft;
+        }
+
+        StepButton {
+            icon: @image-url("../../icons/regular-white/plus.svg");
+            label: "Increase";
+            enabled: root.enabled && root.shown < root.max;
+            clicked => {
+                root.step-by(1);
+            }
+        }
+    }
+}
