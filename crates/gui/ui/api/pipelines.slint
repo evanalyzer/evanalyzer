@@ -40,6 +40,8 @@ export struct LeafParam {
         step: float,
         // Inside an opened component: this setting is a component parameter.
         exposed: bool,
+        // Pinned into the Tuning panel.
+        pinned: bool,
     }
 
 export struct GroupItem {
@@ -402,6 +404,9 @@ export global PipelinesPanelState {
     in property <[TunedSetting]> tuned-settings: [];
     // Pins / unpins a setting (step position, setting name).
     callback toggle-pin(int, string);
+    // Pins / unpins the settings of a section of the step (a row of its
+    // table): all pinned → all unpinned, else all pinned.
+    callback toggle-pin-section(int, string);
         callback add-group-item(int, string);    // step-id, param-name
         // Expands/collapses a step's advanced settings (step-id).
         callback toggle-advanced(int);

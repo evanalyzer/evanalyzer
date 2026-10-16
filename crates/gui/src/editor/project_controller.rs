@@ -70,6 +70,8 @@ enum PendingAction {
 enum AfterAnalysisQuestion {
     Quit,
     Disconnect,
+    /// Another project: the action is in `ProjectController::switch_after_analysis`.
+    SwitchProject,
 }
 
 pub struct ProjectController {
@@ -92,6 +94,8 @@ pub struct ProjectController {
     pending_action: Mutex<Option<PendingAction>>,
     /// What the "Analysis running" dialog's answer leads to.
     after_analysis_question: Mutex<AfterAnalysisQuestion>,
+    /// What opens another project once the running analysis was asked about.
+    switch_after_analysis: Mutex<Option<PendingAction>>,
 }
 
 impl ProjectController {
@@ -118,6 +122,7 @@ impl ProjectController {
             template_filter: Mutex::new(TemplateFilter::default()),
             pending_action: Mutex::new(None),
             after_analysis_question: Mutex::new(AfterAnalysisQuestion::Quit),
+            switch_after_analysis: Mutex::new(None),
         }
     }
 
@@ -577,7 +582,10 @@ impl ProjectController {
                     }
                     manager.after_analysis_question();
                 });
-            ui.global::<AnalysisRunningCloseState>().on_back(|| {});
+            let manager = Arc::clone(self);
+            ui.global::<AnalysisRunningCloseState>().on_back(move || {
+                manager.switch_after_analysis.lock().unwrap().take();
+            });
 
             let manager = Arc::clone(self);
             ui.global::<ToolbarState>()
@@ -828,6 +836,29 @@ impl ProjectController {
     /// dialog, whose Save/Discard/Cancel buttons resolve it (wired in
     /// [`Self::attach_callbacks`]).
     fn guard_discard(self: &Arc<Self>, action: PendingAction) {
+        // Another project while an analysis runs: asked about it first.
+        let switches_project = matches!(
+            action,
+            PendingAction::New
+                | PendingAction::OpenProject(_)
+                | PendingAction::ImportLegacy(_)
+                | PendingAction::OpenProjectTemplate(_)
+        );
+        if switches_project
+            && self
+                .pipelines_controller
+                .analysis_running
+                .load(Ordering::SeqCst)
+        {
+            *self.switch_after_analysis.lock().unwrap() = Some(action);
+            self.ask_about_running_analysis(AfterAnalysisQuestion::SwitchProject);
+            return;
+        }
+        self.guard_unsaved(action);
+    }
+
+    /// `action` - after unsaved changes are saved or discarded.
+    fn guard_unsaved(self: &Arc<Self>, action: PendingAction) {
         if !self.app_state.is_dirty() {
             self.run_pending_action(action);
             return;
@@ -854,6 +885,7 @@ impl ProjectController {
                 let state = ui.global::<AnalysisRunningCloseState>();
                 state.set_remote(remote);
                 state.set_disconnecting(then == AfterAnalysisQuestion::Disconnect);
+                state.set_switching_project(then == AfterAnalysisQuestion::SwitchProject);
                 ui.global::<GlobalAppState>()
                     .set_active_dialog(DialogType::AnalysisRunningClose);
             }
@@ -868,6 +900,11 @@ impl ProjectController {
         match then {
             AfterAnalysisQuestion::Quit => self.quit_unless_unsaved(),
             AfterAnalysisQuestion::Disconnect => self.guard_discard(PendingAction::Disconnect),
+            AfterAnalysisQuestion::SwitchProject => {
+                if let Some(action) = self.switch_after_analysis.lock().unwrap().take() {
+                    self.guard_unsaved(action);
+                }
+            }
         }
     }
 
@@ -2365,6 +2402,75 @@ pub(crate) mod tests {
         question.invoke_keep_running();
         drain_ui_queue();
         assert!(Arc::ptr_eq(&w.ui_state.backend(), &local));
+    }
+
+    /// A new project while an analysis runs: asked first. Back keeps the
+    /// project; "Keep running" goes on, the analysis left alone.
+    #[test]
+    fn a_new_project_while_an_analysis_runs_asks_first() {
+        let w = with_window(project_with_pipeline("P"));
+        let running = &w.controller.pipelines_controller.analysis_running;
+        running.store(true, Ordering::SeqCst);
+        let question = w.ui.global::<AnalysisRunningCloseState>();
+
+        w.toolbar().invoke_new_file_clicked();
+        drain_ui_queue();
+        assert_eq!(w.dialog(), DialogType::AnalysisRunningClose);
+        assert!(question.get_switching_project());
+        assert!(!question.get_disconnecting());
+
+        question.invoke_back();
+        drain_ui_queue();
+        assert_eq!(
+            w.ui_state.get_project().pipelines.len(),
+            1,
+            "still the project"
+        );
+
+        w.toolbar().invoke_new_file_clicked();
+        drain_ui_queue();
+        question.invoke_keep_running();
+        drain_ui_queue();
+        assert!(
+            w.ui_state.get_project().pipelines.is_empty(),
+            "a new project"
+        );
+        assert!(running.load(Ordering::SeqCst), "the analysis left alone");
+    }
+
+    /// "Stop analysis" cancels it, then the new project comes.
+    #[test]
+    fn stopping_the_analysis_for_a_new_project_cancels_it_and_goes_on() {
+        let w = with_window(project_with_pipeline("P"));
+        w.controller
+            .pipelines_controller
+            .analysis_running
+            .store(true, Ordering::SeqCst);
+        let cancel = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        *w.controller
+            .pipelines_controller
+            .pipeline_cancel_flag
+            .lock()
+            .unwrap() = Some(cancel.clone());
+
+        w.toolbar().invoke_new_file_clicked();
+        drain_ui_queue();
+        w.ui.global::<AnalysisRunningCloseState>()
+            .invoke_cancel_analysis();
+        drain_ui_queue();
+
+        assert!(cancel.is_cancelled());
+        assert!(w.ui_state.get_project().pipelines.is_empty());
+    }
+
+    /// Without a running analysis nothing is asked.
+    #[test]
+    fn a_new_project_without_a_running_analysis_asks_nothing() {
+        let w = with_window(project_with_pipeline("P"));
+        w.toolbar().invoke_new_file_clicked();
+        drain_ui_queue();
+        assert_ne!(w.dialog(), DialogType::AnalysisRunningClose);
+        assert!(w.ui_state.get_project().pipelines.is_empty());
     }
 
     #[test]

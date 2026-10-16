@@ -134,7 +134,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                 VerticalLayout {
                                     alignment: center;
                                     Image {
-                                        source: @image-url("../icons/regular-black/magnifying-glass.svg");
+                                        source: @image-url("../icons/regular-white/magnifying-glass.svg");
                                         width: 14px;
                                         height: 14px;
                                         colorize: Ink.text-mute;
@@ -172,7 +172,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                         border-radius: 4px;
                                         background: clear-ta.has-hover ? Ink.hover : transparent;
                                         Image {
-                                            source: @image-url("../icons/regular-black/x.svg");
+                                            source: @image-url("../icons/regular-white/x.svg");
                                             width: 10px;
                                             height: 10px;
                                             colorize: Ink.text-dim;
@@ -200,7 +200,7 @@ export component ProjectSettingsDialog inherits InkDialog {
 
                         NavItem {
                             text: "General";
-                            icon: @image-url("../icons/regular-black/user-circle.svg");
+                            icon: @image-url("../icons/regular-white/user-circle.svg");
                             active: !root.searching && root.current-section == 0;
                             dimmed: root.searching && !root.section-matches(0);
                             clicked => {
@@ -210,7 +210,7 @@ export component ProjectSettingsDialog inherits InkDialog {
 
                         NavItem {
                             text: "Plate & grouping";
-                            icon: @image-url("../icons/regular-black/grid-nine.svg");
+                            icon: @image-url("../icons/regular-white/grid-nine.svg");
                             active: !root.searching && root.current-section == 1;
                             dimmed: root.searching && !root.section-matches(1);
                             clicked => {
@@ -220,7 +220,7 @@ export component ProjectSettingsDialog inherits InkDialog {
 
                         NavItem {
                             text: "Object merging";
-                            icon: @image-url("../icons/regular-black/squares-four.svg");
+                            icon: @image-url("../icons/regular-white/squares-four.svg");
                             active: !root.searching && root.current-section == 2;
                             dimmed: root.searching && !root.section-matches(2);
                             clicked => {
@@ -238,7 +238,7 @@ export component ProjectSettingsDialog inherits InkDialog {
 
                         NavItem {
                             text: "Viewport";
-                            icon: @image-url("../icons/regular-black/monitor.svg");
+                            icon: @image-url("../icons/regular-white/monitor.svg");
                             active: !root.searching && root.current-section == 3;
                             dimmed: root.searching && !root.section-matches(3);
                             clicked => {

@@ -175,6 +175,8 @@ export global AnalysisRunningCloseState {
         in property <bool> remote: false;
         /// Asked for "Disconnect" instead of closing the window.
         in property <bool> disconnecting: false;
+        /// Asked before another project is opened (or a new one made).
+        in property <bool> switching-project: false;
         callback keep_running();
         callback cancel_analysis();
         callback back();

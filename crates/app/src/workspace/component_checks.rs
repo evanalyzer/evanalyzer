@@ -511,24 +511,6 @@ fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
                     );
                 }
 
-                if let PipelineCommand::ExtractObjects(extract) = &command.command
-                    && extract.class_mapping.is_empty()
-                {
-                    let message = if definition.is_some() {
-                        format!(
-                            "“{}” has an Extract Objects step that maps no segmentation class \
-                             to an object class - it creates no objects",
-                            subject(command, &[]).name
-                        )
-                    } else {
-                        "Maps no segmentation class to an object class - it creates no objects; \
-                         add a class mapping"
-                            .to_string()
-                    };
-                    problems
-                        .push(ComponentProblem::warning(None, at, message).inside(detail(command)));
-                }
-
                 // Classes worked on that no step gives any object - one
                 // warning per class and pipeline, at the first step.
                 if let Some(assigned) = &assigned {
@@ -1555,9 +1537,18 @@ mod tests {
         assert_eq!(unmade(&project), Vec::<String>::new());
     }
 
+    /// Without a class mapping, Extract Objects gives each segmentation
+    /// class's objects the project class with the same number - nothing to
+    /// warn about, and the classes it may make are not "never made".
     #[test]
-    fn an_extract_objects_without_a_class_mapping_is_reported() {
+    fn an_extract_objects_without_a_class_mapping_is_fine() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::ClassifyObjectsSettings;
         let mut project = spots_project();
+        project.classification.classes_mut().push(Class {
+            id: 9,
+            name: "Nuclei".into(),
+            ..Default::default()
+        });
         project.pipelines[0].steps.push(step(
             2,
             PipelineCommand::ExtractObjects(ExtractObjectsSettings {
@@ -1565,13 +1556,26 @@ mod tests {
                 ..Default::default()
             }),
         ));
+        // Class 9 is made only by the unmapped segmentation class 9.
+        project.pipelines[0].steps.push(step(
+            3,
+            PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                input_classes: vec![ObjectClass::Global(9)],
+                output_class: ObjectClass::Unset,
+                ..Default::default()
+            }),
+        ));
         let problems = check_project(&project);
-        let empty = problems
-            .iter()
-            .find(|p| p.message.contains("creates no objects"))
-            .unwrap_or_else(|| panic!("{:?}", messages(&problems)));
-        assert_eq!(empty.step, Some((PipelineId(1), StepId(2))));
-        assert_eq!(empty.severity, Severity::Warning);
+        assert!(
+            !problems.iter().any(|p| p.message.contains("creates no objects")),
+            "{:?}",
+            messages(&problems)
+        );
+        assert!(
+            !problems.iter().any(|p| p.message.contains("nothing to work on")),
+            "{:?}",
+            messages(&problems)
+        );
     }
 
     /// A disabled pipeline doesn't run: its channel that doesn't exist, the

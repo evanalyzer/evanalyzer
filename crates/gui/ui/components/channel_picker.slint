@@ -14,7 +14,7 @@ import { PickerField, PickerRow, SwatchName } from "picker_field.slint";
 // the open image doesn't define.
 component ChannelLabel inherits Rectangle {
     in property <int> idx;
-    in property <length> font-size: 12px;
+    in property <length> font-size: Ink.fs-md;
 
     for ch in ChannelState.channels: SwatchName {
         visible: ch.idx == root.idx;
@@ -32,16 +32,16 @@ component ChannelLabel inherits Rectangle {
 // beyond 9), scrolling once there are more than fit.
 export component ChannelPicker inherits Rectangle {
     in-out property <int> value: 0;
-    in property <length> font-size: 12px;
+    in property <length> font-size: Ink.fs-md;
     // A narrow field (a table cell): the number alone, then the name.
     in property <bool> compact: false;
     callback changed(int);
 
     property <int> channel-count: max(10, ImageMetaData.nr-c-stacks, root.value + 1);
-    property <length> row-height: 28px;
+    property <length> row-height: 26px;
     property <int> max-visible-rows: 10;
 
-    height: 30px;
+    height: Ink.control-h;
 
     PickerField {
         label: root.compact ? "\{root.value}" : "Channel " + root.value;
@@ -65,7 +65,7 @@ export component ChannelPicker inherits Rectangle {
             background: Ink.panel;
             border-width: 1px;
             border-color: Ink.border;
-            border-radius: 6px;
+            border-radius: Ink.radius-md;
             drop-shadow-blur: 12px;
             drop-shadow-color: Ink.shadow;
             clip: true;
@@ -89,7 +89,7 @@ export component ChannelPicker inherits Rectangle {
                         }
                         ChannelLabel {
                             idx: index;
-                            font-size: 11px;
+                            font-size: Ink.fs-md;
                         }
                     }
                 }
@@ -144,7 +144,7 @@ export component ImageAddressPicker inherits HorizontalLayout {
     if root.kind == "channel": ChannelPicker {
         horizontal-stretch: 2;
         height: 24px;
-        font-size: 11px;
+        font-size: Ink.fs-md;
         value: root.number;
         changed(v) => {
             root.changed("channel:" + v);

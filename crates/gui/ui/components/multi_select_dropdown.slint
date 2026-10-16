@@ -12,8 +12,7 @@
 // `select-all`/`select-none` still fire a callback for Rust to rebuild and
 // hand back `items`.
 import { ScrollView } from "std-widgets.slint";
-import { LineEdit } from "../ink/std_compat.slint";
-import { Ink } from "../ink/palette.slint";
+import { Ink, InkIcons, InkSearchField, InkCaption } from "../ink/ink.slint";
 
 export struct MultiSelectItem {
     key: string,
@@ -26,21 +25,21 @@ export struct MultiSelectItem {
     selected: bool,
 }
 
+// The checkbox of a row - drawn like `InkCheckbox`.
 component MultiSelectCheckMark inherits Rectangle {
     in property <bool> checked;
     width: 14px;
     height: 14px;
-    border-radius: 4px;
-    border-width: 1.5px;
-    border-color: root.checked ? Ink.focus : Ink.border;
-    background: root.checked ? Ink.focus : transparent;
-    if root.checked: Image {
-        source: @image-url("../icons/regular-black/check.svg");
-        width: 9px;
-        height: 9px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        colorize: white;
+    border-radius: Ink.radius-xs;
+    border-width: root.checked ? 0px : 1px;
+    border-color: Ink.text-faint;
+    background: root.checked ? Ink.primary : Ink.field;
+    Image {
+        visible: root.checked;
+        source: InkIcons.check;
+        width: 10px;
+        height: 10px;
+        colorize: Ink.on-primary;
     }
 }
 
@@ -50,8 +49,8 @@ component MultiSelectRow inherits Rectangle {
     callback activated();
 
     height: 26px;
-    border-radius: 4px;
-    background: row-ta.has-hover ? Ink.raised : transparent;
+    border-radius: Ink.radius-sm;
+    background: row-ta.has-hover ? Ink.hover : (!root.show-checkbox && root.item.selected) ? Ink.selection : transparent;
 
     row-ta := TouchArea {
         mouse-cursor: pointer;
@@ -77,8 +76,9 @@ component MultiSelectRow inherits Rectangle {
 
         Text {
             text: root.item.value;
-            font-size: 12px;
-            color: (!root.show-checkbox && root.item.selected) ? Ink.focus : Ink.text;
+            font-size: Ink.fs-md;
+            font-weight: (!root.show-checkbox && root.item.selected) ? 600 : 400;
+            color: Ink.text;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
@@ -200,58 +200,54 @@ export component MultiSelectDropdown inherits Rectangle {
     width: root.pill-width;
     height: root.pill-height;
 
+    // The label (if any) as a caption above, the choice in a field.
     pill := Rectangle {
         x: 0;
         y: 0;
         width: root.pill-width;
-        // A plain Rectangle never hugs its children's size the way a layout
-        // does, so without this `pill` (now a direct, non-layout child of
-        // `root` - see the popup-anchoring note above) would resolve to
-        // height 0. Bind it to the inner layout's own computed preferred
-        // height instead of hand-picking a pixel value, so it keeps working
-        // whether or not `label` is set.
         height: root.pill-height;
-        border-radius: Ink.radius-sm;
-        background: Ink.raised;
-        border-width: 1px;
-        border-color: Ink.border-soft;
         opacity: root.enabled ? 1.0 : 0.5;
-
-        TouchArea {
-            enabled: root.enabled;
-            mouse-cursor: root.enabled ? pointer : default;
-            clicked => { popup.show(); }
-        }
+        accessible-role: combobox;
+        accessible-label: root.label;
+        accessible-value: root.summary-text;
 
         pill-content := VerticalLayout {
-            padding-left: 10px;
-            padding-right: 10px;
-            padding-top: 5px;
-            padding-bottom: 5px;
-            spacing: 2px;
+            spacing: 3px;
 
-            if root.label != "": Text {
+            if root.label != "": InkCaption {
                 text: root.label;
-                font-size: 9px;
-                letter-spacing: 0.4px;
-                color: Ink.text-mute;
             }
 
-            HorizontalLayout {
-                Text {
-                    text: root.summary-text;
-                    font-size: 12px;
-                    color: Ink.text;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    overflow: elide;
+            field := Rectangle {
+                height: Ink.control-h;
+                border-radius: Ink.radius-sm;
+                background: pill-ta.has-hover && root.enabled ? Ink.hover : Ink.field;
+                border-width: 1px;
+                border-color: pill-ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 6px;
+                    spacing: 6px;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.summary-text;
+                        font-size: Ink.fs-md;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Image {
+                        source: InkIcons.caret-down;
+                        width: 10px;
+                        colorize: Ink.text-mute;
+                    }
                 }
 
-                Text {
-                    text: "▾";
-                    font-size: 9px;
-                    color: Ink.text-mute;
-                    vertical-alignment: center;
+                pill-ta := TouchArea {
+                    enabled: root.enabled;
+                    mouse-cursor: root.enabled ? pointer : default;
+                    clicked => { popup.show(); }
                 }
             }
         }
@@ -308,7 +304,8 @@ export component MultiSelectDropdown inherits Rectangle {
                             clicked => { root.select-all(); }
                             Text {
                                 text: "All";
-                                font-size: 10.5px;
+                                font-size: Ink.fs-sm;
+                                font-weight: 600;
                                 color: Ink.focus;
                                 vertical-alignment: center;
                             }
@@ -320,7 +317,8 @@ export component MultiSelectDropdown inherits Rectangle {
                             clicked => { root.select-none(); }
                             Text {
                                 text: "None";
-                                font-size: 10.5px;
+                                font-size: Ink.fs-sm;
+                                font-weight: 600;
                                 color: Ink.text-mute;
                                 vertical-alignment: center;
                             }
@@ -345,8 +343,8 @@ export component MultiSelectDropdown inherits Rectangle {
 
                     HorizontalLayout {
                         padding: 6px;
-                        LineEdit {
-                            placeholder-text: "Search…";
+                        InkSearchField {
+                            placeholder: "Search…";
                             text <=> root.filter-text;
                             edited(text) => { root.filter-changed(text); }
                         }

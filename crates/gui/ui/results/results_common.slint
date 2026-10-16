@@ -5,7 +5,7 @@ import { InkButton, InkButtonKind } from "../ink/ink.slint";
 import { BreadcrumbItem, ResultsRailMode, ResultsState } from "../api/results.slint";
 
 
-import { Ink } from "../ink/palette.slint";
+import { Ink, InkIcons, InkCaption } from "../ink/ink.slint";
 
 component PlaneAxis inherits HorizontalLayout {
     in property <string> axis-label;
@@ -345,6 +345,8 @@ export component LegendBar inherits VerticalLayout {
 }
 
 // -- Small labeled dropdown button (Value / Aggregate / Class filter pills) --
+// A filter's label as a caption above, its value in a field - the look
+// of `MultiSelectDropdown`; a click is for the caller to open its choices.
 export component FilterPill inherits Rectangle {
     in property <string> label;
     in property <string> value;
@@ -352,45 +354,50 @@ export component FilterPill inherits Rectangle {
     callback clicked;
 
     width: root.pill-width;
-    border-radius: Ink.radius-sm;
-    background: Ink.raised;
-    border-width: 1px;
-    border-color: Ink.border-soft;
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+    height: layout.preferred-height;
+    accessible-role: combobox;
+    accessible-label: root.label;
+    accessible-value: root.value;
+    accessible-action-default => {
+        root.clicked();
     }
 
-    VerticalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        padding-top: 5px;
-        padding-bottom: 5px;
-        spacing: 2px;
+    layout := VerticalLayout {
+        spacing: 3px;
 
-        Text {
+        if root.label != "": InkCaption {
             text: root.label;
-            font-size: 9px;
-            letter-spacing: 0.4px;
-            color: Ink.text-mute;
         }
 
-        HorizontalLayout {
-            Text {
-                text: root.value;
-                font-size: 12px;
-                color: Ink.text;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-                overflow: elide;
+        field := Rectangle {
+            height: Ink.control-h;
+            border-radius: Ink.radius-sm;
+            background: ta.has-hover ? Ink.hover : Ink.field;
+            border-width: 1px;
+            border-color: ta.has-hover ? Ink.text-faint : Ink.border;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 6px;
+                spacing: 6px;
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.value;
+                    font-size: Ink.fs-md;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Image {
+                    source: InkIcons.caret-down;
+                    width: 10px;
+                    colorize: Ink.text-mute;
+                }
             }
 
-            Text {
-                text: "▾";
-                font-size: 9px;
-                color: Ink.text-mute;
-                vertical-alignment: center;
+            ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.clicked(); }
             }
         }
     }

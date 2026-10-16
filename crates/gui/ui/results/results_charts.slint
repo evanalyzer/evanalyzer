@@ -286,21 +286,21 @@ export component ResultsChartsView inherits Rectangle {
                 cross-axis-alignment: center;
 
                 ChartTab {
-                    icon: @image-url("../icons/regular-black/chart-bar.svg");
+                    icon: @image-url("../icons/regular-white/chart-bar.svg");
                     label: "Histogram";
                     active: ResultsState.chart-kind == ResultsChartKind2.histogram;
                     clicked => { ResultsState.chart-kind = ResultsChartKind2.histogram; ResultsState.chart-kind-selected(ResultsChartKind2.histogram); }
                 }
 
                 ChartTab {
-                    icon: @image-url("../icons/regular-black/chart-scatter.svg");
+                    icon: @image-url("../icons/regular-white/chart-scatter.svg");
                     label: "Scatter";
                     active: ResultsState.chart-kind == ResultsChartKind2.scatter;
                     clicked => { ResultsState.chart-kind = ResultsChartKind2.scatter; ResultsState.chart-kind-selected(ResultsChartKind2.scatter); }
                 }
 
                 ChartTab {
-                    icon: @image-url("../icons/regular-black/grid-four.svg");
+                    icon: @image-url("../icons/regular-white/grid-four.svg");
                     label: "Boxplot";
                     active: ResultsState.chart-kind == ResultsChartKind2.boxplot;
                     clicked => { ResultsState.chart-kind = ResultsChartKind2.boxplot; ResultsState.chart-kind-selected(ResultsChartKind2.boxplot); }

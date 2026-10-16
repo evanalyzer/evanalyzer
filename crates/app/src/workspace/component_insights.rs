@@ -155,6 +155,9 @@ pub fn assigned_classes(command: &PipelineCommand) -> (Vec<ObjectClass>, bool) {
         }
         PipelineCommand::Script(s) => assigned.extend(s.classes.iter().copied()),
         PipelineCommand::LoadAnnotatedObjects(s) => any = s.keep_annotated_classes,
+        // Without a mapping, each segmentation class's objects get the
+        // project class with the same number: any class.
+        PipelineCommand::ExtractObjects(s) => any = s.class_mapping.is_empty(),
         _ => {}
     }
     assigned.retain(|c| *c != ObjectClass::Unset);

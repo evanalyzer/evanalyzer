@@ -311,7 +311,7 @@ export component AiLearningDialog inherits InkDialog {
                         HorizontalLayout {
                             spacing: 12px;
                             FormLabel {
-                                text: "Classifier Type:";
+                                text: "Classifier Type";
                             }
 
                             mode-combo := ComboBox {
@@ -323,7 +323,7 @@ export component AiLearningDialog inherits InkDialog {
                         HorizontalLayout {
                             spacing: 12px;
                             FormLabel {
-                                text: "Model Name:";
+                                text: "Model Name";
                             }
 
                             LineEdit {
@@ -374,7 +374,7 @@ export component AiLearningDialog inherits InkDialog {
                         HorizontalLayout {
                             spacing: 12px;
                             FormLabel {
-                                text: "Algorithm:";
+                                text: "Algorithm";
                             }
 
                             algorithm-combo := ComboBox {
@@ -390,7 +390,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Number of Trees:";
+                                    text: "Number of Trees";
                                 }
 
                                 SpinBox {
@@ -403,7 +403,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Max Tree Depth:";
+                                    text: "Max Tree Depth";
                                 }
 
                                 SpinBox {
@@ -423,7 +423,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Min Samples Split:";
+                                    text: "Min Samples Split";
                                 }
 
                                 SpinBox {
@@ -436,7 +436,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Min Samples Leaf:";
+                                    text: "Min Samples Leaf";
                                 }
 
                                 SpinBox {
@@ -449,7 +449,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Split Criterion:";
+                                    text: "Split Criterion";
                                 }
 
                                 ComboBox {
@@ -461,7 +461,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Features per Split:";
+                                    text: "Features per Split";
                                 }
 
                                 SpinBox {
@@ -481,7 +481,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Random Seed:";
+                                    text: "Random Seed";
                                 }
 
                                 SpinBox {
@@ -511,7 +511,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "K (Neighbors):";
+                                    text: "K (Neighbors)";
                                 }
 
                                 SpinBox {
@@ -524,7 +524,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Distance Metric:";
+                                    text: "Distance Metric";
                                 }
 
                                 distance-combo := ComboBox {
@@ -538,7 +538,7 @@ export component AiLearningDialog inherits InkDialog {
                             if distance-combo.current-index == 2: HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Minkowski Order (p):";
+                                    text: "Minkowski Order (p)";
                                 }
 
                                 SpinBox {
@@ -551,7 +551,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Search Algorithm:";
+                                    text: "Search Algorithm";
                                 }
 
                                 ComboBox {
@@ -563,7 +563,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Vote Weighting:";
+                                    text: "Vote Weighting";
                                 }
 
                                 ComboBox {
@@ -580,7 +580,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Hidden Layers:";
+                                    text: "Hidden Layers";
                                 }
 
                                 LineEdit {
@@ -592,7 +592,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Activation:";
+                                    text: "Activation";
                                 }
 
                                 ComboBox {
@@ -604,7 +604,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Max Iterations:";
+                                    text: "Max Iterations";
                                 }
 
                                 SpinBox {
@@ -617,7 +617,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Epsilon:";
+                                    text: "Epsilon";
                                 }
 
                                 LineEdit {
@@ -631,7 +631,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Learning Rate:";
+                                    text: "Learning Rate";
                                 }
 
                                 LineEdit {
@@ -645,7 +645,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Batch Size:";
+                                    text: "Batch Size";
                                 }
 
                                 SpinBox {
@@ -658,7 +658,7 @@ export component AiLearningDialog inherits InkDialog {
                             HorizontalLayout {
                                 spacing: 12px;
                                 FormLabel {
-                                    text: "Random Seed:";
+                                    text: "Random Seed";
                                 }
 
                                 SpinBox {
@@ -693,7 +693,7 @@ export component AiLearningDialog inherits InkDialog {
                         HorizontalLayout {
                             spacing: 12px;
                             FormLabel {
-                                text: "Image Channel:";
+                                text: "Image Channel";
                             }
 
                             ComboBox {
@@ -719,7 +719,7 @@ export component AiLearningDialog inherits InkDialog {
                         HorizontalLayout {
                             spacing: 8px;
                             FormLabel {
-                                text: "Quick add blur scales:";
+                                text: "Quick add blur scales";
                             }
 
                             gaussian-scales-input := LineEdit {
@@ -829,7 +829,7 @@ export component AiLearningDialog inherits InkDialog {
                         HorizontalLayout {
                             spacing: 12px;
                             FormLabel {
-                                text: "Validation Split:";
+                                text: "Validation Split";
                             }
 
                             LineEdit {

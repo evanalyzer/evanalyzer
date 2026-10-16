@@ -1272,6 +1272,10 @@ impl PipelinesController {
                 let manager = manager.clone();
                 move |step_idx, name| manager.toggle_pin(step_idx, &name)
             });
+            ui.global::<PipelinesPanelState>().on_toggle_pin_section({
+                let manager = manager.clone();
+                move |step_idx, section| manager.toggle_pin_section(step_idx, &section)
+            });
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_toggle_section(move |step_idx, section| {
@@ -2541,6 +2545,13 @@ impl PipelinesController {
                                 }
                             }
                         }
+                        // The Tuning panel's copy, if pinned.
+                        patch_tuned_value(
+                            &ui.global::<PipelinesPanelState>(),
+                            step_idx,
+                            &param_name,
+                            &new_param_value,
+                        );
                         model.set_row_data(step_idx as usize, cmd);
                     } else {
                         // Some fields (e.g. a "function" dropdown backed by a Rust enum whose
@@ -2932,6 +2943,48 @@ impl PipelinesController {
             let mut pins = self.pins.lock().expect("Poisoned");
             if !pins.remove(&key) {
                 pins.insert(key);
+            }
+        }
+        self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+    }
+
+    /// Pins the settings of `section` of the step at `step_idx` - a row of
+    /// its table - or, if all are pinned, unpins them.
+    pub(crate) fn toggle_pin_section(self: &Arc<Self>, step_idx: i32, section: &str) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<PipelinesPanelState>();
+        let pipeline_id = state.get_active_pipeline_id() as u32;
+        let Some(card) = state.get_active_commands().row_data(step_idx as usize) else {
+            return;
+        };
+        let names: Vec<String> = card
+            .card_tables
+            .iter()
+            .flat_map(|table| table.rows.iter().collect::<Vec<_>>())
+            .filter(|row| row.name == section)
+            .flat_map(|row| {
+                row.cells
+                    .iter()
+                    .map(|cell| cell.name.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        {
+            let mut pins = self.pins.lock().expect("Poisoned");
+            let key = |name: &String| (pipeline_id, card.step_id.to_string(), name.clone());
+            if names.iter().all(|name| pins.contains(&key(name))) {
+                for name in &names {
+                    pins.remove(&key(name));
+                }
+            } else {
+                for name in &names {
+                    pins.insert(key(name));
+                }
             }
         }
         self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
@@ -5020,6 +5073,51 @@ impl PipelinesController {
                             })
                             .cloned()
                             .collect();
+                        // Pinned settings of list entries: "thresholds.0.min".
+                        let pinned_leaves: Vec<CommandParameter> = d
+                            .parameters
+                            .iter()
+                            .flat_map(|p| {
+                                p.groups.iter().enumerate().flat_map(move |(entry, group)| {
+                                    group.iter().map(move |lp| (p, entry, lp))
+                                })
+                            })
+                            .filter(|(p, entry, lp)| {
+                                pins.contains(&(
+                                    pid as u32,
+                                    step_id.to_string(),
+                                    format!("{}.{entry}.{}", p.name, lp.name),
+                                ))
+                            })
+                            .map(|(p, entry, lp)| CommandParameter {
+                                name: format!("{}.{entry}.{}", p.name, lp.name).into(),
+                                display_name: format!(
+                                    "{} #{} · {}",
+                                    p.display_name,
+                                    entry + 1,
+                                    lp.display_name
+                                )
+                                .into(),
+                                description: lp.description.clone().into(),
+                                value: lp.value.clone().into(),
+                                param_type: map_cfg_param_type(lp.param_type.clone()),
+                                options: ModelRc::new(VecModel::from(
+                                    with_component_flags(
+                                        &lp.param_type,
+                                        &lp.value,
+                                        lp.options.clone(),
+                                    )
+                                    .into_iter()
+                                    .map(SharedString::from)
+                                    .collect::<Vec<_>>(),
+                                )),
+                                min: lp.min,
+                                max: lp.max,
+                                step: lp.step,
+                                pinned: true,
+                                ..Default::default()
+                            })
+                            .collect();
                         let (advanced_defs, basic_defs): (Vec<ParameterDef>, Vec<ParameterDef>) =
                             filter_for_display(d.parameters, show_advanced)
                                 .into_iter()
@@ -5082,6 +5180,11 @@ impl PipelinesController {
                                                     ),
                                                 };
                                                 LeafParam {
+                                                    pinned: pins.contains(&(
+                                                        pid as u32,
+                                                        step_id.to_string(),
+                                                        format!("{p_name}.{entry}.{}", lp.name),
+                                                    )),
                                                     exposed: leaf_exposed,
                                                     name: lp.name.into(),
                                                     display_name: lp.display_name.into(),
@@ -5168,13 +5271,13 @@ impl PipelinesController {
                                 sections
                             });
                         let params = in_sections(basic_defs);
-                        for def in pinned_defs {
+                        for param in pinned_defs.into_iter().map(convert).chain(pinned_leaves) {
                             tuned.push(TunedSetting {
                                 step: d.idx,
                                 step_id: step_id.clone(),
                                 step_name: d.name.clone().into(),
                                 category: d.category,
-                                param: convert(def),
+                                param,
                             });
                         }
                         let advanced_params = if show_advanced {
@@ -5346,6 +5449,21 @@ fn patch_card_copies(card: &SlintPipelineCommand, changed: &CommandParameter) {
     for table in card.card_tables.iter() {
         for row in table.rows.iter() {
             patch(row.cells);
+        }
+    }
+}
+
+/// The Tuning panel's copy of the setting `name` of the step at `step`
+/// takes `value` (a list entry's setting: "thresholds.0.min").
+fn patch_tuned_value(state: &PipelinesPanelState<'_>, step: i32, name: &str, value: &str) {
+    let tuned = state.get_tuned_settings();
+    for k in 0..tuned.row_count() {
+        if let Some(mut pin) = tuned.row_data(k)
+            && pin.step == step
+            && pin.param.name == name
+        {
+            pin.param.value = value.into();
+            tuned.set_row_data(k, pin);
         }
     }
 }
@@ -8292,7 +8410,7 @@ mod tests {
     }
 
     /// A channel and a single class are picked with the same field (label, swatch
-    /// and name, "↓") - only a class list has its own (chips).
+    /// and name, a caret) - only a class list has its own (chips).
     #[test]
     fn channel_and_class_pickers_share_one_design() {
         use i_slint_backend_testing::ElementHandle;
@@ -8309,7 +8427,11 @@ mod tests {
             commands.set_row_data(index, card);
         }
         let count = |label: &str| ElementHandle::find_by_accessible_label(&ui, label).count();
-        assert_eq!(count("↓"), 2, "the channel and the output class field");
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(&ui, "PickerField").count(),
+            2,
+            "the channel and the output class field"
+        );
         assert_eq!(count("▾"), 1, "only the input class list");
     }
 
@@ -11264,6 +11386,96 @@ mod tests {
             .unwrap();
         assert_eq!(table.problems.row_count(), 0);
         assert!(table.rows.iter().all(|r| r.problem == 0));
+    }
+
+    /// A table row's pin pins its section's settings into the Tuning panel;
+    /// again unpins them.
+    #[test]
+    fn a_table_rows_pin_pins_its_sections_settings() {
+        let (ui, _ui_state, _controller) = with_spots(2);
+        let panel = ui.global::<PipelinesPanelState>();
+        let row = |i: usize| {
+            panel
+                .get_active_commands()
+                .row_data(0)
+                .unwrap()
+                .card_tables
+                .row_data(0)
+                .unwrap()
+                .rows
+                .row_data(i)
+                .unwrap()
+        };
+
+        panel.invoke_toggle_pin_section(0, "Bead".into());
+        drain_ui_queue();
+        assert!(row(1).cells.iter().all(|cell| cell.pinned));
+        assert!(row(0).cells.iter().all(|cell| !cell.pinned));
+        let tuned = panel.get_tuned_settings();
+        assert_eq!(tuned.row_count(), row(1).cells.row_count());
+
+        panel.invoke_toggle_pin_section(0, "Bead".into());
+        drain_ui_queue();
+        assert!(row(1).cells.iter().all(|cell| !cell.pinned));
+        assert_eq!(panel.get_tuned_settings().row_count(), 0);
+    }
+
+    /// A setting of a list entry can be pinned: marked in the entry, in the
+    /// Tuning panel as "List #1 · Setting", and changed there.
+    #[test]
+    fn a_list_entrys_setting_can_be_pinned_and_changed_in_the_tuning_panel() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Threshold")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        if ui_param(&ui, 0, "thresholds").group_items.row_count() == 0 {
+            panel.invoke_add_group_item(0, "thresholds".into());
+            drain_ui_queue();
+        }
+        let leaves = || {
+            ui_param(&ui, 0, "thresholds")
+                .group_items
+                .row_data(0)
+                .unwrap()
+                .fields
+                .iter()
+                .collect::<Vec<_>>()
+        };
+        let leaf = leaves()
+            .into_iter()
+            .find(|l| l.param_type == ParamType::Spinner || l.param_type == ParamType::Number)
+            .expect("a number in the entry");
+        let name = format!("thresholds.0.{}", leaf.name);
+
+        panel.invoke_toggle_pin(0, name.clone().into());
+        drain_ui_queue();
+        assert!(
+            leaves()
+                .iter()
+                .find(|l| l.name == leaf.name)
+                .unwrap()
+                .pinned
+        );
+        let pin = panel
+            .get_tuned_settings()
+            .row_data(0)
+            .expect("in the Tuning panel");
+        assert_eq!(pin.param.name, name);
+        assert!(
+            pin.param.display_name.contains("#1"),
+            "{}",
+            pin.param.display_name
+        );
+
+        panel.invoke_param_changed(pin.step, pin.param.name.clone(), "42".into());
+        drain_ui_queue();
+
+        assert_eq!(
+            leaves().iter().find(|l| l.name == leaf.name).unwrap().value,
+            "42"
+        );
+        assert_eq!(
+            panel.get_tuned_settings().row_data(0).unwrap().param.value,
+            "42"
+        );
     }
 
     /// An expanded card draws its table: a row per section, side by side
