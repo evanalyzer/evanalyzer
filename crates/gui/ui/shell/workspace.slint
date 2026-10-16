@@ -8,7 +8,8 @@ import { LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { GlobalAppState, DialogType } from "../api/state.slint";
 import { Viewport } from "../editor/viewport.slint";
 import { PreviewRendering } from "../dialogs/preview_rendering_dialog.slint";
-import { PipelinesPanel } from "../editor/pipelines_panel.slint";
+import { PipelinesPanel, TuningPanel } from "../editor/pipelines_panel.slint";
+import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ImagesListPanel } from "../editor/images_list_panel.slint";
 import { ImageMetaPanel } from "../editor/image_meta_panel.slint";
 import { ResultsListPanel } from "../editor/results_list_panel.slint";
@@ -17,6 +18,8 @@ import { ObjectListPanel } from "../editor/object_list_panel.slint";
 import { ImageControlPanel } from "../editor/image_control_panel.slint";
 import { AnnotateBar } from "annotate_bar.slint";
 import { ResultsView } from "../results/results_view.slint";
+import { AnalysisCard } from "../dialogs/pipeline_running_dialog.slint";
+import { PipelineRunningState } from "../api/pipeline_running.slint";
 
 // Gap between the panels and the edges.
 global Float {
@@ -76,6 +79,20 @@ export component Workspace inherits Rectangle {
     in property <image> object_image;
 
     property <bool> on-image: LayoutState.mode != WorkspaceMode.results;
+
+    // A newly pinned setting shows the Tuning panel again.
+    property <int> tuned-count: PipelinesPanelState.tuned-settings.length;
+    changed tuned-count => {
+        LayoutState.tuning-hidden = false;
+    }
+
+    // A new analysis shows its card again.
+    property <bool> run-active: PipelineRunningState.active;
+    changed run-active => {
+        if self.run-active {
+            LayoutState.analysis-card-hidden = false;
+        }
+    }
 
     background: Ink.viewport;
     clip: true;
@@ -182,6 +199,28 @@ export component Workspace inherits Rectangle {
                 vertical-stretch: 1;
             }
         }
+    }
+
+    // -- The pinned settings, next to the steps --
+    if LayoutState.mode == WorkspaceMode.pipelines && PipelinesPanelState.tuned-settings.length > 0 && !LayoutState.tuning-hidden: InkPanel {
+        x: Float.left-w + 2 * Float.gap;
+        width: min(420px, parent.width - Float.left-w - Float.right-w - 4 * Float.gap);
+        // As high as its settings (at most what the image leaves).
+        height: min(self.preferred-height, parent.height - 2 * Float.gap);
+        y: parent.height - self.height - Float.gap;
+        TuningPanel {
+            close => {
+                LayoutState.tuning-hidden = true;
+            }
+        }
+    }
+
+    // -- A running analysis, while the window stays usable --
+    // Bottom right, beside the right-hand panels: the Tuning panel and the
+    // steps keep their place on the left.
+    if PipelineRunningState.active && !LayoutState.analysis-card-hidden && GlobalAppState.active_dialog != DialogType.pipeline-running: AnalysisCard {
+        x: parent.width - self.width - (root.on-image ? Float.right-w + 2 * Float.gap : Float.gap);
+        y: parent.height - self.height - Float.gap;
     }
 
     // -- Top --

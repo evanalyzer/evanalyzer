@@ -10,7 +10,7 @@ import { ObjectItemDataSlint, ObjectListState } from "api/object_list.slint";
 import { CommandAuthor, CommandDef, CommandPickerState, DefaultParamPreview } from "api/command_selection.slint";
 import { PipelineDeleteConfirmState, PipelineEditState } from "api/pipeline_edit.slint";
 import { ComponentBindingRow, ComponentClassRow, ComponentEditChoiceState, ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState } from "api/create_component.slint";
-import { PipelineRunningState } from "api/pipeline_running.slint";
+import { PipelineRunningState, PreviewRunState } from "api/pipeline_running.slint";
 import { TemplateMetaSlint, TemplateMetaState } from "api/template_meta.slint";
 import { ProjectAuthor, ProjectTemplateDef, ProjectTemplateState } from "api/project_template.slint";
 import { ComponentClassesState, PipelinesPanelState } from "api/pipelines.slint";
@@ -28,9 +28,10 @@ import { GlobalShortcuts, DialogShortcuts } from "shortcuts.slint";
 import { AboutDialog } from "dialogs/about.slint";
 import { ShortcutsHelpDialog } from "dialogs/shortcuts_help_dialog.slint";
 
-import { Theme } from "style.slint";
 import { Appearance } from "api/appearance.slint";
 import { LayoutState, WorkspaceMode } from "api/layout.slint";
+import { CommandPaletteState, PaletteEntry, PaletteKind } from "api/command_palette.slint";
+import { CommandPalette } from "shell/command_palette.slint";
 import { TopBar } from "shell/top_bar.slint";
 import { BottomBar } from "shell/bottom_bar.slint";
 import { Workspace } from "shell/workspace.slint";
@@ -131,6 +132,7 @@ export {
     ComponentBindingRow,
     PipelineDeleteConfirmState,
     PipelineRunningState,
+    PreviewRunState,
     TemplateMetaState,
     TemplateMetaSlint,
     ProjectTemplateState,
@@ -148,6 +150,9 @@ export {
     Appearance,
     LayoutState,
     WorkspaceMode,
+    CommandPaletteState,
+    PaletteEntry,
+    PaletteKind,
     Ink,
     InkScheme,
     AiLearningState,
@@ -179,7 +184,7 @@ export component AppWindow inherits Window {
     preferred-height: 900px;
     min-width: 1500px;
     min-height: 900px;
-    background: Theme.bg;
+    background: Ink.ground;
     default-font-family: Ink.font-sans;
 
     callback apply_math();
@@ -394,6 +399,11 @@ export component AppWindow inherits Window {
                 height: 100%;
             }
         }
+    }
+
+    if CommandPaletteState.open: CommandPalette {
+        width: 100%;
+        height: 100%;
     }
 
     if ExportDialogState.active: ExportDialog {

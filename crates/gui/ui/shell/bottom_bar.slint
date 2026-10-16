@@ -8,6 +8,8 @@ import { ConnectionState, ImagePixelInfo } from "../api/state.slint";
 import { ViewportObjectState, ViewportState } from "../api/viewport.slint";
 import { ClassificationState } from "../api/classification.slint";
 import { ResultsState } from "../api/results.slint";
+import { PipelineRunningState } from "../api/pipeline_running.slint";
+import { AnalysisText } from "../dialogs/pipeline_running_dialog.slint";
 
 export component BottomBar inherits Rectangle {
     property <bool> secure: ConnectionState.encrypted && ConnectionState.verified;
@@ -62,6 +64,17 @@ export component BottomBar inherits Rectangle {
             alignment: center;
             HorizontalLayout {
                 spacing: 2px;
+                // A running analysis: a click shows / puts away its card.
+                if PipelineRunningState.active: InkStatusItem {
+                    icon: PipelineRunningState.done ? (PipelineRunningState.has-error ? InkIcons.error : InkIcons.check) : InkIcons.busy;
+                    tone: AnalysisText.tone();
+                    text: PipelineRunningState.done ? "Analysis finished" : "Analysis " + AnalysisText.percent();
+                    clickable: true;
+                    clicked => {
+                        LayoutState.analysis-card-hidden = !LayoutState.analysis-card-hidden;
+                    }
+                }
+
                 // Results: the database shown.
                 if LayoutState.mode == WorkspaceMode.results: InkStatusItem {
                     icon: ResultsState.loading ? InkIcons.busy : InkIcons.table;

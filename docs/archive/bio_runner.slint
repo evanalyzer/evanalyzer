@@ -1,4 +1,13 @@
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
+
+// The game: a warm paper look, the same in every color scheme.
+global GameColors {
+    out property <color> game-paper: #F0EDD6;
+    out property <color> game-ink: #2a2a2a;
+    out property <color> game-title: #C8C0A4;
+    out property <color> game-subtitle: #C0BAA0;
+    out property <color> game-green: #4aaa55;
+}
 
 component LiverCell inherits Rectangle {
     in property <color> ink;
@@ -432,8 +441,8 @@ component ExtracellularVesicle inherits Rectangle {
 }
 
 export component BioRunner inherits Rectangle {
-    private property <color> ink: Theme.game-ink;
-    private property <color> paper: Theme.game-paper;
+    private property <color> ink: GameColors.game-ink;
+    private property <color> paper: GameColors.game-paper;
 
     background: paper;
     border-radius: 6px;
@@ -640,7 +649,7 @@ export component BioRunner inherits Rectangle {
         font-family: "DejaVu Sans Mono";
         font-size: 22px;
         font-weight: 800;
-        color: Theme.game-title;
+        color: GameColors.game-title;
         x: 0px;
         y: 6px;
         width: parent.width;
@@ -657,7 +666,7 @@ export component BioRunner inherits Rectangle {
         font-family: "DejaVu Sans Mono";
         font-size: 10px;
         font-weight: 400;
-        color: Theme.game-subtitle;
+        color: GameColors.game-subtitle;
         x: 0px;
         y: 33px;
         width: parent.width;
@@ -903,7 +912,7 @@ export component BioRunner inherits Rectangle {
         text: "🦠 " + root.cancer-score;
         font-size: 11px;
         font-weight: 700;
-        color: Theme.game-green;
+        color: GameColors.game-green;
         x: parent.width - 54px;
         y: 4px;
     }
@@ -915,7 +924,7 @@ export component BioRunner inherits Rectangle {
         y: 0px;
         width: parent.width;
         height: parent.height;
-        background: Theme.game-paper.with-alpha(0.88);
+        background: GameColors.game-paper.with-alpha(0.88);
 
         VerticalLayout {
             alignment: center;
@@ -934,7 +943,7 @@ export component BioRunner inherits Rectangle {
                 text: "Cancer cells destroyed: " + root.cancer-score;
                 font-size: 11px;
                 font-weight: 600;
-                color: Theme.game-green;
+                color: GameColors.game-green;
                 horizontal-alignment: center;
             }
 

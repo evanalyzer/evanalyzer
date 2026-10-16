@@ -1,14 +1,12 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { AnalysisRunningCloseState, DialogType, GlobalAppState } from "../api/state.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 
-import { AppButton } from "../components/app_button.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 // Asked when the window is closed while an analysis runs.
-export component AnalysisRunningCloseDialog inherits Dialog {
+export component AnalysisRunningCloseDialog inherits InkDialog {
     title: "Analysis running";
-    dialog-width: 480px;
-    tone: DialogTone.warning;
+    card-width: 480px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
         AnalysisRunningCloseState.back();
@@ -23,13 +21,13 @@ export component AnalysisRunningCloseDialog inherits Dialog {
                     : "An analysis is running on the server. It can keep running without this window - EVAnalyzer shows it again the next time you connect.")
                 : "An analysis is running on this computer. Closing EVAnalyzer stops it.";
             wrap: word-wrap;
-            color: Theme.text;
+            color: Ink.text;
             font-size: 13px;
         }
 
-        DialogFooter {
+        InkDialogFooter {
 
-            AppButton {
+            InkButton {
                 text: "Back";
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
@@ -37,16 +35,16 @@ export component AnalysisRunningCloseDialog inherits Dialog {
                 }
             }
 
-            AppButton {
+            InkButton {
+                kind: InkButtonKind.danger;
                 text: AnalysisRunningCloseState.remote ? "Cancel analysis" : "Stop analysis and close";
-                danger: true;
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
                     AnalysisRunningCloseState.cancel_analysis();
                 }
             }
 
-            if AnalysisRunningCloseState.remote: AppButton {
+            if AnalysisRunningCloseState.remote: InkButton {
                 text: AnalysisRunningCloseState.disconnecting ? "Keep running and disconnect" : "Keep running on server";
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;

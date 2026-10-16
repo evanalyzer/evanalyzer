@@ -6,7 +6,7 @@ import { ImageMetaData } from "../api/image_meta.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { ComboBox } from "../ink/std_compat.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 import { PickerField, PickerRow, SwatchName } from "picker_field.slint";
 
@@ -62,12 +62,12 @@ export component ChannelPicker inherits Rectangle {
         height: min(root.channel-count, root.max-visible-rows) * root.row-height + 8px;
 
         Rectangle {
-            background: Theme.panel;
+            background: Ink.panel;
             border-width: 1px;
-            border-color: Theme.border;
+            border-color: Ink.border;
             border-radius: 6px;
             drop-shadow-blur: 12px;
-            drop-shadow-color: Theme.shadow;
+            drop-shadow-color: Ink.shadow;
             clip: true;
 
             ScrollView {

@@ -23,6 +23,7 @@
 // way to enumerate "every branch below" automatically) - it only stays
 // accurate if every new shortcut updates both places.
 import { LayoutState, WorkspaceMode } from "api/layout.slint";
+import { CommandPaletteState } from "api/command_palette.slint";
 import { AnalysisRunningCloseState, ConnectState, DialogType, GlobalAppState, UnsavedChangesState } from "api/state.slint";
 import { ToolbarState } from "api/toolbar.slint";
 import { ToolState, ViewportObjectState } from "api/viewport.slint";
@@ -71,6 +72,12 @@ export component GlobalShortcuts inherits FocusScope {
     key-pressed(e) => {
         if (GlobalAppState.active_dialog != DialogType.none) {
             return reject;
+        }
+
+        // -- The command palette --
+        if (e.modifiers.control && e.text == "k") {
+            CommandPaletteState.open = true;
+            return accept;
         }
 
         // -- File --

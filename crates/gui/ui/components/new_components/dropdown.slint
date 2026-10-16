@@ -6,7 +6,7 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { LineEdit } from "../../ink/std_compat.slint";
-import { Theme } from "../../style.slint";
+import { Ink } from "../../ink/palette.slint";
 
 export component DropdownField inherits Rectangle {
     in property <string> field-label;
@@ -19,10 +19,10 @@ export component DropdownField inherits Rectangle {
 
     width: root.field-width;
     height: root.field-label == "" ? 34px : 40px;
-    border-radius: Theme.radius-sm;
-    background: Theme.raised;
+    border-radius: Ink.radius-sm;
+    background: Ink.raised;
     border-width: 1px;
-    border-color: root.open ? Theme.accent : Theme.border-soft;
+    border-color: root.open ? Ink.focus : Ink.border-soft;
     animate border-color { duration: 80ms; }
 
     ta := TouchArea {
@@ -36,17 +36,17 @@ export component DropdownField inherits Rectangle {
         padding-top: 4px;
         padding-bottom: 5px;
         spacing: 2px;
-        Text { text: root.field-label; font-size: 9px; letter-spacing: 0.4px; color: Theme.text-mute; }
+        Text { text: root.field-label; font-size: 9px; letter-spacing: 0.4px; color: Ink.text-mute; }
         HorizontalLayout {
-            Text { text: root.value; font-size: 12px; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-            Text { text: "▾"; font-size: 9px; color: Theme.text-mute; vertical-alignment: center; }
+            Text { text: root.value; font-size: 12px; color: Ink.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            Text { text: "▾"; font-size: 9px; color: Ink.text-mute; vertical-alignment: center; }
         }
     }
     if root.field-label == "": HorizontalLayout {
         padding-left: 10px;
         padding-right: 10px;
-        Text { text: root.value; font-size: 12px; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-        Text { text: "▾"; font-size: 9px; color: Theme.text-mute; vertical-alignment: center; }
+        Text { text: root.value; font-size: 12px; color: Ink.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        Text { text: "▾"; font-size: 9px; color: Ink.text-mute; vertical-alignment: center; }
     }
 
     popup := PopupWindow {
@@ -56,11 +56,11 @@ export component DropdownField inherits Rectangle {
         Rectangle {
             width: Math.max(root.field-width, 180px);
             height: Math.min(root.options.length * 30px + (root.searchable ? 40px : 8px), 320px);
-            background: Theme.panel;
+            background: Ink.panel;
             border-width: 1px;
-            border-color: Theme.border;
-            border-radius: Theme.radius-md;
-            drop-shadow-color: Theme.shadow;
+            border-color: Ink.border;
+            border-radius: Ink.radius-md;
+            drop-shadow-color: Ink.shadow;
             drop-shadow-blur: 24px;
             drop-shadow-offset-y: 8px;
             clip: true;
@@ -74,7 +74,7 @@ export component DropdownField inherits Rectangle {
                         padding: 8px;
                         LineEdit { placeholder-text: "Search…"; font-size: 11.5px; }
                     }
-                    Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.border-soft; }
+                    Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Ink.border-soft; }
                 }
 
                 ScrollView {
@@ -89,15 +89,15 @@ export component DropdownField inherits Rectangle {
                             clicked => { root.option-selected(opt); root.open = false; popup.close(); }
 
                             Rectangle {
-                                border-radius: Theme.radius-sm;
-                                background: opt == root.value ? Theme.accent-dim : (opt-ta.has-hover ? Theme.raised : transparent);
+                                border-radius: Ink.radius-sm;
+                                background: opt == root.value ? Ink.selection : (opt-ta.has-hover ? Ink.raised : transparent);
                                 HorizontalLayout {
                                     padding-left: 10px;
                                     padding-right: 10px;
                                     Text {
                                         text: opt;
                                         font-size: 12px;
-                                        color: opt == root.value ? Theme.text : Theme.text-dim;
+                                        color: opt == root.value ? Ink.text : Ink.text-dim;
                                         vertical-alignment: center;
                                         horizontal-stretch: 1;
                                     }

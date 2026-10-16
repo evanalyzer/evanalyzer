@@ -15,8 +15,15 @@ export global LayoutState {
     /// Pinned: it stays open when another panel opens.
     in-out property <bool> image-pinned: false;
 
+    /// The Tuning panel (the pinned settings) is put away.
+    in-out property <bool> tuning-hidden: false;
+
     /// The images as a plate of wells, not as a list.
     in-out property <bool> images-as-plate: false;
+
+    /// The running analysis' card is put away (the bottom bar still shows
+    /// its progress; a click there shows the card again).
+    in-out property <bool> analysis-card-hidden: false;
 
     /// Annotate mode: the tool bar for drawing objects is shown.
     in-out property <bool> annotate: false;

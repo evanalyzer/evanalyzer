@@ -1,7 +1,7 @@
 import { GlobalAppState, HistogramState } from "../api/state.slint";
 import { MarkerData, ToolState, ViewportObjectState, ViewportState } from "../api/viewport.slint";
 import { ClassificationState } from "../api/classification.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 import { ScaleBar } from "viewport_scalebar.slint";
 import { Navigator } from "viewport_navigator.slint";
@@ -19,7 +19,7 @@ export component Viewport inherits Rectangle {
     in property <length> inset-right: 0px;
     property <duration> last-click-time: 0ms;
 
-    background: Theme.bg-viewport;
+    background: Ink.viewport;
     clip: true;
 
     // Image pixel coordinates -> viewport coordinates, with the live
@@ -177,7 +177,7 @@ export component Viewport inherits Rectangle {
                 y: 1px;
                 text: marker.label;
                 font-size: 10px;
-                font-family: Theme.font-mono;
+                font-family: Ink.font-mono;
                 color: #000000;
             }
 
@@ -186,7 +186,7 @@ export component Viewport inherits Rectangle {
                 y: 0px;
                 text: marker.label;
                 font-size: 10px;
-                font-family: Theme.font-mono;
+                font-family: Ink.font-mono;
                 color: #ffff00;
             }
         }
@@ -275,7 +275,7 @@ export component Viewport inherits Rectangle {
             height: parent.height;
             visible: ViewportObjectState.poly_idx > 0;
             Path {
-                stroke: Theme.accent;
+                stroke: Ink.focus;
                 viewbox-width: parent.width / 1px;
                 viewbox-height: parent.height / 1px;
                 stroke-width: 2px;

@@ -106,6 +106,12 @@ pub struct ViewportMemorySettings {
     /// Empty both caches when an analysis starts on this computer, so it
     /// gets that RAM; they fill up again as the viewport is used.
     pub free_caches_on_analysis: bool,
+
+    /// While an analysis runs, pipelines can still be edited and the image
+    /// viewed and previewed - its progress is a card over the image. Off: a
+    /// dialog blocks the window until the analysis is done (for a computer
+    /// whose RAM the analysis needs all of).
+    pub edit_during_analysis: bool,
 }
 
 impl ViewportMemorySettings {
@@ -157,6 +163,7 @@ impl Default for ViewportMemorySettings {
             tile_cache_mb: Self::DEFAULT_TILE_CACHE_MB,
             overview_cache_mb: Self::DEFAULT_OVERVIEW_CACHE_MB,
             free_caches_on_analysis: true,
+            edit_during_analysis: true,
         }
     }
 }

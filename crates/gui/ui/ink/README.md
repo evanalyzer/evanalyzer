@@ -37,5 +37,12 @@ So in Ink:
 
 ## Schemes
 
-`Ink.scheme` is `light`, `dark` or `dim`. Every color is `Ink.<token>`;
-a new scheme is a new `InkPalette` value in `palette.slint`.
+`Ink.scheme` is `light`, `dark` or `dim`. Every color is `Ink.<token>`
+(`Ink.text`, `Ink.panel` …), defined in `palette.slint` with its value per
+scheme: `root.pick(light, dark, dim)`. A new scheme is one more value per
+token.
+
+Keep each token a property bound to plain values - not a field of a
+palette struct: the compiler inlines a global's bindings into every read,
+and with a struct that meant building all 37 colors at each of the ~1300
+reads (14 MB more generated code, and the work at runtime).

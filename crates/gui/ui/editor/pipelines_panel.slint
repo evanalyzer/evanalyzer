@@ -5,12 +5,10 @@
 import { ClassItemData, ClassificationState } from "../api/classification.slint";
 import { PipelineFocusState } from "../api/pipeline_focus.slint";
 import { ScriptEditorState, ScriptFont } from "../api/script_editor.slint";
-import { CardTable, Cat, ClassHelper, CommandParameter, ComponentClassesState, LeafParam, ParamType, Pipeline, PipelineCommand, PipelinesPanelState, ProblemItem, SectionView, Status, StepCategory } from "../api/pipelines.slint";
+import { CardTable, Cat, ClassHelper, CommandParameter, ComponentClassesState, LeafParam, ParamType, Pipeline, PipelineCommand, PipelinesPanelState, ProblemItem, SectionView, Status, StepCategory, TunedSetting } from "../api/pipelines.slint";
 
-import { Dialog } from "../components/new_components/dialog.slint";
 import { ScrollView } from "std-widgets.slint";
 import { LineEdit, ComboBox, CheckBox } from "../ink/std_compat.slint";
-import { Theme } from "../style.slint";
 import {
     ImageAddressPicker,
     ChannelPicker,
@@ -18,7 +16,8 @@ import {
 import { PickerField, PickerRow, SwatchName } from "../components/picker_field.slint";
 
 import { FocusModeButton } from "pipeline_focus.slint";
-import { Ink, InkIcons, InkIconButton, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkTextField, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
+import { CommandPaletteState } from "../api/command_palette.slint";
+import { Ink, InkIcons, InkIconButton, InkPanelHead, InkKbd, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkTextField, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkDialog } from "../ink/ink.slint";
 
 // ----------------------------------------------------------
 // Data model
@@ -33,21 +32,21 @@ component GhostIconBtn inherits Rectangle {
         in property <length> sz: 22px;
         in property <length> icon-sz: 12px;
         in property <bool> enabled: true;
-        in property <color> tint: Theme.text-dim;
+        in property <color> tint: Ink.text-dim;
         callback clicked;
 
         width: sz;
         height: sz;
         border-radius: 4px;
         opacity: root.enabled ? 1.0 : 0.4;
-        background: ta.has-hover && root.enabled ? Theme.raised : transparent;
+        background: ta.has-hover && root.enabled ? Ink.raised : transparent;
         animate background { duration: 100ms; }
 
         Image {
             source: root.icon;
             width: root.icon-sz;
             height: root.icon-sz;
-            colorize: ta.has-hover && root.enabled ? Theme.text : root.tint;
+            colorize: ta.has-hover && root.enabled ? Ink.text : root.tint;
         }
 
         ta := TouchArea {
@@ -67,9 +66,9 @@ component SquareCheck inherits Rectangle {
         width: 14px;
         height: 14px;
         border-radius: 3px;
-        background: root.checked ? Theme.accent : transparent;
+        background: root.checked ? Ink.focus : transparent;
         border-width: root.checked ? 0px : 1.5px;
-        border-color: Theme.border;
+        border-color: Ink.border;
         animate background { duration: 100ms; }
 
         if root.checked: Image {
@@ -121,7 +120,7 @@ component AdvancedRow inherits Rectangle {
                             source: root.expanded ? @image-url("../icons/regular-white/caret-down.svg") : @image-url("../icons/regular-white/caret-right.svg");
                             width: 10px;
                             height: 10px;
-                            colorize: row-ta.has-hover ? Theme.text : Theme.text-dim;
+                            colorize: row-ta.has-hover ? Ink.text : Ink.text-dim;
                         }
                     }
 
@@ -129,7 +128,7 @@ component AdvancedRow inherits Rectangle {
                         text: "Advanced (\{root.count})";
                         font-size: 11px;
                         font-weight: 600;
-                        color: row-ta.has-hover ? Theme.text : Theme.text-dim;
+                        color: row-ta.has-hover ? Ink.text : Ink.text-dim;
                         vertical-alignment: center;
                         overflow: elide;
                     }
@@ -137,7 +136,7 @@ component AdvancedRow inherits Rectangle {
                     if root.changed-count > 0: Text {
                         text: "· \{root.changed-count} changed";
                         font-size: 11px;
-                        color: Theme.warn;
+                        color: Ink.warn;
                         vertical-alignment: center;
                         overflow: elide;
                     }
@@ -160,7 +159,7 @@ component AdvancedRow inherits Rectangle {
                 Text {
                     text: "Always";
                     font-size: 10px;
-                    color: Theme.text-mute;
+                    color: Ink.text-mute;
                     vertical-alignment: center;
                     overflow: elide;
                 }
@@ -353,12 +352,12 @@ component ClassDropdown inherits Rectangle {
             height: 300px;
 
             Rectangle {
-                background: Theme.panel;
+                background: Ink.panel;
                 border-width: 1px;
-                border-color: Theme.border;
+                border-color: Ink.border;
                 border-radius: 6px;
                 drop-shadow-blur: 12px;
-                drop-shadow-color: Theme.shadow;
+                drop-shadow-color: Ink.shadow;
                 clip: true;
 
                 ScrollView {
@@ -373,7 +372,7 @@ component ClassDropdown inherits Rectangle {
                         PickerRow {
                             label: "Unset";
                             mono: false;
-                            label-color: Theme.text-mute;
+                            label-color: Ink.text-mute;
                             selected: root.value == "-1";
                             clicked => {
                                 root.pick("-1");
@@ -400,7 +399,7 @@ component ClassDropdown inherits Rectangle {
 
                         Rectangle {
                             height: 1px;
-                            background: Theme.border-soft;
+                            background: Ink.border-soft;
                         }
 
                         // The opened component's own classes.
@@ -408,7 +407,7 @@ component ClassDropdown inherits Rectangle {
                             height: root.component-classes && !root.is-seg ? 28px : 0px;
                             visible: root.component-classes && !root.is-seg;
                             label: "◆ L\{cls.id}";
-                            label-color: Theme.cat-component;
+                            label-color: Ink.cat-component;
                             selected: root.value == "L\{cls.id}";
                             clicked => {
                                 root.pick("L\{cls.id}");
@@ -421,7 +420,7 @@ component ClassDropdown inherits Rectangle {
 
                         if root.component-classes && !root.is-seg && ComponentClassesState.classes.length > 0: Rectangle {
                             height: 1px;
-                            background: Theme.border-soft;
+                            background: Ink.border-soft;
                         }
 
                         // Fixed 32 numbered entries; color and name for a class the
@@ -474,8 +473,8 @@ export component MultiClassDropdown inherits Rectangle {
             Rectangle {
                 border-radius: 4px;
                 border-width: 1px;
-                border-color: Theme.border-soft;
-                background: trigger-ta.has-hover ? Theme.raised : Theme.bg;
+                border-color: Ink.border-soft;
+                background: trigger-ta.has-hover ? Ink.raised : Ink.ground;
 
                 HorizontalLayout {
                     padding-left: 8px;
@@ -492,7 +491,7 @@ export component MultiClassDropdown inherits Rectangle {
                 if root.value == "": Text {
                         text: "None selected";
                         font-size: 11px;
-                        color: Theme.text-mute;
+                        color: Ink.text-mute;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
                     }
@@ -536,9 +535,9 @@ export component MultiClassDropdown inherits Rectangle {
                                         width: 43px;
                                         height: 18px;
                                         border-radius: 3px;
-                                        background: Theme.accent.with-alpha(0.12);
+                                        background: Ink.focus.with-alpha(0.12);
                                         border-width: 1px;
-                                        border-color: Theme.accent.with-alpha(0.35);
+                                        border-color: Ink.focus.with-alpha(0.35);
 
                                         property <bool> has-custom-name: false;
 
@@ -551,15 +550,15 @@ export component MultiClassDropdown inherits Rectangle {
                                             if i == 0: Text {
                                                 text: "BG";
                                                 font-size: 9px;
-                                                font-family: Theme.font-mono;
-                                                color: Theme.text;
+                                                font-family: Ink.font-mono;
+                                                color: Ink.text;
                                                 vertical-alignment: center;
                                             }
 
                                             if i != 0 && !parent.has-custom-name: Text {
                                                 text: ClassHelper.zeropad2(i);
                                                 font-size: 9px;
-                                                color: Theme.text;
+                                                color: Ink.text;
                                                 vertical-alignment: center;
                                             }
                                         }
@@ -575,7 +574,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                                             width: parent.width;
                                             height: parent.height;
-                                            background: Theme.accent.with-alpha(0.12);
+                                            background: Ink.focus.with-alpha(0.12);
 
                                             HorizontalLayout {
                                                 alignment: center;
@@ -596,7 +595,7 @@ export component MultiClassDropdown inherits Rectangle {
                                                 Text {
                                                     text: cls.name;
                                                     font-size: 9px;
-                                                    color: Theme.text;
+                                                    color: Ink.text;
                                                     vertical-alignment: center;
                                                     overflow: elide;
                                                 }
@@ -616,9 +615,9 @@ export component MultiClassDropdown inherits Rectangle {
                                         width: 43px;
                                         height: 18px;
                                         border-radius: 3px;
-                                        background: Theme.cat-component.with-alpha(0.12);
+                                        background: Ink.cat-component.with-alpha(0.12);
                                         border-width: 1px;
-                                        border-color: Theme.cat-component.with-alpha(0.35);
+                                        border-color: Ink.cat-component.with-alpha(0.35);
                                         HorizontalLayout {
                                             alignment: center;
                                             spacing: 3px;
@@ -637,7 +636,7 @@ export component MultiClassDropdown inherits Rectangle {
                                             Text {
                                                 text: cls.name != "" ? cls.name : "L\{cls.id}";
                                                 font-size: 9px;
-                                                color: Theme.text;
+                                                color: Ink.text;
                                                 vertical-alignment: center;
                                                 overflow: elide;
                                             }
@@ -652,7 +651,7 @@ export component MultiClassDropdown inherits Rectangle {
                             height: 18px;
                             text: "+\{chip-area.selected - chip-area.shown}";
                             font-size: 9px;
-                            color: Theme.text-dim;
+                            color: Ink.text-dim;
                             vertical-alignment: center;
                         }
                     }
@@ -660,7 +659,7 @@ export component MultiClassDropdown inherits Rectangle {
                     Text {
                         text: "▾";
                         font-size: 9px;
-                        color: Theme.text-mute;
+                        color: Ink.text-mute;
                         vertical-alignment: center;
                     }
                 }
@@ -675,9 +674,9 @@ export component MultiClassDropdown inherits Rectangle {
             close-policy: no-auto-close;
 
             Rectangle {
-                background: Theme.panel;
+                background: Ink.panel;
                 border-width: 1px;
-                border-color: Theme.border;
+                border-color: Ink.border;
                 border-radius: 6px;
                 drop-shadow-blur: 12px;
                 drop-shadow-color: #000000.with-alpha(0.4);
@@ -699,7 +698,7 @@ export component MultiClassDropdown inherits Rectangle {
                                 }
                                 Rectangle {
                                     border-radius: 3px;
-                                    background: bg-ta.has-hover ? Theme.raised : transparent;
+                                    background: bg-ta.has-hover ? Ink.raised : transparent;
                                     HorizontalLayout {
                                         padding-left: 8px;
                                         padding-right: 8px;
@@ -711,16 +710,16 @@ export component MultiClassDropdown inherits Rectangle {
                                                 width: 12px;
                                                 height: 12px;
                                                 border-radius: 3px;
-                                                background: root.selection-flags[0] == "1" ? Theme.accent : transparent;
+                                                background: root.selection-flags[0] == "1" ? Ink.focus : transparent;
                                                 border-width: root.selection-flags[0] == "1" ? 0px : 1.5px;
-                                                border-color: Theme.border;
+                                                border-color: Ink.border;
                                             }
                                         }
 
                                         Text {
                                             text: "Background";
                                             font-size: 11px;
-                                            color: Theme.text;
+                                            color: Ink.text;
                                             vertical-alignment: center;
                                         }
                                     }
@@ -729,7 +728,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                             Rectangle {
                                 height: 1px;
-                                background: Theme.border-soft;
+                                background: Ink.border-soft;
                             }
 
                             // The opened component's classes - flags[33 + k].
@@ -741,7 +740,7 @@ export component MultiClassDropdown inherits Rectangle {
                                 }
                                 Rectangle {
                                     border-radius: 3px;
-                                    background: local-ta.has-hover ? Theme.raised : transparent;
+                                    background: local-ta.has-hover ? Ink.raised : transparent;
                                     HorizontalLayout {
                                         padding-left: 8px;
                                         padding-right: 8px;
@@ -752,9 +751,9 @@ export component MultiClassDropdown inherits Rectangle {
                                                 width: 12px;
                                                 height: 12px;
                                                 border-radius: 3px;
-                                                background: root.selection-flags[33 + k] == "1" ? Theme.accent : transparent;
+                                                background: root.selection-flags[33 + k] == "1" ? Ink.focus : transparent;
                                                 border-width: root.selection-flags[33 + k] == "1" ? 0px : 1.5px;
-                                                border-color: Theme.border;
+                                                border-color: Ink.border;
                                             }
                                         }
 
@@ -762,7 +761,7 @@ export component MultiClassDropdown inherits Rectangle {
                                             width: 96px;
                                             text: "◆ L\{cls.id}";
                                             font-size: 11px;
-                                            color: Theme.cat-component;
+                                            color: Ink.cat-component;
                                             vertical-alignment: center;
                                         }
 
@@ -779,7 +778,7 @@ export component MultiClassDropdown inherits Rectangle {
                                         Text {
                                             text: "(" + cls.name + ")";
                                             font-size: 11px;
-                                            color: Theme.text-dim;
+                                            color: Ink.text-dim;
                                             vertical-alignment: center;
                                             overflow: elide;
                                             horizontal-stretch: 1;
@@ -790,7 +789,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                             if root.component-classes && !root.is-seg && ComponentClassesState.classes.length > 0: Rectangle {
                                 height: 1px;
-                                background: Theme.border-soft;
+                                background: Ink.border-soft;
                             }
 
                             // Classes 1–32 - flags[i+1] (i is 0-based loop index)
@@ -801,7 +800,7 @@ export component MultiClassDropdown inherits Rectangle {
                                 }
                                 Rectangle {
                                     border-radius: 3px;
-                                    background: num-ta.has-hover ? Theme.raised : transparent;
+                                    background: num-ta.has-hover ? Ink.raised : transparent;
                                     HorizontalLayout {
                                         padding-left: 8px;
                                         padding-right: 8px;
@@ -812,9 +811,9 @@ export component MultiClassDropdown inherits Rectangle {
                                                 width: 12px;
                                                 height: 12px;
                                                 border-radius: 3px;
-                                                background: root.selection-flags[i + 1] == "1" ? Theme.accent : transparent;
+                                                background: root.selection-flags[i + 1] == "1" ? Ink.focus : transparent;
                                                 border-width: root.selection-flags[i + 1] == "1" ? 0px : 1.5px;
-                                                border-color: Theme.border;
+                                                border-color: Ink.border;
                                             }
                                         }
 
@@ -824,7 +823,7 @@ export component MultiClassDropdown inherits Rectangle {
                                             width: 96px;
                                             text: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
                                             font-size: 11px;
-                                            color: Theme.text;
+                                            color: Ink.text;
                                             vertical-alignment: center;
                                         }
 
@@ -846,7 +845,7 @@ export component MultiClassDropdown inherits Rectangle {
                                                 Text {
                                                     text: "(" + cls.name + ")";
                                                     font-size: 11px;
-                                                    color: Theme.text-dim;
+                                                    color: Ink.text-dim;
                                                     vertical-alignment: center;
                                                     overflow: elide;
                                                 }
@@ -860,7 +859,7 @@ export component MultiClassDropdown inherits Rectangle {
 
                     Rectangle {
                         height: 1px;
-                        background: Theme.border-soft;
+                        background: Ink.border-soft;
                     }
 
                     done-ta := TouchArea {
@@ -871,14 +870,14 @@ export component MultiClassDropdown inherits Rectangle {
                         }
 
                         Rectangle {
-                            background: done-ta.has-hover ? Theme.raised : transparent;
+                            background: done-ta.has-hover ? Ink.raised : transparent;
 
                             HorizontalLayout {
                                 alignment: center;
                                 Text {
                                     text: "Done";
                                     font-size: 11px;
-                                    color: Theme.accent;
+                                    color: Ink.focus;
                                     font-weight: 500;
                                     vertical-alignment: center;
                                 }
@@ -912,11 +911,11 @@ component LeafParamRow inherits VerticalLayout {
                 width: 14px;
                 height: 14px;
                 border-radius: 3px;
-                background: leaf-expose-ta.has-hover ? Theme.raised : transparent;
+                background: leaf-expose-ta.has-hover ? Ink.raised : transparent;
                 Text {
                     text: p.exposed ? "◆" : "◇";
                     font-size: 9px;
-                    color: p.exposed ? Theme.cat-component : Theme.text-mute;
+                    color: p.exposed ? Ink.cat-component : Ink.text-mute;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -932,11 +931,11 @@ component LeafParamRow inherits VerticalLayout {
                 width: 14px;
                 height: 14px;
                 border-radius: 3px;
-                background: leaf-edit-ta.has-hover ? Theme.raised : transparent;
+                background: leaf-edit-ta.has-hover ? Ink.raised : transparent;
                 Text {
                     text: "✎";
                     font-size: 9px;
-                    color: Theme.cat-component;
+                    color: Ink.cat-component;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -951,7 +950,7 @@ component LeafParamRow inherits VerticalLayout {
             Text {
                 text: p.display-name == "" ? p.name : p.display-name;
                 font-size: 10px;
-                color: p.exposed ? Theme.cat-component : Theme.text-dim;
+                color: p.exposed ? Ink.cat-component : Ink.text-dim;
                 vertical-alignment: center;
             }
 
@@ -959,12 +958,12 @@ component LeafParamRow inherits VerticalLayout {
                 width: 13px;
                 height: 13px;
                 border-radius: 7px;
-                background: leaf-help-ta.has-hover ? Theme.accent.with-alpha(0.3) : Theme.border-soft;
+                background: leaf-help-ta.has-hover ? Ink.focus.with-alpha(0.3) : Ink.border-soft;
                 animate background { duration: 100ms; }
                 Text {
                     text: "?";
                     font-size: 8px;
-                    color: Theme.text-dim;
+                    color: Ink.text-dim;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -981,9 +980,9 @@ component LeafParamRow inherits VerticalLayout {
                     y: parent.height + 3px;
                     width: 230px;
                     Rectangle {
-                        background: Theme.panel;
+                        background: Ink.panel;
                         border-width: 1px;
-                        border-color: Theme.border;
+                        border-color: Ink.border;
                         border-radius: 6px;
                         drop-shadow-blur: 10px;
                         drop-shadow-color: #000000.with-alpha(0.35);
@@ -993,7 +992,7 @@ component LeafParamRow inherits VerticalLayout {
                             Text {
                                 text: p.description;
                                 font-size: 11px;
-                                color: Theme.text;
+                                color: Ink.text;
                                 wrap: word-wrap;
                             }
                         }
@@ -1041,13 +1040,13 @@ component LeafParamRow inherits VerticalLayout {
                 height: 24px;
                 border-radius: 4px;
                 border-width: 1px;
-                border-color: Theme.border;
-                background: leaf-browse-ta.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
+                border-color: Ink.border;
+                background: leaf-browse-ta.has-hover ? Ink.focus.with-alpha(0.2) : Ink.panel;
                 Image {
                     source: @image-url("../icons/regular-white/folder-open.svg");
                     width: 13px;
                     height: 13px;
-                    colorize: Theme.text-dim;
+                    colorize: Ink.text-dim;
                 }
 
                 leaf-browse-ta := TouchArea {
@@ -1067,8 +1066,8 @@ component LeafParamRow inherits VerticalLayout {
         if p.param-type == ParamType.label: Text {
             text: p.value;
             font-size: 11px;
-            font-family: Theme.font-mono;
-            color: Theme.text-dim;
+            font-family: Ink.font-mono;
+            color: Ink.text-dim;
             vertical-alignment: center;
         }
 
@@ -1204,13 +1203,13 @@ component SectionHeader inherits VerticalLayout {
             font-size: 10px;
             font-weight: 700;
             letter-spacing: 0.5px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
             overflow: elide;
         }
 
         Rectangle {
             height: 1px;
-            background: Theme.border-soft;
+            background: Ink.border-soft;
         }
     }
 
@@ -1233,11 +1232,11 @@ component ParamLabel inherits HorizontalLayout {
             width: 16px;
             height: 16px;
             border-radius: 3px;
-            background: expose-ta.has-hover ? Theme.raised : transparent;
+            background: expose-ta.has-hover ? Ink.raised : transparent;
             Text {
                 text: p.exposed ? "◆" : "◇";
                 font-size: 10px;
-                color: p.exposed ? Theme.cat-component : Theme.text-mute;
+                color: p.exposed ? Ink.cat-component : Ink.text-mute;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -1253,11 +1252,11 @@ component ParamLabel inherits HorizontalLayout {
             width: 16px;
             height: 16px;
             border-radius: 3px;
-            background: edit-exposed-ta.has-hover ? Theme.raised : transparent;
+            background: edit-exposed-ta.has-hover ? Ink.raised : transparent;
             Text {
                 text: "✎";
                 font-size: 10px;
-                color: Theme.cat-component;
+                color: Ink.cat-component;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -1273,7 +1272,7 @@ component ParamLabel inherits HorizontalLayout {
             text: p.display-name == "" ? p.name : p.display-name;
             font-size: root.wide ? 12px : 11px;
             font-weight: root.wide ? 600 : 400;
-            color: p.exposed ? Theme.cat-component : (root.wide ? Theme.text : Theme.text-dim);
+            color: p.exposed ? Ink.cat-component : (root.wide ? Ink.text : Ink.text-dim);
             vertical-alignment: center;
             overflow: elide;
         }
@@ -1282,12 +1281,12 @@ component ParamLabel inherits HorizontalLayout {
             width: 14px;
             height: 14px;
             border-radius: 7px;
-            background: help-ta.has-hover || root.help-open ? Theme.accent.with-alpha(0.3) : Theme.border-soft;
+            background: help-ta.has-hover || root.help-open ? Ink.focus.with-alpha(0.3) : Ink.border-soft;
             animate background { duration: 100ms; }
             Text {
                 text: "?";
                 font-size: 8px;
-                color: Theme.text-dim;
+                color: Ink.text-dim;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -1308,9 +1307,9 @@ component ParamLabel inherits HorizontalLayout {
                 y: parent.height + 3px;
                 width: 240px;
                 Rectangle {
-                    background: Theme.panel;
+                    background: Ink.panel;
                     border-width: 1px;
-                    border-color: Theme.border;
+                    border-color: Ink.border;
                     border-radius: 6px;
                     drop-shadow-blur: 10px;
                     drop-shadow-color: #000000.with-alpha(0.35);
@@ -1320,7 +1319,7 @@ component ParamLabel inherits HorizontalLayout {
                         Text {
                             text: p.description;
                             font-size: 11px;
-                            color: Theme.text;
+                            color: Ink.text;
                             wrap: word-wrap;
                         }
                     }
@@ -1365,8 +1364,8 @@ component ParamControls inherits Rectangle {
                 height: 84px;
                 border-radius: 4px;
                 border-width: 1px;
-                border-color: script-ta.has-hover ? Theme.accent.with-alpha(0.6) : Theme.border;
-                background: Theme.bg;
+                border-color: script-ta.has-hover ? Ink.focus.with-alpha(0.6) : Ink.border;
+                background: Ink.ground;
                 clip: true;
 
                 Text {
@@ -1377,7 +1376,7 @@ component ParamControls inherits Rectangle {
                     text: p.value;
                     font-family: ScriptFont.family;
                     font-size: 10px;
-                    color: Theme.text-dim;
+                    color: Ink.text-dim;
                     wrap: no-wrap;
                     overflow: clip;
                     vertical-alignment: top;
@@ -1389,11 +1388,11 @@ component ParamControls inherits Rectangle {
                     width: edit-label.preferred-width + 12px;
                     height: 18px;
                     border-radius: 3px;
-                    background: script-ta.has-hover ? Theme.accent : Theme.raised;
+                    background: script-ta.has-hover ? Ink.focus : Ink.raised;
                     edit-label := Text {
                         text: "Edit script";
                         font-size: 10px;
-                        color: script-ta.has-hover ? #FFFFFF : Theme.text-dim;
+                        color: script-ta.has-hover ? #FFFFFF : Ink.text-dim;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -1601,8 +1600,8 @@ component ParamControls inherits Rectangle {
                 for item[i] in p.group-items: Rectangle {
                     border-radius: 4px;
                     border-width: 1px;
-                    border-color: Theme.border-soft;
-                    background: Theme.bg;
+                    border-color: Ink.border-soft;
+                    background: Ink.ground;
                     VerticalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
@@ -1614,8 +1613,8 @@ component ParamControls inherits Rectangle {
                             Text {
                                 text: "#" + (i + 1);
                                 font-size: 9.5px;
-                                font-family: Theme.font-mono;
-                                color: Theme.text-mute;
+                                font-family: Ink.font-mono;
+                                color: Ink.text-mute;
                                 vertical-alignment: center;
                             }
 
@@ -1623,7 +1622,7 @@ component ParamControls inherits Rectangle {
                                 icon: @image-url("../icons/regular-white/trash-simple.svg");
                                 sz: 18px;
                                 icon-sz: 10px;
-                                tint: Theme.err.with-alpha(0.6);
+                                tint: Ink.err.with-alpha(0.6);
                                 clicked => {
                                     root.remove-item(i);
                                 }
@@ -1648,8 +1647,8 @@ component ParamControls inherits Rectangle {
                     height: 26px;
                     border-radius: 4px;
                     border-width: 1px;
-                    border-color: Theme.border;
-                    background: add-item-ta.has-hover ? Theme.raised : transparent;
+                    border-color: Ink.border;
+                    background: add-item-ta.has-hover ? Ink.raised : transparent;
                     animate background { duration: 100ms; }
                     HorizontalLayout {
                         alignment: center;
@@ -1658,14 +1657,14 @@ component ParamControls inherits Rectangle {
                             source: @image-url("../icons/regular-white/plus.svg");
                             width: 10px;
                             height: 10px;
-                            colorize: Theme.text-dim;
+                            colorize: Ink.text-dim;
                             y: 8px;
                         }
 
                         Text {
                             text: "Add item";
                             font-size: 10.5px;
-                            color: Theme.text-dim;
+                            color: Ink.text-dim;
                             vertical-alignment: center;
                         }
                     }
@@ -1692,14 +1691,14 @@ component ParamNotes inherits VerticalLayout {
         if p.wiring != "": Text {
             text: p.wiring;
             font-size: 9.5px;
-            color: Theme.cat-component.with-alpha(0.85);
+            color: Ink.cat-component.with-alpha(0.85);
             wrap: word-wrap;
             height: self.preferred-height;
         }
         if p.problem != "": Text {
             text: "⚠ \{p.problem}";
             font-size: 10px;
-            color: p.problem-error ? Theme.err : Theme.warn;
+            color: p.problem-error ? Ink.err : Ink.warn;
             wrap: word-wrap;
             height: self.preferred-height;
         }
@@ -1719,7 +1718,7 @@ component ProblemRow inherits HorizontalLayout {
                 width: 6px;
                 height: 6px;
                 border-radius: 3px;
-                background: item.error ? Theme.err : Theme.warn;
+                background: item.error ? Ink.err : Ink.warn;
             }
         }
 
@@ -1730,13 +1729,13 @@ component ProblemRow inherits HorizontalLayout {
                 text: item.where;
                 font-size: 9.5px;
                 font-weight: 600;
-                color: Theme.text-mute;
+                color: Ink.text-mute;
                 overflow: elide;
             }
             problem-text := Text {
                 text: item.text;
                 font-size: 10.5px;
-                color: problem-ta.has-hover && root.show-where ? Theme.text : Theme.text-dim;
+                color: problem-ta.has-hover && root.show-where ? Ink.text : Ink.text-dim;
                 wrap: word-wrap;
                 height: self.preferred-height;
                 problem-ta := TouchArea {
@@ -1757,14 +1756,14 @@ component ProblemRow inherits HorizontalLayout {
                 width: fix-text.preferred-width + 14px;
                 border-radius: 4px;
                 border-width: 1px;
-                border-color: Theme.border;
-                background: fix-ta.has-hover ? Theme.raised : transparent;
+                border-color: Ink.border;
+                background: fix-ta.has-hover ? Ink.raised : transparent;
                 accessible-role: button;
                 accessible-label: item.fix-label;
                 fix-text := Text {
                     text: item.fix-label;
                     font-size: 10px;
-                    color: Theme.text;
+                    color: Ink.text;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -1861,7 +1860,7 @@ component WideParamRow inherits VerticalLayout {
 
         Rectangle {
             height: 1px;
-            background: Theme.border-soft;
+            background: Ink.border-soft;
         }
 
         HorizontalLayout {
@@ -1893,7 +1892,7 @@ component WideParamRow inherits VerticalLayout {
                 if p.short-description != "": Text {
                     text: root.help-open ? p.description : p.short-description;
                     font-size: 11px;
-                    color: Theme.text-dim;
+                    color: Ink.text-dim;
                     wrap: word-wrap;
                     height: self.preferred-height;
                 }
@@ -1981,6 +1980,8 @@ component InlineParamRow inherits VerticalLayout {
         // A list entry's setting: entry index, setting name.
         callback toggle-item-exposed(int, string);
         callback edit-item-exposed(int, string);
+        // Pins / unpins it into the Tuning panel.
+        callback toggle-pin();
 
         property <bool> stacked: p.param-type == ParamType.group || p.param-type == ParamType.script || p.param-type == ParamType.file-path || p.param-type == ParamType.multi-obj-class || p.param-type == ParamType.multi-seg-class || p.param-type == ParamType.image-address || p.param-type == ParamType.slider;
 
@@ -2019,7 +2020,7 @@ component InlineParamRow inherits VerticalLayout {
         }
 
         if !root.stacked: HorizontalLayout {
-            spacing: 8px;
+            spacing: 6px;
             HorizontalLayout {
                 width: 112px;
                 alignment: start;
@@ -2059,6 +2060,32 @@ component InlineParamRow inherits VerticalLayout {
                     root.edit-item-exposed(i, n);
                 }
             }
+
+            // Into the Tuning panel - with the settings of other steps.
+            pin := Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                border-radius: Ink.radius-sm;
+                background: pin-ta.has-hover ? Ink.hover : transparent;
+                accessible-role: button;
+                accessible-label: root.p.pinned ? "Unpin \{root.p.display-name}" : "Pin \{root.p.display-name} to the Tuning panel";
+                accessible-checked: root.p.pinned;
+                accessible-action-default => {
+                    root.toggle-pin();
+                }
+                Image {
+                    source: InkIcons.pin;
+                    width: 12px;
+                    colorize: root.p.pinned ? Ink.focus : pin-ta.has-hover ? Ink.text-dim : Ink.text-faint;
+                }
+                pin-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.toggle-pin();
+                    }
+                }
+            }
         }
 
         if !root.stacked: ParamNotes {
@@ -2073,7 +2100,7 @@ component SectionHead inherits Rectangle {
 
         height: 30px;
         border-radius: 4px;
-        background: head-ta.has-hover ? Theme.raised : transparent;
+        background: head-ta.has-hover ? Ink.raised : transparent;
         accessible-role: button;
         accessible-label: root.section.name;
 
@@ -2092,7 +2119,7 @@ component SectionHead inherits Rectangle {
                 width: 10px;
                 text: root.section.open ? "▾" : "▸";
                 font-size: 9px;
-                color: Theme.text-mute;
+                color: Ink.text-mute;
                 vertical-alignment: center;
             }
 
@@ -2100,14 +2127,14 @@ component SectionHead inherits Rectangle {
                 text: root.section.name;
                 font-size: 11px;
                 font-weight: 600;
-                color: Theme.text;
+                color: Ink.text;
                 vertical-alignment: center;
             }
 
             if root.section.problem > 0: Text {
                 text: "⚠";
                 font-size: 10px;
-                color: root.section.problem == 2 ? Theme.err : Theme.warn;
+                color: root.section.problem == 2 ? Ink.err : Ink.warn;
                 vertical-alignment: center;
             }
 
@@ -2115,7 +2142,7 @@ component SectionHead inherits Rectangle {
                 horizontal-stretch: 1;
                 text: root.section.open ? "" : root.section.summary;
                 font-size: 10.5px;
-                color: Theme.text-dim;
+                color: Ink.text-dim;
                 overflow: elide;
                 vertical-alignment: center;
             }
@@ -2144,7 +2171,7 @@ component CardTableView inherits VerticalLayout {
                 text: column;
                 font-size: 9.5px;
                 font-weight: 600;
-                color: Theme.text-mute;
+                color: Ink.text-mute;
                 overflow: elide;
             }
         }
@@ -2157,7 +2184,7 @@ component CardTableView inherits VerticalLayout {
                 text: row.name;
                 font-size: 11px;
                 font-weight: 600;
-                color: row.problem == 2 ? Theme.err : row.problem == 1 ? Theme.warn : Theme.text;
+                color: row.problem == 2 ? Ink.err : row.problem == 1 ? Ink.warn : Ink.text;
                 overflow: elide;
                 vertical-alignment: center;
             }
@@ -2168,7 +2195,7 @@ component CardTableView inherits VerticalLayout {
                 min-width: 0px;
                 border-radius: 5px;
                 border-width: cell.problem != "" ? 1px : 0px;
-                border-color: cell.problem-error ? Theme.err : Theme.warn;
+                border-color: cell.problem-error ? Ink.err : Ink.warn;
                 ParamControls {
                     x: 1px;
                     y: (parent.height - self.height) / 2;
@@ -2185,7 +2212,7 @@ component CardTableView inherits VerticalLayout {
         for problem in root.table.problems: Text {
             text: "⚠ \{problem}";
             font-size: 10px;
-            color: root.table.problem-error ? Theme.err : Theme.warn;
+            color: root.table.problem-error ? Ink.err : Ink.warn;
             wrap: word-wrap;
             height: self.preferred-height;
         }
@@ -2427,7 +2454,7 @@ component StepRow inherits Rectangle {
                     y: 0px;
                     width: 100%;
                     height: 1px;
-                    background: Theme.border-soft;
+                    background: Ink.border-soft;
                 }
 
                 VerticalLayout {
@@ -2501,6 +2528,9 @@ component StepRow inherits Rectangle {
                                 edit-item-exposed(item_idx, field_name) => {
                                     PipelinesPanelState.edit-exposed(step.id, "\{p.name}.\{item_idx}.\{field_name}");
                                 }
+                                toggle-pin => {
+                                    PipelinesPanelState.toggle-pin(step.id, p.name);
+                                }
                             }
                         }
                     }
@@ -2554,6 +2584,9 @@ component StepRow inherits Rectangle {
                     }
 
                     for p in step.advanced-parameters: InlineParamRow {
+                        toggle-pin => {
+                            PipelinesPanelState.toggle-pin(step.id, p.name);
+                        }
                         p: p;
                         changed(v) => {
                             root.param-changed(p.name, v);
@@ -2727,7 +2760,7 @@ component CategoryChip inherits Rectangle {
     height: 24px;
     border-radius: 12px;
     border-width: 1px;
-    border-color: root.active ? Cat.color(category) : Theme.border-soft;
+    border-color: root.active ? Cat.color(category) : Ink.border-soft;
     background: root.active ? Cat.tint(category) : transparent;
     animate background { duration: 100ms; }
 
@@ -2749,7 +2782,7 @@ component CategoryChip inherits Rectangle {
 
         Text {
             text: Cat.name(category);
-            color: root.active ? Cat.color(category) : Theme.text-dim;
+            color: root.active ? Cat.color(category) : Ink.text-dim;
             font-size: 10.5px;
             vertical-alignment: center;
             overflow: elide;
@@ -2757,9 +2790,9 @@ component CategoryChip inherits Rectangle {
 
         Text {
             text: count;
-            color: Theme.text-mute;
+            color: Ink.text-mute;
             font-size: 10.5px;
-            font-family: Theme.font-mono;
+            font-family: Ink.font-mono;
             vertical-alignment: center;
         }
     }
@@ -2833,6 +2866,29 @@ export component PipelinesPanel inherits Rectangle {
                         mouse-cursor: pointer;
                         clicked => {
                             pipelines-popup.show();
+                        }
+                    }
+                }
+
+                // Ctrl+K: find a step, an action, a command.
+                VerticalLayout {
+                    alignment: center;
+                    palette-hint := Rectangle {
+                        width: kbd.width;
+                        height: kbd.height;
+                        accessible-role: button;
+                        accessible-label: "Command palette (Ctrl K)";
+                        accessible-action-default => {
+                            CommandPaletteState.open = true;
+                        }
+                        kbd := InkKbd {
+                            text: "Ctrl K";
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                CommandPaletteState.open = true;
+                            }
                         }
                     }
                 }
@@ -3365,7 +3421,7 @@ component SectionNavItem inherits Rectangle {
 
         height: 30px;
         border-radius: 6px;
-        background: root.active ? Theme.accent-dim : (ta.has-hover ? Theme.hover : transparent);
+        background: root.active ? Ink.selection : (ta.has-hover ? Ink.hover : transparent);
 
         Rectangle {
             x: 0;
@@ -3373,7 +3429,7 @@ component SectionNavItem inherits Rectangle {
             width: 3px;
             height: parent.height - 14px;
             border-radius: 1.5px;
-            background: root.active ? Theme.accent : transparent;
+            background: root.active ? Ink.focus : transparent;
         }
 
         HorizontalLayout {
@@ -3386,7 +3442,7 @@ component SectionNavItem inherits Rectangle {
                 vertical-alignment: center;
                 font-size: 12px;
                 font-weight: root.active ? 600 : 400;
-                color: root.active ? Theme.text : Theme.text-dim;
+                color: root.active ? Ink.text : Ink.text-dim;
                 overflow: elide;
             }
 
@@ -3394,7 +3450,7 @@ component SectionNavItem inherits Rectangle {
                 text: root.note;
                 vertical-alignment: center;
                 font-size: 10px;
-                color: Theme.warn;
+                color: Ink.warn;
             }
         }
 
@@ -3413,10 +3469,10 @@ component SectionNavItem inherits Rectangle {
 // `PipelinesPanelState.settings-step-id`, live: edits go through the same
 // callbacks as on the card. (Opening it shows the step's advanced settings,
 // so they are there to pick and to search.)
-export component StepSettingsDialog inherits Dialog {
+export component StepSettingsDialog inherits InkDialog {
         title: "Step settings";
-        dialog-width: 920px;
-        dialog-height: 660px;
+        card-width: 920px;
+        card-height: 660px;
         content-padding: 0px;
         close-on-backdrop: true;
 
@@ -3454,14 +3510,14 @@ export component StepSettingsDialog inherits Dialog {
                 width: 100%;
                 height: 100%;
                 border-width: 1px;
-                border-color: Theme.border-soft;
+                border-color: Ink.border-soft;
                 clip: true;
 
                 HorizontalLayout {
                 // -- Left: name, search, sections --
                 Rectangle {
                         width: 230px;
-                        background: Theme.bg;
+                        background: Ink.ground;
                         VerticalLayout {
                             padding: 16px;
                             spacing: 4px;
@@ -3479,7 +3535,7 @@ export component StepSettingsDialog inherits Dialog {
                                     text: cmd.name;
                                     font-size: 18px;
                                     font-weight: 700;
-                                    color: Theme.text;
+                                    color: Ink.text;
                                     overflow: elide;
                                 }
                             }
@@ -3523,7 +3579,7 @@ export component StepSettingsDialog inherits Dialog {
 
                     Rectangle {
                         width: 1px;
-                        background: Theme.border-soft;
+                        background: Ink.border-soft;
                     }
 
                     // -- Right: the chosen section's settings --
@@ -3543,7 +3599,7 @@ export component StepSettingsDialog inherits Dialog {
                                         text: root.searching ? "Search results" : on-advanced ? "Advanced" : (cmd.sections[root.current] == "" ? "General" : cmd.sections[root.current]);
                                         font-size: 16px;
                                         font-weight: 700;
-                                        color: Theme.text;
+                                        color: Ink.text;
                                         vertical-alignment: center;
                                     }
                                 }
@@ -3551,8 +3607,8 @@ export component StepSettingsDialog inherits Dialog {
                                 Text {
                                     text: cmd.summary;
                                     font-size: 11px;
-                                    font-family: Theme.font-mono;
-                                    color: Theme.text-mute;
+                                    font-family: Ink.font-mono;
+                                    color: Ink.text-mute;
                                     overflow: elide;
                                 }
 
@@ -3560,7 +3616,7 @@ export component StepSettingsDialog inherits Dialog {
                             if cmd.help != "" && !root.searching && root.current == 0: Text {
                                     text: cmd.help;
                                     font-size: 11px;
-                                    color: Theme.text-dim;
+                                    color: Ink.text-dim;
                                     wrap: word-wrap;
                                     height: self.preferred-height;
                                 }
@@ -3572,10 +3628,10 @@ export component StepSettingsDialog inherits Dialog {
                                 // The rows draw the dividers between them; the
                             // card's top border is the first one's.
                             Rectangle {
-                                    background: Theme.panel;
+                                    background: Ink.panel;
                                     border-radius: 8px;
                                     border-width: 1px;
-                                    border-color: Theme.border-soft;
+                                    border-color: Ink.border-soft;
                                     clip: true;
 
                                     VerticalLayout {
@@ -3660,3 +3716,106 @@ export component StepSettingsDialog inherits Dialog {
         }
     }
     }
+
+// ══════════════════════════════════════════════════════════
+// Tuning panel
+// ══════════════════════════════════════════════════════════
+
+// The pinned settings of the shown pipeline, from all its steps, in one
+// place - to tune a pipeline without opening step after step. Each setting
+// is changed here just like on its card.
+export component TuningPanel inherits Rectangle {
+    property <[TunedSetting]> tuned: PipelinesPanelState.tuned-settings;
+    callback close;
+
+    preferred-height: layout.preferred-height;
+
+    layout := VerticalLayout {
+        spacing: 0px;
+
+        InkPanelHead {
+            title: "Tuning";
+            count: root.tuned.length;
+            subtitle: "pinned settings";
+            close => {
+                root.close();
+            }
+        }
+
+        Flickable {
+            vertical-stretch: 1;
+            preferred-height: min(rows.preferred-height, 360px);
+            content-height: rows.preferred-height;
+
+            rows := VerticalLayout {
+                padding: Ink.pad-panel;
+                padding-top: 8px;
+                spacing: 6px;
+                alignment: start;
+
+                for t[i] in root.tuned: VerticalLayout {
+                    spacing: 4px;
+
+                    // The step, above its first setting.
+                    if i == 0 || root.tuned[i - 1].step != t.step: HorizontalLayout {
+                        spacing: 6px;
+                        padding-top: i == 0 ? 0px : 6px;
+                        Rectangle {
+                            width: 3px;
+                            Rectangle {
+                                width: 3px;
+                                height: 12px;
+                                border-radius: 1.5px;
+                                background: Cat.color(t.category);
+                            }
+                        }
+                        Text {
+                            text: t.step-id;
+                            font-size: Ink.fs-sm;
+                            font-family: Ink.font-mono;
+                            color: Ink.text-faint;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: t.step-name;
+                            font-size: Ink.fs-sm;
+                            font-weight: 600;
+                            color: Ink.text-dim;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text {
+                            width: 112px;
+                            text: t.param.display-name;
+                            font-size: Ink.fs-sm;
+                            color: Ink.text-dim;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        ParamControls {
+                            horizontal-stretch: 1;
+                            p: t.param;
+                            changed(v) => {
+                                PipelinesPanelState.param-changed(t.step, t.param.name, v);
+                            }
+                        }
+                        InkIconButton {
+                            y: (parent.height - self.height) / 2;
+                            size: 20px;
+                            icon: InkIcons.unpin;
+                            label: "Unpin \{t.param.display-name}";
+                            clicked => {
+                                PipelinesPanelState.toggle-pin(t.step, t.param.name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,11 +1,10 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ProjectSettingsState, ViewportMemoryState } from "../api/project_settings.slint";
 import { ScrollView } from "std-widgets.slint";
 import { LineEdit, ComboBox, SpinBox, Switch } from "../ink/std_compat.slint";
 
-import { Theme } from "../style.slint";
-import { AppButton } from "../components/app_button.slint";
-import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
+import { Ink } from "../ink/palette.slint";
 import { MultiClassDropdown } from "../editor/pipelines_panel.slint";
 import {
     NavItem,
@@ -20,10 +19,10 @@ import {
 // All settings in one place: the project's (saved with the project) and this
 // computer's (viewport memory). A section list on the left, or - while
 // searching - every matching setting of all sections.
-export component ProjectSettingsDialog inherits Dialog {
+export component ProjectSettingsDialog inherits InkDialog {
     title: "Settings";
-    dialog-width: 900px;
-    dialog-height: 680px;
+    card-width: 900px;
+    card-height: 680px;
     content-padding: 0px;
     close => {
         root.cancel();
@@ -55,6 +54,7 @@ export component ProjectSettingsDialog inherits Dialog {
     property <string> kw-tile-cache: "Tile cache image tiles read from disk memory RAM MB megabytes performance";
     property <string> kw-overview-cache: "Overview cache whole image overviews switching images memory RAM MB megabytes performance";
     property <string> kw-free-caches: "Free caches when an analysis starts release memory RAM analysis run";
+    property <string> kw-edit-during-analysis: "Edit while an analysis runs preview pipelines block wait analysis run";
 
     // Whether `words` contain the search text (ignoring case).
     pure function matches(words: string) -> bool {
@@ -71,7 +71,7 @@ export component ProjectSettingsDialog inherits Dialog {
         section == 0 ? (root.matches(root.kw-name) || root.matches(root.kw-author) || root.matches(root.kw-org))
         : section == 1 ? (root.matches(root.kw-grouping) || (ProjectSettingsState.settings.grouping_mode == 1 && root.matches(root.kw-regex)) || root.matches(root.kw-plate) || root.matches(root.kw-well-size) || (!ProjectSettingsState.settings.well_auto && root.matches(root.kw-well-images)))
         : section == 2 ? (root.matches(root.kw-merge) || (ProjectSettingsState.settings.tile_merge_enabled && (root.matches(root.kw-exclude) || root.matches(root.kw-connectivity) || root.matches(root.kw-fragments))))
-        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-cache-auto) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-free-caches))
+        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-cache-auto) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-free-caches) || root.matches(root.kw-edit-during-analysis))
     }
 
     pure function shows-section(section: int) -> bool {
@@ -95,14 +95,14 @@ export component ProjectSettingsDialog inherits Dialog {
 
     Rectangle {
         vertical-stretch: 1;
-        background: Theme.bg;
+        background: Ink.ground;
 
         VerticalLayout {
             spacing: 0;
 
             Rectangle {
                 height: 1px;
-                background: Theme.border-soft;
+                background: Ink.border-soft;
             }
 
             HorizontalLayout {
@@ -112,7 +112,7 @@ export component ProjectSettingsDialog inherits Dialog {
                 // -- Section list ----------------------------------------------
                 Rectangle {
                     width: 230px;
-                    background: Theme.sidebar;
+                    background: Ink.panel;
 
                     VerticalLayout {
                         padding: 16px;
@@ -122,9 +122,9 @@ export component ProjectSettingsDialog inherits Dialog {
                         Rectangle {
                             height: 32px;
                             border-radius: 6px;
-                            background: Theme.panel;
+                            background: Ink.panel;
                             border-width: 1px;
-                            border-color: search-input.has-focus ? Theme.accent : Theme.border-soft;
+                            border-color: search-input.has-focus ? Ink.focus : Ink.border-soft;
 
                             HorizontalLayout {
                                 padding-left: 10px;
@@ -137,7 +137,7 @@ export component ProjectSettingsDialog inherits Dialog {
                                         source: @image-url("../icons/regular-black/magnifying-glass.svg");
                                         width: 14px;
                                         height: 14px;
-                                        colorize: Theme.text-mute;
+                                        colorize: Ink.text-mute;
                                     }
                                 }
 
@@ -149,7 +149,7 @@ export component ProjectSettingsDialog inherits Dialog {
                                         height: 100%;
                                         text: "Search settings";
                                         font-size: 12px;
-                                        color: Theme.text-faint;
+                                        color: Ink.text-faint;
                                         vertical-alignment: center;
                                     }
 
@@ -159,7 +159,7 @@ export component ProjectSettingsDialog inherits Dialog {
                                         text <=> root.query;
                                         single-line: true;
                                         font-size: 12px;
-                                        color: Theme.text;
+                                        color: Ink.text;
                                         vertical-alignment: center;
                                     }
                                 }
@@ -170,12 +170,12 @@ export component ProjectSettingsDialog inherits Dialog {
                                         width: 20px;
                                         height: 20px;
                                         border-radius: 4px;
-                                        background: clear-ta.has-hover ? Theme.hover : transparent;
+                                        background: clear-ta.has-hover ? Ink.hover : transparent;
                                         Image {
                                             source: @image-url("../icons/regular-black/x.svg");
                                             width: 10px;
                                             height: 10px;
-                                            colorize: Theme.text-dim;
+                                            colorize: Ink.text-dim;
                                         }
 
                                         clear-ta := TouchArea {
@@ -255,7 +255,7 @@ export component ProjectSettingsDialog inherits Dialog {
                         x: parent.width - 1px;
                         width: 1px;
                         height: parent.height;
-                        background: Theme.border-soft;
+                        background: Ink.border-soft;
                     }
                 }
 
@@ -277,14 +277,14 @@ export component ProjectSettingsDialog inherits Dialog {
                                     text: "No settings match “" + root.query + "”";
                                     font-size: 13px;
                                     font-weight: 600;
-                                    color: Theme.text;
+                                    color: Ink.text;
                                     horizontal-alignment: center;
                                 }
 
                                 Text {
                                     text: "Try another word, e.g. “plate”, “merge” or “memory”.";
                                     font-size: 11px;
-                                    color: Theme.text-dim;
+                                    color: Ink.text-dim;
                                     horizontal-alignment: center;
                                 }
                             }
@@ -382,7 +382,7 @@ export component ProjectSettingsDialog inherits Dialog {
                                                     text: "Rows";
                                                     width: 56px;
                                                     font-size: 11px;
-                                                    color: Theme.text-dim;
+                                                    color: Ink.text-dim;
                                                     vertical-alignment: center;
                                                 }
 
@@ -403,7 +403,7 @@ export component ProjectSettingsDialog inherits Dialog {
                                                     text: "Columns";
                                                     width: 56px;
                                                     font-size: 11px;
-                                                    color: Theme.text-dim;
+                                                    color: Ink.text-dim;
                                                     vertical-alignment: center;
                                                 }
 
@@ -431,9 +431,9 @@ export component ProjectSettingsDialog inherits Dialog {
                                                     col: mod(i, ProjectSettingsState.settings.well_columns);
                                                     width: root.well_size;
                                                     height: root.well_size * 0.8;
-                                                    background: Theme.bg;
+                                                    background: Ink.ground;
                                                     border-width: 1px;
-                                                    border-color: Theme.border-soft;
+                                                    border-color: Ink.border-soft;
                                                     border-radius: 3px;
 
                                                     TextInput {
@@ -442,7 +442,7 @@ export component ProjectSettingsDialog inherits Dialog {
                                                         vertical-alignment: center;
                                                         width: 100%;
                                                         height: 100%;
-                                                        color: Theme.text;
+                                                        color: Ink.text;
                                                         font-size: 11px;
                                                         accepted => {
                                                             ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
@@ -599,11 +599,21 @@ export component ProjectSettingsDialog inherits Dialog {
                                             }
                                         }
                                     }
+                                    if root.shows(3, root.kw-edit-during-analysis): SettingRow {
+                                        label: "Edit while an analysis runs";
+                                        description: "Pipelines can be edited and the image previewed while an analysis runs - its progress is shown over the image. Off: the window waits until the analysis is done, for a computer that needs all its RAM for the analysis.";
+                                        HorizontalLayout {
+                                            alignment: end;
+                                            Switch {
+                                                checked <=> ViewportMemoryState.edit_during_analysis;
+                                            }
+                                        }
+                                    }
                                 }
 
                                 if !root.searching: HorizontalLayout {
                                     alignment: end;
-                                    AppButton {
+                                    InkButton {
                                         text: "Reset to defaults";
                                         clicked => {
                                             ViewportMemoryState.reset_to_defaults();
@@ -619,37 +629,40 @@ export component ProjectSettingsDialog inherits Dialog {
             // -- Footer ------------------------------------------------------
             Rectangle {
                 height: 1px;
-                background: Theme.border-soft;
+                background: Ink.border-soft;
             }
 
             Rectangle {
-                background: Theme.panel;
+                background: Ink.panel;
 
-                DialogFooter {
-                    padding-left: 20px;
-                    padding-right: 16px;
-                    padding-top: 12px;
-                    padding-bottom: 12px;
+                // The dialog's buttons; this dialog pads its own content.
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 6px;
+                    padding-left: Ink.pad-dialog;
+                    padding-right: Ink.pad-dialog;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
 
                     Text {
                         text: "Project settings are saved with the project; viewport settings on this computer.";
                         font-size: 12px;
-                        color: Theme.text-dim;
+                        color: Ink.text-dim;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
                         overflow: elide;
                     }
 
-                    AppButton {
+                    InkButton {
                         text: "Cancel";
                         clicked => {
                             root.cancel();
                         }
                     }
 
-                    AppButton {
+                    InkButton {
+                        kind: InkButtonKind.primary;
                         text: "Apply";
-                        primary: true;
                         clicked => {
                             ProjectSettingsState.trigger_project_settings_accepted();
                             ViewportMemoryState.apply();

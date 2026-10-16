@@ -1,10 +1,9 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
-import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 
-import { Theme } from "../style.slint";
-import { AppButton } from "../components/app_button.slint";
+import { Ink } from "../ink/palette.slint";
 component ColorTile inherits Rectangle {
     in property <color> item_color;
     property <bool> is_selected: ClassificationSettingsState.settings.color == item_color;
@@ -14,7 +13,7 @@ component ColorTile inherits Rectangle {
     border-radius: 4px;
 
     border-width: is_selected ? 3px : 1px;
-    border-color: is_selected ? Theme.accent : Theme.border;
+    border-color: is_selected ? Ink.focus : Ink.border;
 
     TouchArea {
         clicked => {
@@ -23,9 +22,9 @@ component ColorTile inherits Rectangle {
     }
 }
 
-export component ClassEditDialog inherits Dialog {
+export component ClassEditDialog inherits InkDialog {
     title: "Class Settings";
-    dialog-width: 486px;
+    card-width: 486px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
         ClassificationSettingsState.reset_to_zero();
@@ -38,7 +37,7 @@ export component ClassEditDialog inherits Dialog {
             width: 110px;
             vertical-alignment: center;
             font-size: 13px;
-            color: Theme.text;
+            color: Ink.text;
         }
 
         LineEdit {
@@ -54,7 +53,7 @@ export component ClassEditDialog inherits Dialog {
             width: 110px;
             vertical-alignment: center;
             font-size: 13px;
-            color: Theme.text;
+            color: Ink.text;
         }
 
         LineEdit {
@@ -70,7 +69,7 @@ export component ClassEditDialog inherits Dialog {
             width: 110px;
             vertical-alignment: center;
             font-size: 13px;
-            color: Theme.text;
+            color: Ink.text;
         }
 
         ComboBox {
@@ -85,7 +84,7 @@ export component ClassEditDialog inherits Dialog {
     if ClassificationSettingsState.settings.class-id > 0 && ClassificationSettingsState.id-index > 0: Text {
         text: "Pipelines, components and annotated objects using class \{ClassificationSettingsState.settings.class-id} switch to the new id. Results of earlier runs keep the old one.";
         font-size: 12px;
-        color: Theme.text-dim;
+        color: Ink.text-dim;
         wrap: word-wrap;
     }
 
@@ -96,7 +95,7 @@ export component ClassEditDialog inherits Dialog {
             width: 110px;
             vertical-alignment: center;
             font-size: 13px;
-            color: Theme.text;
+            color: Ink.text;
         }
 
         GridLayout {
@@ -127,8 +126,8 @@ export component ClassEditDialog inherits Dialog {
         }
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Cancel";
             clicked => {
                 GlobalAppState.active-dialog = DialogType.none;
@@ -136,9 +135,9 @@ export component ClassEditDialog inherits Dialog {
             }
         }
 
-        AppButton {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: "Apply";
-            primary: true;
             clicked => {
                 // Index 0 is "Auto" for a new class, the own id for an edited one.
                 ClassificationSettingsState.settings.new-id = ClassificationSettingsState.id-index == 0 ? (ClassificationSettingsState.settings.class-id < 0 ? -1 : ClassificationSettingsState.settings.class-id) : ClassificationSettingsState.id-options[ClassificationSettingsState.id-index].to-float();

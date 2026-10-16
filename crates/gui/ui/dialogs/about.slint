@@ -1,9 +1,8 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { AppInfoState, DialogType, GlobalAppState } from "../api/state.slint";
 import { ScrollView } from "std-widgets.slint";
 
-import { Theme } from "../style.slint";
-import { AppButton } from "../components/app_button.slint";
-import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
+import { Ink } from "../ink/palette.slint";
 
 component TabButton inherits Rectangle {
     in property <string> text;
@@ -12,15 +11,15 @@ component TabButton inherits Rectangle {
 
     horizontal-stretch: 1;
     height: 30px;
-    border-radius: Theme.radius-md;
-    background: root.active ? Theme.accent.with-alpha(0.14) : (ta.has-hover ? Theme.hover : transparent);
+    border-radius: Ink.radius-md;
+    background: root.active ? Ink.focus.with-alpha(0.14) : (ta.has-hover ? Ink.hover : transparent);
     animate background { duration: 100ms; }
 
     Text {
         text: root.text;
         font-size: 12px;
         font-weight: root.active ? 700 : 500;
-        color: root.active ? Theme.accent : Theme.text-dim;
+        color: root.active ? Ink.focus : Ink.text-dim;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -46,14 +45,14 @@ component ContributorRow inherits Rectangle {
             width: 32px;
             height: 32px;
             border-radius: 16px;
-            background: Theme.accent-dim;
+            background: Ink.selection;
             y: 0px;
 
             Text {
                 text: root.initials;
                 font-size: 12px;
                 font-weight: 700;
-                color: Theme.accent;
+                color: Ink.focus;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -67,13 +66,13 @@ component ContributorRow inherits Rectangle {
                 text: root.person_name;
                 font-size: 13px;
                 font-weight: 700;
-                color: Theme.text;
+                color: Ink.text;
             }
 
             Text {
                 text: root.role;
                 font-size: 11.5px;
-                color: Theme.text-dim;
+                color: Ink.text-dim;
                 wrap: word-wrap;
             }
         }
@@ -84,18 +83,18 @@ component ContributorRow inherits Rectangle {
         y: parent.height - 1px;
         width: parent.width;
         height: 1px;
-        background: Theme.border-soft;
+        background: Ink.border-soft;
     }
 }
 
 component InfoStat inherits Rectangle {
     in property <string> label;
     in property <string> value;
-    in property <color> value_color: Theme.text;
+    in property <color> value_color: Ink.text;
 
     horizontal-stretch: 1;
     height: 72px;
-    background: Theme.raised;
+    background: Ink.raised;
     border-radius: 8px;
 
     VerticalLayout {
@@ -108,7 +107,7 @@ component InfoStat inherits Rectangle {
             font-size: 9.5px;
             font-weight: 600;
             letter-spacing: 0.3px;
-            color: Theme.text-mute;
+            color: Ink.text-mute;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
@@ -140,7 +139,7 @@ component AttributionLogo inherits Rectangle {
     height: root.logo-height;
 
     Image {
-        source: Theme.dark-mode ? root.logo-dark : root.logo-light;
+        source: Ink.dark ? root.logo-dark : root.logo-light;
         width: parent.width;
         height: parent.height;
         image-fit: contain;
@@ -158,7 +157,7 @@ component LicenseCard inherits Rectangle {
     in property <bool> expanded;
     callback toggled;
 
-    background: Theme.raised;
+    background: Ink.raised;
     border-radius: 8px;
     clip: true;
 
@@ -180,7 +179,7 @@ component LicenseCard inherits Rectangle {
                 Text {
                     text: root.expanded ? "▾" : "▸";
                     font-size: 10px;
-                    color: Theme.text-mute;
+                    color: Ink.text-mute;
                     vertical-alignment: center;
                 }
 
@@ -192,13 +191,13 @@ component LicenseCard inherits Rectangle {
                         text: root.title;
                         font-size: 12px;
                         font-weight: 700;
-                        color: header-ta.has-hover ? Theme.accent : Theme.text;
+                        color: header-ta.has-hover ? Ink.focus : Ink.text;
                     }
 
                     Text {
                         text: root.subtitle;
                         font-size: 11px;
-                        color: Theme.text-dim;
+                        color: Ink.text-dim;
                         wrap: word-wrap;
                     }
                 }
@@ -207,7 +206,7 @@ component LicenseCard inherits Rectangle {
 
         if root.expanded: Rectangle {
             height: 1px;
-            background: Theme.border;
+            background: Ink.border;
         }
 
         // Always instantiated (unlike the divider above) so `@children` has
@@ -231,11 +230,11 @@ component LicenseCard inherits Rectangle {
     }
 }
 
-export component AboutDialog inherits Dialog {
+export component AboutDialog inherits InkDialog {
     title: "EVA";
     subtitle: "Version " + AppInfoState.version + " · High-throughput image analysis";
-    dialog-width: 600px;
-    dialog-height: 600px;
+    card-width: 600px;
+    card-height: 600px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
         root.current-tab = 0;
@@ -302,10 +301,10 @@ export component AboutDialog inherits Dialog {
                 Rectangle {
                     width: 48px;
                     height: 48px;
-                    border-radius: Theme.radius-lg + 2px;
-                    background: Theme.accent.with-alpha(0.12);
+                    border-radius: Ink.radius-lg + 2px;
+                    background: Ink.focus.with-alpha(0.12);
                     border-width: 1px;
-                    border-color: Theme.accent.with-alpha(0.25);
+                    border-color: Ink.focus.with-alpha(0.25);
                     Image {
                         source: @image-url("../icons/icon.png");
                         width: 30px;
@@ -317,7 +316,7 @@ export component AboutDialog inherits Dialog {
                     horizontal-stretch: 1;
                     text: "Enhanced Visual Analazer " + AppInfoState.version + " is an application for high throughput image processing.";
                     font-size: 13px;
-                    color: Theme.text;
+                    color: Ink.text;
                     wrap: word-wrap;
                     vertical-alignment: center;
                 }
@@ -326,22 +325,22 @@ export component AboutDialog inherits Dialog {
             Text {
                 text: "Copyright 2019-2026 Joachim Danmayr";
                 font-size: 12px;
-                color: Theme.text-mute;
+                color: Ink.text-mute;
             }
 
             Rectangle {
                 width: link-text.preferred-width + 28px;
                 height: 30px;
                 border-radius: 15px;
-                background: Theme.raised;
+                background: Ink.raised;
                 border-width: 1px;
-                border-color: Theme.border;
+                border-color: Ink.border;
 
                 link-text := Text {
                     text: "evanalyzer.org ↗";
                     font-size: 12px;
                     font-weight: 600;
-                    color: Theme.accent;
+                    color: Ink.focus;
                     x: 14px;
                     y: (parent.height - self.height) / 2;
                 }
@@ -356,7 +355,7 @@ export component AboutDialog inherits Dialog {
                 font-size: 11px;
                 font-weight: 700;
                 letter-spacing: 1px;
-                color: Theme.text-faint;
+                color: Ink.text-faint;
             }
         }
 
@@ -417,14 +416,14 @@ export component AboutDialog inherits Dialog {
             Text {
                 text: "Computing on: " + AppInfoState.system_source;
                 font-size: 11px;
-                color: Theme.text-mute;
+                color: Ink.text-mute;
                 wrap: word-wrap;
             }
 
             if AppInfoState.system_error != "": Text {
                 text: AppInfoState.system_error;
                 font-size: 11px;
-                color: Theme.warn;
+                color: Ink.warn;
                 wrap: word-wrap;
             }
 
@@ -449,7 +448,7 @@ export component AboutDialog inherits Dialog {
                 InfoStat {
                     label: "CUDA (GPU)";
                     value: AppInfoState.system_loading ? "Checking…" : (AppInfoState.cuda_available ? "Available" : "Not available");
-                    value_color: AppInfoState.cuda_available && !AppInfoState.system_loading ? Theme.ok : Theme.text-mute;
+                    value_color: AppInfoState.cuda_available && !AppInfoState.system_loading ? Ink.ok : Ink.text-mute;
                 }
             }
         }
@@ -467,7 +466,7 @@ export component AboutDialog inherits Dialog {
                 Text {
                     text: "Tap a license to view its full text.";
                     font-size: 11px;
-                    color: Theme.text-mute;
+                    color: Ink.text-mute;
                 }
 
                 Rectangle {
@@ -488,9 +487,9 @@ export component AboutDialog inherits Dialog {
 
                     for paragraph in AppInfoState.license_paragraphs: Text {
                         text: paragraph;
-                        font-family: Theme.font-mono;
+                        font-family: Ink.font-mono;
                         font-size: 10px;
-                        color: Theme.text-dim;
+                        color: Ink.text-dim;
                         wrap: word-wrap;
                     }
                 }
@@ -523,7 +522,7 @@ export component AboutDialog inherits Dialog {
                     text: "Third-party open-source packages (" + AppInfoState.third_party_package_count + ")";
                     font-size: 13px;
                     font-weight: 700;
-                    color: Theme.text;
+                    color: Ink.text;
                 }
 
                 Rectangle {
@@ -540,9 +539,9 @@ export component AboutDialog inherits Dialog {
 
                     for paragraph in group.text_paragraphs: Text {
                         text: paragraph;
-                        font-family: Theme.font-mono;
+                        font-family: Ink.font-mono;
                         font-size: 10px;
-                        color: Theme.text-dim;
+                        color: Ink.text-dim;
                         wrap: word-wrap;
                     }
                 }
@@ -550,10 +549,10 @@ export component AboutDialog inherits Dialog {
         }
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: "Close";
-            primary: true;
             clicked => {
                 root.close();
             }

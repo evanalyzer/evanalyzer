@@ -1,76 +1,94 @@
-import { PipelineRunningState } from "../api/pipeline_running.slint";
-import { Theme } from "../style.slint";
+// dialogs/preview_rendering_dialog.slint — while the preview renders: a
+// small pill at the top of the image with the progress and ✕ (cancel, or
+// dismiss a finished one). Not a dialog: the image stays usable.
 
-// -- Dialog --------------------------------------------------------------------
+import { PreviewRunState } from "../api/pipeline_running.slint";
+import { Ink, InkIcons, InkBusy, InkIconButton } from "../ink/ink.slint";
 
-// A slim, unobtrusive progress banner across the middle of the viewport.
-// Preview rendering is fast most of the time, so this deliberately avoids a
-// full modal card (backdrop, centered dialog, blocking TouchArea) - it's a
-// thin black strip, vertically centered over the image, with white
-// status/progress text and a small "✕" to cancel or dismiss, all grouped
-// together in the middle rather than spread edge-to-edge.
 export component PreviewRendering inherits Rectangle {
-    background: transparent;
-
     // Cancels a running preview, or dismisses a finished one.
     function dismiss() {
-        if (PipelineRunningState.done) {
-            PipelineRunningState.close();
+        if PreviewRunState.done {
+            PreviewRunState.close();
         } else {
-            PipelineRunningState.cancel();
+            PreviewRunState.cancel();
         }
     }
 
-    bar := Rectangle {
-        x: 0;
-        y: (parent.height - self.height) / 2;
-        width: 100%;
-        height: 28px;
-        background: #000000;
+    property <bool> failed: PreviewRunState.done && PreviewRunState.has-error;
 
-        HorizontalLayout {
-            alignment: center;
-            spacing: 8px;
+    pill := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 64px;
+        width: min(row.preferred-width + 16px, parent.width - 32px);
+        height: 32px;
+        accessible-role: groupbox;
+        accessible-label: "Preview";
 
-            Text {
-                text: !PipelineRunningState.done ? "Generating preview…" : (PipelineRunningState.has-error ? "Preview failed: " + PipelineRunningState.status-message : "Preview ready");
-                font-size: 12px;
-                color: PipelineRunningState.has-error && PipelineRunningState.done ? Theme.err : Theme.text-pixel-info;
-                vertical-alignment: center;
-                overflow: elide;
-            }
+        face := Rectangle {
+            border-radius: 16px;
+            background: #000000.with-alpha(0.72);
+            border-width: 1px;
+            border-color: #FFFFFF.with-alpha(0.15);
 
-            Text {
-                text: PipelineRunningState.total > 0 && !PipelineRunningState.done ? (PipelineRunningState.processed + " / " + PipelineRunningState.total + " (" + (PipelineRunningState.processed * 100 / PipelineRunningState.total) + "%)") : "";
-                font-size: 12px;
-                color: Theme.text-pixel-info.with-alpha(0.67);
-                vertical-alignment: center;
-            }
+            row := HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 4px;
+                spacing: 8px;
 
-            Rectangle {
-                width: 20px;
-                height: 20px;
-                y: (parent.height - self.height) / 2;
-                border-radius: Theme.radius-sm;
-                background: close-ta.has-hover ? Theme.text-pixel-info.with-alpha(0.2) : transparent;
-                animate background { duration: 80ms; }
-                accessible-role: button;
-                accessible-label: "Close";
-                accessible-action-default => {
-                    root.dismiss();
+                Rectangle {
+                    width: 13px;
+                    if !PreviewRunState.done: InkBusy {
+                        size: 13px;
+                        tint: #FFFFFF;
+                    }
+                    if PreviewRunState.done: Image {
+                        source: root.failed ? InkIcons.error : InkIcons.check;
+                        width: 13px;
+                        colorize: root.failed ? Ink.err : #FFFFFF;
+                    }
                 }
 
-                Image {
-                    source: @image-url("../icons/regular-white/x.svg");
-                    width: 12px;
-                    height: 12px;
-                    colorize: Theme.text-pixel-info;
+                Text {
+                    text: !PreviewRunState.done ? "Generating preview…"
+                        : root.failed ? "Preview failed: " + PreviewRunState.status-message
+                        : "Preview ready";
+                    font-size: Ink.fs-md;
+                    color: root.failed ? Ink.err : #FFFFFF;
+                    vertical-alignment: center;
+                    overflow: elide;
                 }
 
-                close-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
+                if PreviewRunState.total > 0 && !PreviewRunState.done: Text {
+                    text: PreviewRunState.processed + " / " + PreviewRunState.total
+                        + " · " + round(PreviewRunState.processed * 100 / PreviewRunState.total) + "%";
+                    font-size: Ink.fs-sm;
+                    font-family: Ink.font-mono;
+                    color: #FFFFFF.with-alpha(0.65);
+                    vertical-alignment: center;
+                }
+
+                close := Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 24px;
+                    height: 24px;
+                    border-radius: 12px;
+                    background: close-ta.has-hover ? #FFFFFF.with-alpha(0.18) : transparent;
+                    accessible-role: button;
+                    accessible-label: "Close";
+                    accessible-action-default => {
                         root.dismiss();
+                    }
+                    Image {
+                        source: InkIcons.close;
+                        width: 11px;
+                        colorize: #FFFFFF;
+                    }
+                    close-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.dismiss();
+                        }
                     }
                 }
             }

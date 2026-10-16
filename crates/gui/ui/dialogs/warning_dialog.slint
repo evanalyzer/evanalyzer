@@ -1,16 +1,14 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState, WarningState } from "../api/state.slint";
 import { ScrollView } from "std-widgets.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
-import { AppButton } from "../components/app_button.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
-export component WarningDialog inherits Dialog {
+export component WarningDialog inherits InkDialog {
     title: WarningState.title;
-    tone: WarningState.info ? DialogTone.info : DialogTone.warning;
-    dialog-width: 440px;
+    card-width: 440px;
     // Grow with the message - a long one scrolls inside (the dialog is never
     // taller than the window, so OK stays reachable).
-    dialog-height: msg.preferred-height + 150px;
+    card-height: msg.preferred-height + 150px;
     close => {
         GlobalAppState.active_dialog = DialogType.none;
     }
@@ -19,18 +17,18 @@ export component WarningDialog inherits Dialog {
         vertical-stretch: 1;
 
         msg := Text {
-            width: root.dialog-width - 64px;
+            width: root.card-width - 2 * Ink.pad-dialog;
             text: WarningState.message;
             wrap: word-wrap;
-            color: Theme.text;
+            color: Ink.text;
             font-size: 13px;
         }
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: "OK";
-            primary: true;
             clicked => {
                 GlobalAppState.active_dialog = DialogType.none;
             }

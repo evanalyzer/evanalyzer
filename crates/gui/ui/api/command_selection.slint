@@ -1,7 +1,7 @@
 // api/command_selection.slint — the Rust interface of dialogs/command_selection_dialog.slint: the state Rust
 // sets, the callbacks it answers.
 
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 import { StepCategory } from "pipelines.slint";
 
 export struct DefaultParamPreview {
@@ -92,24 +92,24 @@ export global PickerStyle {
 
     public pure function cat-color(c: StepCategory) -> color {
         if c == StepCategory.preprocess {
-            return Theme.cat-preprocess;
+            return Ink.cat-preprocess;
         }
         if c == StepCategory.segment {
-            return Theme.cat-segment;
+            return Ink.cat-segment;
         }
         if c == StepCategory.instance-segmentation {
-            return Theme.cat-object;
+            return Ink.cat-object;
         }
         if c == StepCategory.measure {
-            return Theme.cat-measure;
+            return Ink.cat-measure;
         }
         if c == StepCategory.dataset {
-            return Theme.cat-dataset;
+            return Ink.cat-dataset;
         }
         if c == StepCategory.component {
-            return Theme.cat-component;
+            return Ink.cat-component;
         }
-        return Theme.cat-classify;
+        return Ink.cat-classify;
     }
     public pure function cmd-color(cmd: CommandDef) -> color {
         return cat-color(cmd.category);

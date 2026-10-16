@@ -1,14 +1,12 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ObjectListState } from "../api/object_list.slint";
-import { Theme } from "../style.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
+import { Ink } from "../ink/palette.slint";
 
-import { AppButton } from "../components/app_button.slint";
 
-export component ConfirmDeleteManualAnnotatedObjectDialog inherits Dialog {
+export component ConfirmDeleteManualAnnotatedObjectDialog inherits InkDialog {
     title: "Delete objects";
-    dialog-width: 440px;
-    tone: DialogTone.danger;
+    card-width: 440px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
     }
@@ -18,29 +16,29 @@ export component ConfirmDeleteManualAnnotatedObjectDialog inherits Dialog {
         Text {
             text: "This action cannot be undone. Deleting all manual annotated objects.";
             wrap: word-wrap;
-            color: Theme.text;
+            color: Ink.text;
             font-size: 13px;
         }
 
         Text {
             text: "Delete all manual annotated objects.";
             wrap: word-wrap;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
             font-size: 13px;
         }
 
-        DialogFooter {
+        InkDialogFooter {
 
-            AppButton {
+            InkButton {
                 text: "Cancel";
                 clicked => {
                     GlobalAppState.active_dialog = DialogType.none;
                 }
             }
 
-            AppButton {
+            InkButton {
+                kind: InkButtonKind.danger;
                 text: "Delete";
-                danger: true;
                 clicked => {
                     GlobalAppState.active_dialog = DialogType.none;
                     ObjectListState.object_delete_all_manual_annotated();

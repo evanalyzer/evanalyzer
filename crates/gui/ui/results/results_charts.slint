@@ -6,7 +6,7 @@
 import { ResultsChartKind2, ResultsState } from "../api/results.slint";
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
 
@@ -16,8 +16,8 @@ component ChartTab inherits Rectangle {
     in property <bool> active;
     callback clicked;
 
-    border-radius: Theme.radius-sm;
-    background: root.active ? Theme.accent : (ta.has-hover ? Theme.raised : transparent);
+    border-radius: Ink.radius-sm;
+    background: root.active ? Ink.focus : (ta.has-hover ? Ink.raised : transparent);
     animate background { duration: 80ms; }
 
     ta := TouchArea {
@@ -37,14 +37,14 @@ component ChartTab inherits Rectangle {
             source: root.icon;
             width: 14px;
             height: 14px;
-            colorize: root.active ? white : Theme.text-dim;
+            colorize: root.active ? white : Ink.text-dim;
         }
 
         Text {
             text: root.label;
             font-size: 12.5px;
-            font-family: Theme.font-sans;
-            color: root.active ? white : Theme.text-dim;
+            font-family: Ink.font-sans;
+            color: root.active ? white : Ink.text-dim;
             vertical-alignment: center;
         }
     }
@@ -52,7 +52,7 @@ component ChartTab inherits Rectangle {
 
 component ChartErrorOrEmpty inherits Text {
     text: ResultsState.chart-error;
-    color: Theme.text-mute;
+    color: Ink.text-mute;
     font-size: 12px;
     horizontal-alignment: center;
     vertical-alignment: center;
@@ -69,7 +69,7 @@ component HistogramChart inherits Rectangle {
         Text {
             text: ResultsState.chart-histogram-object-count + " objects";
             font-size: 11px;
-            color: Theme.text-mute;
+            color: Ink.text-mute;
         }
 
         bars := HorizontalLayout {
@@ -83,14 +83,14 @@ component HistogramChart inherits Rectangle {
                     y: parent.height - self.height;
                     width: parent.width;
                     height: parent.height * bin;
-                    background: Theme.accent;
+                    background: Ink.focus;
                     border-radius: 2px;
                 }
             }
 
             if ResultsState.chart-histogram-bins.length == 0: Text {
                 text: "No data for the selected filters";
-                color: Theme.text-mute;
+                color: Ink.text-mute;
                 font-size: 12px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -101,7 +101,7 @@ component HistogramChart inherits Rectangle {
             Text {
                 text: ResultsState.chart-histogram-min-label;
                 font-size: 10px;
-                color: Theme.text-faint;
+                color: Ink.text-faint;
             }
             Rectangle {
                 horizontal-stretch: 1;
@@ -109,7 +109,7 @@ component HistogramChart inherits Rectangle {
             Text {
                 text: ResultsState.chart-histogram-max-label;
                 font-size: 10px;
-                color: Theme.text-faint;
+                color: Ink.text-faint;
             }
         }
     }
@@ -125,12 +125,12 @@ component ScatterChart inherits Rectangle {
         Text {
             text: ResultsState.chart-scatter-shown-count + " of " + ResultsState.chart-scatter-total-count + " objects plotted";
             font-size: 11px;
-            color: Theme.text-mute;
+            color: Ink.text-mute;
         }
 
         plot-area := Rectangle {
             vertical-stretch: 1;
-            background: Theme.raised;
+            background: Ink.raised;
             border-radius: 4px;
             clip: true;
 
@@ -138,14 +138,14 @@ component ScatterChart inherits Rectangle {
                 width: 5px;
                 height: 5px;
                 border-radius: 2.5px;
-                background: Theme.accent.with-alpha(0.65);
+                background: Ink.focus.with-alpha(0.65);
                 x: pt.x * (plot-area.width - self.width);
                 y: (1.0 - pt.y) * (plot-area.height - self.height);
             }
 
             if ResultsState.chart-scatter-points.length == 0: Text {
                 text: "No data for the selected filters";
-                color: Theme.text-mute;
+                color: Ink.text-mute;
                 font-size: 12px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -156,14 +156,14 @@ component ScatterChart inherits Rectangle {
                 y: 2px;
                 text: ResultsState.chart-scatter-y-max-label;
                 font-size: 9px;
-                color: Theme.text-faint;
+                color: Ink.text-faint;
             }
             Text {
                 x: 4px;
                 y: parent.height - self.height - 2px;
                 text: ResultsState.chart-scatter-y-min-label;
                 font-size: 9px;
-                color: Theme.text-faint;
+                color: Ink.text-faint;
             }
         }
 
@@ -171,7 +171,7 @@ component ScatterChart inherits Rectangle {
             Text {
                 text: ResultsState.chart-scatter-x-min-label;
                 font-size: 10px;
-                color: Theme.text-faint;
+                color: Ink.text-faint;
             }
             Rectangle {
                 horizontal-stretch: 1;
@@ -179,7 +179,7 @@ component ScatterChart inherits Rectangle {
             Text {
                 text: ResultsState.chart-scatter-x-max-label;
                 font-size: 10px;
-                color: Theme.text-faint;
+                color: Ink.text-faint;
             }
         }
     }
@@ -190,7 +190,7 @@ component BoxplotChart inherits Rectangle {
 
     if ResultsState.chart-error == "" && ResultsState.chart-boxplot-boxes.length == 0: Text {
         text: "No data for the selected filters";
-        color: Theme.text-mute;
+        color: Ink.text-mute;
         font-size: 12px;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -256,14 +256,14 @@ component BoxplotChart inherits Rectangle {
                 Text {
                     text: box.label;
                     font-size: 9.5px;
-                    color: Theme.text-mute;
+                    color: Ink.text-mute;
                     horizontal-alignment: center;
                     overflow: elide;
                 }
                 Text {
                     text: box.object-count + " objects";
                     font-size: 8.5px;
-                    color: Theme.text-faint;
+                    color: Ink.text-faint;
                     horizontal-alignment: center;
                 }
             }
@@ -272,7 +272,7 @@ component BoxplotChart inherits Rectangle {
 }
 
 export component ResultsChartsView inherits Rectangle {
-    background: Theme.bg;
+    background: Ink.ground;
 
     VerticalLayout {
         spacing: 0px;
@@ -352,7 +352,7 @@ export component ResultsChartsView inherits Rectangle {
                 y: parent.height - 1px;
                 width: parent.width;
                 height: 1px;
-                background: Theme.border-soft;
+                background: Ink.border-soft;
             }
         }
 

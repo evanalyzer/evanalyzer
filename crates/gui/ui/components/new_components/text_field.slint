@@ -1,10 +1,10 @@
 // components/text_field.slint — shared single-line text input with an
-// optional leading icon and placeholder, styled off Theme. Wraps
+// optional leading icon and placeholder, styled with Ink. Wraps
 // std-widgets' LineEdit so we keep native text editing/selection/caret
 // behavior instead of reimplementing it.
 
 import { LineEdit } from "../../ink/std_compat.slint";
-import { Theme } from "../../style.slint";
+import { Ink } from "../../ink/palette.slint";
 
 export component TextField inherits Rectangle {
     in property <string> placeholder;
@@ -20,10 +20,10 @@ export component TextField inherits Rectangle {
     callback accepted(string);
 
     height: 34px;
-    border-radius: Theme.radius-sm;
-    background: Theme.raised;
+    border-radius: Ink.radius-sm;
+    background: Ink.raised;
     border-width: 1px;
-    border-color: le.has-focus ? Theme.accent : Theme.border-soft;
+    border-color: le.has-focus ? Ink.focus : Ink.border-soft;
     animate border-color { duration: 80ms; }
 
     HorizontalLayout {
@@ -35,7 +35,7 @@ export component TextField inherits Rectangle {
             source: root.icon;
             width: 13px;
             height: 13px;
-            colorize: Theme.text-mute;
+            colorize: Ink.text-mute;
             y: (parent.height - self.height) / 2;
         }
 
@@ -45,7 +45,7 @@ export component TextField inherits Rectangle {
             placeholder-text: root.placeholder;
             text <=> root.value;
             font-size: root.mono ? 11.5px : 12px;
-            font-family: root.mono ? Theme.font-mono : Theme.font-sans;
+            font-family: root.mono ? Ink.font-mono : Ink.font-sans;
             edited(t) => { root.edited(t); }
             accepted(t) => { root.accepted(t); }
             init => {
@@ -69,8 +69,8 @@ export component CheckMark inherits Rectangle {
     height: 15px;
     border-radius: 4px;
     border-width: 1.5px;
-    border-color: (root.checked || root.indeterminate) ? Theme.accent : Theme.border;
-    background: (root.checked || root.indeterminate) ? Theme.accent : transparent;
+    border-color: (root.checked || root.indeterminate) ? Ink.focus : Ink.border;
+    background: (root.checked || root.indeterminate) ? Ink.focus : transparent;
     animate background { duration: 60ms; }
 
     if root.checked: Image {
@@ -112,8 +112,8 @@ export component Checkbox inherits Rectangle {
         Text {
             text: root.label;
             font-size: 12px;
-            font-family: Theme.font-sans;
-            color: root.checked ? Theme.text : Theme.text-dim;
+            font-family: Ink.font-sans;
+            color: root.checked ? Ink.text : Ink.text-dim;
             vertical-alignment: center;
         }
     }

@@ -5,7 +5,7 @@
 // "Obj. class 03"); what's known about it - a color swatch and a name, see
 // `SwatchName` - comes as children.
 
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 // A color swatch and a name, after a picker's label.
 export component SwatchName inherits HorizontalLayout {
@@ -29,7 +29,7 @@ export component SwatchName inherits HorizontalLayout {
     Text {
         text: root.name;
         font-size: root.font-size;
-        color: Theme.text-dim;
+        color: Ink.text-dim;
         vertical-alignment: center;
         overflow: elide;
         horizontal-stretch: 1;
@@ -46,8 +46,8 @@ export component PickerField inherits Rectangle {
 
     border-radius: 4px;
     border-width: 1px;
-    border-color: Theme.border-soft;
-    background: ta.has-hover ? Theme.raised : Theme.bg;
+    border-color: Ink.border-soft;
+    background: ta.has-hover ? Ink.raised : Ink.ground;
 
     ta := TouchArea {
         mouse-cursor: pointer;
@@ -63,8 +63,8 @@ export component PickerField inherits Rectangle {
         Text {
             text: root.label;
             font-size: root.font-size;
-            font-family: root.mono ? Theme.font-mono : "";
-            color: Theme.text;
+            font-family: root.mono ? Ink.font-mono : "";
+            color: Ink.text;
             vertical-alignment: center;
         }
 
@@ -76,7 +76,7 @@ export component PickerField inherits Rectangle {
         Text {
             text: "↓";
             font-size: 9px;
-            color: Theme.text-mute;
+            color: Ink.text-mute;
             vertical-alignment: center;
         }
     }
@@ -89,14 +89,14 @@ export component PickerRow inherits TouchArea {
     in property <bool> selected;
     in property <length> font-size: 11px;
     in property <bool> mono: true;
-    in property <color> label-color: Theme.text;
+    in property <color> label-color: Ink.text;
 
     height: 28px;
     mouse-cursor: pointer;
 
     Rectangle {
         border-radius: 3px;
-        background: root.selected ? Theme.accent.with-alpha(0.12) : (root.has-hover ? Theme.raised : transparent);
+        background: root.selected ? Ink.focus.with-alpha(0.12) : (root.has-hover ? Ink.raised : transparent);
         HorizontalLayout {
             padding-left: 8px;
             padding-right: 8px;
@@ -104,7 +104,7 @@ export component PickerRow inherits TouchArea {
             Text {
                 text: root.label;
                 font-size: root.font-size;
-                font-family: root.mono ? Theme.font-mono : "";
+                font-family: root.mono ? Ink.font-mono : "";
                 color: root.label-color;
                 vertical-alignment: center;
             }

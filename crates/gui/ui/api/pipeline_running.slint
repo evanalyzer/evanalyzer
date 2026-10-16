@@ -1,7 +1,13 @@
-// api/pipeline_running.slint — the Rust interface of dialogs/pipeline_running_dialog.slint: the state Rust
-// sets, the callbacks it answers.
+// api/pipeline_running.slint — the progress of a running analysis
+// (`PipelineRunningState`) and of the preview (`PreviewRunState`). Kept
+// apart: with editing allowed during an analysis, a preview runs while the
+// analysis does.
 
 export global PipelineRunningState {
+    // An analysis was started and its progress not yet closed: shown as a
+    // card over the image (editing allowed during the analysis), or in the
+    // running dialog (not allowed).
+    in-out property <bool> active: false;
     in-out property <int> processed: 0;
     in-out property <int> total: 0;
     // True once every tile is done and the pipeline has moved on to
@@ -10,6 +16,18 @@ export global PipelineRunningState {
     // images, so the label switches to a phase description instead of a
     // counter that would otherwise look "stuck".
     in-out property <bool> whole-image-phase: false;
+    in-out property <bool> done: false;
+    in-out property <bool> has-error: false;
+    in-out property <string> status-message: "";
+    callback cancel();
+    callback close();
+}
+
+// The preview of the current image (the overlay over the image while it
+// renders).
+export global PreviewRunState {
+    in-out property <int> processed: 0;
+    in-out property <int> total: 0;
     in-out property <bool> done: false;
     in-out property <bool> has-error: false;
     in-out property <string> status-message: "";

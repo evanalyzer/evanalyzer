@@ -1,5 +1,6 @@
 use crate::{
-    DialogType, GlobalAppState, PipelineRunningState, PipelinesPanelState, UiState,
+    DialogType, GlobalAppState, PipelineRunningState, PipelinesPanelState, PreviewRunState,
+    UiState,
     editor::{
         classification_controller::ClassificationController,
         object_list_controller::ObjectListController, pipeline_task::PipelineTask,
@@ -17,6 +18,21 @@ use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
 use log::{error, info};
 use slint::ComponentHandle;
 use std::sync::{Arc, Condvar, Mutex};
+
+/// Runs `$body` with `$state` the progress state of the job: the preview's
+/// (`PreviewRunState`) or the analysis's (`PipelineRunningState`) - both
+/// have the same properties.
+macro_rules! with_progress {
+    ($ui:expr, $preview:expr, |$state:ident| $body:block) => {
+        if $preview {
+            let $state = $ui.global::<PreviewRunState>();
+            $body
+        } else {
+            let $state = $ui.global::<PipelineRunningState>();
+            $body
+        }
+    };
+}
 
 pub struct PipelineWorker {
     pub(crate) app_state: Arc<UiState>,
@@ -58,27 +74,51 @@ impl PipelineWorker {
             .expect("Failed to spawn pipeline worker thread");
     }
 
+    /// Previews run here, one after the other. An analysis gets a thread of
+    /// its own: previews keep running while it does (with editing allowed
+    /// during an analysis, see `ViewportMemorySettings::edit_during_analysis`).
     fn run_worker_loop(self: &Arc<Self>) -> ! {
         let task_request = &self.pipeline_controller.task_request;
         loop {
             let task = wait_for_task(task_request.clone());
-            self.run_task(task);
+            self.start_task(task);
         }
+    }
+
+    /// Runs a preview here and now; starts an analysis on its own thread
+    /// (marked running before this returns) and returns that thread.
+    fn start_task(self: &Arc<Self>, task: PipelineTask) -> Option<std::thread::JoinHandle<()>> {
+        if task.preview {
+            self.run_task(task);
+            return None;
+        }
+        let running = &self.pipeline_controller.analysis_running;
+        running.store(true, std::sync::atomic::Ordering::SeqCst);
+        let worker = Arc::clone(self);
+        Some(crate::helper::ui_thread::spawn(move || {
+            worker.run_task(task)
+        }))
     }
 
     /// A job that could not start (e.g. a pipeline reads a channel the images
     /// don't have): logged, and shown to the user in the run status - the
     /// same place "zoomed out too far to preview" is reported.
-    fn report_start_failure(&self, what: &str, e: &InternalErrors) {
+    fn report_start_failure(&self, preview: bool, what: &str, e: &InternalErrors) {
         error!("{what} could not be started: {e}");
         let message = format!("{what} could not be started: {e}");
+        if !preview {
+            self.pipeline_controller
+                .analysis_running
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
         let ui_handle = self.app_state.ui_handle.clone();
         let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui) = ui_handle.upgrade() {
-                let running = ui.global::<PipelineRunningState>();
-                running.set_status_message(message.into());
-                running.set_has_error(true);
-                running.set_done(true);
+                with_progress!(ui, preview, |running| {
+                    running.set_status_message(message.into());
+                    running.set_has_error(true);
+                    running.set_done(true);
+                });
             }
         });
     }
@@ -133,16 +173,16 @@ impl PipelineWorker {
                         );
                         let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
-                                ui.global::<PipelineRunningState>()
-                                    .set_status_message(message.into());
-                                ui.global::<PipelineRunningState>().set_has_error(true);
-                                ui.global::<PipelineRunningState>().set_done(true);
+                                let preview = ui.global::<PreviewRunState>();
+                                preview.set_status_message(message.into());
+                                preview.set_has_error(true);
+                                preview.set_done(true);
                             }
                         });
                         return;
                     }
                     Err(StartPreviewError::Failed(e)) => {
-                        self.report_start_failure("The preview", &e);
+                        self.report_start_failure(true, "The preview", &e);
                         return;
                     }
                 }
@@ -161,22 +201,22 @@ impl PipelineWorker {
                 match started {
                     Ok(job) => job,
                     Err(e) => {
-                        self.report_start_failure("The analysis", &e);
+                        self.report_start_failure(false, "The analysis", &e);
                         return;
                     }
                 }
             };
-            let analysis_running = &self.pipeline_controller.analysis_running;
-            analysis_running.store(!is_preview, std::sync::atomic::Ordering::SeqCst);
             let job_id = job.id().map(str::to_string);
 
             info!("Pipeline job started ...");
 
-            *self
-                .pipeline_controller
-                .pipeline_cancel_flag
-                .lock()
-                .unwrap() = Some(job.cancel_handle());
+            // Cancel stops this job: the preview's or the analysis's.
+            let cancel_slot = if is_preview {
+                &self.pipeline_controller.preview_cancel_flag
+            } else {
+                &self.pipeline_controller.pipeline_cancel_flag
+            };
+            *cancel_slot.lock().unwrap() = Some(job.cancel_handle());
             let mut last_ui_update = std::time::Instant::now();
             let mut pipeline_start: Option<std::time::Instant> = None;
             for event in job.events() {
@@ -186,10 +226,14 @@ impl PipelineWorker {
                         let total = total_tiles as i32;
                         let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
-                                ui.global::<PipelineRunningState>().set_total(total);
-                                ui.global::<PipelineRunningState>().set_processed(0);
-                                ui.global::<PipelineRunningState>()
-                                    .set_whole_image_phase(false);
+                                with_progress!(ui, is_preview, |running| {
+                                    running.set_total(total);
+                                    running.set_processed(0);
+                                });
+                                if !is_preview {
+                                    ui.global::<PipelineRunningState>()
+                                        .set_whole_image_phase(false);
+                                }
                             }
                         });
                     }
@@ -210,12 +254,16 @@ impl PipelineWorker {
                         let total = total as i32;
                         let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
-                                ui.global::<PipelineRunningState>().set_done(false);
-                                ui.global::<PipelineRunningState>().set_has_error(false);
-                                ui.global::<PipelineRunningState>().set_total(total);
-                                ui.global::<PipelineRunningState>().set_processed(0);
-                                ui.global::<PipelineRunningState>()
-                                    .set_whole_image_phase(false);
+                                with_progress!(ui, is_preview, |running| {
+                                    running.set_done(false);
+                                    running.set_has_error(false);
+                                    running.set_total(total);
+                                    running.set_processed(0);
+                                });
+                                if !is_preview {
+                                    ui.global::<PipelineRunningState>()
+                                        .set_whole_image_phase(false);
+                                }
                             }
                         });
                     }
@@ -244,12 +292,14 @@ impl PipelineWorker {
                         let ui_handle = self.app_state.ui_handle.clone();
                         let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
-                                ui.global::<PipelineRunningState>()
-                                    .set_processed(tile_index as i32);
-                                ui.global::<PipelineRunningState>()
-                                    .set_total(total_tiles as i32);
-                                ui.global::<PipelineRunningState>()
-                                    .set_whole_image_phase(false);
+                                with_progress!(ui, is_preview, |running| {
+                                    running.set_processed(tile_index as i32);
+                                    running.set_total(total_tiles as i32);
+                                });
+                                if !is_preview {
+                                    ui.global::<PipelineRunningState>()
+                                        .set_whole_image_phase(false);
+                                }
                             }
                         });
                     }
@@ -269,12 +319,14 @@ impl PipelineWorker {
                         let ui_handle = self.app_state.ui_handle.clone();
                         let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_handle.upgrade() {
-                                ui.global::<PipelineRunningState>()
-                                    .set_processed(completed as i32);
-                                ui.global::<PipelineRunningState>()
-                                    .set_total(total_tiles as i32);
-                                ui.global::<PipelineRunningState>()
-                                    .set_whole_image_phase(true);
+                                with_progress!(ui, is_preview, |running| {
+                                    running.set_processed(completed as i32);
+                                    running.set_total(total_tiles as i32);
+                                });
+                                if !is_preview {
+                                    ui.global::<PipelineRunningState>()
+                                        .set_whole_image_phase(true);
+                                }
                             }
                         });
                     }
@@ -298,8 +350,10 @@ impl PipelineWorker {
                             let total = total as i32;
                             let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_handle.upgrade() {
-                                    ui.global::<PipelineRunningState>().set_processed(index);
-                                    ui.global::<PipelineRunningState>().set_total(total);
+                                    with_progress!(ui, is_preview, |running| {
+                                        running.set_processed(index);
+                                        running.set_total(total);
+                                    });
                                     ui.global::<PipelinesPanelState>()
                                         .set_eta_seconds_per_image(eta_str.into());
                                 }
@@ -340,11 +394,7 @@ impl PipelineWorker {
                     }
                     ProgressEvent::Finished => {
                         info!("Pipeline job finished - waiting for result");
-                        *self
-                            .pipeline_controller
-                            .pipeline_cancel_flag
-                            .lock()
-                            .unwrap() = None;
+                        *cancel_slot.lock().unwrap() = None;
                     }
                 }
             }
@@ -352,7 +402,11 @@ impl PipelineWorker {
             // (see `RunningJob::wait`), so the user sees it and this worker
             // survives to run the next job.
             let job_result = job.wait();
-            analysis_running.store(false, std::sync::atomic::Ordering::SeqCst);
+            if !is_preview {
+                self.pipeline_controller
+                    .analysis_running
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+            }
             let backend = self.app_state.backend();
             let connection_lost = job_result.is_err() && !backend.is_connected();
             // Seen through to its end here: no need to report it again
@@ -409,15 +463,21 @@ impl PipelineWorker {
             let is_preview = task.preview;
             let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_handle.upgrade() {
-                    ui.global::<PipelineRunningState>()
-                        .set_status_message(status_message.into());
-                    ui.global::<PipelineRunningState>().set_has_error(is_error);
-                    ui.global::<PipelineRunningState>().set_done(true);
+                    with_progress!(ui, is_preview, |running| {
+                        running.set_status_message(status_message.into());
+                        running.set_has_error(is_error);
+                        running.set_done(true);
+                    });
 
-                    // For preview: auto-close on success or cancel; keep open on error
-                    if is_preview && !is_error {
-                        ui.global::<GlobalAppState>()
-                            .set_active_dialog(DialogType::None);
+                    // The preview's overlay closes on success or cancel, and
+                    // stays open on an error - only that overlay, not
+                    // whatever dialog the user opened meanwhile.
+                    let app = ui.global::<GlobalAppState>();
+                    if is_preview
+                        && !is_error
+                        && app.get_active_dialog() == DialogType::PreviewRendering
+                    {
+                        app.set_active_dialog(DialogType::None);
                     }
                 }
             });
@@ -747,11 +807,70 @@ mod tests {
             .set_active_dialog(DialogType::PreviewRendering);
         f.worker.run_task(f.task(true));
         drain_ui_queue();
-        assert!(f.running().get_done());
-        assert!(!f.running().get_has_error());
+        let preview = f.ui.global::<PreviewRunState>();
+        assert!(preview.get_done());
+        assert!(!preview.get_has_error());
         assert_eq!(
             f.ui.global::<GlobalAppState>().get_active_dialog(),
             DialogType::None
+        );
+    }
+
+    /// A preview while an analysis runs (editing allowed during it): it
+    /// reports to its own state and leaves the analysis' progress alone.
+    #[test]
+    fn a_preview_leaves_the_progress_of_a_running_analysis_alone() {
+        let f = fixture();
+        let running = f.running();
+        running.set_active(true);
+        running.set_processed(3);
+        running.set_total(9);
+        f.worker.run_task(f.task(true));
+        drain_ui_queue();
+
+        assert!(f.ui.global::<PreviewRunState>().get_done());
+        assert!(running.get_active());
+        assert!(!running.get_done());
+        assert_eq!((running.get_processed(), running.get_total()), (3, 9));
+        assert_eq!(running.get_status_message(), "");
+    }
+
+    /// A finished preview closes only its own overlay - not a dialog the
+    /// user opened while it rendered.
+    #[test]
+    fn a_finished_preview_leaves_another_open_dialog_open() {
+        let f = fixture();
+        f.ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::ProjectSettings);
+        f.worker.run_task(f.task(true));
+        drain_ui_queue();
+        assert_eq!(
+            f.ui.global::<GlobalAppState>().get_active_dialog(),
+            DialogType::ProjectSettings
+        );
+    }
+
+    /// An analysis gets a thread of its own - the worker is free for
+    /// previews meanwhile - and counts as running from the start on.
+    #[test]
+    fn an_analysis_runs_on_its_own_thread_and_is_running_until_it_ends() {
+        let f = fixture();
+        let analysis_running = &f.worker.pipeline_controller.analysis_running;
+
+        let thread = f.worker.start_task(f.task(false)).expect("its own thread");
+        assert!(analysis_running.load(std::sync::atomic::Ordering::SeqCst));
+        thread.join().unwrap();
+        drain_ui_queue();
+
+        assert!(!analysis_running.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            f.running().get_done(),
+            "{}",
+            f.running().get_status_message()
+        );
+        assert!(
+            f.worker.start_task(f.task(true)).is_none(),
+            "a preview runs right here"
         );
     }
 
