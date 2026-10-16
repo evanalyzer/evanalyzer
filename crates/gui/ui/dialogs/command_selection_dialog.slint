@@ -42,6 +42,7 @@
 
 import { ScrollView, LineEdit } from "std-widgets.slint";
 import { AppButton } from "../components/app_button.slint";
+import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 import { Theme } from "../style.slint";
 import { StepCategory } from "../editor/pipelines_panel.slint";
 
@@ -136,7 +137,6 @@ global PickerStyle {
     out property <length> modal-h: 680px;
     out property <length> list-col-w: 440px;
     out property <length> row-h: 44px;
-    out property <length> radius: 10px;
 
     public pure function cat-color(c: StepCategory) -> color {
         if c == StepCategory.preprocess {
@@ -674,7 +674,7 @@ component DetailPane inherits Rectangle {
 // Main dialog
 // ===========================================================================
 
-export component CommandSelectionDialog inherits Rectangle {
+export component CommandSelectionDialog inherits Dialog {
     // ---- Host inputs ----
     in property <[CommandDef]> commands;
     in property <string> target-pipeline;        // pipeline name, for breadcrumb
@@ -732,109 +732,31 @@ export component CommandSelectionDialog inherits Rectangle {
     callback cancel();
     callback import-bioimageio();    // open a bioimage.io rdf.yaml and insert the configured command
 
-    // Dimmed background
-    background: Theme.modal-overlay;
+    title: "Add step";
+    subtitle: insert-after-idx < 0 ? "Append to \"\{target-pipeline}\"" : "After step \{insert-after-idx + 1} of \"\{target-pipeline}\"";
+    dialog-width: PickerStyle.modal-w;
+    dialog-height: PickerStyle.modal-h;
+    content-padding: 0px;
+    close => {
+        root.cancel();
+    }
 
-    Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: PickerStyle.modal-w;
-        height: PickerStyle.modal-h;
-        background: Theme.panel;
-        border-radius: PickerStyle.radius;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-blur: 40px;
-        drop-shadow-offset-y: 18px;
-        clip: true;
-
-        // -------- Keyboard --------
-    forward-focus: kbd;
-        kbd := FocusScope {
-            key-pressed(e) => {
-                if e.text == Key.Escape {
-                    root.cancel();
-                    return accept;
-                }
-                if e.text == Key.Return && root.selected-id != -1 {
-                    root.confirm(root.selected-id);
-                    return accept;
-                }
-                return reject;
+    // -------- Keyboard -------- (Esc is the Dialog's: `close` above)
+    kbd := FocusScope {
+        key-pressed(e) => {
+            if e.text == Key.Return && root.selected-id != -1 {
+                root.confirm(root.selected-id);
+                return accept;
             }
+            return reject;
         }
 
         VerticalLayout {
             spacing: 0;
 
-            // ---------- 1. Header ----------
-        Rectangle {
-                height: 44px;
-                background: Theme.panel;
-                HorizontalLayout {
-                    padding-left: 20px;
-                    padding-right: 12px;
-                    spacing: 12px;
-                    alignment: stretch;
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 0;
-                        Text {
-                            text: "Add step";
-                            color: Theme.text;
-                            font-size: 13.5px;
-                            font-weight: 600;
-                        }
-                    }
-
-                    Rectangle {
-                        width: 1px;
-                        background: Theme.border-soft;
-                    }
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 0;
-                        horizontal-stretch: 1;
-                        Text {
-                            text: insert-after-idx < 0 ? "Append to \"\{target-pipeline}\"" : "After step \{insert-after-idx + 1} of \"\{target-pipeline}\"";
-                            color: Theme.text-mute;
-                            font-size: 11px;
-                            font-family: Theme.font-mono;
-                        }
-                    }
-
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        y: (parent.height - 28px) / 2;
-                        border-radius: 5px;
-                        background: close-ta.has-hover ? Theme.raised : transparent;
-                        Text {
-                            text: "✕";
-                            color: Theme.text-dim;
-                            font-size: 12px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        close-ta := TouchArea {
-                            clicked => {
-                                root.cancel();
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    x: 0;
-                    y: parent.height - 1px;
-                    width: parent.width;
-                    height: 1px;
-                    background: Theme.border-soft;
-                }
+            Rectangle {
+                height: 1px;
+                background: Theme.border-soft;
             }
 
             Rectangle {
@@ -856,11 +778,12 @@ export component CommandSelectionDialog inherits Rectangle {
                             padding-right: 12px;
                             spacing: 10px;
                             alignment: stretch;
-                            Text {
-                                text: "🔍";
-                                color: Theme.text-mute;
-                                font-size: 13px;
-                                vertical-alignment: center;
+                            Image {
+                                width: 14px;
+                                height: 14px;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("../icons/regular-gray/magnifying-glass.svg");
+                                colorize: Theme.text-mute;
                             }
 
                             LineEdit {
@@ -1440,128 +1363,37 @@ export component CommandSelectionDialog inherits Rectangle {
             }
 
             // ---------- 5. Footer ----------
-        Rectangle {
-                height: 52px;
-                background: Theme.bg;
-          //  border-top-width: 1px;
-            border-color: Theme.border-soft;
+            Rectangle {
+                height: 1px;
+                background: Theme.border-soft;
+            }
 
-                HorizontalLayout {
-                    padding-left: 20px;
-                    padding-right: 16px;
-                    spacing: 14px;
-                    alignment: stretch;
+            DialogFooter {
+                padding-left: 24px;
+                padding-right: 24px;
+                padding-top: 14px;
+                padding-bottom: 20px;
 
-                    // Keyboard hints
-                    /*
-                HorizontalLayout {
-                        spacing: 14px;
-                        alignment: start;
-
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Rectangle {
-                                width: 22px;
-                                height: 18px;
-                                y: (parent.height - 18px) / 2;
-                                border-radius: 3px;
-                                background: Theme.raised;
-                                border-width: 1px;
-                                border-color: Theme.border-soft;
-                                Text {
-                                    text: "↑↓";
-                                    color: Theme.text-dim;
-                                    font-size: 10px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Text {
-                                text: "navigate";
-                                color: Theme.text-mute;
-                                font-size: 11px;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Rectangle {
-                                width: 22px;
-                                height: 18px;
-                                y: (parent.height - 18px) / 2;
-                                border-radius: 3px;
-                                background: Theme.raised;
-                                border-width: 1px;
-                                border-color: Theme.border-soft;
-                                Text {
-                                    text: "↵";
-                                    color: Theme.text-dim;
-                                    font-size: 10px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Text {
-                                text: "add";
-                                color: Theme.text-mute;
-                                font-size: 11px;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Rectangle {
-                                width: 22px;
-                                height: 18px;
-                                y: (parent.height - 18px) / 2;
-                                border-radius: 3px;
-                                background: Theme.raised;
-                                border-width: 1px;
-                                border-color: Theme.border-soft;
-                                Text {
-                                    text: "⎋";
-                                    color: Theme.text-dim;
-                                    font-size: 10px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Text {
-                                text: "cancel";
-                                color: Theme.text-mute;
-                                font-size: 11px;
-                                vertical-alignment: center;
-                            }
-                        }
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        root.cancel();
                     }
-*/
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
+                }
 
-                    // Action buttons
-                    AppButton {
-                        text: "Cancel";
-                        clicked => {
-                            root.cancel();
-                        }
-                    }
-
-                    AppButton {
-                        text: "Add to pipeline";
-                        primary: true;
-                        clicked => {
-                            root.confirm(root.selected-id);
-                        }
+                AppButton {
+                    text: "Add to pipeline";
+                    primary: true;
+                    clicked => {
+                        root.confirm(root.selected-id);
                     }
                 }
             }
         }
+    }
+
+    init => {
+        kbd.focus();
     }
 }
 
@@ -1620,18 +1452,11 @@ export component CommandPickerModal inherits Rectangle {
     callback cancel();
     callback import-bioimageio();
 
-    // Scrim (full-screen darkening)
-    background: #000000.with-alpha(0.55);
-    TouchArea {
-        clicked => {
-            root.cancel();
-        }
-    }
-
-    // Centered modal
+    // The dialog brings its own backdrop; a click on it cancels.
     CommandSelectionDialog {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        width: 100%;
+        height: 100%;
+        close-on-backdrop: true;
         commands: root.commands;
         target-pipeline: root.target-pipeline;
         insert-after-idx: root.insert-after-idx;
@@ -1667,9 +1492,6 @@ export component CommandPickerModal inherits Rectangle {
         filter-components <=> root.filter-components;
         filter-recents <=> root.filter-recents;
         selected-id <=> root.selected-id;
-
-        // Eat clicks so the scrim TouchArea doesn't fire when clicking inside.
-        TouchArea { }
 
         query-changed(t) => {
             root.query-changed(t);

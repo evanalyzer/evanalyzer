@@ -10,6 +10,8 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
+import { IconButton } from "../components/new_components/button.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { TextField } from "../components/new_components/text_field.slint";
 import { DropdownField } from "../components/new_components/dropdown.slint";
 
@@ -76,34 +78,6 @@ export global FileBrowserState {
     callback create-folder(string);
     callback overwrite-answered(bool);
     callback file-name-edited(string);
-}
-
-component IconButton inherits Rectangle {
-    in property <image> icon;
-    in property <string> tooltip;
-    in property <bool> enabled: true;
-    in property <bool> active: false;
-    callback clicked;
-
-    width: 30px;
-    height: 30px;
-    border-radius: Theme.radius-md;
-    background: root.active ? Theme.accent-dim : ta.has-hover && root.enabled ? Theme.hover : transparent;
-    opacity: root.enabled ? 1.0 : 0.4;
-    animate background { duration: 80ms; }
-
-    Image {
-        source: root.icon;
-        width: 16px;
-        height: 16px;
-        colorize: root.active ? Theme.accent : Theme.text-dim;
-    }
-
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: root.enabled ? pointer : default;
-        clicked => { root.clicked(); }
-    }
 }
 
 component PlaceRow inherits Rectangle {
@@ -207,11 +181,20 @@ component EntryRow inherits Rectangle {
     }
 }
 
-export component FileBrowserDialog inherits Rectangle {
-    background: Theme.modal-overlay;
-
-    // Block clicks to whatever is underneath.
-    TouchArea { }
+export component FileBrowserDialog inherits Dialog {
+    title: FileBrowserState.title;
+    subtitle: FileBrowserState.location;
+    dialog-width: 980px;
+    dialog-height: 640px;
+    content-padding: 0px;
+    close => {
+        if (FileBrowserState.overwrite-name != "") {
+            FileBrowserState.overwrite-answered(false);
+            keys.focus();
+        } else {
+            FileBrowserState.cancel();
+        }
+    }
 
     // Manual windowing (see multi_select_dropdown.slint): folders with
     // thousands of images must not instantiate thousands of rows.
@@ -219,16 +202,9 @@ export component FileBrowserDialog inherits Rectangle {
     property <length> row-pitch: 36px;
     property <int> window-size: 40;
 
+    // Esc is the Dialog's (`close` above); the rest is the browser's.
     keys := FocusScope {
         key-pressed(event) => {
-            if (event.text == Key.Escape) {
-                if (FileBrowserState.overwrite-name != "") {
-                    FileBrowserState.overwrite-answered(false);
-                } else {
-                    FileBrowserState.cancel();
-                }
-                return accept;
-            }
             if (event.text == Key.Return) {
                 if (FileBrowserState.overwrite-name != "") {
                     FileBrowserState.overwrite-answered(true);
@@ -251,82 +227,9 @@ export component FileBrowserDialog inherits Rectangle {
             }
             reject
         }
-    }
-    init => { keys.focus(); }
-
-    card := Rectangle {
-        width: min(parent.width - 48px, 980px);
-        height: min(parent.height - 48px, 640px);
-        background: Theme.panel;
-        border-radius: 16px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: Theme.shadow;
-        clip: true;
 
         VerticalLayout {
-            padding: 0px;
             spacing: 0px;
-
-            // ---- Header -------------------------------------------------
-            HorizontalLayout {
-                padding-left: 22px;
-                padding-right: 14px;
-                padding-top: 16px;
-                padding-bottom: 14px;
-                spacing: 12px;
-
-                Rectangle {
-                    width: 34px;
-                    height: 34px;
-                    border-radius: 17px;
-                    background: Theme.accent-dim;
-                    Image {
-                        width: 18px;
-                        height: 18px;
-                        source: FileBrowserState.mode == FileBrowserMode.save-file
-                            ? @image-url("../icons/regular-gray/floppy-disk.svg")
-                            : FileBrowserState.mode == FileBrowserMode.open-folder
-                            ? @image-url("../icons/regular-gray/folder-open.svg")
-                            : @image-url("../icons/regular-gray/file.svg");
-                        colorize: Theme.accent;
-                    }
-                }
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    alignment: center;
-                    spacing: 1px;
-                    Text {
-                        text: FileBrowserState.title;
-                        font-size: 17px;
-                        font-weight: 700;
-                        color: Theme.text-bright;
-                    }
-                    HorizontalLayout {
-                        spacing: 6px;
-                        Image {
-                            width: 12px;
-                            height: 12px;
-                            y: (parent.height - self.height) / 2;
-                            source: FileBrowserState.remote
-                                ? @image-url("../icons/regular-gray/hard-drives.svg")
-                                : @image-url("../icons/regular-gray/desktop.svg");
-                            colorize: FileBrowserState.remote ? Theme.accent : Theme.text-mute;
-                        }
-                        Text {
-                            text: FileBrowserState.location;
-                            font-size: 11.5px;
-                            color: FileBrowserState.remote ? Theme.accent : Theme.text-mute;
-                        }
-                    }
-                }
-                IconButton {
-                    y: (parent.height - self.height) / 2;
-                    icon: @image-url("../icons/regular-gray/x.svg");
-                    clicked => { FileBrowserState.cancel(); }
-                }
-            }
 
             Rectangle { height: 1px; background: Theme.border-soft; }
 
@@ -369,11 +272,15 @@ export component FileBrowserDialog inherits Rectangle {
                     HorizontalLayout {
                         spacing: 6px;
                         IconButton {
+                            size: 30px;
+                            label: "Up";
                             icon: @image-url("../icons/regular-gray/arrow-up.svg");
                             enabled: FileBrowserState.crumbs.length > 1;
                             clicked => { FileBrowserState.go-up(); }
                         }
                         IconButton {
+                            size: 30px;
+                            label: "Refresh";
                             icon: @image-url("../icons/regular-gray/arrow-clockwise.svg");
                             clicked => { FileBrowserState.refresh(); }
                         }
@@ -444,8 +351,8 @@ export component FileBrowserDialog inherits Rectangle {
                             IconButton {
                                 x: parent.width - self.width - 1px;
                                 y: 1px;
-                                width: 30px;
-                                height: 30px;
+                                size: 30px;
+                                label: crumb-box.editing ? "Stop editing path" : "Edit path";
                                 icon: crumb-box.editing
                                     ? @image-url("../icons/regular-gray/x.svg")
                                     : @image-url("../icons/regular-gray/pencil-simple.svg");
@@ -469,6 +376,8 @@ export component FileBrowserDialog inherits Rectangle {
                             icon: FileBrowserState.show-hidden
                                 ? @image-url("../icons/regular-gray/eye.svg")
                                 : @image-url("../icons/regular-gray/eye-slash.svg");
+                            size: 30px;
+                            label: "Show hidden files";
                             active: FileBrowserState.show-hidden;
                             clicked => { FileBrowserState.hidden-toggled(!FileBrowserState.show-hidden); }
                         }
@@ -563,10 +472,10 @@ export component FileBrowserDialog inherits Rectangle {
 
             // ---- Footer -------------------------------------------------
             VerticalLayout {
-                padding-left: 22px;
-                padding-right: 22px;
+                padding-left: 24px;
+                padding-right: 24px;
                 padding-top: 14px;
-                padding-bottom: 16px;
+                padding-bottom: 20px;
                 spacing: 10px;
 
                 HorizontalLayout {
@@ -597,8 +506,8 @@ export component FileBrowserDialog inherits Rectangle {
                     }
                 }
 
-                HorizontalLayout {
-                    spacing: 10px;
+                DialogFooter {
+                    padding-top: 0px;
 
                     // New folder (inline)
                     new-folder := HorizontalLayout {
@@ -621,6 +530,8 @@ export component FileBrowserDialog inherits Rectangle {
                         }
                         if new-folder.naming: IconButton {
                             y: 3px;
+                            size: 30px;
+                            label: "Cancel new folder";
                             icon: @image-url("../icons/regular-gray/x.svg");
                             clicked => { new-folder.naming = false; keys.focus(); }
                         }
@@ -650,59 +561,36 @@ export component FileBrowserDialog inherits Rectangle {
             }
         }
 
-        // ---- Overwrite confirmation -------------------------------------
-        if FileBrowserState.overwrite-name != "": Rectangle {
-            background: Theme.modal-dim;
-            TouchArea { }
-            Rectangle {
-                width: 420px;
-                height: 176px;
-                background: Theme.panel;
-                border-radius: 12px;
-                border-width: 1px;
-                border-color: Theme.border;
-                drop-shadow-blur: 24px;
-                drop-shadow-color: Theme.shadow;
-                VerticalLayout {
-                    padding: 20px;
-                    spacing: 10px;
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Image {
-                            width: 20px;
-                            height: 20px;
-                            source: @image-url("../icons/regular-gray/warning-circle.svg");
-                            colorize: Theme.warn;
-                        }
-                        Text {
-                            text: "Replace existing file?";
-                            font-size: 15px;
-                            font-weight: 700;
-                            color: Theme.text-bright;
-                        }
-                    }
-                    Text {
-                        text: "“" + FileBrowserState.overwrite-name + "” already exists in this folder. Replacing it overwrites its contents.";
-                        font-size: 13px;
-                        color: Theme.text;
-                        wrap: word-wrap;
-                    }
-                    Rectangle { vertical-stretch: 1; }
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: end;
-                        AppButton {
-                            text: "Cancel";
-                            clicked => { FileBrowserState.overwrite-answered(false); keys.focus(); }
-                        }
-                        AppButton {
-                            text: "Replace";
-                            danger: true;
-                            clicked => { FileBrowserState.overwrite-answered(true); }
-                        }
-                    }
+        // ---- Overwrite confirmation (a dialog over the browser) ---------
+        if FileBrowserState.overwrite-name != "": Dialog {
+            title: "Replace existing file?";
+            tone: DialogTone.warning;
+            dialog-width: 420px;
+            close => {
+                FileBrowserState.overwrite-answered(false);
+                keys.focus();
+            }
+
+            Text {
+                text: "“" + FileBrowserState.overwrite-name + "” already exists in this folder. Replacing it overwrites its contents.";
+                font-size: 13px;
+                color: Theme.text;
+                wrap: word-wrap;
+            }
+
+            DialogFooter {
+                AppButton {
+                    text: "Cancel";
+                    clicked => { FileBrowserState.overwrite-answered(false); keys.focus(); }
+                }
+                AppButton {
+                    text: "Replace";
+                    danger: true;
+                    clicked => { FileBrowserState.overwrite-answered(true); }
                 }
             }
         }
     }
+
+    init => { keys.focus(); }
 }

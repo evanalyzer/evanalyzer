@@ -1,71 +1,72 @@
-// components/button.slint — shared Button for the whole app: primary /
-// secondary / ghost / danger variants, optional leading icon, disabled
-// state. Replaces the one-off "StyleToggleButton"-style rectangles that
-// got hand-rolled per dialog.
+// components/button.slint — the app's buttons. `AppButton` for every
+// action with a label (dialog footers, panel actions): secondary by default,
+// `primary` for the one confirming action, `danger` for a destructive one,
+// `ghost` for a quiet one beside them. `IconButton` for an icon alone.
 
-import { Theme } from "../style.slint";
+import { Theme } from "../../style.slint";
 
-export enum ButtonVariant { primary, secondary, ghost, danger }
-
-export component Button inherits Rectangle {
-    in property <string> label;
-    in property <image> icon;
-    in property <bool> has-icon: false;
-    in property <ButtonVariant> variant: ButtonVariant.secondary;
+export component AppButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    // No frame, no fill until hovered: a quiet action next to the others.
+    in property <bool> ghost: false;
     in property <bool> enabled: true;
-    in property <length> button-width: self.preferred-width;
     callback clicked;
 
-    width: root.button-width;
-    height: 34px;
-    border-radius: Theme.radius-sm;
-    opacity: root.enabled ? 1.0 : 0.45;
-
-    background: root.variant == ButtonVariant.primary
-        ? (ta.pressed ? Theme.accent.darker(15%) : (ta.has-hover ? Theme.accent.brighter(8%) : Theme.accent))
-        : root.variant == ButtonVariant.danger
-            ? (ta.has-hover ? Theme.err.darker(10%) : Theme.err)
-            : root.variant == ButtonVariant.ghost
-                ? (ta.has-hover ? Theme.raised : transparent)
-                : (ta.has-hover ? Theme.raised.brighter(6%) : Theme.raised);
-
-    border-width: root.variant == ButtonVariant.secondary || root.variant == ButtonVariant.ghost ? 1px : 0px;
-    border-color: Theme.border-soft;
-
-    animate background { duration: 80ms; }
-
-    ta := TouchArea {
-        mouse-cursor: root.enabled ? pointer : default;
-        enabled: root.enabled;
-        clicked => { root.clicked(); }
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
     }
 
-    HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
-        spacing: 7px;
-        alignment: center;
+    property <bool> filled: root.primary || root.danger;
 
-        if root.has-icon: Image {
-            source: root.icon;
-            width: 14px;
-            height: 14px;
-            colorize: root.variant == ButtonVariant.primary || root.variant == ButtonVariant.danger ? white : Theme.text;
-        }
+    height: 34px;
+    min-width: root.ghost ? 0px : 88px;
+    border-radius: Theme.radius-md;
+    border-width: root.filled || root.ghost ? 0px : 1px;
+    border-color: ta.has-hover && root.enabled ? Theme.border : Theme.border-soft;
+    background: root.danger ? (ta.pressed ? Theme.err.darker(12%) : ta.has-hover ? Theme.err : Theme.err.with-alpha(0.9))
+        : root.primary ? (ta.pressed ? Theme.accent.darker(12%) : ta.has-hover ? Theme.accent.brighter(8%) : Theme.accent)
+        : root.ghost ? (ta.has-hover && root.enabled ? Theme.raised : transparent)
+        : (ta.pressed ? Theme.hover : ta.has-hover && root.enabled ? Theme.raised.brighter(4%) : Theme.raised);
+    opacity: root.enabled ? 1.0 : 0.5;
+    animate background { duration: 80ms; }
+
+    HorizontalLayout {
+        padding-left: root.ghost ? 10px : 16px;
+        padding-right: root.ghost ? 10px : 16px;
+        alignment: center;
         Text {
-            text: root.label;
+            // The button itself carries the label.
+            accessible-role: none;
+            text: root.text;
             font-size: 12.5px;
-            font-family: Theme.font-sans;
             font-weight: 600;
-            color: root.variant == ButtonVariant.primary || root.variant == ButtonVariant.danger ? white : (root.variant == ButtonVariant.ghost ? Theme.text-dim : Theme.text);
+            color: root.filled ? #FFFFFF : root.ghost ? Theme.text-dim : Theme.text;
+            horizontal-alignment: center;
             vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.clicked();
         }
     }
 }
 
-// Square icon-only button (rail entries, toolbar glyphs, chip removes).
+// Square icon-only button (rail entries, toolbar glyphs, chip removes, a
+// dialog's ✕). `label` says what it does, for screen readers.
 export component IconButton inherits Rectangle {
     in property <image> icon;
+    in property <string> label;
     in property <bool> active: false;
     in property <bool> enabled: true;
     in property <length> size: 28px;
@@ -74,14 +75,24 @@ export component IconButton inherits Rectangle {
     width: root.size;
     height: root.size;
     border-radius: Theme.radius-sm;
-    background: root.active ? Theme.accent-dim : (ta.has-hover ? Theme.raised : transparent);
+    background: root.active ? Theme.accent-dim : (ta.has-hover && root.enabled ? Theme.raised : transparent);
     opacity: root.enabled ? 1.0 : 0.4;
     animate background { duration: 80ms; }
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
 
     ta := TouchArea {
         mouse-cursor: root.enabled ? pointer : default;
         enabled: root.enabled;
-        clicked => { root.clicked(); }
+        clicked => {
+            root.clicked();
+        }
     }
 
     Image {

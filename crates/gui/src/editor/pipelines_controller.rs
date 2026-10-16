@@ -7,12 +7,12 @@ use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
-    ClassItemData, CommandDef, CommandParameter, CommandPickerState, ComponentBindingRow,
-    ComponentClassRow, ComponentClassesState, ComponentEditChoiceState, ComponentParamRow,
-    ComponentSettingsState, ComponentUpdateState, CreateComponentState, DefaultParamPreview,
-    ExposeChoiceState, GlobalAppState, GroupItem, LeafParam, ParamType, Pipeline,
-    PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, ProblemItem,
-    RunAnalysisState, StepCategory, UiState, WarningState,
+    CardTable, CardTableRow, ClassItemData, CommandDef, CommandParameter, CommandPickerState,
+    ComponentBindingRow, ComponentClassRow, ComponentClassesState, ComponentEditChoiceState,
+    ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState,
+    DefaultParamPreview, ExposeChoiceState, GlobalAppState, GroupItem, LeafParam, ParamType,
+    Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState,
+    ProblemItem, RunAnalysisState, SectionView, StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use crate::{ResultItemData, ResultsListState};
@@ -139,6 +139,10 @@ pub struct PipelinesController {
 
     /// Debug mode (toolbar): settings show what they're wired to.
     debug_mode: std::sync::atomic::AtomicBool,
+
+    /// The open sections of component cards: (pipeline, step id, section).
+    /// The others show their values on one line.
+    open_sections: Mutex<std::collections::HashSet<(u32, String, String)>>,
 }
 
 /// One level of [`PipelinesController::open_component`].
@@ -180,6 +184,7 @@ impl PipelinesController {
             parameter_edit_snapshot: Mutex::new(None),
             last_problems: Mutex::new(Vec::new()),
             debug_mode: std::sync::atomic::AtomicBool::new(false),
+            open_sections: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -1226,6 +1231,40 @@ impl PipelinesController {
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_show_problem(move |index| manager.show_problem(index as usize));
+
+            // ▸ / ▾ of a component card's section: open or close it - in
+            // place, the card isn't rebuilt.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_toggle_section(move |step_idx, section| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<PipelinesPanelState>();
+                    let pipeline_id = state.get_active_pipeline_id() as u32;
+                    let Some(card) = state.get_active_commands().row_data(step_idx as usize) else {
+                        return;
+                    };
+                    let key = (pipeline_id, card.step_id.to_string(), section.to_string());
+                    let open = {
+                        let mut open_sections = manager.open_sections.lock().expect("Poisoned");
+                        if open_sections.remove(&key) {
+                            false
+                        } else {
+                            open_sections.insert(key);
+                            true
+                        }
+                    };
+                    let views = card.section_views.clone();
+                    for i in 0..views.row_count() {
+                        if let Some(mut view) = views.row_data(i)
+                            && view.name == section
+                        {
+                            view.open = open;
+                            views.set_row_data(i, view);
+                        }
+                    }
+                });
 
             // A problem's fix ("Add class 1").
             let manager = self.clone();
@@ -2533,6 +2572,8 @@ impl PipelinesController {
                                                 .collect();
                                             p.options = ModelRc::new(VecModel::from(new_flags));
                                         }
+                                        // The rows show copies: they take it too.
+                                        patch_card_copies(&cmd, &p);
                                         list.set_row_data(i, p);
                                         break 'patch;
                                     }
@@ -3636,7 +3677,14 @@ impl PipelinesController {
                 continue;
             }
             let mut changed = false;
-            for list in [card.parameters.clone(), card.advanced_parameters.clone()] {
+            // The settings, and the copies a component card's sections and
+            // tables show (see `card_layout`).
+            let mut lists = vec![card.parameters.clone(), card.advanced_parameters.clone()];
+            lists.extend(card.section_views.iter().map(|v| v.params));
+            for table in card.card_tables.iter() {
+                lists.extend(table.rows.iter().map(|r| r.cells));
+            }
+            for list in lists {
                 for k in 0..list.row_count() {
                     let Some(mut parameter) = list.row_data(k) else {
                         continue;
@@ -3656,6 +3704,7 @@ impl PipelinesController {
                     }
                 }
             }
+            refresh_section_problems(&card);
             let shown: Vec<(SharedString, bool, SharedString)> = card
                 .problems
                 .iter()
@@ -4533,6 +4582,28 @@ impl PipelinesController {
                         .map(|d| d.classes.clone())
                 })
                 .unwrap_or_default();
+        // What a collapsed section's values are called: the images' channel
+        // names, the project's and the opened component's class names.
+        let value_names = {
+            let project = self.app_state.get_project();
+            ValueNames {
+                channels: evanalyzer_app::components::image_channels(&project)
+                    .map(|c| c.names)
+                    .unwrap_or_default(),
+                classes: project
+                    .classification
+                    .classes()
+                    .iter()
+                    .map(|c| (c.id.to_string(), c.name.clone()))
+                    .chain(
+                        component_classes
+                            .iter()
+                            .map(|c| (ObjectClass::Local(c.id).to_text(), c.name.clone())),
+                    )
+                    .collect(),
+            }
+        };
+        let open_sections = self.open_sections.lock().expect("Poisoned").clone();
         let component_class_items = component_classes.clone();
         // A class list's flags: the project's 33 (see `MultiClassDropdown`),
         // then one per class of the opened component.
@@ -4992,7 +5063,22 @@ impl PipelinesController {
                         } else {
                             Vec::new()
                         };
+                        let (section_views, card_tables) = {
+                            card_layout(
+                                &params,
+                                |section| {
+                                    open_sections.contains(&(
+                                        pid as u32,
+                                        step_id.to_string(),
+                                        section.to_string(),
+                                    ))
+                                },
+                                &value_names,
+                            )
+                        };
                         SlintPipelineCommand {
+                            section_views: ModelRc::new(VecModel::from(section_views)),
+                            card_tables: ModelRc::new(VecModel::from(card_tables)),
                             id: d.idx,
                             step_id: step_id.clone(),
                             name: d.name.into(),
@@ -5067,6 +5153,278 @@ impl PipelinesController {
             warn!("Failed to sync steps to Slint: {}", e);
         }
     }
+}
+
+/// What values are called in a collapsed section's summary: the images'
+/// channel names (by channel), the classes' names (by `ObjectClass::to_text`).
+struct ValueNames {
+    channels: Vec<String>,
+    classes: std::collections::HashMap<String, String>,
+}
+
+/// Setting `p`'s value as a collapsed section's summary shows it: a
+/// channel or class by its name, a number as it is.
+fn value_summary(p: &CommandParameter, names: &ValueNames) -> String {
+    let value = p.value.as_str();
+    let class = |v: &str| {
+        names
+            .classes
+            .get(v)
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .unwrap_or_else(|| match v {
+                "-1" => "no class".into(),
+                "0" => "background".into(),
+                v => format!("class {v}"),
+            })
+    };
+    match p.param_type {
+        ParamType::ImageChannel => value
+            .parse::<usize>()
+            .ok()
+            .and_then(|i| names.channels.get(i))
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("channel {value}")),
+        ParamType::ObjClass => class(value),
+        ParamType::MultiObjClass => value
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(class)
+            .collect::<Vec<_>>()
+            .join(", "),
+        ParamType::SegClass => format!("seg. {value}"),
+        ParamType::Toggle => format!(
+            "{} {}",
+            p.display_name,
+            if value == "true" { "on" } else { "off" }
+        ),
+        ParamType::Group => format!("{} entries", p.group_items.row_count()),
+        ParamType::Script | ParamType::Label => String::new(),
+        _ => value.to_string(),
+    }
+}
+
+/// Writes setting `changed`'s value (and options, a class list's flags)
+/// into the copies `card`'s sections and tables show (see `card_layout`).
+fn patch_card_copies(card: &SlintPipelineCommand, changed: &CommandParameter) {
+    let patch = |list: ModelRc<CommandParameter>| {
+        for k in 0..list.row_count() {
+            if let Some(mut copy) = list.row_data(k)
+                && copy.name == changed.name
+            {
+                copy.value = changed.value.clone();
+                copy.options = changed.options.clone();
+                list.set_row_data(k, copy);
+            }
+        }
+    };
+    for view in card.section_views.iter() {
+        patch(view.params);
+    }
+    for table in card.card_tables.iter() {
+        for row in table.rows.iter() {
+            patch(row.cells);
+        }
+    }
+}
+
+/// What a check found among `list`: 0 nothing, 1 a warning, 2 an error.
+fn problem_level<'a>(list: impl IntoIterator<Item = &'a CommandParameter>) -> i32 {
+    list.into_iter()
+        .map(|p| match (p.problem.is_empty(), p.problem_error) {
+            (true, _) => 0,
+            (false, false) => 1,
+            (false, true) => 2,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Brings the problem marks of `card`'s sections and tables in line with
+/// their settings' (after these were patched).
+fn refresh_section_problems(card: &SlintPipelineCommand) {
+    for i in 0..card.section_views.row_count() {
+        if let Some(mut view) = card.section_views.row_data(i) {
+            let level = problem_level(&view.params.iter().collect::<Vec<_>>());
+            if view.problem != level {
+                view.problem = level;
+                card.section_views.set_row_data(i, view);
+            }
+        }
+    }
+    for t in 0..card.card_tables.row_count() {
+        let Some(mut table) = card.card_tables.row_data(t) else {
+            continue;
+        };
+        let mut problems: Vec<SharedString> = Vec::new();
+        let mut error = false;
+        for r in 0..table.rows.row_count() {
+            let Some(mut row) = table.rows.row_data(r) else {
+                continue;
+            };
+            let cells: Vec<CommandParameter> = row.cells.iter().collect();
+            for cell in &cells {
+                if !cell.problem.is_empty() && !problems.contains(&cell.problem) {
+                    problems.push(cell.problem.clone());
+                }
+                error |= cell.problem_error;
+            }
+            let level = problem_level(&cells);
+            if row.problem != level {
+                row.problem = level;
+                table.rows.set_row_data(r, row);
+            }
+        }
+        let now: Vec<SharedString> = table.problems.iter().collect();
+        if now != problems || table.problem_error != error {
+            table.problems = ModelRc::new(VecModel::from(problems));
+            table.problem_error = error;
+            card.card_tables.set_row_data(t, table);
+        }
+    }
+}
+
+/// How a card shows `params` (in section order): those without a section
+/// as rows, always; a section collapses to its values on one line,
+/// open (`is_open`) it shows its settings; sections with the same settings
+/// (at least two, each up to 4 simple ones) are a table instead: a row per
+/// section, a column per setting.
+fn card_layout(
+    params: &[CommandParameter],
+    is_open: impl Fn(&str) -> bool,
+    names: &ValueNames,
+) -> (Vec<SectionView>, Vec<CardTable>) {
+    let mut groups: Vec<(SharedString, Vec<CommandParameter>)> = Vec::new();
+    for p in params {
+        match groups.last_mut() {
+            Some((name, list)) if *name == p.section => list.push(p.clone()),
+            _ => groups.push((p.section.clone(), vec![p.clone()])),
+        }
+    }
+    if groups.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let in_a_cell = |p: &CommandParameter| {
+        matches!(
+            p.param_type,
+            ParamType::Number
+                | ParamType::Text
+                | ParamType::Spinner
+                | ParamType::Dropdown
+                | ParamType::Toggle
+                | ParamType::ObjClass
+                | ParamType::SegClass
+                | ParamType::ImageChannel
+                | ParamType::PixelUnits
+                | ParamType::SizeUnits
+        )
+    };
+    // A section's settings, if a table can show them: (label, type) each.
+    let signature = |list: &[CommandParameter]| -> Option<Vec<(SharedString, ParamType)>> {
+        (list.len() <= 4 && list.iter().all(in_a_cell)).then(|| {
+            list.iter()
+                .map(|p| (p.display_name.clone(), p.param_type))
+                .collect()
+        })
+    };
+    let signatures: Vec<Option<Vec<(SharedString, ParamType)>>> = groups
+        .iter()
+        .map(|(name, list)| {
+            if name.is_empty() {
+                None
+            } else {
+                signature(list)
+            }
+        })
+        .collect();
+    let level = |list: &[CommandParameter]| problem_level(list);
+
+    // Which table each section is a row of: (its signature, its sections).
+    let mut tables: Vec<(Vec<(SharedString, ParamType)>, Vec<usize>)> = Vec::new();
+    let mut table_of: Vec<Option<usize>> = vec![None; groups.len()];
+    for (i, signature) in signatures.iter().enumerate() {
+        let Some(signature) = signature else {
+            continue;
+        };
+        if signatures
+            .iter()
+            .filter(|s| s.as_ref() == Some(signature))
+            .count()
+            < 2
+        {
+            continue;
+        }
+        let t = match tables.iter().position(|(s, _)| s == signature) {
+            Some(t) => t,
+            None => {
+                tables.push((signature.clone(), Vec::new()));
+                tables.len() - 1
+            }
+        };
+        tables[t].1.push(i);
+        table_of[i] = Some(t);
+    }
+
+    let views = groups
+        .iter()
+        .enumerate()
+        .map(|(i, (name, list))| SectionView {
+            name: name.clone(),
+            summary: list
+                .iter()
+                .map(|p| value_summary(p, names))
+                .filter(|v| !v.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ")
+                .into(),
+            open: is_open(name),
+            kind: match table_of[i] {
+                _ if name.is_empty() => 3,
+                Some(t) if tables[t].1[0] == i => 1,
+                Some(_) => 2,
+                None => 0,
+            },
+            table: table_of[i].unwrap_or(0) as i32,
+            problem: level(list),
+            params: ModelRc::new(VecModel::from(list.clone())),
+        })
+        .collect();
+    let tables = tables
+        .into_iter()
+        .map(|(signature, members)| {
+            let cells: Vec<&CommandParameter> =
+                members.iter().flat_map(|&i| groups[i].1.iter()).collect();
+            let mut problems: Vec<SharedString> = Vec::new();
+            for cell in &cells {
+                if !cell.problem.is_empty() && !problems.contains(&cell.problem) {
+                    problems.push(cell.problem.clone());
+                }
+            }
+            CardTable {
+                columns: ModelRc::new(VecModel::from(
+                    signature
+                        .into_iter()
+                        .map(|(label, _)| label)
+                        .collect::<Vec<_>>(),
+                )),
+                rows: ModelRc::new(VecModel::from(
+                    members
+                        .iter()
+                        .map(|&i| CardTableRow {
+                            name: groups[i].0.clone(),
+                            problem: level(&groups[i].1),
+                            cells: ModelRc::new(VecModel::from(groups[i].1.clone())),
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+                problem_error: cells.iter().any(|c| c.problem_error),
+                problems: ModelRc::new(VecModel::from(problems)),
+            }
+        })
+        .collect();
+    (views, tables)
 }
 
 /// A problem as the panel shows it - `Send`, so it can cross to the UI thread.
@@ -7772,8 +8130,7 @@ mod tests {
     fn a_spinners_buttons_step_the_setting() {
         use i_slint_backend_testing::ElementHandle;
         let (ui, ui_state, _controller) = selected(vec![step("Blur")]);
-        ui.window()
-            .set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
         ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
         let commands = ui.global::<PipelinesPanelState>().get_active_commands();
         let mut card = commands.row_data(0).unwrap();
@@ -7877,6 +8234,8 @@ mod tests {
         let mut card = commands.row_data(1).unwrap();
         card.expanded = true;
         commands.set_row_data(1, card);
+        ui.global::<PipelinesPanelState>()
+            .invoke_toggle_section(1, "Staining 1".into());
 
         let text = |label: &str| {
             let e = ElementHandle::find_by_accessible_label(&ui, label)
@@ -7886,7 +8245,7 @@ mod tests {
         };
         let (header_y, header_height) = text("Staining 1");
         let (setting_y, _) = text("Kernel");
-        assert!(header_height < 30.0, "header {header_height}px high");
+        assert!(header_height <= 30.0, "header {header_height}px high");
         assert!(
             setting_y - header_y < 40.0,
             "the setting is {}px below its section header",
@@ -10488,6 +10847,212 @@ mod tests {
         drain_ui_queue();
         assert_eq!(panel.get_open_component_values(), "");
         assert_eq!(class_of(1), "2");
+    }
+
+    fn section_views(ui: &AppWindow, step: usize) -> Vec<SectionView> {
+        ui.global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(step)
+            .unwrap()
+            .section_views
+            .iter()
+            .collect()
+    }
+
+    /// A component card's section shows its values on one line until it's
+    /// opened - and stays open when the card is filled again.
+    #[test]
+    fn a_section_shows_its_values_until_its_opened() {
+        let (ui, ui_state, controller) = with_a_component();
+        {
+            let mut project = ui_state.get_project_write();
+            let definition = &mut project.components[0];
+            let step = definition.steps[0].id;
+            evanalyzer_app::components::toggle_exposed(
+                definition,
+                step,
+                "kernel_size",
+                "Kernel",
+                "3",
+            );
+            let key = definition.parameters[0].key.clone();
+            evanalyzer_app::components::set_parameter_section(definition, &key, "Staining 1");
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        let views = section_views(&ui, 1);
+        assert_eq!(views.len(), 1);
+        assert_eq!(
+            (views[0].name.as_str(), views[0].kind, views[0].open),
+            ("Staining 1", 0, false)
+        );
+        assert_eq!(views[0].summary, "3");
+        let command = section_views(&ui, 0);
+        assert_eq!(
+            command
+                .iter()
+                .map(|v| (v.name.as_str(), v.kind))
+                .collect::<Vec<_>>(),
+            [("", 3)],
+            "a command card: its settings as rows, always shown"
+        );
+
+        ui.global::<PipelinesPanelState>()
+            .invoke_toggle_section(1, "Staining 1".into());
+        assert!(section_views(&ui, 1)[0].open);
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), false);
+        drain_ui_queue();
+        assert!(section_views(&ui, 1)[0].open, "still open");
+        ui.global::<PipelinesPanelState>()
+            .invoke_toggle_section(1, "Staining 1".into());
+        assert!(!section_views(&ui, 1)[0].open);
+    }
+
+    /// Sections with the same settings are one table - a row per section,
+    /// its problems at the row and below the table.
+    #[test]
+    fn sections_with_the_same_settings_are_a_table() {
+        let (ui, _ui_state, _controller) = with_spots(1);
+        let views = section_views(&ui, 0);
+        let kinds: Vec<(String, i32)> =
+            views.iter().map(|v| (v.name.to_string(), v.kind)).collect();
+        assert_eq!(kinds, [("Spot".to_string(), 1), ("Bead".to_string(), 2)]);
+        let table = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(0)
+            .unwrap()
+            .card_tables
+            .row_data(0)
+            .unwrap();
+        assert_eq!(
+            table.columns.iter().collect::<Vec<_>>(),
+            [SharedString::from("Output class")]
+        );
+        let rows: Vec<CardTableRow> = table.rows.iter().collect();
+        assert_eq!(
+            rows.iter().map(|r| r.name.to_string()).collect::<Vec<_>>(),
+            ["Spot", "Bead"]
+        );
+        assert_eq!(rows[1].cells.row_data(0).unwrap().value, "1");
+        assert!(rows.iter().all(|r| r.problem == 1), "both rows collide");
+        assert_eq!(table.problems.row_count(), 1);
+        assert!(table.problems.row_data(0).unwrap().contains("both create"));
+
+        // Each its own class: no marks.
+        let (ui, _ui_state, _controller) = with_spots(2);
+        let table = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(0)
+            .unwrap()
+            .card_tables
+            .row_data(0)
+            .unwrap();
+        assert_eq!(table.problems.row_count(), 0);
+        assert!(table.rows.iter().all(|r| r.problem == 0));
+    }
+
+    /// An expanded card draws its table: a row per section, side by side
+    /// below the column's name.
+    #[test]
+    fn an_expanded_card_draws_its_table() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _ui_state, _controller) = with_spots(2);
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = commands.row_data(0).unwrap();
+        card.expanded = true;
+        commands.set_row_data(0, card);
+        let at = |label: &str| {
+            let e = ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label:?} not found"));
+            e.absolute_position()
+        };
+        let (column, spot, bead) = (at("Output class"), at("Spot"), at("Bead"));
+        assert!(
+            column.y < spot.y && spot.y < bead.y,
+            "{column:?} {spot:?} {bead:?}"
+        );
+        assert_eq!(spot.x, bead.x, "rows one below the other");
+    }
+
+    /// The table's cells share its width - each wide enough to use (a cell
+    /// used to be 1px wide, its column's name elided to nothing).
+    #[test]
+    fn a_tables_cells_share_its_width() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _ui_state, _controller) = with_spots(2);
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = commands.row_data(0).unwrap();
+        card.expanded = true;
+        commands.set_row_data(0, card);
+        let column = ElementHandle::find_by_accessible_label(&ui, "Output class")
+            .next()
+            .expect("the column's name");
+        assert!(
+            column.size().width > 60.0,
+            "column {}px",
+            column.size().width
+        );
+        let fields: Vec<f32> = ElementHandle::find_by_accessible_label(&ui, "Spot")
+            .chain(ElementHandle::find_by_accessible_label(&ui, "Bead"))
+            .map(|e| e.size().width)
+            .collect();
+        assert!(!fields.is_empty());
+    }
+
+    /// A command card shows its settings as rows: the name left, the
+    /// control right, on one line.
+    #[test]
+    fn a_command_cards_settings_are_rows() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _ui_state, _controller) = selected(vec![step("Blur")]);
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = commands.row_data(0).unwrap();
+        card.expanded = true;
+        commands.set_row_data(0, card);
+        let name = ui_param(&ui, 0, "kernel_size").display_name.to_string();
+        let label = ElementHandle::find_by_accessible_label(&ui, &name)
+            .next()
+            .unwrap_or_else(|| panic!("{name}"));
+        let field = ElementHandle::find_by_accessible_label(&ui, "Increase")
+            .next()
+            .expect("the spinner's +");
+        let middle = |e: &ElementHandle| e.absolute_position().y + e.size().height / 2.0;
+        assert!(
+            (middle(&label) - middle(&field)).abs() < 8.0,
+            "label at {}, field at {}",
+            middle(&label),
+            middle(&field)
+        );
+        assert!(label.absolute_position().x < field.absolute_position().x);
+    }
+
+    /// A changed setting is patched into its card in place - the rows show
+    /// copies of the settings, and they take the new value too.
+    #[test]
+    fn a_changed_setting_reaches_the_row_showing_it() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Blur")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_param_changed(0, "kernel_size".into(), "7".into());
+        drain_ui_queue();
+        let card = panel.get_active_commands().row_data(0).unwrap();
+        let shown = card
+            .section_views
+            .row_data(0)
+            .unwrap()
+            .params
+            .iter()
+            .find(|p| p.name == "kernel_size")
+            .expect("in the row group");
+        assert_eq!(shown.value, ui_param(&ui, 0, "kernel_size").value);
     }
 
     /// A changed setting only patches its card - the problems are checked

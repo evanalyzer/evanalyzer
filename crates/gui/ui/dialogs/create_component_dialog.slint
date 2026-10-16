@@ -7,6 +7,7 @@ import {
     SettingBlock,
 } from "../components/settings_layout.slint";
 import { AppButton } from "../components/app_button.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { Theme } from "../style.slint";
 
 // "Create component": turns consecutive steps of a pipeline into a component.
@@ -72,191 +73,128 @@ component RangeRow inherits HorizontalLayout {
 
 // -- Dialog component -----------------------------------------
 
-export component CreateComponentDialog inherits Rectangle {
-    background: Theme.modal-overlay;
+export component CreateComponentDialog inherits Dialog {
+    title: "Create component";
+    subtitle: "The steps become one step - a component you can use like a command, in this and other pipelines.";
+    dialog-width: 480px;
+    close-on-backdrop: true;
+    close => {
+        CreateComponentState.cancel();
+    }
 
-    TouchArea {
-        clicked => {
-            CreateComponentState.cancel();
+    VerticalLayout {
+        spacing: 5px;
+        Text {
+            text: "Component name";
+            font-size: 11px;
+            color: Theme.text-dim;
+        }
+
+        LineEdit {
+            height: 30px;
+            text: CreateComponentState.name;
+            placeholder-text: "e.g. Cell reconstruction";
+            font-size: 12px;
+            edited(t) => {
+                CreateComponentState.name = t;
+            }
         }
     }
 
-    card := Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 480px;
-        background: Theme.panel;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-offset-y: 12px;
-        clip: true;
+    VerticalLayout {
+        spacing: 6px;
+        RangeRow {
+            label: "From";
+            model: CreateComponentState.step-names;
+            current: CreateComponentState.from-step;
+            picked(i) => {
+                CreateComponentState.range-changed(i, CreateComponentState.to-step);
+            }
+        }
 
-        TouchArea { }
+        RangeRow {
+            label: "To";
+            model: CreateComponentState.step-names;
+            current: CreateComponentState.to-step;
+            picked(i) => {
+                CreateComponentState.range-changed(CreateComponentState.from-step, i);
+            }
+        }
+    }
 
-        layout := VerticalLayout {
-            padding: 24px;
-            spacing: 16px;
+    if CreateComponentState.classes.length > 0: VerticalLayout {
+        spacing: 6px;
+        Text {
+            text: "Classes";
+            font-size: 11px;
+            color: Theme.text-dim;
+        }
 
-            HorizontalLayout {
-                alignment: space-between;
+        for row[i] in CreateComponentState.classes: HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
                 Text {
-                    text: "Create component";
-                    font-size: 16px;
-                    font-weight: 700;
+                    text: row.name;
+                    font-size: 12px;
                     color: Theme.text;
                 }
 
-                Rectangle {
-                    width: 22px;
-                    height: 22px;
-                    border-radius: 4px;
-                    background: close-ta.has-hover ? Theme.raised : transparent;
-                    Text {
-                        text: "✕";
-                        font-size: 12px;
-                        color: Theme.text-dim;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    close-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            CreateComponentState.cancel();
-                        }
-                    }
-                }
-            }
-
-            Text {
-                text: "The steps become one step - a component you can use like a command, in this and other pipelines.";
-                font-size: 11px;
-                color: Theme.text-dim;
-                wrap: word-wrap;
-            }
-
-            VerticalLayout {
-                spacing: 5px;
                 Text {
-                    text: "Component name";
-                    font-size: 11px;
-                    color: Theme.text-dim;
-                }
-
-                LineEdit {
-                    height: 30px;
-                    text: CreateComponentState.name;
-                    placeholder-text: "e.g. Cell reconstruction";
-                    font-size: 12px;
-                    edited(t) => {
-                        CreateComponentState.name = t;
-                    }
-                }
-            }
-
-            VerticalLayout {
-                spacing: 6px;
-                RangeRow {
-                    label: "From";
-                    model: CreateComponentState.step-names;
-                    current: CreateComponentState.from-step;
-                    picked(i) => {
-                        CreateComponentState.range-changed(i, CreateComponentState.to-step);
-                    }
-                }
-
-                RangeRow {
-                    label: "To";
-                    model: CreateComponentState.step-names;
-                    current: CreateComponentState.to-step;
-                    picked(i) => {
-                        CreateComponentState.range-changed(CreateComponentState.from-step, i);
-                    }
-                }
-            }
-
-            if CreateComponentState.classes.length > 0: VerticalLayout {
-                spacing: 6px;
-                Text {
-                    text: "Classes";
-                    font-size: 11px;
-                    color: Theme.text-dim;
-                }
-
-                for row[i] in CreateComponentState.classes: HorizontalLayout {
-                    spacing: 8px;
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        alignment: center;
-                        Text {
-                            text: row.name;
-                            font-size: 12px;
-                            color: Theme.text;
-                        }
-
-                        Text {
-                            text: row.detail;
-                            font-size: 10px;
-                            color: Theme.text-mute;
-                        }
-                    }
-
-                    ComboBox {
-                        width: 190px;
-                        model: ["Internal (component only)", "Component parameter", "Fixed"];
-                        current-index: row.role;
-                        selected(v) => {
-                            CreateComponentState.role-changed(i, self.current-index);
-                        }
-                    }
-                }
-
-                Text {
-                    text: "Internal classes are the component's own: each use of the component has its own, and their objects don't reach the results.";
+                    text: row.detail;
                     font-size: 10px;
                     color: Theme.text-mute;
-                    wrap: word-wrap;
                 }
             }
 
-            if CreateComponentState.channels-text != "": Text {
-                text: CreateComponentState.channels-text;
-                font-size: 11px;
-                color: Theme.text-dim;
-                wrap: word-wrap;
-            }
-
-            if CreateComponentState.error != "": Text {
-                text: CreateComponentState.error;
-                font-size: 11px;
-                color: Theme.err;
-                wrap: word-wrap;
-            }
-
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: end;
-                AppButton {
-                    text: "Cancel";
-                    clicked => {
-                        CreateComponentState.cancel();
-                    }
-                }
-
-                AppButton {
-                    text: "Create component";
-                    primary: true;
-                    clicked => {
-                        CreateComponentState.confirm();
-                    }
+            ComboBox {
+                width: 190px;
+                model: ["Internal (component only)", "Component parameter", "Fixed"];
+                current-index: row.role;
+                selected(v) => {
+                    CreateComponentState.role-changed(i, self.current-index);
                 }
             }
         }
 
-        height: layout.preferred-height;
+        Text {
+            text: "Internal classes are the component's own: each use of the component has its own, and their objects don't reach the results.";
+            font-size: 11px;
+            color: Theme.text-dim;
+            wrap: word-wrap;
+        }
+    }
+
+    if CreateComponentState.channels-text != "": Text {
+        text: CreateComponentState.channels-text;
+        font-size: 12px;
+        color: Theme.text-dim;
+        wrap: word-wrap;
+    }
+
+    if CreateComponentState.error != "": Text {
+        text: CreateComponentState.error;
+        font-size: 12px;
+        color: Theme.err;
+        wrap: word-wrap;
+    }
+
+    DialogFooter {
+        AppButton {
+            text: "Cancel";
+            clicked => {
+                CreateComponentState.cancel();
+            }
+        }
+
+        AppButton {
+            text: "Create component";
+            primary: true;
+            clicked => {
+                CreateComponentState.confirm();
+            }
+        }
     }
 }
 
@@ -273,76 +211,44 @@ export global ComponentEditChoiceState {
     callback cancel();
 }
 
-export component ComponentEditChoiceDialog inherits Rectangle {
-    background: Theme.modal-overlay;
-
-    TouchArea {
-        clicked => {
-            ComponentEditChoiceState.cancel();
-        }
+export component ComponentEditChoiceDialog inherits Dialog {
+    title: "Open \{ComponentEditChoiceState.component-name}";
+    tone: DialogTone.info;
+    dialog-width: 420px;
+    close-on-backdrop: true;
+    close => {
+        ComponentEditChoiceState.cancel();
     }
 
-    card := Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 420px;
-        background: Theme.panel;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-offset-y: 12px;
-        clip: true;
+    Text {
+        text: "This component is used by \{ComponentEditChoiceState.uses} steps. Changes to it apply to all of them - or make a copy just for this step.";
+        font-size: 13px;
+        color: Theme.text;
+        wrap: word-wrap;
+    }
 
-        TouchArea { }
-
-        layout := VerticalLayout {
-            padding: 24px;
-            spacing: 14px;
-
-            Text {
-                text: "Open \{ComponentEditChoiceState.component-name}";
-                font-size: 16px;
-                font-weight: 700;
-                color: Theme.text;
-            }
-
-            Text {
-                text: "This component is used by \{ComponentEditChoiceState.uses} steps. Changes to it apply to all of them - or make a copy just for this step.";
-                font-size: 11px;
-                color: Theme.text-dim;
-                wrap: word-wrap;
-            }
-
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: end;
-                AppButton {
-                    text: "Cancel";
-                    clicked => {
-                        ComponentEditChoiceState.cancel();
-                    }
-                }
-
-                AppButton {
-                    text: "Only this step";
-                    clicked => {
-                        ComponentEditChoiceState.only-this();
-                    }
-                }
-
-                AppButton {
-                    text: "Edit for all";
-                    primary: true;
-                    clicked => {
-                        ComponentEditChoiceState.edit-all();
-                    }
-                }
+    DialogFooter {
+        AppButton {
+            text: "Cancel";
+            clicked => {
+                ComponentEditChoiceState.cancel();
             }
         }
 
-        height: layout.preferred-height;
+        AppButton {
+            text: "Only this step";
+            clicked => {
+                ComponentEditChoiceState.only-this();
+            }
+        }
+
+        AppButton {
+            text: "Edit for all";
+            primary: true;
+            clicked => {
+                ComponentEditChoiceState.edit-all();
+            }
+        }
     }
 }
 
@@ -361,110 +267,76 @@ export global ExposeChoiceState {
     callback cancel();
 }
 
-export component ExposeChoiceDialog inherits Rectangle {
-    background: Theme.modal-overlay;
+export component ExposeChoiceDialog inherits Dialog {
+    title: "Expose \{ExposeChoiceState.setting-name}";
+    subtitle: "As a parameter of its own, or set by a parameter the component has already:";
+    dialog-width: 460px;
+    close-on-backdrop: true;
+    close => {
+        ExposeChoiceState.cancel();
+    }
 
-    TouchArea {
-        clicked => {
-            ExposeChoiceState.cancel();
+    VerticalLayout {
+        spacing: 10px;
+
+        if ExposeChoiceState.choices.length > 0: AppButton {
+            text: ExposeChoiceState.choices[0];
+            primary: true;
+            clicked => {
+                ExposeChoiceState.chosen(0);
+            }
+        }
+
+        // An existing parameter: its name, and below what it sets already -
+        // parameters of equal steps are often named alike.
+        for choice[i] in ExposeChoiceState.choices: Rectangle {
+            visible: i > 0;
+            height: i > 0 ? self.preferred-height : 0px;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: choice-ta.has-hover ? Theme.accent : Theme.border;
+            background: choice-ta.has-hover ? Theme.raised : Theme.bg;
+            accessible-role: button;
+            accessible-label: choice;
+
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 7px;
+                padding-bottom: 7px;
+                spacing: 2px;
+                Text {
+                    text: choice;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.text;
+                    overflow: elide;
+                }
+
+                if ExposeChoiceState.details[i] != "": Text {
+                    text: ExposeChoiceState.details[i];
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                    overflow: elide;
+                }
+            }
+
+            choice-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    ExposeChoiceState.chosen(i);
+                }
+            }
         }
     }
 
-    card := Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: min(460px, parent.width - 48px);
-        background: Theme.panel;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-offset-y: 12px;
-        clip: true;
-
-        TouchArea { }
-
-        layout := VerticalLayout {
-            padding: 24px;
-            spacing: 10px;
-
-            Text {
-                text: "Expose \{ExposeChoiceState.setting-name}";
-                font-size: 16px;
-                font-weight: 700;
-                color: Theme.text;
-            }
-
-            Text {
-                text: "As a parameter of its own, or set by a parameter the component has already:";
-                font-size: 11px;
-                color: Theme.text-dim;
-                wrap: word-wrap;
-            }
-
-            if ExposeChoiceState.choices.length > 0: AppButton {
-                text: ExposeChoiceState.choices[0];
-                primary: true;
-                clicked => {
-                    ExposeChoiceState.chosen(0);
-                }
-            }
-
-            // An existing parameter: its name, and below what it sets already -
-            // parameters of equal steps are often named alike.
-            for choice[i] in ExposeChoiceState.choices: Rectangle {
-                visible: i > 0;
-                height: i > 0 ? self.preferred-height : 0px;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: choice-ta.has-hover ? Theme.accent : Theme.border;
-                background: choice-ta.has-hover ? Theme.raised : Theme.bg;
-                accessible-role: button;
-                accessible-label: choice;
-
-                VerticalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    padding-top: 7px;
-                    padding-bottom: 7px;
-                    spacing: 2px;
-                    Text {
-                        text: choice;
-                        font-size: 12px;
-                        font-weight: 600;
-                        color: Theme.text;
-                        overflow: elide;
-                    }
-
-                    if ExposeChoiceState.details[i] != "": Text {
-                        text: ExposeChoiceState.details[i];
-                        font-size: 11px;
-                        color: Theme.text-dim;
-                        overflow: elide;
-                    }
-                }
-
-                choice-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        ExposeChoiceState.chosen(i);
-                    }
-                }
-            }
-
-            HorizontalLayout {
-                alignment: end;
-                AppButton {
-                    text: "Cancel";
-                    clicked => {
-                        ExposeChoiceState.cancel();
-                    }
-                }
+    DialogFooter {
+        AppButton {
+            text: "Cancel";
+            clicked => {
+                ExposeChoiceState.cancel();
             }
         }
-
-        height: layout.preferred-height;
     }
 }
 
@@ -481,76 +353,44 @@ export global ComponentUpdateState {
     callback cancel();
 }
 
-export component ComponentUpdateDialog inherits Rectangle {
-    background: Theme.modal-overlay;
-
-    TouchArea {
-        clicked => {
-            ComponentUpdateState.cancel();
-        }
+export component ComponentUpdateDialog inherits Dialog {
+    title: "Update \{ComponentUpdateState.component-name}";
+    tone: ComponentUpdateState.changed-here ? DialogTone.warning : DialogTone.info;
+    dialog-width: 420px;
+    close-on-backdrop: true;
+    close => {
+        ComponentUpdateState.cancel();
     }
 
-    card := Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 420px;
-        background: Theme.panel;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-offset-y: 12px;
-        clip: true;
+    Text {
+        text: "The component library has a newer version (\{ComponentUpdateState.versions}). Every step using the component gets it; their values stay.";
+        font-size: 13px;
+        color: Theme.text;
+        wrap: word-wrap;
+    }
 
-        TouchArea { }
+    if ComponentUpdateState.changed-here: Text {
+        text: "This project changed the component since it was inserted - updating replaces those changes.";
+        font-size: 12px;
+        color: Theme.warn;
+        wrap: word-wrap;
+    }
 
-        layout := VerticalLayout {
-            padding: 24px;
-            spacing: 12px;
-
-            Text {
-                text: "Update \{ComponentUpdateState.component-name}";
-                font-size: 16px;
-                font-weight: 700;
-                color: Theme.text;
-            }
-
-            Text {
-                text: "The component library has a newer version (\{ComponentUpdateState.versions}). Every step using the component gets it; their values stay.";
-                font-size: 11px;
-                color: Theme.text-dim;
-                wrap: word-wrap;
-            }
-
-            if ComponentUpdateState.changed-here: Text {
-                text: "This project changed the component since it was inserted - updating replaces those changes.";
-                font-size: 11px;
-                color: Theme.warn;
-                wrap: word-wrap;
-            }
-
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: end;
-                AppButton {
-                    text: "Cancel";
-                    clicked => {
-                        ComponentUpdateState.cancel();
-                    }
-                }
-
-                AppButton {
-                    text: "Update";
-                    primary: true;
-                    clicked => {
-                        ComponentUpdateState.confirm();
-                    }
-                }
+    DialogFooter {
+        AppButton {
+            text: "Cancel";
+            clicked => {
+                ComponentUpdateState.cancel();
             }
         }
 
-        height: layout.preferred-height;
+        AppButton {
+            text: "Update";
+            primary: true;
+            clicked => {
+                ComponentUpdateState.confirm();
+            }
+        }
     }
 }
 
@@ -798,8 +638,16 @@ component ParamHeader inherits Rectangle {
 // The component's name, descriptions and parameters - laid out like the
 // project settings: sections on the left, rows of name/explanation and
 // control on the right. Changes apply right away.
-export component ComponentSettingsDialog inherits Rectangle {
-    background: Theme.modal-overlay;
+export component ComponentSettingsDialog inherits Dialog {
+    title: "Component settings";
+    subtitle: "◆ " + ComponentSettingsState.name;
+    dialog-width: 860px;
+    dialog-height: 620px;
+    content-padding: 0px;
+    close-on-backdrop: true;
+    close => {
+        ComponentSettingsState.close();
+    }
 
     // 0 General, 1 Parameters. ✎ on an exposed setting opens its parameter -
     // set once as the dialog opens (refills change `focus-index`).
@@ -818,30 +666,17 @@ export component ComponentSettingsDialog inherits Rectangle {
     // The opened parameter's editor height (below its header).
     property <length> edited-height: 0px;
 
-    TouchArea {
-        clicked => {
-            ComponentSettingsState.close();
-        }
-    }
-
     Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: min(860px, parent.width - 48px);
-        height: min(620px, parent.height - 48px);
+        vertical-stretch: 1;
         background: Theme.bg;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-blur: 40px;
-        drop-shadow-offset-y: 18px;
-        clip: true;
-
-        TouchArea { }
 
         VerticalLayout {
             spacing: 0;
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border-soft;
+            }
 
             HorizontalLayout {
                 vertical-stretch: 1;
@@ -854,26 +689,7 @@ export component ComponentSettingsDialog inherits Rectangle {
 
                     VerticalLayout {
                         padding: 16px;
-                        padding-top: 18px;
                         spacing: 4px;
-
-                        Text {
-                            text: "Component settings";
-                            font-size: 15px;
-                            font-weight: 700;
-                            color: Theme.text;
-                        }
-
-                        Text {
-                            text: "◆ " + ComponentSettingsState.name;
-                            font-size: 11px;
-                            color: Theme.cat-component;
-                            overflow: elide;
-                        }
-
-                        Rectangle {
-                            height: 14px;
-                        }
 
                         NavItem {
                             text: "General";
@@ -1005,7 +821,7 @@ export component ComponentSettingsDialog inherits Rectangle {
                         list := ScrollView {
                             init => {
                                 if ComponentSettingsState.focus-index > 0 {
-                                    self.viewport-y = -ComponentSettingsState.focus-index * root.row-height;
+                                    self.content-y = -ComponentSettingsState.focus-index * root.row-height;
                                 }
                             }
 
@@ -1169,7 +985,7 @@ export component ComponentSettingsDialog inherits Rectangle {
 
                         // The opened parameter's header, while its own is scrolled
                         // away and its editor still shows.
-                        property <length> header-top: list.viewport-y + root.editing * root.row-height;
+                        property <length> header-top: list.content-y + root.editing * root.row-height;
                         if root.editing >= 0 && self.header-top < 0 && self.header-top + root.row-height + root.edited-height > root.row-height: Rectangle {
                             y: 0;
                             height: root.row-height;
@@ -1196,25 +1012,22 @@ export component ComponentSettingsDialog inherits Rectangle {
 
             // -- Footer ----------------------------------------------------
             Rectangle {
-                height: 56px;
-                Rectangle {
-                    y: 0;
-                    height: 1px;
-                    background: Theme.border-soft;
-                }
+                height: 1px;
+                background: Theme.border-soft;
+            }
 
-                HorizontalLayout {
+            Rectangle {
+                background: Theme.panel;
+                DialogFooter {
                     padding-left: 20px;
                     padding-right: 20px;
-                    alignment: end;
-                    VerticalLayout {
-                        alignment: center;
-                        AppButton {
-                            text: "Close";
-                            primary: true;
-                            clicked => {
-                                ComponentSettingsState.close();
-                            }
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    AppButton {
+                        text: "Close";
+                        primary: true;
+                        clicked => {
+                            ComponentSettingsState.close();
                         }
                     }
                 }

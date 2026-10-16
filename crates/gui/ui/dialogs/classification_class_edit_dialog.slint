@@ -1,19 +1,8 @@
-import {
-    Button,
-    LineEdit,
-    ComboBox,
-    SpinBox,
-    VerticalBox,
-    HorizontalBox,
-    Palette,
-    CheckBox,
-    ScrollView,
-} from "std-widgets.slint";
+import { LineEdit, ComboBox } from "std-widgets.slint";
+import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 import { DialogType, GlobalAppState } from "../state.slint";
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
-
-
 
 export struct ClassSettingsSlint {
     // The class's id - negative for a new class.
@@ -54,7 +43,7 @@ component ColorTile inherits Rectangle {
     border-radius: 4px;
 
     border-width: is_selected ? 3px : 1px;
-    border-color: is_selected ? Palette.accent-background : Palette.border.darker(20%);
+    border-color: is_selected ? Theme.accent : Theme.border;
 
     TouchArea {
         clicked => {
@@ -63,273 +52,128 @@ component ColorTile inherits Rectangle {
     }
 }
 
-export component ClassEditDialog inherits Rectangle {
-    background: Theme.modal-overlay;
+export component ClassEditDialog inherits Dialog {
+    title: "Class Settings";
+    dialog-width: 486px;
+    close => {
+        GlobalAppState.active-dialog = DialogType.none;
+        ClassificationSettingsState.reset_to_zero();
+    }
 
-    Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 486px;
-        height: 450px;
-        background: Theme.panel;
-        border-radius: 10px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-blur: 40px;
-        drop-shadow-offset-y: 18px;
-        clip: true;
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            text: "Name:";
+            width: 110px;
+            vertical-alignment: center;
+            font-size: 13px;
+            color: Theme.text;
+        }
 
-        VerticalLayout {
-            spacing: 0;
+        LineEdit {
+            placeholder-text: "e.g. FITC-Cell";
+            text <=> ClassificationSettingsState.settings.name;
+        }
+    }
 
-            Rectangle {
-                height: 56px;
-                background: Theme.panel;
-                HorizontalLayout {
-                    padding-left: 20px;
-                    padding-right: 16px;
-                    spacing: 12px;
-                    alignment: stretch;
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            text: "Notes:";
+            width: 110px;
+            vertical-alignment: center;
+            font-size: 13px;
+            color: Theme.text;
+        }
 
-                    Text {
-                        text: "Class Settings";
-                        color: Theme.text;
-                        font-size: 15px;
-                        font-weight: 600;
-                        vertical-alignment: center;
-                    }
+        LineEdit {
+            placeholder-text: "Optional description...";
+            text <=> ClassificationSettingsState.settings.notes;
+        }
+    }
 
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            text: "Class ID:";
+            width: 110px;
+            vertical-alignment: center;
+            font-size: 13px;
+            color: Theme.text;
+        }
 
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 5px;
-                        background: close-ta.has-hover ? Theme.raised : transparent;
-                        Text {
-                            text: "x";
-                            color: Theme.text-dim;
-                            font-size: 12px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
+        ComboBox {
+            // The background keeps its id 0.
+            enabled: ClassificationSettingsState.settings.class-id != 0;
+            model: ClassificationSettingsState.id-options;
+            current-index <=> ClassificationSettingsState.id-index;
+        }
+    }
 
-                        close-ta := TouchArea {
-                            clicked => {
-                                GlobalAppState.active-dialog = DialogType.none;
-                                ClassificationSettingsState.reset_to_zero();
-                            }
-                        }
-                    }
-                }
+    // Changing an existing class's id moves its references.
+    if ClassificationSettingsState.settings.class-id > 0 && ClassificationSettingsState.id-index > 0: Text {
+        text: "Pipelines, components and annotated objects using class \{ClassificationSettingsState.settings.class-id} switch to the new id. Results of earlier runs keep the old one.";
+        font-size: 12px;
+        color: Theme.text-dim;
+        wrap: word-wrap;
+    }
 
-                Rectangle {
-                    x: 0;
-                    y: parent.height - 1px;
-                    width: parent.width;
-                    height: 1px;
-                    background: Theme.border-soft;
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            text: "Color:";
+            width: 110px;
+            vertical-alignment: center;
+            font-size: 13px;
+            color: Theme.text;
+        }
+
+        GridLayout {
+            spacing: 8px;
+            Row {
+                for c in [#FF00FF, #00FFFF, #00FF00, #FFFF00, #FF3333, #3366FF, #FF9900, #ADFF2F, #00FA9A, #87CEFA, #FF66CC, #FF1493, #7B00FF, #00FF88]: ColorTile {
+                    item_color: c;
                 }
             }
 
-            Rectangle {
-                vertical-stretch: 1;
-                VerticalLayout {
-                    padding: 20px;
-                    spacing: 15px;
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Text {
-                            text: "Name:";
-                            vertical-alignment: center;
-                            width: 110px;
-                        }
-
-                        LineEdit {
-                            placeholder-text: "e.g. FITC-Cell";
-                            text <=> ClassificationSettingsState.settings.name;
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Text {
-                            text: "Notes:";
-                            vertical-alignment: center;
-                            width: 110px;
-                        }
-
-                        LineEdit {
-                            placeholder-text: "Optional description...";
-                            text <=> ClassificationSettingsState.settings.notes;
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Text {
-                            text: "Class ID:";
-                            vertical-alignment: center;
-                            width: 110px;
-                        }
-
-                        ComboBox {
-                            // The background keeps its id 0.
-                            enabled: ClassificationSettingsState.settings.class-id != 0;
-                            model: ClassificationSettingsState.id-options;
-                            current-index <=> ClassificationSettingsState.id-index;
-                        }
-                    }
-
-                    // Changing an existing class's id moves its references.
-                    if ClassificationSettingsState.settings.class-id > 0 && ClassificationSettingsState.id-index > 0: Text {
-                        text: "Pipelines, components and annotated objects using class \{ClassificationSettingsState.settings.class-id} switch to the new id. Results of earlier runs keep the old one.";
-                        font-size: 11px;
-                        color: Theme.text-dim;
-                        wrap: word-wrap;
-                    }
-
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Text {
-                            text: "Color:";
-                            width: 110px;
-                            vertical-alignment: center;
-                        }
-
-                        GridLayout {
-                            spacing: 8px;
-                            Row {
-                                for c in [
-                                    #FF00FF,
-                                    #00FFFF,
-                                    #00FF00,
-                                    #FFFF00,
-                                    #FF3333,
-                                    #3366FF,
-                                    #FF9900,
-                                    #ADFF2F,
-                                    #00FA9A,
-                                    #87CEFA,
-                                    #FF66CC,
-                                    #FF1493,
-                                    #7B00FF, // Added: Electric Purple
-                                    #00FF88, // Added: Bright Mint Neon
-                                ]: ColorTile {
-                                        item_color: c;
-                                    }
-                                }
-
-                                Row {
-                                    for c in [
-                                        #FFD700,
-                                        #FF4500,
-                                        #FF69B4,
-                                        #F08080,
-                                        #FFA07A,
-                                        #DA70D6,
-                                        #FF007F,
-                                        #FFCC00,
-                                        #EEDD82,
-                                        #BC8F8F,
-                                        #FF8C00,
-                                        #FF7F50,
-                                        #C71585, // Added: Medium Violet Red
-                                    #E9967A, // Added: Dark Salmon
-                                ]: ColorTile {
-                                            item_color: c;
-                                        }
-                                    }
-
-                                    Row {
-                                        for c in [
-                                            #00CED1,
-                                            #1E90FF,
-                                            #9370DB,
-                                            #40E0D0,
-                                            #7B68EE,
-                                            #48D1CC,
-                                            #00BFFF,
-                                            #AFEEEE,
-                                            #B0C4DE,
-                                            #66CDAA,
-                                            #9932CC,
-                                            #20B2AA,
-                                            #5F9EA0, // Added: Cadet Blue
-                                    #4169E1, // Added: Royal Blue
-                                ]: ColorTile {
-                                                item_color: c;
-                                            }
-                                        }
-
-                                        Row {
-                                            for c in [
-                                                #FFCCFF,
-                                                #99FFFF,
-                                                #FFE4B5,
-                                                #EEE8AA,
-                                                #CCFFCC,
-                                                #E6E6FA,
-                                                #FFFAC8,
-                                                #F0FFF0,
-                                                #F5FFFA,
-                                                #F0F8FF,
-                                                #FFFFFF,
-                                                #FFF0F5,
-                                                #FFE4E1, // Added: Misty Rose
-                                    #E0FFFF, // Added: Light Cyan / Ice Blue
-                                ]: ColorTile {
-                                                    item_color: c;
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    Rectangle {
-                                        vertical-stretch: 1;
-                                    }
-                                }
-                            }
-
-                            Rectangle {
-                                height: 56px;
-                                background: Theme.bg;
-                                border-color: Theme.border-soft;
-                                HorizontalLayout {
-                                    padding-left: 20px;
-                                    padding-right: 16px;
-                                    spacing: 12px;
-                                    alignment: end;
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        AppButton {
-                                            text: "Cancel";
-                                            clicked => {
-                                                GlobalAppState.active-dialog = DialogType.none;
-                                                ClassificationSettingsState.reset_to_zero();
-                                            }
-                                        }
-                                    }
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        AppButton {
-                                            text: "Apply";
-                                            primary: true;
-                                            clicked => {
-                            // Index 0 is "Auto" for a new class, the own id for an edited one.
-                            ClassificationSettingsState.settings.new-id = ClassificationSettingsState.id-index == 0 ? (ClassificationSettingsState.settings.class-id < 0 ? -1 : ClassificationSettingsState.settings.class-id) : ClassificationSettingsState.id-options[ClassificationSettingsState.id-index].to-float();
-                                                ClassificationSettingsState.apply_classification_settings(ClassificationSettingsState.settings);
-                                                GlobalAppState.active-dialog = DialogType.none;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+            Row {
+                for c in [#FFD700, #FF4500, #FF69B4, #F08080, #FFA07A, #DA70D6, #FF007F, #FFCC00, #EEDD82, #BC8F8F, #FF8C00, #FF7F50, #C71585, #E9967A]: ColorTile {
+                    item_color: c;
                 }
+            }
+
+            Row {
+                for c in [#00CED1, #1E90FF, #9370DB, #40E0D0, #7B68EE, #48D1CC, #00BFFF, #AFEEEE, #B0C4DE, #66CDAA, #9932CC, #20B2AA, #5F9EA0, #4169E1]: ColorTile {
+                    item_color: c;
+                }
+            }
+
+            Row {
+                for c in [#FFCCFF, #99FFFF, #FFE4B5, #EEE8AA, #CCFFCC, #E6E6FA, #FFFAC8, #F0FFF0, #F5FFFA, #F0F8FF, #FFFFFF, #FFF0F5, #FFE4E1, #E0FFFF]: ColorTile {
+                    item_color: c;
+                }
+            }
+        }
+    }
+
+    DialogFooter {
+        AppButton {
+            text: "Cancel";
+            clicked => {
+                GlobalAppState.active-dialog = DialogType.none;
+                ClassificationSettingsState.reset_to_zero();
+            }
+        }
+
+        AppButton {
+            text: "Apply";
+            primary: true;
+            clicked => {
+                // Index 0 is "Auto" for a new class, the own id for an edited one.
+                ClassificationSettingsState.settings.new-id = ClassificationSettingsState.id-index == 0 ? (ClassificationSettingsState.settings.class-id < 0 ? -1 : ClassificationSettingsState.settings.class-id) : ClassificationSettingsState.id-options[ClassificationSettingsState.id-index].to-float();
+                ClassificationSettingsState.apply_classification_settings(ClassificationSettingsState.settings);
+                GlobalAppState.active-dialog = DialogType.none;
+            }
+        }
+    }
+}

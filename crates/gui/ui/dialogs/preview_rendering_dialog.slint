@@ -13,11 +13,20 @@ import { PipelineRunningState } from "pipeline_running_dialog.slint";
 export component PreviewRendering inherits Rectangle {
     background: transparent;
 
+    // Cancels a running preview, or dismisses a finished one.
+    function dismiss() {
+        if (PipelineRunningState.done) {
+            PipelineRunningState.close();
+        } else {
+            PipelineRunningState.cancel();
+        }
+    }
+
     bar := Rectangle {
         x: 0;
         y: (parent.height - self.height) / 2;
         width: 100%;
-        height: 26px;
+        height: 28px;
         background: #000000;
 
         HorizontalLayout {
@@ -26,42 +35,43 @@ export component PreviewRendering inherits Rectangle {
 
             Text {
                 text: !PipelineRunningState.done ? "Generating preview…" : (PipelineRunningState.has-error ? "Preview failed: " + PipelineRunningState.status-message : "Preview ready");
-                font-size: 11px;
-                color: PipelineRunningState.has-error && PipelineRunningState.done ? Theme.err : #FFFFFF;
+                font-size: 12px;
+                color: PipelineRunningState.has-error && PipelineRunningState.done ? Theme.err : Theme.text-pixel-info;
                 vertical-alignment: center;
                 overflow: elide;
             }
 
             Text {
                 text: PipelineRunningState.total > 0 && !PipelineRunningState.done ? (PipelineRunningState.processed + " / " + PipelineRunningState.total + " (" + (PipelineRunningState.processed * 100 / PipelineRunningState.total) + "%)") : "";
-                font-size: 11px;
-                color: #FFFFFFAA;
+                font-size: 12px;
+                color: Theme.text-pixel-info.with-alpha(0.67);
                 vertical-alignment: center;
             }
 
             Rectangle {
-                width: 18px;
-                height: 18px;
-                border-radius: 3px;
-                background: close-ta.has-hover ? #FFFFFF33 : transparent;
+                width: 20px;
+                height: 20px;
+                y: (parent.height - self.height) / 2;
+                border-radius: Theme.radius-sm;
+                background: close-ta.has-hover ? Theme.text-pixel-info.with-alpha(0.2) : transparent;
                 animate background { duration: 80ms; }
+                accessible-role: button;
+                accessible-label: "Close";
+                accessible-action-default => {
+                    root.dismiss();
+                }
 
-                Text {
-                    text: "✕";
-                    font-size: 11px;
-                    color: #FFFFFF;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: @image-url("../icons/regular-white/x.svg");
+                    width: 12px;
+                    height: 12px;
+                    colorize: Theme.text-pixel-info;
                 }
 
                 close-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
-                        if (PipelineRunningState.done) {
-                            PipelineRunningState.close();
-                        } else {
-                            PipelineRunningState.cancel();
-                        }
+                        root.dismiss();
                     }
                 }
             }

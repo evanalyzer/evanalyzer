@@ -1,5 +1,5 @@
-import { Palette } from "std-widgets.slint";
 import { Theme } from "../style.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { GlobalAppState, DialogType } from "../state.slint";
 import { BioRunner } from "../components/bio_runner.slint";
 import { AppButton } from "../components/app_button.slint";
@@ -22,115 +22,86 @@ export global PipelineRunningState {
     callback close();
 }
 
-
 // -- Dialog --------------------------------------------------------------------
 
-export component PipelineRunningDialog inherits Rectangle {
-    background: Theme.modal-overlay;
+export component PipelineRunningDialog inherits Dialog {
+    title: "Analyzing Images";
+    tone: DialogTone.run;
+    dialog-width: 440px;
+    // No ✕ / Esc / backdrop: the run is stopped (or the finished dialog
+    // closed) only through the footer button.
+    closable: false;
 
-    TouchArea { }
+    // Progress label
+    HorizontalLayout {
+        alignment: space-between;
+        Text {
+            text: PipelineRunningState.whole-image-phase ? "Processing objects…" : (PipelineRunningState.total > 0 ? (PipelineRunningState.processed + " of " + PipelineRunningState.total + " images processed") : "Starting…");
+            font-size: 13px;
+            color: Theme.text-dim;
+        }
 
+        Text {
+            text: PipelineRunningState.total > 0 ? ((PipelineRunningState.processed * 100 / PipelineRunningState.total) + "%") : "";
+            font-size: 13px;
+            font-weight: 600;
+            color: Theme.accent;
+        }
+    }
+
+    // Progress bar
     Rectangle {
-        width: 440px;
-        height: 320px;
-        background: Palette.background;
-        border-radius: 16px;
-        border-width: 1px;
-        border-color: Palette.border;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: Theme.shadow;
+        height: 8px;
+        border-radius: 4px;
+        background: Theme.raised;
 
-        VerticalLayout {
-            padding: 24px;
-            spacing: 14px;
-
-            // Header
-            HorizontalLayout {
-                spacing: 12px;
-                alignment: start;
-
-                Text {
-                    text: "Analyzing Images";
-                    font-size: 20px;
-                    font-weight: 800;
-                    color: Palette.foreground;
-                    vertical-alignment: center;
-                }
+        Rectangle {
+            x: 0;
+            width: PipelineRunningState.total > 0 ? parent.width * (PipelineRunningState.processed * 1.0 / PipelineRunningState.total) : 0px;
+            height: parent.height;
+            border-radius: 4px;
+            background: Theme.accent;
+            animate width {
+                duration: 350ms;
+                easing: ease-out;
             }
+        }
+    }
 
-            // Progress label
-            HorizontalLayout {
-                alignment: space-between;
-                Text {
-                    text: PipelineRunningState.whole-image-phase ? "Processing objects…" : (PipelineRunningState.total > 0 ? (PipelineRunningState.processed + " of " + PipelineRunningState.total + " images processed") : "Starting…");
-                    font-size: 13px;
-                    color: Theme.text-dim;
-                }
+    // Divider
+    Rectangle {
+        height: 1px;
+        background: Theme.border-soft;
+    }
 
-                Text {
-                    text: PipelineRunningState.total > 0 ? ((PipelineRunningState.processed * 100 / PipelineRunningState.total) + "%") : "";
-                    font-size: 13px;
-                    font-weight: 600;
-                    color: Theme.accent;
-                }
-            }
+    // Bio-dino runner
+    BioRunner { paused: PipelineRunningState.done; }
 
-            // Progress bar
-            Rectangle {
-                height: 8px;
-                border-radius: 4px;
-                background: Theme.raised;
+    // Status message (shown when done)
+    Rectangle {
+        height: PipelineRunningState.done ? 20px : 0px;
+        clip: true;
+        animate height { duration: 200ms; easing: ease-out; }
+        Text {
+            text: PipelineRunningState.status-message;
+            font-size: 12px;
+            color: PipelineRunningState.done && !PipelineRunningState.has-error ? Theme.accent : Theme.text-dim;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+    }
 
-                Rectangle {
-                    x: 0;
-                    width: PipelineRunningState.total > 0 ? parent.width * (PipelineRunningState.processed * 1.0 / PipelineRunningState.total) : 0px;
-                    height: parent.height;
-                    border-radius: 4px;
-                    background: Theme.accent;
-                    animate width {
-                        duration: 350ms;
-                        easing: ease-out;
-                    }
-                }
-            }
-
-            // Divider
-            Rectangle {
-                height: 1px;
-                background: Theme.border-soft;
-            }
-
-            // Bio-dino runner
-            BioRunner { paused: PipelineRunningState.done; }
-
-            // Status message (shown when done)
-            Rectangle {
-                height: PipelineRunningState.done ? 20px : 0px;
-                clip: true;
-                animate height { duration: 200ms; easing: ease-out; }
-                Text {
-                    text: PipelineRunningState.status-message;
-                    font-size: 12px;
-                    color: PipelineRunningState.done && !PipelineRunningState.has-error ? Theme.accent : Theme.text-dim;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    width: parent.width;
-                    height: parent.height;
-                }
-            }
-
-            // Cancel / Close button
-            HorizontalLayout {
-                alignment: end;
-                AppButton {
-                    text: PipelineRunningState.done ? "Close" : "Cancel";
-                    clicked => {
-                        if (PipelineRunningState.done) {
-                            PipelineRunningState.close();
-                        } else {
-                            PipelineRunningState.cancel();
-                        }
-                    }
+    DialogFooter {
+        AppButton {
+            text: PipelineRunningState.done ? "Close" : "Cancel";
+            primary: PipelineRunningState.done;
+            clicked => {
+                if (PipelineRunningState.done) {
+                    PipelineRunningState.close();
+                } else {
+                    PipelineRunningState.cancel();
                 }
             }
         }

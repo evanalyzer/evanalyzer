@@ -19,7 +19,7 @@ import {
     ClassListRow,
     ClassificationState,
 } from "../editor/classification_panel.slint";
-import { BaseDialog } from "dialog_base.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { ObjectListState } from "../editor/object_list_panel.slint";
 
 
@@ -28,11 +28,15 @@ export global ClassSelectDialogState {
     in-out property <string> selected_class_name;
 }
 
-export component ClassSelectDialog inherits BaseDialog {
-    title-text: "Select class";
-    main-height: 520px;
-    main-width: 480px;
-    show-icon: false;
+export component ClassSelectDialog inherits Dialog {
+    title: "Select class";
+    dialog-height: 520px;
+    dialog-width: 480px;
+    close => {
+        ClassSelectDialogState.selected_class_name = "";
+        ClassSelectDialogState.selected_class_id = -1;
+        GlobalAppState.active-dialog = DialogType.none;
+    }
 
     VerticalLayout {
         spacing: 12px;
@@ -70,9 +74,7 @@ export component ClassSelectDialog inherits BaseDialog {
             }
         }
 
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: end;
+        DialogFooter {
 
             AppButton {
                 text: "Close";

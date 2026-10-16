@@ -1,4 +1,5 @@
 import { ScrollView } from "std-widgets.slint";
+import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 import { GlobalAppState, DialogType } from "../state.slint";
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
@@ -40,104 +41,52 @@ component ShortcutRow inherits Rectangle {
     }
 }
 
-export component ShortcutsHelpDialog inherits Rectangle {
-    background: Theme.modal-overlay;
-
-    // Click outside = close, same as the pipeline-edit dialog - this is a
-    // pure reference view with nothing to confirm/discard.
-    TouchArea {
-        clicked => {
-            GlobalAppState.active_dialog = DialogType.none;
-        }
+export component ShortcutsHelpDialog inherits Dialog {
+    title: "Keyboard Shortcuts";
+    dialog-width: 460px;
+    // The list scrolls inside a fixed-height card.
+    dialog-height: 560px;
+    // A pure reference view with nothing to confirm/discard: a click
+    // outside closes it too.
+    close-on-backdrop: true;
+    close => {
+        GlobalAppState.active_dialog = DialogType.none;
     }
 
-    Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 460px;
-        height: 560px;
-        background: Theme.panel;
-        border-radius: 14px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-blur: 48px;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-offset-y: 16px;
-        clip: true;
-
-        // Eat clicks inside so the scrim behind doesn't fire.
-        TouchArea { }
-
+    ScrollView {
+        vertical-stretch: 1;
         VerticalLayout {
-            padding: 24px;
-            spacing: 16px;
+            spacing: 18px;
 
-            HorizontalLayout {
-                alignment: space-between;
+            for section in ShortcutsDoc.sections: VerticalLayout {
+                spacing: 2px;
+
                 Text {
-                    text: "Keyboard Shortcuts";
-                    font-size: 16px;
+                    text: section.title;
+                    font-size: 11px;
                     font-weight: 700;
-                    color: Theme.text;
-                    vertical-alignment: center;
+                    color: Theme.text-mute;
                 }
 
                 Rectangle {
-                    width: 22px;
-                    height: 22px;
-                    border-radius: 4px;
-                    background: close-ta.has-hover ? Theme.raised : transparent;
-                    animate background { duration: 80ms; }
-                    Text {
-                        text: "✕";
-                        font-size: 12px;
-                        color: Theme.text-dim;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
 
-                    close-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            GlobalAppState.active_dialog = DialogType.none;
-                        }
-                    }
+                for row in section.rows: ShortcutRow {
+                    combo: row.combo;
+                    label: row.label;
                 }
             }
+        }
+    }
 
-            ScrollView {
-                VerticalLayout {
-                    spacing: 18px;
-
-                    for section in ShortcutsDoc.sections: VerticalLayout {
-                        spacing: 2px;
-
-                        Text {
-                            text: section.title;
-                            font-size: 11px;
-                            font-weight: 700;
-                            color: Theme.text-mute;
-                        }
-
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
-
-                        for row in section.rows: ShortcutRow {
-                            combo: row.combo;
-                            label: row.label;
-                        }
-                    }
-                }
-            }
-
-            AppButton {
-                text: "Close";
-                primary: true;
-                clicked => {
-                    GlobalAppState.active_dialog = DialogType.none;
-                }
+    DialogFooter {
+        AppButton {
+            text: "Close";
+            primary: true;
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
             }
         }
     }

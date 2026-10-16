@@ -8,6 +8,7 @@ import {
 import { GlobalAppState, DialogType } from "../state.slint";
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
+import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 import { MultiClassDropdown } from "../editor/pipelines_panel.slint";
 import {
     NavItem,
@@ -143,8 +144,14 @@ export global ViewportMemoryState {
 // All settings in one place: the project's (saved with the project) and this
 // computer's (viewport memory). A section list on the left, or - while
 // searching - every matching setting of all sections.
-export component ProjectSettingsDialog inherits Rectangle {
-    background: Theme.modal-overlay;
+export component ProjectSettingsDialog inherits Dialog {
+    title: "Settings";
+    dialog-width: 900px;
+    dialog-height: 680px;
+    content-padding: 0px;
+    close => {
+        root.cancel();
+    }
     private property <length> well_size: (ProjectSettingsState.settings.well_rows > 5 || ProjectSettingsState.settings.well_columns > 5) ? 30px : 45px;
 
     // Sections: 0 General, 1 Plate & grouping, 2 Object merging, 3 Viewport.
@@ -210,25 +217,17 @@ export component ProjectSettingsDialog inherits Rectangle {
         search-input.focus();
     }
 
-    // Block clicks to the app behind.
-    TouchArea { }
-
     Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: min(900px, parent.width - 48px);
-        height: min(680px, parent.height - 48px);
+        vertical-stretch: 1;
         background: Theme.bg;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-blur: 40px;
-        drop-shadow-offset-y: 18px;
-        clip: true;
 
         VerticalLayout {
             spacing: 0;
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border-soft;
+            }
 
             HorizontalLayout {
                 vertical-stretch: 1;
@@ -241,19 +240,7 @@ export component ProjectSettingsDialog inherits Rectangle {
 
                     VerticalLayout {
                         padding: 16px;
-                        padding-top: 18px;
                         spacing: 4px;
-
-                        Text {
-                            text: "Settings";
-                            font-size: 17px;
-                            font-weight: 700;
-                            color: Theme.text;
-                        }
-
-                        Rectangle {
-                            height: 10px;
-                        }
 
                         // Search field
                         Rectangle {
@@ -760,68 +747,39 @@ export component ProjectSettingsDialog inherits Rectangle {
             }
 
             Rectangle {
-                height: 56px;
                 background: Theme.panel;
 
-                HorizontalLayout {
+                DialogFooter {
                     padding-left: 20px;
                     padding-right: 16px;
-                    spacing: 12px;
+                    padding-top: 12px;
+                    padding-bottom: 12px;
 
                     Text {
                         text: "Project settings are saved with the project; viewport settings on this computer.";
-                        font-size: 11px;
-                        color: Theme.text-mute;
+                        font-size: 12px;
+                        color: Theme.text-dim;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
                         overflow: elide;
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        AppButton {
-                            text: "Cancel";
-                            clicked => {
-                                root.cancel();
-                            }
+                    AppButton {
+                        text: "Cancel";
+                        clicked => {
+                            root.cancel();
                         }
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        AppButton {
-                            text: "Apply";
-                            primary: true;
-                            clicked => {
-                                ProjectSettingsState.trigger_project_settings_accepted();
-                                ViewportMemoryState.apply();
-                                GlobalAppState.active-dialog = DialogType.none;
-                            }
+                    AppButton {
+                        text: "Apply";
+                        primary: true;
+                        clicked => {
+                            ProjectSettingsState.trigger_project_settings_accepted();
+                            ViewportMemoryState.apply();
+                            GlobalAppState.active-dialog = DialogType.none;
                         }
                     }
-                }
-            }
-        }
-
-        // Close button
-        Rectangle {
-            x: parent.width - self.width - 12px;
-            y: 12px;
-            width: 28px;
-            height: 28px;
-            border-radius: 6px;
-            background: close-ta.has-hover ? Theme.raised : transparent;
-            Image {
-                source: @image-url("../icons/regular-black/x.svg");
-                width: 12px;
-                height: 12px;
-                colorize: Theme.text-dim;
-            }
-
-            close-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.cancel();
                 }
             }
         }

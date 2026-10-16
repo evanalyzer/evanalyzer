@@ -1,8 +1,5 @@
-import { BaseDialog } from "dialog_base.slint";
-import { Button } from "std-widgets.slint";
-import {
-    Palette,
-} from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import {
     GlobalAppState,
     DialogType,
@@ -11,40 +8,34 @@ import {
 import { ObjectListState } from "../editor/object_list_panel.slint";
 import { AppButton } from "../components/app_button.slint";
 
-export component ConfirmDeleteManualAnnotatedObjectDialog inherits BaseDialog {
-    title-text: "Delete objects";
-    icon: "⚠️";
-    main-height: 260px;
-    main-width: 440px;
+export component ConfirmDeleteManualAnnotatedObjectDialog inherits Dialog {
+    title: "Delete objects";
+    dialog-width: 440px;
+    tone: DialogTone.danger;
+    close => {
+        GlobalAppState.active-dialog = DialogType.none;
+    }
 
     VerticalLayout {
         spacing: 12px;
         Text {
             text: "This action cannot be undone. Deleting all manual annotated objects.";
             wrap: word-wrap;
-            color: Palette.foreground;
-            font-size: 14px;
-            font-weight: 500;
+            color: Theme.text;
+            font-size: 13px;
         }
 
         Text {
             text: "Delete all manual annotated objects.";
             wrap: word-wrap;
-            color: Palette.foreground.with-alpha(0.5);
+            color: Theme.text-dim;
             font-size: 13px;
         }
 
-        Rectangle {
-            vertical-stretch: 1;
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: end;
+        DialogFooter {
 
             AppButton {
                 text: "Cancel";
-                width: 80px;
                 clicked => {
                     GlobalAppState.active_dialog = DialogType.none;
                 }
@@ -52,7 +43,6 @@ export component ConfirmDeleteManualAnnotatedObjectDialog inherits BaseDialog {
 
             AppButton {
                 text: "Delete";
-                width: 100px;
                 danger: true;
                 clicked => {
                     GlobalAppState.active_dialog = DialogType.none;

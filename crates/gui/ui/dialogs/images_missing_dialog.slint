@@ -1,8 +1,6 @@
-import { BaseDialog } from "dialog_base.slint";
-import { Button } from "std-widgets.slint";
-import {
-    Palette,
-} from "std-widgets.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
 import {
     GlobalAppState,
     DialogType,
@@ -11,73 +9,65 @@ import {
     ImagesListState,
 } from "../editor/images_list_panel.slint";
 
+export component ImageMissingDialog inherits Dialog {
+    title: "Images missing";
+    tone: DialogTone.warning;
+    dialog-width: 440px;
+    close => {
+        GlobalAppState.active_dialog = DialogType.none;
+    }
 
-export component ImageMissingDialog inherits BaseDialog {
-    title-text: "Images Missing";
-    icon: "⚠️";
-    main-height: 260px;
-    main-width: 440px;
+    Text {
+        text: "The project's image files could not be found. They may have been moved or renamed, or the drive is disconnected.";
+        wrap: word-wrap;
+        color: Theme.text;
+        font-size: 13px;
+    }
 
-    VerticalLayout {
-        spacing: 12px;
-        Text {
-            text: "The project image files could not be located. They may have been moved, renamed, or the drive is disconnected.";
+    Rectangle {
+        height: path.preferred-height + 12px;
+        background: Theme.bg;
+        border-radius: Theme.radius-sm;
+        path := Text {
+            x: 8px;
+            width: parent.width - 16px;
+            text: ImagesListState.act_image_root_dir;
+            font-family: Theme.font-mono;
+            font-size: 11px;
+            color: Theme.text-dim;
             wrap: word-wrap;
-            color: Palette.foreground;
-            font-size: 14px;
-            font-weight: 500;
         }
+    }
 
-        Text {
-            text: "Would you like to search for them or select a new root folder?";
-            wrap: word-wrap;
-            color: Palette.foreground.with-alpha(0.5);
-            font-size: 13px;
-        }
+    Text {
+        text: "Search for them there, or select the folder they're in now?";
+        wrap: word-wrap;
+        color: Theme.text-dim;
+        font-size: 12px;
+    }
 
-        Rectangle {
-            background: Palette.background.darker(0.2);
-            border-radius: 4px;
-            Text {
-                text: ImagesListState.act_image_root_dir;
-                font-family: "monospace";
-                font-size: 11px;
-                color: Palette.accent-background;
+    DialogFooter {
+        AppButton {
+            text: "Cancel";
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
             }
         }
 
-        Rectangle {
-            vertical-stretch: 1;
+        AppButton {
+            text: "Select folder";
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+                ImagesListState.open_images_folder_clicked();
+            }
         }
 
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: end;
-            Button {
-                text: "Search";
-                primary: true;
-                width: 100px;
-                clicked => {
-                    GlobalAppState.active_dialog = DialogType.none;
-                    ImagesListState.new_image_root_folder_clicked();
-                }
-            }
-
-            Button {
-                text: "Select Folder";
-                width: 130px;
-                clicked => {
-                    GlobalAppState.active_dialog = DialogType.none;
-                    ImagesListState.open_images_folder_clicked();
-                }
-            }
-
-            Button {
-                text: "Cancel";
-                width: 80px;
-                clicked => {
-                    GlobalAppState.active_dialog = DialogType.none;
-                }
+        AppButton {
+            text: "Search";
+            primary: true;
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.none;
+                ImagesListState.new_image_root_folder_clicked();
             }
         }
     }

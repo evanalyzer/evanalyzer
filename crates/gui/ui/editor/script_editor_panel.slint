@@ -14,6 +14,7 @@ import { Theme } from "../style.slint";
 // only line up with the text when every character has the same width.
 import "../fonts/DejaVuSansMono.ttf";
 import { AppButton } from "../components/app_button.slint";
+import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 import { GlobalAppState, DialogType } from "../state.slint";
 
 export struct ScriptHighlight {
@@ -105,7 +106,7 @@ component HighlightLayer inherits Text {
     vertical-alignment: top;
 }
 
-export component ScriptEditorPanel inherits Rectangle {
+export component ScriptEditorPanel inherits Dialog {
     // Syntax colors, readable on both themes.
     property <color> c-keyword: Theme.dark-mode ? #C586C0 : #AF00DB;
     property <color> c-function: Theme.dark-mode ? #DCDCAA : #795E26;
@@ -138,41 +139,20 @@ export component ScriptEditorPanel inherits Rectangle {
         editor.set-selection-offsets(0, 0);
     }
 
-    background: Theme.modal-overlay;
-
-    // Block clicks to the app. Deliberately no cancel-on-click-outside: a
-    // stray click must not throw away an edited script.
-    TouchArea { }
-
-    card := Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: min(parent.width - 48px, 1100px);
-        height: min(parent.height - 48px, 800px);
-        background: Theme.panel;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.border;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: Theme.shadow;
-        drop-shadow-offset-y: 12px;
-        clip: true;
-
-        TouchArea { }
-
-        VerticalLayout {
-            padding: 20px;
-            spacing: 12px;
+    title: ScriptEditorState.title;
+    dialog-width: 1100px;
+    dialog-height: 800px;
+    // Deliberately no cancel on a click outside or Esc: neither may throw
+    // away an edited script. ✕ is Cancel.
+    close-on-escape: false;
+    close => {
+        ScriptEditorState.cancel();
+    }
 
             // -- Title + toolbar --
             HorizontalLayout {
                 spacing: 8px;
-                Text {
-                    text: ScriptEditorState.title;
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: Theme.text;
-                    vertical-alignment: center;
+                Rectangle {
                     horizontal-stretch: 1;
                 }
 
@@ -456,9 +436,7 @@ export component ScriptEditorPanel inherits Rectangle {
             }
 
             // -- Footer --
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: end;
+            DialogFooter {
                 AppButton {
                     text: "Cancel";
                     clicked => {
@@ -474,6 +452,4 @@ export component ScriptEditorPanel inherits Rectangle {
                     }
                 }
             }
-        }
-    }
 }

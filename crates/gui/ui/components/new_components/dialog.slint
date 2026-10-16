@@ -1,0 +1,173 @@
+// components/dialog.slint — the frame every dialog shares: the dimmed
+// backdrop, a centered card, a head with the title (and an optional
+// subtitle, tone icon and ✕). The dialog's content goes inside; its
+// buttons last, in a `DialogFooter`.
+//
+//     Dialog {
+//         title: "Delete class";
+//         tone: DialogTone.danger;
+//         close => { State.cancel(); }
+//         Text { text: "…"; }
+//         DialogFooter {
+//             AppButton { text: "Cancel"; clicked => { State.cancel(); } }
+//             AppButton { text: "Delete"; danger: true; clicked => { State.confirm(); } }
+//         }
+//     }
+
+import { Theme } from "../../style.slint";
+import { IconButton } from "button.slint";
+
+// What the head's icon says: nothing, information, a warning, a destructive
+// action, starting something.
+export enum DialogTone { none, info, warning, danger, run }
+
+export component Dialog inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <DialogTone> tone: DialogTone.none;
+    in property <length> dialog-width: 440px;
+    // 0px: as high as its content (at most the window's height).
+    in property <length> dialog-height: 0px;
+    // The head's ✕ - it and Esc call `close`.
+    in property <bool> closable: true;
+    // A click on the backdrop calls `close` too.
+    in property <bool> close-on-backdrop: false;
+    // Esc calls `close` (when `closable`) - off where Esc must not throw
+    // work away, e.g. while editing text.
+    in property <bool> close-on-escape: true;
+    // Space around the content: 0px for one that fills the card (lists,
+    // side menus) and pads itself.
+    in property <length> content-padding: 24px;
+    callback close;
+
+    property <color> tone-color: root.tone == DialogTone.danger ? Theme.err
+        : root.tone == DialogTone.warning ? Theme.warn
+        : root.tone == DialogTone.run ? Theme.ok
+        : Theme.accent;
+
+    background: Theme.modal-overlay;
+
+    // The backdrop: blocks the app below.
+    TouchArea {
+        clicked => {
+            if root.close-on-backdrop {
+                root.close();
+            }
+        }
+    }
+
+    card := Rectangle {
+        width: min(root.dialog-width, root.width - 48px);
+        height: root.dialog-height > 0 ? min(root.dialog-height, root.height - 48px) : min(layout.preferred-height, root.height - 48px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.panel;
+        border-radius: Theme.radius-lg + 2px;
+        border-width: 1px;
+        border-color: Theme.border-soft;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 12px;
+        drop-shadow-color: Theme.shadow;
+        clip: true;
+        accessible-role: groupbox;
+        accessible-label: root.title;
+
+        // Clicks inside stay inside.
+        TouchArea { }
+
+        keys := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Escape && root.closable && root.close-on-escape {
+                    root.close();
+                    return accept;
+                }
+                reject
+            }
+
+            layout := VerticalLayout {
+                spacing: 0px;
+
+                // -- Head --
+                HorizontalLayout {
+                    padding-left: 24px;
+                    padding-right: root.closable ? 14px : 24px;
+                    padding-top: 20px;
+                    padding-bottom: root.content-padding > 0 ? 4px : 16px;
+                    spacing: 12px;
+
+                    if root.tone != DialogTone.none: VerticalLayout {
+                        alignment: start;
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            border-radius: Theme.radius-md + 2px;
+                            background: root.tone-color.with-alpha(0.14);
+                            Image {
+                                source: root.tone == DialogTone.danger ? @image-url("../../icons/regular-white/trash.svg")
+                                    : root.tone == DialogTone.warning ? @image-url("../../icons/regular-white/warning.svg")
+                                    : root.tone == DialogTone.run ? @image-url("../../icons/regular-white/play.svg")
+                                    : @image-url("../../icons/regular-white/info.svg");
+                                width: 16px;
+                                height: 16px;
+                                colorize: root.tone-color;
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 2px;
+                        Text {
+                            text: root.title;
+                            font-size: 16px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            wrap: word-wrap;
+                            accessible-role: none;
+                        }
+
+                        if root.subtitle != "": Text {
+                            text: root.subtitle;
+                            font-size: 12px;
+                            color: Theme.text-dim;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    if root.closable: VerticalLayout {
+                        alignment: start;
+                        IconButton {
+                            icon: @image-url("../../icons/regular-white/x.svg");
+                            label: "Close";
+                            clicked => {
+                                root.close();
+                            }
+                        }
+                    }
+                }
+
+                // -- Content, the footer last --
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    padding: root.content-padding;
+                    padding-top: root.content-padding > 0 ? 12px : 0px;
+                    spacing: 16px;
+                    @children
+                }
+            }
+        }
+    }
+
+    init => {
+        keys.focus();
+    }
+}
+
+// A dialog's buttons, at its bottom right - the confirming one last.
+// Something before them that stretches (`horizontal-stretch: 1`) goes left.
+export component DialogFooter inherits HorizontalLayout {
+    alignment: end;
+    spacing: 8px;
+    padding-top: 4px;
+}

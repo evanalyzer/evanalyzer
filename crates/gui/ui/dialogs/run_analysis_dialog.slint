@@ -1,5 +1,5 @@
 import { CheckBox, ComboBox, LineEdit } from "std-widgets.slint";
-import { BaseDialog } from "dialog_base.slint";
+import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { GlobalAppState, DialogType } from "../state.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Theme } from "../style.slint";
@@ -19,11 +19,13 @@ export global RunAnalysisState {
     callback cancel();
 }
 
-export component RunAnalysisDialog inherits BaseDialog {
-    title-text: "Run Analysis";
-    icon: "▶";
-    main-height: RunAnalysisState.dataset_only ? 340px : 290px;
-    main-width: 440px;
+export component RunAnalysisDialog inherits Dialog {
+    title: "Run Analysis";
+    dialog-width: 440px;
+    tone: DialogTone.run;
+    close => {
+        RunAnalysisState.cancel();
+    }
 
     VerticalLayout {
         spacing: 12px;
@@ -81,13 +83,7 @@ export component RunAnalysisDialog inherits BaseDialog {
             }
         }
 
-        Rectangle {
-            vertical-stretch: 1;
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: end;
+        DialogFooter {
 
             AppButton {
                 text: "Cancel";
