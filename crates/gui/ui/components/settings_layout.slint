@@ -3,7 +3,7 @@
 // section list on the left; on the right, sections of cards whose rows have
 // the setting's name and explanation on the left, its control on the right.
 
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 // -- Building blocks -----------------------------------------------------------
 
@@ -18,7 +18,7 @@ export component NavItem inherits Rectangle {
 
     height: 32px;
     border-radius: 6px;
-    background: root.active ? Theme.accent-dim : (ta.has-hover ? Theme.hover : transparent);
+    background: root.active ? Ink.selection : (ta.has-hover ? Ink.hover : transparent);
 
     Rectangle {
         x: 0;
@@ -26,7 +26,7 @@ export component NavItem inherits Rectangle {
         width: 3px;
         height: parent.height - 16px;
         border-radius: 1.5px;
-        background: root.active ? Theme.accent : transparent;
+        background: root.active ? Ink.focus : transparent;
     }
 
     HorizontalLayout {
@@ -40,7 +40,7 @@ export component NavItem inherits Rectangle {
                 source: root.icon;
                 width: 14px;
                 height: 14px;
-                colorize: root.active ? Theme.accent : (root.dimmed ? Theme.text-faint : Theme.text-dim);
+                colorize: root.active ? Ink.focus : (root.dimmed ? Ink.text-faint : Ink.text-dim);
             }
         }
 
@@ -49,7 +49,7 @@ export component NavItem inherits Rectangle {
             vertical-alignment: center;
             font-size: 12px;
             font-weight: root.active ? 600 : 400;
-            color: root.dimmed ? Theme.text-faint : (root.active ? Theme.text : Theme.text-dim);
+            color: root.dimmed ? Ink.text-faint : (root.active ? Ink.text : Ink.text-dim);
             overflow: elide;
         }
     }
@@ -66,7 +66,7 @@ export component NavGroupLabel inherits Text {
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.6px;
-    color: Theme.text-mute;
+    color: Ink.text-mute;
 }
 
 // Title of a settings section, with where its settings are kept.
@@ -84,7 +84,7 @@ export component SectionHeader inherits VerticalLayout {
             text: root.title;
             font-size: 16px;
             font-weight: 700;
-            color: Theme.text;
+            color: Ink.text;
             vertical-alignment: center;
         }
 
@@ -94,11 +94,11 @@ export component SectionHeader inherits VerticalLayout {
                 height: 18px;
                 width: scope-text.preferred-width + 14px;
                 border-radius: 9px;
-                background: Theme.raised;
+                background: Ink.raised;
                 scope-text := Text {
                     text: root.scope;
                     font-size: 10px;
-                    color: Theme.text-dim;
+                    color: Ink.text-dim;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -115,17 +115,17 @@ export component SectionHeader inherits VerticalLayout {
     Text {
         text: root.subtitle;
         font-size: 11px;
-        color: Theme.text-dim;
+        color: Ink.text-dim;
         wrap: word-wrap;
     }
 }
 
 // A rounded panel the rows of a section sit on.
 export component SettingsCard inherits Rectangle {
-    background: Theme.panel;
+    background: Ink.panel;
     border-radius: 8px;
     border-width: 1px;
-    border-color: Theme.border-soft;
+    border-color: Ink.border-soft;
     clip: true;
 
     VerticalLayout {
@@ -143,7 +143,7 @@ export component SettingRow inherits VerticalLayout {
 
     Rectangle {
         height: 1px;
-        background: Theme.border-soft;
+        background: Ink.border-soft;
     }
 
     HorizontalLayout {
@@ -166,7 +166,7 @@ export component SettingRow inherits VerticalLayout {
                 text: root.label;
                 font-size: 12px;
                 font-weight: 600;
-                color: root.enabled ? Theme.text : Theme.text-mute;
+                color: root.enabled ? Ink.text : Ink.text-mute;
                 wrap: word-wrap;
                 height: self.preferred-height;
             }
@@ -174,7 +174,7 @@ export component SettingRow inherits VerticalLayout {
             if root.description != "": Text {
                 text: root.description;
                 font-size: 11px;
-                color: root.enabled ? Theme.text-dim : Theme.text-mute;
+                color: root.enabled ? Ink.text-dim : Ink.text-mute;
                 wrap: word-wrap;
                 height: self.preferred-height;
             }
@@ -196,7 +196,7 @@ export component SettingBlock inherits VerticalLayout {
 
     Rectangle {
         height: 1px;
-        background: Theme.border-soft;
+        background: Ink.border-soft;
     }
 
     VerticalLayout {
@@ -210,13 +210,13 @@ export component SettingBlock inherits VerticalLayout {
                 text: root.label;
                 font-size: 12px;
                 font-weight: 600;
-                color: Theme.text;
+                color: Ink.text;
             }
 
             if root.description != "": Text {
                 text: root.description;
                 font-size: 11px;
-                color: Theme.text-dim;
+                color: Ink.text-dim;
                 wrap: word-wrap;
             }
         }

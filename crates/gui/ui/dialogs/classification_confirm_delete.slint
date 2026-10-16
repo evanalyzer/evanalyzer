@@ -1,14 +1,12 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ClassificationState } from "../api/classification.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 
-import { AppButton } from "../components/app_button.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
-export component ConfirmDeleteClassDialog inherits Dialog {
+export component ConfirmDeleteClassDialog inherits InkDialog {
     title: "Delete class";
-    dialog-width: 440px;
-    tone: DialogTone.danger;
+    card-width: 440px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
     }
@@ -18,29 +16,29 @@ export component ConfirmDeleteClassDialog inherits Dialog {
         Text {
             text: "This action cannot be undone. Deleting a class breaks existing annotations and pipeline steps. Ensure you are not using this class before proceeding.";
             wrap: word-wrap;
-            color: Theme.text;
+            color: Ink.text;
             font-size: 13px;
         }
 
         Text {
             text: "Delete class \{ClassificationState.selected_class_name}?";
             wrap: word-wrap;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
             font-size: 13px;
         }
 
-        DialogFooter {
+        InkDialogFooter {
 
-            AppButton {
+            InkButton {
                 text: "Cancel";
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
                 }
             }
 
-            AppButton {
+            InkButton {
+                kind: InkButtonKind.danger;
                 text: "Delete";
-                danger: true;
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
                     ClassificationState.class_delete(ClassificationState.selected_class_id);

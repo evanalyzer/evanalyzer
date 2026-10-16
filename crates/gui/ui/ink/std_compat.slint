@@ -1,10 +1,11 @@
-// ink/std_compat.slint — Ink controls under the names and API of Slint's
-// std-widgets (`LineEdit`, `ComboBox`, `CheckBox`, `SpinBox`, `Switch`), so
-// a view not yet rebuilt on Ink only swaps its import:
+// ink/std_compat.slint — Ink's form controls with the API of Slint's
+// std-widgets (`LineEdit`, `ComboBox`, `CheckBox`, `SpinBox`, `Switch`):
+// for forms bound two-way to their state (`value <=> State.x`, an `int`
+// index or value), which the Ink fields (`InkTextField`, `InkSelect`,
+// `InkNumberField` …, made for a value and a change callback) don't do.
+// They look exactly like those.
 //
 //     import { LineEdit, ComboBox } from "../ink/std_compat.slint";
-//
-// The part of the API the views use; new code uses the Ink controls.
 
 import { Ink } from "palette.slint";
 import { InkIcons } from "icons.slint";

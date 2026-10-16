@@ -1,13 +1,11 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ObjectListState } from "../api/object_list.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
-import { AppButton } from "../components/app_button.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
-export component ConfirmDeleteObjectDialog inherits Dialog {
+export component ConfirmDeleteObjectDialog inherits InkDialog {
     title: "Delete object \{ObjectListState.selected_object.id}?";
-    tone: DialogTone.danger;
-    dialog-width: 440px;
+    card-width: 440px;
     close => {
         GlobalAppState.active_dialog = DialogType.none;
     }
@@ -15,21 +13,21 @@ export component ConfirmDeleteObjectDialog inherits Dialog {
     Text {
         text: "The selected object is deleted. This can't be undone.";
         wrap: word-wrap;
-        color: Theme.text;
+        color: Ink.text;
         font-size: 13px;
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Cancel";
             clicked => {
                 GlobalAppState.active_dialog = DialogType.none;
             }
         }
 
-        AppButton {
+        InkButton {
+            kind: InkButtonKind.danger;
             text: "Delete";
-            danger: true;
             clicked => {
                 GlobalAppState.active_dialog = DialogType.none;
                 ObjectListState.object_delete(ObjectListState.selected_object.id);

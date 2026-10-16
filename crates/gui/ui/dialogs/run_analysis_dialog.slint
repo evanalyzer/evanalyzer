@@ -1,14 +1,12 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { RunAnalysisState } from "../api/run_analysis.slint";
 import { CheckBox, ComboBox, LineEdit } from "../ink/std_compat.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 
-import { AppButton } from "../components/app_button.slint";
-import { Theme } from "../style.slint";
-export component RunAnalysisDialog inherits Dialog {
+import { Ink } from "../ink/palette.slint";
+export component RunAnalysisDialog inherits InkDialog {
     title: "Run Analysis";
-    dialog-width: 440px;
-    tone: DialogTone.run;
+    card-width: 440px;
     close => {
         RunAnalysisState.cancel();
     }
@@ -21,7 +19,7 @@ export component RunAnalysisDialog inherits Dialog {
             Text {
                 text: "Job name (optional)";
                 font-size: 11px;
-                color: Theme.text-dim;
+                color: Ink.text-dim;
             }
 
             name-edit := LineEdit {
@@ -36,7 +34,7 @@ export component RunAnalysisDialog inherits Dialog {
             Text {
                 text: "Leave blank to auto-generate a name.";
                 wrap: word-wrap;
-                color: Theme.text-dim;
+                color: Ink.text-dim;
                 font-size: 11px;
             }
         }
@@ -59,7 +57,7 @@ export component RunAnalysisDialog inherits Dialog {
                     ? "No image is analysed: the dataset steps run on a copy of these results, saved under the new job name."
                     : "Analyses every image, then runs the dataset steps.";
                 wrap: word-wrap;
-                color: Theme.text-dim;
+                color: Ink.text-dim;
                 font-size: 11px;
             }
 
@@ -69,18 +67,18 @@ export component RunAnalysisDialog inherits Dialog {
             }
         }
 
-        DialogFooter {
+        InkDialogFooter {
 
-            AppButton {
+            InkButton {
                 text: "Cancel";
                 clicked => {
                     RunAnalysisState.cancel();
                 }
             }
 
-            AppButton {
+            InkButton {
+                kind: InkButtonKind.primary;
                 text: "Run";
-                primary: true;
                 clicked => {
                     RunAnalysisState.confirm();
                 }

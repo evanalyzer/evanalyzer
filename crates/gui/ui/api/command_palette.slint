@@ -1,0 +1,28 @@
+// api/command_palette.slint — the command palette (Ctrl+K): type, and run
+// an action, go to a step of the shown pipeline, or add a command. Rust
+// finds the entries for what was typed and runs the chosen one.
+
+// What an entry is.
+export enum PaletteKind { action, step, command }
+
+export struct PaletteEntry {
+    // What `run` gets back: "action:save", "step:2", "command:17".
+    id: string,
+    title: string,
+    // A second, dimmer text: a step's summary, a command's category.
+    detail: string,
+    // "Ctrl S".
+    shortcut: string,
+    kind: PaletteKind,
+}
+
+export global CommandPaletteState {
+    in-out property <bool> open: false;
+    in-out property <string> query;
+    in property <[PaletteEntry]> entries: [];
+    // The entry Enter runs.
+    in-out property <int> selected: 0;
+    // The entries for this text (also on opening, with "").
+    callback query-changed(string);
+    callback run(string);
+}

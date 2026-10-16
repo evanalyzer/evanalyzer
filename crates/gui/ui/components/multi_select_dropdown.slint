@@ -13,7 +13,7 @@
 // hand back `items`.
 import { ScrollView } from "std-widgets.slint";
 import { LineEdit } from "../ink/std_compat.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 export struct MultiSelectItem {
     key: string,
@@ -32,8 +32,8 @@ component MultiSelectCheckMark inherits Rectangle {
     height: 14px;
     border-radius: 4px;
     border-width: 1.5px;
-    border-color: root.checked ? Theme.accent : Theme.border;
-    background: root.checked ? Theme.accent : transparent;
+    border-color: root.checked ? Ink.focus : Ink.border;
+    background: root.checked ? Ink.focus : transparent;
     if root.checked: Image {
         source: @image-url("../icons/regular-black/check.svg");
         width: 9px;
@@ -51,7 +51,7 @@ component MultiSelectRow inherits Rectangle {
 
     height: 26px;
     border-radius: 4px;
-    background: row-ta.has-hover ? Theme.raised : transparent;
+    background: row-ta.has-hover ? Ink.raised : transparent;
 
     row-ta := TouchArea {
         mouse-cursor: pointer;
@@ -78,7 +78,7 @@ component MultiSelectRow inherits Rectangle {
         Text {
             text: root.item.value;
             font-size: 12px;
-            color: (!root.show-checkbox && root.item.selected) ? Theme.accent : Theme.text;
+            color: (!root.show-checkbox && root.item.selected) ? Ink.focus : Ink.text;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
@@ -211,10 +211,10 @@ export component MultiSelectDropdown inherits Rectangle {
         // height instead of hand-picking a pixel value, so it keeps working
         // whether or not `label` is set.
         height: root.pill-height;
-        border-radius: Theme.radius-sm;
-        background: Theme.raised;
+        border-radius: Ink.radius-sm;
+        background: Ink.raised;
         border-width: 1px;
-        border-color: Theme.border-soft;
+        border-color: Ink.border-soft;
         opacity: root.enabled ? 1.0 : 0.5;
 
         TouchArea {
@@ -234,14 +234,14 @@ export component MultiSelectDropdown inherits Rectangle {
                 text: root.label;
                 font-size: 9px;
                 letter-spacing: 0.4px;
-                color: Theme.text-mute;
+                color: Ink.text-mute;
             }
 
             HorizontalLayout {
                 Text {
                     text: root.summary-text;
                     font-size: 12px;
-                    color: Theme.text;
+                    color: Ink.text;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     overflow: elide;
@@ -250,7 +250,7 @@ export component MultiSelectDropdown inherits Rectangle {
                 Text {
                     text: "▾";
                     font-size: 9px;
-                    color: Theme.text-mute;
+                    color: Ink.text-mute;
                     vertical-alignment: center;
                 }
             }
@@ -284,11 +284,11 @@ export component MultiSelectDropdown inherits Rectangle {
         Rectangle {
             width: max(root.pill-width, 320px);
             height: 300px;
-            background: Theme.panel;
+            background: Ink.panel;
             border-width: 1px;
-            border-color: Theme.border;
-            border-radius: Theme.radius-md;
-            drop-shadow-color: Theme.shadow;
+            border-color: Ink.border;
+            border-radius: Ink.radius-md;
+            drop-shadow-color: Ink.shadow;
             drop-shadow-blur: 24px;
             drop-shadow-offset-y: 8px;
             clip: true;
@@ -309,7 +309,7 @@ export component MultiSelectDropdown inherits Rectangle {
                             Text {
                                 text: "All";
                                 font-size: 10.5px;
-                                color: Theme.accent;
+                                color: Ink.focus;
                                 vertical-alignment: center;
                             }
                         }
@@ -321,7 +321,7 @@ export component MultiSelectDropdown inherits Rectangle {
                             Text {
                                 text: "None";
                                 font-size: 10.5px;
-                                color: Theme.text-mute;
+                                color: Ink.text-mute;
                                 vertical-alignment: center;
                             }
                         }
@@ -336,7 +336,7 @@ export component MultiSelectDropdown inherits Rectangle {
                         y: parent.height - 1px;
                         width: parent.width;
                         height: 1px;
-                        background: Theme.border-soft;
+                        background: Ink.border-soft;
                     }
                 }
 
@@ -357,7 +357,7 @@ export component MultiSelectDropdown inherits Rectangle {
                         y: parent.height - 1px;
                         width: parent.width;
                         height: 1px;
-                        background: Theme.border-soft;
+                        background: Ink.border-soft;
                     }
                 }
 
@@ -450,7 +450,7 @@ export component MultiSelectDropdown inherits Rectangle {
                                     font-size: 10px;
                                     font-weight: 700;
                                     letter-spacing: 0.5px;
-                                    color: Theme.text-mute;
+                                    color: Ink.text-mute;
                                     height: 22px;
                                     vertical-alignment: center;
                                 }

@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 pub mod ai_learning_controller;
 pub mod classification_controller;
+pub mod command_palette_controller;
 pub mod connection_controller;
 pub mod focus_controller;
 pub mod histogram_controller;
@@ -65,6 +66,7 @@ pub struct Editor {
     results_state_controller: Arc<ResultsStateController>,
     connection_controller: Arc<connection_controller::ConnectionController>,
     script_editor_controller: script_editor_controller::ScriptEditorController,
+    command_palette_controller: command_palette_controller::CommandPaletteController,
 }
 
 impl Editor {
@@ -216,10 +218,13 @@ impl Editor {
 
         let script_editor_controller =
             script_editor_controller::ScriptEditorController::new(ui.clone());
+        let command_palette_controller =
+            command_palette_controller::CommandPaletteController::new(ui.clone());
 
         Self {
             connection_controller,
             script_editor_controller,
+            command_palette_controller,
             image_list_controller,
             project_controller,
             histogram_controller,
@@ -260,6 +265,7 @@ impl Editor {
         self.results_state_controller.attach_callbacks();
         self.connection_controller.attach_callbacks();
         self.script_editor_controller.attach_callbacks();
+        self.command_palette_controller.attach_callbacks();
 
         self.viewport_worker.start_worker();
         self.pipeline_worker.start_worker();

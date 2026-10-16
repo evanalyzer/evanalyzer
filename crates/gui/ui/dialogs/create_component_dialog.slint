@@ -1,3 +1,4 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { ComponentEditChoiceState, ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState } from "../api/create_component.slint";
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
@@ -8,9 +9,7 @@ import {
     SettingRow,
     SettingBlock,
 } from "../components/settings_layout.slint";
-import { AppButton } from "../components/app_button.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 // "Create component": turns consecutive steps of a pipeline into a component.
 // The host fills the class list with suggested roles (see
@@ -29,7 +28,7 @@ component RangeRow inherits HorizontalLayout {
         text: label;
         width: 40px;
         font-size: 11px;
-        color: Theme.text-dim;
+        color: Ink.text-dim;
         vertical-alignment: center;
     }
 
@@ -45,10 +44,10 @@ component RangeRow inherits HorizontalLayout {
 
 // -- Dialog component -----------------------------------------
 
-export component CreateComponentDialog inherits Dialog {
+export component CreateComponentDialog inherits InkDialog {
     title: "Create component";
     subtitle: "The steps become one step - a component you can use like a command, in this and other pipelines.";
-    dialog-width: 480px;
+    card-width: 480px;
     close-on-backdrop: true;
     close => {
         CreateComponentState.cancel();
@@ -59,7 +58,7 @@ export component CreateComponentDialog inherits Dialog {
         Text {
             text: "Component name";
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
         }
 
         LineEdit {
@@ -99,7 +98,7 @@ export component CreateComponentDialog inherits Dialog {
         Text {
             text: "Classes";
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
         }
 
         for row[i] in CreateComponentState.classes: HorizontalLayout {
@@ -110,13 +109,13 @@ export component CreateComponentDialog inherits Dialog {
                 Text {
                     text: row.name;
                     font-size: 12px;
-                    color: Theme.text;
+                    color: Ink.text;
                 }
 
                 Text {
                     text: row.detail;
                     font-size: 10px;
-                    color: Theme.text-mute;
+                    color: Ink.text-mute;
                 }
             }
 
@@ -133,7 +132,7 @@ export component CreateComponentDialog inherits Dialog {
         Text {
             text: "Internal classes are the component's own: each use of the component has its own, and their objects don't reach the results.";
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
             wrap: word-wrap;
         }
     }
@@ -141,28 +140,28 @@ export component CreateComponentDialog inherits Dialog {
     if CreateComponentState.channels-text != "": Text {
         text: CreateComponentState.channels-text;
         font-size: 12px;
-        color: Theme.text-dim;
+        color: Ink.text-dim;
         wrap: word-wrap;
     }
 
     if CreateComponentState.error != "": Text {
         text: CreateComponentState.error;
         font-size: 12px;
-        color: Theme.err;
+        color: Ink.err;
         wrap: word-wrap;
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Cancel";
             clicked => {
                 CreateComponentState.cancel();
             }
         }
 
-        AppButton {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: "Create component";
-            primary: true;
             clicked => {
                 CreateComponentState.confirm();
             }
@@ -171,10 +170,9 @@ export component CreateComponentDialog inherits Dialog {
 }
 
 // -- "Edit for all" or "Only this step" -------------------------
-export component ComponentEditChoiceDialog inherits Dialog {
+export component ComponentEditChoiceDialog inherits InkDialog {
     title: "Open \{ComponentEditChoiceState.component-name}";
-    tone: DialogTone.info;
-    dialog-width: 420px;
+    card-width: 420px;
     close-on-backdrop: true;
     close => {
         ComponentEditChoiceState.cancel();
@@ -183,28 +181,28 @@ export component ComponentEditChoiceDialog inherits Dialog {
     Text {
         text: "This component is used by \{ComponentEditChoiceState.uses} steps. Changes to it apply to all of them - or make a copy just for this step.";
         font-size: 13px;
-        color: Theme.text;
+        color: Ink.text;
         wrap: word-wrap;
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Cancel";
             clicked => {
                 ComponentEditChoiceState.cancel();
             }
         }
 
-        AppButton {
+        InkButton {
             text: "Only this step";
             clicked => {
                 ComponentEditChoiceState.only-this();
             }
         }
 
-        AppButton {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: "Edit for all";
-            primary: true;
             clicked => {
                 ComponentEditChoiceState.edit-all();
             }
@@ -213,10 +211,10 @@ export component ComponentEditChoiceDialog inherits Dialog {
 }
 
 // -- Expose a setting: a new parameter, or one that exists -------
-export component ExposeChoiceDialog inherits Dialog {
+export component ExposeChoiceDialog inherits InkDialog {
     title: "Expose \{ExposeChoiceState.setting-name}";
     subtitle: "As a parameter of its own, or set by a parameter the component has already:";
-    dialog-width: 460px;
+    card-width: 460px;
     close-on-backdrop: true;
     close => {
         ExposeChoiceState.cancel();
@@ -225,9 +223,9 @@ export component ExposeChoiceDialog inherits Dialog {
     VerticalLayout {
         spacing: 10px;
 
-        if ExposeChoiceState.choices.length > 0: AppButton {
+        if ExposeChoiceState.choices.length > 0: InkButton {
+            kind: InkButtonKind.primary;
             text: ExposeChoiceState.choices[0];
-            primary: true;
             clicked => {
                 ExposeChoiceState.chosen(0);
             }
@@ -240,8 +238,8 @@ export component ExposeChoiceDialog inherits Dialog {
             height: i > 0 ? self.preferred-height : 0px;
             border-radius: 8px;
             border-width: 1px;
-            border-color: choice-ta.has-hover ? Theme.accent : Theme.border;
-            background: choice-ta.has-hover ? Theme.raised : Theme.bg;
+            border-color: choice-ta.has-hover ? Ink.focus : Ink.border;
+            background: choice-ta.has-hover ? Ink.raised : Ink.ground;
             accessible-role: button;
             accessible-label: choice;
 
@@ -255,14 +253,14 @@ export component ExposeChoiceDialog inherits Dialog {
                     text: choice;
                     font-size: 12px;
                     font-weight: 600;
-                    color: Theme.text;
+                    color: Ink.text;
                     overflow: elide;
                 }
 
                 if ExposeChoiceState.details[i] != "": Text {
                     text: ExposeChoiceState.details[i];
                     font-size: 11px;
-                    color: Theme.text-dim;
+                    color: Ink.text-dim;
                     overflow: elide;
                 }
             }
@@ -276,8 +274,8 @@ export component ExposeChoiceDialog inherits Dialog {
         }
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Cancel";
             clicked => {
                 ExposeChoiceState.cancel();
@@ -287,10 +285,9 @@ export component ExposeChoiceDialog inherits Dialog {
 }
 
 // -- Update a component from the library -------------------------------
-export component ComponentUpdateDialog inherits Dialog {
+export component ComponentUpdateDialog inherits InkDialog {
     title: "Update \{ComponentUpdateState.component-name}";
-    tone: ComponentUpdateState.changed-here ? DialogTone.warning : DialogTone.info;
-    dialog-width: 420px;
+    card-width: 420px;
     close-on-backdrop: true;
     close => {
         ComponentUpdateState.cancel();
@@ -299,28 +296,28 @@ export component ComponentUpdateDialog inherits Dialog {
     Text {
         text: "The component library has a newer version (\{ComponentUpdateState.versions}). Every step using the component gets it; their values stay.";
         font-size: 13px;
-        color: Theme.text;
+        color: Ink.text;
         wrap: word-wrap;
     }
 
     if ComponentUpdateState.changed-here: Text {
         text: "This project changed the component since it was inserted - updating replaces those changes.";
         font-size: 12px;
-        color: Theme.warn;
+        color: Ink.warn;
         wrap: word-wrap;
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Cancel";
             clicked => {
                 ComponentUpdateState.cancel();
             }
         }
 
-        AppButton {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: "Update";
-            primary: true;
             clicked => {
                 ComponentUpdateState.confirm();
             }
@@ -341,14 +338,14 @@ component RowButton inherits Rectangle {
     height: 24px;
     border-radius: 4px;
     opacity: root.enabled ? 1 : 0.3;
-    background: ta.has-hover && root.enabled ? Theme.raised : transparent;
+    background: ta.has-hover && root.enabled ? Ink.raised : transparent;
     accessible-role: button;
     accessible-label: root.tooltip;
 
     Text {
         text: root.text;
         font-size: 12px;
-        color: ta.has-hover && root.danger ? Theme.warn : Theme.text-dim;
+        color: ta.has-hover && root.danger ? Ink.warn : Ink.text-dim;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -373,7 +370,7 @@ component ParamHeader inherits Rectangle {
 
     property <bool> free: root.editing < 0;
 
-    background: root.index == root.editing ? Theme.cat-component.with-alpha(0.06) : transparent;
+    background: root.index == root.editing ? Ink.cat-component.with-alpha(0.06) : transparent;
 
     HorizontalLayout {
         padding-left: 16px;
@@ -391,7 +388,7 @@ component ParamHeader inherits Rectangle {
                     text: root.param.label;
                     font-size: 12px;
                     font-weight: 600;
-                    color: Theme.text;
+                    color: Ink.text;
                     overflow: elide;
                 }
 
@@ -401,11 +398,11 @@ component ParamHeader inherits Rectangle {
                         height: 16px;
                         width: section-text.preferred-width + 12px;
                         border-radius: 8px;
-                        background: Theme.raised;
+                        background: Ink.raised;
                         section-text := Text {
                             text: root.param.section;
                             font-size: 10px;
-                            color: Theme.text-dim;
+                            color: Ink.text-dim;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
@@ -420,14 +417,14 @@ component ParamHeader inherits Rectangle {
             Text {
                 text: root.param.description != "" ? root.param.description : (root.param.default-description != "" ? root.param.default-description : "No help text");
                 font-size: 11px;
-                color: root.param.description != "" ? Theme.text-dim : Theme.text-mute;
+                color: root.param.description != "" ? Ink.text-dim : Ink.text-mute;
                 overflow: elide;
             }
 
             Text {
                 text: "sets \{root.param.sets}";
                 font-size: 10px;
-                color: Theme.text-mute;
+                color: Ink.text-mute;
                 overflow: elide;
             }
         }
@@ -439,7 +436,7 @@ component ParamHeader inherits Rectangle {
                 Text {
                     text: "default \{root.param.default-value}";
                     font-size: 10px;
-                    color: Theme.text-mute;
+                    color: Ink.text-mute;
                     vertical-alignment: center;
                 }
 
@@ -491,11 +488,11 @@ component ParamHeader inherits Rectangle {
 // The component's name, descriptions and parameters - laid out like the
 // project settings: sections on the left, rows of name/explanation and
 // control on the right. Changes apply right away.
-export component ComponentSettingsDialog inherits Dialog {
+export component ComponentSettingsDialog inherits InkDialog {
     title: "Component settings";
     subtitle: "◆ " + ComponentSettingsState.name;
-    dialog-width: 860px;
-    dialog-height: 620px;
+    card-width: 860px;
+    card-height: 620px;
     content-padding: 0px;
     close-on-backdrop: true;
     close => {
@@ -521,14 +518,14 @@ export component ComponentSettingsDialog inherits Dialog {
 
     Rectangle {
         vertical-stretch: 1;
-        background: Theme.bg;
+        background: Ink.ground;
 
         VerticalLayout {
             spacing: 0;
 
             Rectangle {
                 height: 1px;
-                background: Theme.border-soft;
+                background: Ink.border-soft;
             }
 
             HorizontalLayout {
@@ -538,7 +535,7 @@ export component ComponentSettingsDialog inherits Dialog {
                 // -- Section list ----------------------------------------
                 Rectangle {
                     width: 210px;
-                    background: Theme.sidebar;
+                    background: Ink.panel;
 
                     VerticalLayout {
                         padding: 16px;
@@ -571,7 +568,7 @@ export component ComponentSettingsDialog inherits Dialog {
                         x: parent.width - 1px;
                         width: 1px;
                         height: parent.height;
-                        background: Theme.border-soft;
+                        background: Ink.border-soft;
                     }
                 }
 
@@ -687,7 +684,7 @@ export component ComponentSettingsDialog inherits Dialog {
                                         // Divider, like a settings row.
                                         Rectangle {
                                             height: 1px;
-                                            background: Theme.border-soft;
+                                            background: Ink.border-soft;
                                         }
 
                                         ParamHeader {
@@ -758,7 +755,7 @@ export component ComponentSettingsDialog inherits Dialog {
 
                                                 if param.description != "": HorizontalLayout {
                                                     alignment: start;
-                                                    AppButton {
+                                                    InkButton {
                                                         text: "Reset to the setting's own help";
                                                         clicked => {
                                                             ComponentSettingsState.parameter-help-reset(param.key);
@@ -778,7 +775,7 @@ export component ComponentSettingsDialog inherits Dialog {
                                                         horizontal-stretch: 1;
                                                         text: binding.text;
                                                         font-size: 11px;
-                                                        color: Theme.text;
+                                                        color: Ink.text;
                                                         vertical-alignment: center;
                                                         overflow: elide;
                                                     }
@@ -813,7 +810,7 @@ export component ComponentSettingsDialog inherits Dialog {
                                                 alignment: end;
                                                 spacing: 8px;
                                                 padding-top: 4px;
-                                                AppButton {
+                                                InkButton {
                                                     text: "Cancel";
                                                     clicked => {
                                                         ComponentSettingsState.parameter-edit-cancelled();
@@ -821,9 +818,9 @@ export component ComponentSettingsDialog inherits Dialog {
                                                     }
                                                 }
 
-                                                AppButton {
+                                                InkButton {
+                                                    kind: InkButtonKind.primary;
                                                     text: "Apply";
-                                                    primary: true;
                                                     clicked => {
                                                         ComponentSettingsState.parameter-edit-applied();
                                                         root.editing = -1;
@@ -842,12 +839,12 @@ export component ComponentSettingsDialog inherits Dialog {
                         if root.editing >= 0 && self.header-top < 0 && self.header-top + root.row-height + root.edited-height > root.row-height: Rectangle {
                             y: 0;
                             height: root.row-height;
-                            background: Theme.panel;
+                            background: Ink.panel;
                             border-radius: 8px;
                             border-width: 1px;
-                            border-color: Theme.cat-component.with-alpha(0.5);
+                            border-color: Ink.cat-component.with-alpha(0.5);
                             drop-shadow-blur: 8px;
-                            drop-shadow-color: Theme.shadow;
+                            drop-shadow-color: Ink.shadow;
                             accessible-role: none;
                             ParamHeader {
                                 param: ComponentSettingsState.parameters[root.editing];
@@ -866,19 +863,22 @@ export component ComponentSettingsDialog inherits Dialog {
             // -- Footer ----------------------------------------------------
             Rectangle {
                 height: 1px;
-                background: Theme.border-soft;
+                background: Ink.border-soft;
             }
 
             Rectangle {
-                background: Theme.panel;
-                DialogFooter {
-                    padding-left: 20px;
-                    padding-right: 20px;
-                    padding-top: 12px;
-                    padding-bottom: 12px;
-                    AppButton {
+                background: Ink.panel;
+                // The dialog's buttons; this dialog pads its own content.
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 6px;
+                    padding-left: Ink.pad-dialog;
+                    padding-right: Ink.pad-dialog;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    InkButton {
+                        kind: InkButtonKind.primary;
                         text: "Close";
-                        primary: true;
                         clicked => {
                             ComponentSettingsState.close();
                         }

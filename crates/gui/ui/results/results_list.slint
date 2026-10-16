@@ -1,17 +1,17 @@
 // results_list.slint — flat object table with an image/class filter bar and
 // a grouped column-visibility dropdown, both built on the shared
 // MultiSelectDropdown (components/multi_select_dropdown.slint).
+import { InkButton } from "../ink/ink.slint";
 import { ResultsState } from "../api/results.slint";
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
-import { AppButton } from "../components/app_button.slint";
 import { VerticalDivider } from "../components/divider.slint";
 
 export component ResultsListView inherits Rectangle {
-    background: Theme.bg;
+    background: Ink.ground;
 
     VerticalLayout {
         spacing: 0px;
@@ -129,7 +129,7 @@ export component ResultsListView inherits Rectangle {
                 // accumulate rows or track scroll position. Next to the row
                 // count rather than in a footer of its own, to leave the
                 // table the height.
-                AppButton {
+                InkButton {
                     text: "‹ Prev";
                     height: 28px;
                     min-width: 60px;
@@ -140,12 +140,12 @@ export component ResultsListView inherits Rectangle {
                 Text {
                     text: "Page " + ResultsState.list-page-number;
                     font-size: 11.5px;
-                    font-family: Theme.font-mono;
-                    color: Theme.text-mute;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-mute;
                     vertical-alignment: center;
                 }
 
-                AppButton {
+                InkButton {
                     text: "Next ›";
                     height: 28px;
                     min-width: 60px;
@@ -159,21 +159,21 @@ export component ResultsListView inherits Rectangle {
                 y: parent.height - 1px;
                 width: parent.width;
                 height: 1px;
-                background: Theme.border-soft;
+                background: Ink.border-soft;
             }
         }
 
         // -- Table --
         Rectangle {
             vertical-stretch: 1;
-            background: Theme.panel;
+            background: Ink.panel;
 
             VerticalLayout {
                 spacing: 0px;
 
                 header-rect := Rectangle {
                     height: 28px;
-                    background: Theme.raised;
+                    background: Ink.raised;
                     // Columns have a fixed pixel width, so the row content
                     // can be wider than the window; clip the header to its
                     // 28px band and pan it in step with the body's
@@ -195,9 +195,9 @@ export component ResultsListView inherits Rectangle {
                                 text: header;
                                 width: ResultsState.list-column-widths[idx] * 1px;
                                 font-size: 10.5px;
-                                font-family: Theme.font-mono;
+                                font-family: Ink.font-mono;
                                 font-weight: 600;
-                                color: Theme.text-mute;
+                                color: Ink.text-mute;
                                 overflow: elide;
                                 vertical-alignment: center;
                                 horizontal-alignment: start;
@@ -211,7 +211,7 @@ export component ResultsListView inherits Rectangle {
                         y: parent.height - 1px;
                         width: parent.width;
                         height: 1px;
-                        background: Theme.border-soft;
+                        background: Ink.border-soft;
                     }
                 }
 
@@ -227,7 +227,7 @@ export component ResultsListView inherits Rectangle {
                         height: 34px;
                         width: header-layout.width;
 
-                        background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
+                        background: ta.has-hover ? Ink.hover : (ResultsState.list-with-coloc-details && row.alternating ? Ink.field : transparent);
                         opacity: row.disabled ? 0.55 : 1.0;
 
                         property <bool> row-visible: self.y + self.height >= -body-list.content-y - 3 * self.height
@@ -236,7 +236,7 @@ export component ResultsListView inherits Rectangle {
                         Rectangle {
                             y: 34px;
                             border-width: 1px;
-                            border-color: Theme.border;
+                            border-color: Ink.border;
                             height: 1px;
                             x: 0;
                         }
@@ -271,8 +271,8 @@ export component ResultsListView inherits Rectangle {
                                     text: cell;
                                     width: ResultsState.list-column-widths[c-index] * 1px;
                                     font-size: 12px;
-                                    font-family: Theme.font-mono;
-                                    color: row.failed ? Theme.warn : Theme.text;
+                                    font-family: Ink.font-mono;
+                                    color: row.failed ? Ink.warn : Ink.text;
                                     overflow: elide;
                                     vertical-alignment: center;
                                     horizontal-alignment: start;
@@ -286,7 +286,7 @@ export component ResultsListView inherits Rectangle {
                             x: 0;
                             width: parent.width;
                             height: 1px;
-                            background: Theme.text-mute;
+                            background: Ink.text-mute;
                         }
                     }
                 }
@@ -296,7 +296,7 @@ export component ResultsListView inherits Rectangle {
                 Text {
                     text: "No objects match the current filters";
                     font-size: 12px;
-                    color: Theme.text-mute;
+                    color: Ink.text-mute;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }

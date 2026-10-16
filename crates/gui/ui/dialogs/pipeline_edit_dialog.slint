@@ -1,10 +1,9 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { PipelineDeleteConfirmState, PipelineEditState } from "../api/pipeline_edit.slint";
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
-import { AppButton } from "../components/app_button.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 import { ChannelPicker } from "../components/channel_picker.slint";
 
@@ -19,9 +18,9 @@ component SourceOption inherits Rectangle {
 
     height: 42px;
     border-radius: 6px;
-    background: selected ? Theme.accent.with-alpha(0.12) : (ta.has-hover ? Theme.raised : transparent);
+    background: selected ? Ink.focus.with-alpha(0.12) : (ta.has-hover ? Ink.raised : transparent);
     border-width: 1px;
-    border-color: selected ? Theme.accent.with-alpha(0.5) : Theme.border-soft;
+    border-color: selected ? Ink.focus.with-alpha(0.5) : Ink.border-soft;
     animate background, border-color { duration: 80ms; }
 
     HorizontalLayout {
@@ -38,7 +37,7 @@ component SourceOption inherits Rectangle {
                 height: 16px;
                 border-radius: 8px;
                 border-width: 1.5px;
-                border-color: selected ? Theme.accent : Theme.border;
+                border-color: selected ? Ink.focus : Ink.border;
                 background: transparent;
                 if selected: Rectangle {
                     x: 4px;
@@ -46,7 +45,7 @@ component SourceOption inherits Rectangle {
                     width: 8px;
                     height: 8px;
                     border-radius: 4px;
-                    background: Theme.accent;
+                    background: Ink.focus;
                 }
             }
         }
@@ -58,13 +57,13 @@ component SourceOption inherits Rectangle {
                 text: label;
                 font-size: 12px;
                 font-weight: selected ? 600 : 400;
-                color: selected ? Theme.text : Theme.text-dim;
+                color: selected ? Ink.text : Ink.text-dim;
             }
 
             Text {
                 text: description;
                 font-size: 10px;
-                color: Theme.text-mute;
+                color: Ink.text-mute;
                 overflow: elide;
             }
         }
@@ -90,7 +89,7 @@ component LabeledInput inherits VerticalLayout {
     Text {
         text: label;
         font-size: 11px;
-        color: Theme.text-dim;
+        color: Ink.text-dim;
     }
 
     LineEdit {
@@ -106,9 +105,9 @@ component LabeledInput inherits VerticalLayout {
 
 // -- Dialog component -----------------------------------------
 
-export component PipelineEditDialog inherits Dialog {
+export component PipelineEditDialog inherits InkDialog {
     title: "Edit Pipeline";
-    dialog-width: 420px;
+    card-width: 420px;
     close-on-backdrop: true;
     close => {
         PipelineEditState.cancel();
@@ -130,7 +129,7 @@ export component PipelineEditDialog inherits Dialog {
         Text {
             text: "Image source";
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
         }
 
         VerticalLayout {
@@ -158,7 +157,7 @@ export component PipelineEditDialog inherits Dialog {
                 Text {
                     text: "Channel";
                     font-size: 11px;
-                    color: Theme.text-dim;
+                    color: Ink.text-dim;
                     vertical-alignment: center;
                     width: 52px;
                 }
@@ -208,7 +207,7 @@ export component PipelineEditDialog inherits Dialog {
                 Text {
                     text: "Slot";
                     font-size: 11px;
-                    color: Theme.text-dim;
+                    color: Ink.text-dim;
                     vertical-alignment: center;
                     width: 30px;
                 }
@@ -225,17 +224,17 @@ export component PipelineEditDialog inherits Dialog {
         }
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Cancel";
             clicked => {
                 PipelineEditState.cancel();
             }
         }
 
-        AppButton {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: "Save";
-            primary: true;
             clicked => {
                 PipelineEditState.confirm();
             }
@@ -244,10 +243,9 @@ export component PipelineEditDialog inherits Dialog {
 }
 
 // -- Delete-pipeline confirm dialog ---------------------------
-export component PipelineDeleteConfirmDialog inherits Dialog {
+export component PipelineDeleteConfirmDialog inherits InkDialog {
     title: "Delete pipeline?";
-    tone: DialogTone.danger;
-    dialog-width: 380px;
+    card-width: 380px;
     close-on-backdrop: true;
     close => {
         PipelineDeleteConfirmState.cancel();
@@ -256,21 +254,21 @@ export component PipelineDeleteConfirmDialog inherits Dialog {
     Text {
         text: "\"" + PipelineDeleteConfirmState.pipeline-name + "\" and all its steps will be permanently removed.";
         font-size: 13px;
-        color: Theme.text;
+        color: Ink.text;
         wrap: word-wrap;
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Cancel";
             clicked => {
                 PipelineDeleteConfirmState.cancel();
             }
         }
 
-        AppButton {
+        InkButton {
+            kind: InkButtonKind.danger;
             text: "Delete";
-            danger: true;
             clicked => {
                 PipelineDeleteConfirmState.confirm();
             }

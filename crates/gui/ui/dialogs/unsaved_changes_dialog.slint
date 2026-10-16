@@ -1,13 +1,11 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState, UnsavedChangesState } from "../api/state.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 
-import { AppButton } from "../components/app_button.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
-export component UnsavedChangesDialog inherits Dialog {
+export component UnsavedChangesDialog inherits InkDialog {
     title: "Unsaved changes";
-    dialog-width: 440px;
-    tone: DialogTone.warning;
+    card-width: 440px;
     close => {
         GlobalAppState.active-dialog = DialogType.none;
         UnsavedChangesState.cancel();
@@ -18,13 +16,13 @@ export component UnsavedChangesDialog inherits Dialog {
         Text {
             text: "This project has unsaved changes. Do you want to save them before continuing?";
             wrap: word-wrap;
-            color: Theme.text;
+            color: Ink.text;
             font-size: 13px;
         }
 
-        DialogFooter {
+        InkDialogFooter {
 
-            AppButton {
+            InkButton {
                 text: "Cancel";
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
@@ -32,16 +30,16 @@ export component UnsavedChangesDialog inherits Dialog {
                 }
             }
 
-            AppButton {
+            InkButton {
+                kind: InkButtonKind.danger;
                 text: "Discard changes";
-                danger: true;
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
                     UnsavedChangesState.discard();
                 }
             }
 
-            AppButton {
+            InkButton {
                 text: "Save";
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;

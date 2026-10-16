@@ -1,10 +1,9 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ShortcutsDoc } from "../api/shortcuts.slint";
 import { ScrollView } from "std-widgets.slint";
-import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 
-import { Theme } from "../style.slint";
-import { AppButton } from "../components/app_button.slint";
+import { Ink } from "../ink/palette.slint";
 
 component ShortcutRow inherits Rectangle {
     in property <string> combo;
@@ -19,22 +18,22 @@ component ShortcutRow inherits Rectangle {
         Text {
             text: root.label;
             font-size: 12.5px;
-            color: Theme.text;
+            color: Ink.text;
             vertical-alignment: center;
         }
 
         Rectangle {
-            background: Theme.raised;
+            background: Ink.raised;
             border-width: 1px;
-            border-color: Theme.border-soft;
+            border-color: Ink.border-soft;
             border-radius: 5px;
             width: combo-text.preferred-width + 16px;
 
             combo-text := Text {
                 text: root.combo;
                 font-size: 11px;
-                font-family: Theme.font-mono;
-                color: Theme.text-dim;
+                font-family: Ink.font-mono;
+                color: Ink.text-dim;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -42,11 +41,11 @@ component ShortcutRow inherits Rectangle {
     }
 }
 
-export component ShortcutsHelpDialog inherits Dialog {
+export component ShortcutsHelpDialog inherits InkDialog {
     title: "Keyboard Shortcuts";
-    dialog-width: 460px;
+    card-width: 460px;
     // The list scrolls inside a fixed-height card.
-    dialog-height: 560px;
+    card-height: 560px;
     // A pure reference view with nothing to confirm/discard: a click
     // outside closes it too.
     close-on-backdrop: true;
@@ -66,12 +65,12 @@ export component ShortcutsHelpDialog inherits Dialog {
                     text: section.title;
                     font-size: 11px;
                     font-weight: 700;
-                    color: Theme.text-mute;
+                    color: Ink.text-mute;
                 }
 
                 Rectangle {
                     height: 1px;
-                    background: Theme.border-soft;
+                    background: Ink.border-soft;
                 }
 
                 for row in section.rows: ShortcutRow {
@@ -82,10 +81,10 @@ export component ShortcutsHelpDialog inherits Dialog {
         }
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: "Close";
-            primary: true;
             clicked => {
                 GlobalAppState.active_dialog = DialogType.none;
             }

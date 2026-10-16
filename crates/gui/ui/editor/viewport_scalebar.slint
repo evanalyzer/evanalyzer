@@ -1,4 +1,4 @@
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
 export component ScaleBar inherits Rectangle {
     in property <length> bar_width;
@@ -16,22 +16,22 @@ export component ScaleBar inherits Rectangle {
 
         Text {
             text: unit_text;
-            color: Theme.text-scalebar;
+            color: #FFFFFF;
             font-size: 14px;
             horizontal-alignment: center;
             // Add a slight shadow effect for visibility on bright images
-            stroke: Theme.game-ink;
+            stroke: #2a2a2a;
             stroke-width: 0.5px;
         }
 
         Rectangle {
             width: bar_width;
             height: 4px;
-            background: Theme.text-scalebar;
+            background: #FFFFFF;
             border-radius: 1px;
             // Border to make it pop against white image areas
             border-width: 1px;
-            border-color: Theme.game-ink;
+            border-color: #2a2a2a;
         }
     }
 }

@@ -1,7 +1,7 @@
 // api/pipelines.slint — the Rust interface of editor/pipelines_panel.slint: the state Rust
 // sets, the callbacks it answers.
 
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 import { ClassItemData } from "classification.slint";
 
 export enum StepCategory { preprocess, segment, instance-segmentation, measure, object, dataset, component }
@@ -82,6 +82,19 @@ export struct CommandParameter {
         // What a check found about this setting, or empty.
         problem: string,
         problem-error: bool,
+        // Pinned into the Tuning panel (see `PipelinesPanelState.tuned-settings`).
+        pinned: bool,
+    }
+
+// A setting pinned into the Tuning panel: changed there like on its card.
+export struct TunedSetting {
+        // The step's position (what `param-changed` takes), its id ("3")
+        // and name.
+        step: int,
+        step-id: string,
+        step-name: string,
+        category: StepCategory,
+        param: CommandParameter,
     }
 
 // A problem the checks found (`check_project`) - in the panel's problem list
@@ -188,24 +201,24 @@ export struct Pipeline {
 export global Cat {
         public pure function color(c: StepCategory) -> color {
             if c == StepCategory.preprocess {
-                return Theme.cat-preprocess;
+                return Ink.cat-preprocess;
             }
             if c == StepCategory.segment {
-                return Theme.cat-segment;
+                return Ink.cat-segment;
             }
             if c == StepCategory.instance-segmentation {
-                return Theme.cat-object;
+                return Ink.cat-object;
             }
             if c == StepCategory.measure {
-                return Theme.cat-measure;
+                return Ink.cat-measure;
             }
             if c == StepCategory.dataset {
-                return Theme.cat-dataset;
+                return Ink.cat-dataset;
             }
             if c == StepCategory.component {
-                return Theme.cat-component;
+                return Ink.cat-component;
             }
-            return Theme.cat-classify;
+            return Ink.cat-classify;
         }
         public pure function tint(c: StepCategory) -> color {
             return Cat.color(c).with-alpha(0.15);
@@ -236,18 +249,18 @@ export global Cat {
 export global Status {
         public pure function color(s: PipelineStatus) -> color {
             if s == PipelineStatus.running {
-                return Theme.warn;
+                return Ink.warn;
             }
             if s == PipelineStatus.queued {
-                return Theme.accent;
+                return Ink.focus;
             }
             if s == PipelineStatus.done {
-                return Theme.ok;
+                return Ink.ok;
             }
             if s == PipelineStatus.error {
-                return Theme.err;
+                return Ink.err;
             }
-            return Theme.text-faint;
+            return Ink.text-faint;
         }
         public pure function name(s: PipelineStatus) -> string {
             if s == PipelineStatus.running {
@@ -385,6 +398,10 @@ export global PipelinesPanelState {
         callback toggle-exposed(int, string);
         callback insert-step(int, int);          // pipeline-id, after-idx
     callback param-changed(int, string, string);
+    // The pinned settings of the shown pipeline, in step order.
+    in property <[TunedSetting]> tuned-settings: [];
+    // Pins / unpins a setting (step position, setting name).
+    callback toggle-pin(int, string);
         callback add-group-item(int, string);    // step-id, param-name
         // Expands/collapses a step's advanced settings (step-id).
         callback toggle-advanced(int);

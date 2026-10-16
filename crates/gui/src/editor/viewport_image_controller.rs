@@ -92,6 +92,7 @@ impl ViewportImageController {
             state.set_tile_cache_mb(tile_mb as i32);
             state.set_overview_cache_mb(overview_mb as i32);
             state.set_free_caches_on_analysis(settings.free_caches_on_analysis);
+            state.set_edit_during_analysis(settings.edit_during_analysis);
         }
     }
 
@@ -111,6 +112,7 @@ impl ViewportImageController {
             overview_cache_mb: (state.get_overview_cache_mb().max(0) as u32)
                 .max(ViewportMemorySettings::MIN_CACHE_MB),
             free_caches_on_analysis: state.get_free_caches_on_analysis(),
+            edit_during_analysis: state.get_edit_during_analysis(),
             cache_sizes_auto: state.get_cache_sizes_auto(),
         };
         if settings != self.viewport_controller.memory_settings() {
@@ -1225,6 +1227,7 @@ mod tests {
         state.set_tile_cache_mb(0);
         state.set_overview_cache_mb(300);
         state.set_free_caches_on_analysis(false);
+        state.set_edit_during_analysis(false);
 
         state.invoke_apply();
         drain_ui_queue();
@@ -1237,6 +1240,7 @@ mod tests {
             tile_cache_mb: ViewportMemorySettings::MIN_CACHE_MB,
             overview_cache_mb: 300.max(ViewportMemorySettings::MIN_CACHE_MB),
             free_caches_on_analysis: false,
+            edit_during_analysis: false,
         };
         assert_eq!(controller.viewport_controller.memory_settings(), expected);
         assert_eq!(

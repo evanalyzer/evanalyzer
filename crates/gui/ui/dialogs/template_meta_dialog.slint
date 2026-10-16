@@ -1,14 +1,13 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { TemplateMetaState } from "../api/template_meta.slint";
 import { TextEdit } from "std-widgets.slint";
 import { LineEdit } from "../ink/std_compat.slint";
 
-import { Theme } from "../style.slint";
-import { AppButton } from "../components/app_button.slint";
-import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
-export component TemplateMetaDialog inherits Dialog {
+import { Ink } from "../ink/palette.slint";
+export component TemplateMetaDialog inherits InkDialog {
     title: TemplateMetaState.dialog_title;
-    dialog-width: 460px;
+    card-width: 460px;
     close-on-backdrop: true;
     close => {
         TemplateMetaState.cancel();
@@ -22,7 +21,7 @@ export component TemplateMetaDialog inherits Dialog {
         Text {
             text: "Name";
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
         }
 
         LineEdit {
@@ -37,7 +36,7 @@ export component TemplateMetaDialog inherits Dialog {
         Text {
             text: "Short description";
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
         }
 
         LineEdit {
@@ -52,7 +51,7 @@ export component TemplateMetaDialog inherits Dialog {
         Text {
             text: "Description";
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
         }
 
         TextEdit {
@@ -69,7 +68,7 @@ export component TemplateMetaDialog inherits Dialog {
             Text {
                 text: "Author";
                 font-size: 11px;
-                color: Theme.text-dim;
+                color: Ink.text-dim;
             }
 
             LineEdit {
@@ -84,7 +83,7 @@ export component TemplateMetaDialog inherits Dialog {
             Text {
                 text: "Organization";
                 font-size: 11px;
-                color: Theme.text-dim;
+                color: Ink.text-dim;
             }
 
             LineEdit {
@@ -100,7 +99,7 @@ export component TemplateMetaDialog inherits Dialog {
         Text {
             text: "Category";
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
         }
 
         LineEdit {
@@ -116,15 +115,15 @@ export component TemplateMetaDialog inherits Dialog {
                 height: 20px;
                 border-radius: 10px;
                 border-width: 1px;
-                border-color: Theme.border-soft;
-                background: cat-ta.has-hover ? Theme.raised : transparent;
+                border-color: Ink.border-soft;
+                background: cat-ta.has-hover ? Ink.raised : transparent;
                 HorizontalLayout {
                     padding-left: 8px;
                     padding-right: 8px;
                     Text {
                         text: c;
                         font-size: 10px;
-                        color: Theme.text-dim;
+                        color: Ink.text-dim;
                         vertical-alignment: center;
                     }
                 }
@@ -144,7 +143,7 @@ export component TemplateMetaDialog inherits Dialog {
         Text {
             text: "Version (optional)";
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
         }
 
         LineEdit {
@@ -157,7 +156,7 @@ export component TemplateMetaDialog inherits Dialog {
         if !root.version-valid: Text {
             text: "A whole number from 1, or leave it empty.";
             font-size: 11px;
-            color: Theme.err;
+            color: Ink.err;
         }
     }
 
@@ -166,7 +165,7 @@ export component TemplateMetaDialog inherits Dialog {
         Text {
             text: "Tags";
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
         }
 
         LineEdit {
@@ -176,17 +175,17 @@ export component TemplateMetaDialog inherits Dialog {
         }
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Cancel";
             clicked => {
                 TemplateMetaState.cancel();
             }
         }
 
-        AppButton {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: "Next…";
-            primary: true;
             enabled: TemplateMetaState.meta.name != "" && TemplateMetaState.meta.category != "" && TemplateMetaState.meta.tags != "" && root.version-valid;
             clicked => {
                 TemplateMetaState.confirm();

@@ -12,9 +12,9 @@ use crate::{
     ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState,
     DefaultParamPreview, ExposeChoiceState, GlobalAppState, GroupItem, LeafParam, ParamType,
     Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState,
-    ProblemItem, RunAnalysisState, SectionView, StepCategory, UiState, WarningState,
+    ProblemItem, RunAnalysisState, SectionView, StepCategory, TunedSetting, UiState, WarningState,
 };
-use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
+use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState, PreviewRunState};
 use crate::{ResultItemData, ResultsListState};
 use evanalyzer_app::ai_learning::load_classifier_settings;
 use evanalyzer_app::components::ClassRole;
@@ -84,7 +84,10 @@ pub struct PipelinesController {
     pub(crate) viewport_controller: Arc<ViewportController>,
     pub(crate) template_controller: Arc<TemplateController>,
     pub(crate) task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>,
+    /// Cancels the running analysis.
     pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<evanalyzer_app::analysis::CancelHandle>>>,
+    /// Cancels the running preview - it may run while an analysis does.
+    pub(crate) preview_cancel_flag: Arc<Mutex<Option<evanalyzer_app::analysis::CancelHandle>>>,
     /// An analysis (not a preview) is running - closing the window asks
     /// what to do with it.
     pub(crate) analysis_running: Arc<std::sync::atomic::AtomicBool>,
@@ -143,6 +146,9 @@ pub struct PipelinesController {
     /// The open sections of component cards: (pipeline, step id, section).
     /// The others show their values on one line.
     open_sections: Mutex<std::collections::HashSet<(u32, String, String)>>,
+    /// The settings pinned into the Tuning panel: (pipeline id, step id,
+    /// setting name). For this session.
+    pins: Mutex<std::collections::HashSet<(u32, String, String)>>,
 }
 
 /// One level of [`PipelinesController::open_component`].
@@ -172,6 +178,7 @@ impl PipelinesController {
             template_controller,
             task_request: Arc::new((Mutex::new(None), Condvar::new())),
             pipeline_cancel_flag: Arc::new(Mutex::new(None)),
+            preview_cancel_flag: Arc::new(Mutex::new(None)),
             analysis_running: Arc::default(),
             breakpoint: Arc::new(Mutex::new(None)),
             auto_preview_enabled: Mutex::new(false),
@@ -185,6 +192,7 @@ impl PipelinesController {
             last_problems: Mutex::new(Vec::new()),
             debug_mode: std::sync::atomic::AtomicBool::new(false),
             open_sections: Mutex::new(std::collections::HashSet::new()),
+            pins: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -701,15 +709,40 @@ impl PipelinesController {
                 }
             });
 
-            // Running dialog: close after done
+            // Running dialog / card: close after done
             let manager = self.clone();
             ui.global::<PipelineRunningState>().on_close(move || {
                 if let Some(ui) = manager.ui.upgrade() {
-                    ui.global::<PipelineRunningState>().set_done(false);
-                    ui.global::<PipelineRunningState>()
-                        .set_status_message("".into());
-                    ui.global::<GlobalAppState>()
-                        .set_active_dialog(DialogType::None);
+                    let running = ui.global::<PipelineRunningState>();
+                    running.set_done(false);
+                    running.set_status_message("".into());
+                    running.set_active(false);
+                    let app = ui.global::<GlobalAppState>();
+                    if app.get_active_dialog() == DialogType::PipelineRunning {
+                        app.set_active_dialog(DialogType::None);
+                    }
+                }
+            });
+
+            // Preview overlay: cancel the preview
+            let manager = self.clone();
+            ui.global::<PreviewRunState>().on_cancel(move || {
+                if let Some(cancel) = manager.preview_cancel_flag.lock().unwrap().as_ref() {
+                    cancel.cancel();
+                }
+            });
+
+            // Preview overlay: close after done
+            let manager = self.clone();
+            ui.global::<PreviewRunState>().on_close(move || {
+                if let Some(ui) = manager.ui.upgrade() {
+                    let preview = ui.global::<PreviewRunState>();
+                    preview.set_done(false);
+                    preview.set_status_message("".into());
+                    let app = ui.global::<GlobalAppState>();
+                    if app.get_active_dialog() == DialogType::PreviewRendering {
+                        app.set_active_dialog(DialogType::None);
+                    }
                 }
             });
 
@@ -1234,6 +1267,11 @@ impl PipelinesController {
 
             // ▸ / ▾ of a component card's section: open or close it - in
             // place, the card isn't rebuilt.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>().on_toggle_pin({
+                let manager = manager.clone();
+                move |step_idx, name| manager.toggle_pin(step_idx, &name)
+            });
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_toggle_section(move |step_idx, section| {
@@ -2572,8 +2610,14 @@ impl PipelinesController {
                                                 .collect();
                                             p.options = ModelRc::new(VecModel::from(new_flags));
                                         }
-                                        // The rows show copies: they take it too.
+                                        // The rows show copies: they take it too,
+                                        // and the Tuning panel's.
                                         patch_card_copies(&cmd, &p);
+                                        patch_tuned_copy(
+                                            &ui.global::<PipelinesPanelState>(),
+                                            step_idx,
+                                            &p,
+                                        );
                                         list.set_row_data(i, p);
                                         break 'patch;
                                     }
@@ -2860,8 +2904,11 @@ impl PipelinesController {
         drop(project);
 
         if let Some(ui) = self.app_state.ui_handle.upgrade() {
-            ui.global::<PipelineRunningState>().set_processed(0);
-            ui.global::<PipelineRunningState>().set_total(0);
+            let preview = ui.global::<PreviewRunState>();
+            preview.set_processed(0);
+            preview.set_total(0);
+            preview.set_done(false);
+            preview.set_has_error(false);
             ui.global::<GlobalAppState>()
                 .set_active_dialog(DialogType::PreviewRendering);
         }
@@ -2869,11 +2916,64 @@ impl PipelinesController {
         self.dispatch_worker_task(task);
     }
 
+    /// Pins the setting `name` of the step at `step_idx` of the shown
+    /// pipeline into the Tuning panel - or unpins it.
+    pub(crate) fn toggle_pin(self: &Arc<Self>, step_idx: i32, name: &str) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<PipelinesPanelState>();
+        let pipeline_id = state.get_active_pipeline_id() as u32;
+        let Some(card) = state.get_active_commands().row_data(step_idx as usize) else {
+            return;
+        };
+        let key = (pipeline_id, card.step_id.to_string(), name.to_string());
+        {
+            let mut pins = self.pins.lock().expect("Poisoned");
+            if !pins.remove(&key) {
+                pins.insert(key);
+            }
+        }
+        self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+    }
+
+    /// Shows a starting analysis' progress: as a card over the image, the
+    /// window stays usable (`ViewportMemorySettings::edit_during_analysis`,
+    /// the default) - or in the running dialog, which blocks the window
+    /// until the analysis is done.
+    pub(crate) fn show_analysis_progress(&self, ui: &AppWindow) {
+        let running = ui.global::<PipelineRunningState>();
+        running.set_processed(0);
+        running.set_total(0);
+        running.set_done(false);
+        running.set_has_error(false);
+        running.set_status_message("".into());
+        running.set_active(true);
+        if !self
+            .app_state
+            .viewport_memory_settings()
+            .edit_during_analysis
+        {
+            ui.global::<GlobalAppState>()
+                .set_active_dialog(DialogType::PipelineRunning);
+        }
+    }
+
     /// Opens the "Run Analysis" confirm dialog (job name, optional) before
     /// actually starting a full run. Bails out immediately - same as the old
     /// pre-dialog behavior - if there's no saved project to run against, so
     /// the user isn't asked for a job name only to hit that error afterward.
     pub fn open_run_analysis_dialog(self: &Arc<Self>) {
+        // One analysis at a time.
+        if self
+            .analysis_running
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.show_warning(
+                "An analysis is already running. Wait for it to finish, or cancel it first.",
+            );
+            return;
+        }
         let has_project_path = self
             .app_state
             .get_project()
@@ -2991,11 +3091,8 @@ impl PipelinesController {
         };
         drop(project);
 
-        if let Some(ui) = self.app_state.ui_handle.upgrade() {
-            ui.global::<PipelineRunningState>().set_processed(0);
-            ui.global::<PipelineRunningState>().set_total(0);
-            ui.global::<GlobalAppState>()
-                .set_active_dialog(DialogType::PipelineRunning);
+        if let Some(ui) = self.ui.upgrade() {
+            self.show_analysis_progress(&ui);
         }
 
         // A local analysis gets the RAM of the viewport caches; a server's
@@ -3139,10 +3236,7 @@ impl PipelinesController {
                 let manager = Arc::clone(&manager);
                 let _ = crate::helper::ui_thread::invoke_from_event_loop(move || {
                     if let Some(ui) = manager.app_state.ui_handle.upgrade() {
-                        ui.global::<PipelineRunningState>().set_processed(0);
-                        ui.global::<PipelineRunningState>().set_total(0);
-                        ui.global::<GlobalAppState>()
-                            .set_active_dialog(DialogType::PipelineRunning);
+                        manager.show_analysis_progress(&ui);
                     }
                     manager.dispatch_worker_task(PipelineTask {
                         attach: Some(id),
@@ -4604,6 +4698,7 @@ impl PipelinesController {
             }
         };
         let open_sections = self.open_sections.lock().expect("Poisoned").clone();
+        let pins = self.pins.lock().expect("Poisoned").clone();
         let component_class_items = component_classes.clone();
         // A class list's flags: the project's 33 (see `MultiClassDropdown`),
         // then one per class of the opened component.
@@ -4850,6 +4945,7 @@ impl PipelinesController {
                 };
                 let always_show_advanced = state.get_always_show_advanced();
 
+                let mut tuned: Vec<TunedSetting> = Vec::new();
                 let commands: Vec<SlintPipelineCommand> = step_data
                     .into_iter()
                     .map(|d| {
@@ -4915,6 +5011,15 @@ impl PipelinesController {
                         let (advanced_count, advanced_changed) = advanced_stats(&d.parameters);
                         let exposed = d.exposed.clone();
                         let notes = d.notes.clone();
+                        // The pinned settings, advanced ones too: for the Tuning panel.
+                        let pinned_defs: Vec<ParameterDef> = d
+                            .parameters
+                            .iter()
+                            .filter(|p| {
+                                pins.contains(&(pid as u32, step_id.to_string(), p.name.clone()))
+                            })
+                            .cloned()
+                            .collect();
                         let (advanced_defs, basic_defs): (Vec<ParameterDef>, Vec<ParameterDef>) =
                             filter_for_display(d.parameters, show_advanced)
                                 .into_iter()
@@ -5027,6 +5132,11 @@ impl PipelinesController {
                                 section: SharedString::new(),
                                 short_description: SharedString::new(),
                                 more_help: false,
+                                pinned: pins.contains(&(
+                                    pid as u32,
+                                    step_id.to_string(),
+                                    p_name.clone(),
+                                )),
                             }
                         };
                         let in_sections = |defs: Vec<ParameterDef>| -> Vec<CommandParameter> {
@@ -5058,6 +5168,15 @@ impl PipelinesController {
                                 sections
                             });
                         let params = in_sections(basic_defs);
+                        for def in pinned_defs {
+                            tuned.push(TunedSetting {
+                                step: d.idx,
+                                step_id: step_id.clone(),
+                                step_name: d.name.clone().into(),
+                                category: d.category,
+                                param: convert(def),
+                            });
+                        }
                         let advanced_params = if show_advanced {
                             in_sections(advanced_defs)
                         } else {
@@ -5134,6 +5253,7 @@ impl PipelinesController {
                 state.set_open_component_read_only(read_only);
                 state.set_active_pipeline_image_source(pipeline_image_source.into());
                 state.set_active_commands(ModelRc::new(VecModel::from(commands)));
+                state.set_tuned_settings(ModelRc::new(VecModel::from(tuned)));
 
                 // Keep the pipeline tab's step counts in sync
                 let pipelines = state.get_pipelines();
@@ -5226,6 +5346,22 @@ fn patch_card_copies(card: &SlintPipelineCommand, changed: &CommandParameter) {
     for table in card.card_tables.iter() {
         for row in table.rows.iter() {
             patch(row.cells);
+        }
+    }
+}
+
+/// The Tuning panel's copy of the changed setting of the step at `step`
+/// takes the new value too.
+fn patch_tuned_copy(state: &PipelinesPanelState<'_>, step: i32, changed: &CommandParameter) {
+    let tuned = state.get_tuned_settings();
+    for k in 0..tuned.row_count() {
+        if let Some(mut pin) = tuned.row_data(k)
+            && pin.step == step
+            && pin.param.name == changed.name
+        {
+            pin.param.value = changed.value.clone();
+            pin.param.options = changed.options.clone();
+            tuned.set_row_data(k, pin);
         }
     }
 }
@@ -10575,6 +10711,184 @@ mod tests {
         assert!(!running.get_done());
         assert_eq!(running.get_status_message(), "");
         assert_eq!(active_dialog(&ui), DialogType::None);
+    }
+
+    /// With editing allowed during an analysis (the default) its progress
+    /// is a card - no dialog blocks the window; switched off, the running
+    /// dialog does.
+    #[test]
+    fn a_started_analysis_blocks_the_window_only_when_editing_during_it_is_off() {
+        let (ui, ui_state, _controller) = selected(vec![]);
+        ui_state.get_project_write().tmp_settings.current_project =
+            Some(PathBuf::from("/data/exp/project.evaproj"));
+        assert!(ui_state.viewport_memory_settings().edit_during_analysis);
+
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        ui.global::<RunAnalysisState>().invoke_confirm();
+        let running = ui.global::<PipelineRunningState>();
+        assert!(running.get_active());
+        assert_eq!(active_dialog(&ui), DialogType::None);
+
+        running.set_done(true);
+        running.invoke_close();
+        assert!(!running.get_active());
+
+        let mut settings = ui_state.viewport_memory_settings();
+        settings.edit_during_analysis = false;
+        ui_state.save_viewport_memory_settings(settings);
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        ui.global::<RunAnalysisState>().invoke_confirm();
+        assert!(running.get_active());
+        assert_eq!(active_dialog(&ui), DialogType::PipelineRunning);
+    }
+
+    /// A pinned setting is marked on its card and listed in the Tuning
+    /// panel with its step; pinning it again unpins it.
+    #[test]
+    fn a_pinned_setting_shows_in_the_tuning_panel_with_its_step() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Threshold"), step("Blur")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        assert_eq!(panel.get_tuned_settings().row_count(), 0);
+
+        panel.invoke_toggle_pin(1, "kernel_size".into());
+        drain_ui_queue();
+        assert!(ui_param(&ui, 1, "kernel_size").pinned);
+        let tuned = panel.get_tuned_settings();
+        assert_eq!(tuned.row_count(), 1);
+        let pin = tuned.row_data(0).unwrap();
+        assert_eq!(pin.step, 1);
+        assert_eq!(pin.step_name, "Blur");
+        assert_eq!(pin.param.name, "kernel_size");
+        assert!(pin.param.pinned);
+
+        panel.invoke_toggle_pin(1, "kernel_size".into());
+        drain_ui_queue();
+        assert!(!ui_param(&ui, 1, "kernel_size").pinned);
+        assert_eq!(panel.get_tuned_settings().row_count(), 0);
+    }
+
+    /// A change in the Tuning panel is the step's setting change: the
+    /// card and the panel show the new value.
+    #[test]
+    fn a_change_in_the_tuning_panel_changes_the_steps_setting() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Blur")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_toggle_pin(0, "kernel_size".into());
+        drain_ui_queue();
+        let pin = panel.get_tuned_settings().row_data(0).unwrap();
+
+        panel.invoke_param_changed(pin.step, pin.param.name.clone(), "7".into());
+        drain_ui_queue();
+
+        assert_eq!(ui_param(&ui, 0, "kernel_size").value, "7");
+        assert_eq!(
+            panel.get_tuned_settings().row_data(0).unwrap().param.value,
+            "7"
+        );
+    }
+
+    /// Pins belong to their step: one inserted above doesn't move them.
+    #[test]
+    fn a_pin_stays_with_its_step_when_a_step_is_inserted_above() {
+        let (ui, ui_state, controller) = selected(vec![step("Blur")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_toggle_pin(0, "kernel_size".into());
+        drain_ui_queue();
+
+        {
+            let mut project = ui_state.get_project_write();
+            let pipeline = project.settings.pipelines.first_mut().unwrap();
+            let blur = pipeline.steps[0].clone();
+            let mut other = blur.clone();
+            other.id = evanalyzer_cfg::core_types::StepId(99);
+            pipeline.steps.insert(0, other);
+        }
+        let pid = PipelineId(panel.get_active_pipeline_id() as u32);
+        controller.sync_steps_of_selected_pipeline_to_slint(pid, false);
+        drain_ui_queue();
+
+        assert!(!ui_param(&ui, 0, "kernel_size").pinned);
+        assert!(ui_param(&ui, 1, "kernel_size").pinned);
+        assert_eq!(panel.get_tuned_settings().row_data(0).unwrap().step, 1);
+    }
+
+    /// "Add “Blur”" in the command palette appends the command to the shown
+    /// pipeline, the same as through "Add step".
+    #[test]
+    fn a_command_added_from_the_palette_is_appended_as_a_step() {
+        let (ui, ui_state, _controller) = selected(vec![step("Threshold")]);
+        let palette =
+            crate::editor::command_palette_controller::CommandPaletteController::new(ui.as_weak());
+        palette.attach_callbacks();
+        drain_ui_queue();
+        let blur = ui
+            .global::<CommandPickerState>()
+            .get_all_commands()
+            .iter()
+            .find(|command| command.name == "Blur")
+            .expect("Blur is a command")
+            .id;
+
+        ui.global::<crate::CommandPaletteState>()
+            .invoke_run(format!("command:{blur}").into());
+        drain_ui_queue();
+
+        let project = ui_state.get_project();
+        let steps = &project.settings.pipelines[0].steps;
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[1].command().map(|c| c.name()), Some("Blur"));
+        assert_eq!(active_dialog(&ui), DialogType::None);
+    }
+
+    #[test]
+    fn a_second_analysis_is_refused_while_one_runs() {
+        let (ui, ui_state, controller) = selected(vec![]);
+        ui_state.get_project_write().tmp_settings.current_project =
+            Some(PathBuf::from("/data/exp/project.evaproj"));
+        controller
+            .analysis_running
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        ui.global::<PipelinesPanelState>().invoke_run_all();
+        crate::helper::ui_thread::drain_ui_queue();
+
+        assert_eq!(active_dialog(&ui), DialogType::Warning);
+        assert!(
+            ui.global::<WarningState>()
+                .get_message()
+                .contains("already running")
+        );
+    }
+
+    /// Closing the analysis' card leaves a dialog the user opened alone.
+    #[test]
+    fn closing_the_analysis_card_leaves_another_dialog_open() {
+        let (ui, _ui_state, _controller) = selected(vec![]);
+        let running = ui.global::<PipelineRunningState>();
+        running.set_active(true);
+        running.set_done(true);
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::ProjectSettings);
+
+        running.invoke_close();
+
+        assert!(!running.get_active());
+        assert_eq!(active_dialog(&ui), DialogType::ProjectSettings);
+    }
+
+    /// The preview's Cancel stops the preview - not the analysis.
+    #[test]
+    fn the_preview_has_its_own_cancel() {
+        let (ui, _ui_state, controller) = selected(vec![]);
+        let analysis = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        let preview = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        *controller.pipeline_cancel_flag.lock().unwrap() = Some(analysis.clone());
+        *controller.preview_cancel_flag.lock().unwrap() = Some(preview.clone());
+
+        ui.global::<PreviewRunState>().invoke_cancel();
+
+        assert!(preview.is_cancelled());
+        assert!(!analysis.is_cancelled());
     }
 
     #[test]

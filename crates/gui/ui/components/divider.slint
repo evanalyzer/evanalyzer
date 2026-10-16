@@ -1,4 +1,4 @@
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 export component VerticalDivider inherits Rectangle {
     width: 5px;
     HorizontalLayout {
@@ -9,7 +9,7 @@ export component VerticalDivider inherits Rectangle {
         height: 30px;
         Rectangle {
             width: 2px;
-            background: Theme.border;
+            background: Ink.border;
         }
     }
 }

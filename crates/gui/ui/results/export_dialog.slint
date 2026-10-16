@@ -6,13 +6,12 @@
 // results_state_controller.rs) and never imports state.slint — Slint
 // globals are per-tree, so the main window's dialog machinery is simply
 // unreachable here.
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { ExportDialogState } from "../api/export.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { LineEdit, CheckBox } from "../ink/std_compat.slint";
-import { Theme } from "../style.slint";
-import { AppButton } from "../components/app_button.slint";
-import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
+import { Ink } from "../ink/palette.slint";
 import {
     MultiSelectDropdown,
     MultiSelectItem,
@@ -23,17 +22,17 @@ component LabeledField inherits HorizontalLayout {
     Text {
         text: root.field-label;
         vertical-alignment: center;
-        color: Theme.text-dim;
+        color: Ink.text-dim;
         font-size: 11px;
     }
 
     @children
 }
 
-export component ExportDialog inherits Dialog {
+export component ExportDialog inherits InkDialog {
     title: "Export Results";
-    dialog-width: 680px;
-    dialog-height: 790px;
+    card-width: 680px;
+    card-height: 790px;
     // No closing while the export runs (Cancel stops it first).
     closable: !ExportDialogState.is-exporting;
     close => {
@@ -54,7 +53,7 @@ export component ExportDialog inherits Dialog {
                 spacing: 8px;
                 Text {
                     text: "Output Folder";
-                    color: Theme.text;
+                    color: Ink.text;
                     font-size: 12px;
                     font-weight: 600;
                 }
@@ -72,15 +71,15 @@ export component ExportDialog inherits Dialog {
                     Rectangle {
                         horizontal-stretch: 1;
                         height: 32px;
-                        border-radius: Theme.radius-sm;
-                        background: Theme.raised;
+                        border-radius: Ink.radius-sm;
+                        background: Ink.raised;
                         border-width: 1px;
-                        border-color: Theme.border-soft;
+                        border-color: Ink.border-soft;
                         Text {
                             x: 8px;
                             width: parent.width - 16px;
                             text: ExportDialogState.output-dir == "" ? "Choose a folder…" : ExportDialogState.output-dir;
-                            color: ExportDialogState.output-dir == "" ? Theme.text-faint : Theme.text;
+                            color: ExportDialogState.output-dir == "" ? Ink.text-faint : Ink.text;
                             vertical-alignment: center;
                             font-size: 11.5px;
                             overflow: elide;
@@ -96,7 +95,7 @@ export component ExportDialog inherits Dialog {
                         item-selected(key, value, selected) => { if selected { ExportDialogState.format-summary = value; } }
                     }
 
-                    AppButton {
+                    InkButton {
                         height: 32px;
                         text: "Browse…";
                         enabled: !ExportDialogState.is-exporting;
@@ -112,7 +111,7 @@ export component ExportDialog inherits Dialog {
 
                 img-title := Text {
                     text: "Images/Objects (ungrouped)";
-                    color: Theme.text;
+                    color: Ink.text;
                     font-size: 12px;
                     font-weight: 600;
                 }
@@ -201,14 +200,14 @@ export component ExportDialog inherits Dialog {
 
                 Text {
                     text: "Plates/Wells";
-                    color: Theme.text;
+                    color: Ink.text;
                     font-size: 12px;
                     font-weight: 600;
                 }
 
                 Text {
                     text: "Grouping, plate size and well size as set in the project settings (and the Matrix view).";
-                    color: Theme.text-mute;
+                    color: Ink.text-mute;
                     font-size: 11px;
                     wrap: word-wrap;
                 }
@@ -256,7 +255,7 @@ export component ExportDialog inherits Dialog {
                 alignment: start;
                 Text {
                     text: "Z / T Range";
-                    color: Theme.text;
+                    color: Ink.text;
                     font-size: 12px;
                     font-weight: 600;
                 }
@@ -277,7 +276,7 @@ export component ExportDialog inherits Dialog {
                             horizontal-alignment: center;
                             text: "to";
                             vertical-alignment: center;
-                            color: Theme.text-mute;
+                            color: Ink.text-mute;
                             font-size: 11px;
                         }
 
@@ -304,7 +303,7 @@ export component ExportDialog inherits Dialog {
                         Text {
                             text: "to";
                             vertical-alignment: center;
-                            color: Theme.text-mute;
+                            color: Ink.text-mute;
                             font-size: 11px;
                         }
 
@@ -324,7 +323,7 @@ export component ExportDialog inherits Dialog {
                 alignment: start;
                 Text {
                     text: "Filters";
-                    color: Theme.text;
+                    color: Ink.text;
                     font-size: 12px;
                     font-weight: 600;
                 }
@@ -378,7 +377,7 @@ export component ExportDialog inherits Dialog {
                         : ExportDialogState.done
                         ? "Export complete."
                         : ExportDialogState.progress-message;
-                    color: ExportDialogState.has-error ? Theme.err : (ExportDialogState.done ? Theme.ok : Theme.text);
+                    color: ExportDialogState.has-error ? Ink.err : (ExportDialogState.done ? Ink.ok : Ink.text);
                     font-size: 11.5px;
                     wrap: word-wrap;
                 }
@@ -386,7 +385,7 @@ export component ExportDialog inherits Dialog {
                 if ExportDialogState.is-exporting: Rectangle {
                     height: 8px;
                     border-radius: 4px;
-                    background: Theme.raised;
+                    background: Ink.raised;
                     Rectangle {
                         x: 0;
                         width: ExportDialogState.progress-total > 0
@@ -394,7 +393,7 @@ export component ExportDialog inherits Dialog {
                             : 0px;
                         height: parent.height;
                         border-radius: 4px;
-                        background: Theme.accent;
+                        background: Ink.focus;
                         animate width {
                             duration: 200ms;
                             easing: ease-out;
@@ -405,8 +404,8 @@ export component ExportDialog inherits Dialog {
         }
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Close";
             enabled: !ExportDialogState.is-exporting;
             clicked => {
@@ -414,16 +413,16 @@ export component ExportDialog inherits Dialog {
             }
         }
 
-        if ExportDialogState.is-exporting: AppButton {
+        if ExportDialogState.is-exporting: InkButton {
             text: "Cancel";
             clicked => {
                 ExportDialogState.cancel-clicked();
             }
         }
 
-        AppButton {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: ExportDialogState.is-exporting ? "Exporting…" : "Start Export";
-            primary: true;
             enabled: !ExportDialogState.is-exporting && ExportDialogState.output-dir != "";
             clicked => {
                 ExportDialogState.start-clicked();

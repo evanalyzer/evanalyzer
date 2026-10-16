@@ -1,13 +1,11 @@
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ImagesListState } from "../api/images_list.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
-import { AppButton } from "../components/app_button.slint";
-import { Theme } from "../style.slint";
+import { Ink } from "../ink/palette.slint";
 
-export component ImageMissingDialog inherits Dialog {
+export component ImageMissingDialog inherits InkDialog {
     title: "Images missing";
-    tone: DialogTone.warning;
-    dialog-width: 440px;
+    card-width: 440px;
     close => {
         GlobalAppState.active_dialog = DialogType.none;
     }
@@ -15,21 +13,21 @@ export component ImageMissingDialog inherits Dialog {
     Text {
         text: "The project's image files could not be found. They may have been moved or renamed, or the drive is disconnected.";
         wrap: word-wrap;
-        color: Theme.text;
+        color: Ink.text;
         font-size: 13px;
     }
 
     Rectangle {
         height: path.preferred-height + 12px;
-        background: Theme.bg;
-        border-radius: Theme.radius-sm;
+        background: Ink.ground;
+        border-radius: Ink.radius-sm;
         path := Text {
             x: 8px;
             width: parent.width - 16px;
             text: ImagesListState.act_image_root_dir;
-            font-family: Theme.font-mono;
+            font-family: Ink.font-mono;
             font-size: 11px;
-            color: Theme.text-dim;
+            color: Ink.text-dim;
             wrap: word-wrap;
         }
     }
@@ -37,19 +35,19 @@ export component ImageMissingDialog inherits Dialog {
     Text {
         text: "Search for them there, or select the folder they're in now?";
         wrap: word-wrap;
-        color: Theme.text-dim;
+        color: Ink.text-dim;
         font-size: 12px;
     }
 
-    DialogFooter {
-        AppButton {
+    InkDialogFooter {
+        InkButton {
             text: "Cancel";
             clicked => {
                 GlobalAppState.active_dialog = DialogType.none;
             }
         }
 
-        AppButton {
+        InkButton {
             text: "Select folder";
             clicked => {
                 GlobalAppState.active_dialog = DialogType.none;
@@ -57,9 +55,9 @@ export component ImageMissingDialog inherits Dialog {
             }
         }
 
-        AppButton {
+        InkButton {
+            kind: InkButtonKind.primary;
             text: "Search";
-            primary: true;
             clicked => {
                 GlobalAppState.active_dialog = DialogType.none;
                 ImagesListState.new_image_root_folder_clicked();
