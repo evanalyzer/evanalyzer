@@ -445,4 +445,78 @@ mod tests {
         assert!(cache.get(&ObjectId(4)).is_some(), "another use's scope");
         assert!(cache.get(&ObjectId(5)).is_some(), "the project's");
     }
+
+    #[test]
+    fn end_scope_runs_in_its_use_phase_and_needs_no_scratch_or_citation() {
+        for phase in [ExecutionScope::Tile, ExecutionScope::WholeImage] {
+            let end = EndScope {
+                end: UseEnd::Scope(COMPONENT),
+                phase,
+            };
+            assert_eq!(end.execution_scope(), phase);
+            assert_eq!(end.name(), "End Scope");
+            assert!(end.cite().is_empty(), "an internal step cites nothing");
+            assert!(!end.scratch_is_workspace());
+        }
+    }
+
+    /// Run through `execute`, a nested use's end removes its own class's
+    /// objects from the object cache, not just its memory slots.
+    #[test]
+    fn executing_a_nested_use_end_removes_its_classes_objects() {
+        let inner = ObjectClass::Local(5);
+        let objects = cache(vec![
+            object(1, inner, COMPONENT),
+            object(2, ObjectClass::Local(1), COMPONENT),
+        ]);
+        let mut cache = GlobalPipelineCache::default();
+        cache.object_cache = objects;
+        let mut ctx = crate::pipeline::pipeline_context::PipelineContext::new_from_image_test(
+            kornia_image::Image::new(
+                kornia_image::ImageSize {
+                    width: 1,
+                    height: 1,
+                },
+                vec![0.0],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        EndScope {
+            end: UseEnd::Nested {
+                scope: COMPONENT,
+                classes: vec![inner],
+                slots: vec![],
+            },
+            phase: ExecutionScope::WholeImage,
+        }
+        .execute(&mut ctx, &mut cache)
+        .unwrap();
+
+        assert!(cache.object_cache.get(&ObjectId(1)).is_none());
+        assert!(cache.object_cache.get(&ObjectId(2)).is_some());
+    }
+
+    /// Few removed objects take the `retain` path instead of the rebuild;
+    /// references to them are dropped all the same.
+    #[test]
+    fn removing_a_small_share_keeps_the_cache_and_still_drops_references() {
+        let mut objects: Vec<Object> = (10..20)
+            .map(|id| object(id, ObjectClass::Global(1), Scope::Global))
+            .collect();
+        objects[0].parent_id = Some(ObjectId(1));
+        objects[1].children = vec![ObjectId(1), ObjectId(11)];
+        objects.push(object(1, ObjectClass::Local(1), COMPONENT));
+        let mut cache = cache(objects);
+        assert!(
+            REBUILD_FRACTION < cache.len(),
+            "one removal must not rebuild"
+        );
+
+        assert_eq!(remove_scope(&mut cache, COMPONENT), 1);
+        assert_eq!(cache.len(), 10);
+        assert_eq!(cache.get(&ObjectId(10)).unwrap().parent_id, None);
+        assert_eq!(cache.get(&ObjectId(11)).unwrap().children, [ObjectId(11)]);
+    }
 }

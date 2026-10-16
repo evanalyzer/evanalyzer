@@ -1012,6 +1012,255 @@ mod ui_state_tests {
         assert_eq!(name(&ui_state), "");
     }
 
+    // -- undo history limit ---------------------------------------------------
+
+    #[test]
+    fn a_new_checkpoint_beyond_the_limit_drops_the_oldest_one() {
+        let ui_state = test_ui_state();
+        {
+            let mut undo_stack = ui_state.undo_stack.lock().unwrap();
+            for i in 0..UNDO_STACK_LIMIT {
+                let mut settings = ProjectSettings::default();
+                settings.meta.name = format!("step {i}");
+                undo_stack.push_back(settings);
+            }
+        }
+        ui_state
+            .force_next_checkpoint
+            .store(true, Ordering::Relaxed);
+
+        set_name(&ui_state, "newest");
+
+        let undo_stack = ui_state.undo_stack.lock().unwrap();
+        assert_eq!(undo_stack.len(), UNDO_STACK_LIMIT);
+        assert_eq!(undo_stack.front().unwrap().meta.name, "step 1");
+        assert_eq!(undo_stack.back().unwrap().meta.name, "");
+    }
+
+    #[test]
+    fn undo_with_a_full_redo_history_drops_the_oldest_redo_step() {
+        let ui_state = test_ui_state();
+        set_name(&ui_state, "edited");
+        {
+            let mut redo_stack = ui_state.redo_stack.lock().unwrap();
+            for i in 0..UNDO_STACK_LIMIT {
+                let mut settings = ProjectSettings::default();
+                settings.meta.name = format!("redo {i}");
+                redo_stack.push_back(settings);
+            }
+        }
+
+        assert!(ui_state.undo());
+
+        let redo_stack = ui_state.redo_stack.lock().unwrap();
+        assert_eq!(redo_stack.len(), UNDO_STACK_LIMIT);
+        assert_eq!(redo_stack.front().unwrap().meta.name, "redo 1");
+        assert_eq!(redo_stack.back().unwrap().meta.name, "edited");
+    }
+
+    #[test]
+    fn redo_with_a_full_undo_history_drops_the_oldest_undo_step() {
+        let ui_state = test_ui_state();
+        set_name(&ui_state, "edited");
+        assert!(ui_state.undo());
+        {
+            let mut undo_stack = ui_state.undo_stack.lock().unwrap();
+            for i in 0..UNDO_STACK_LIMIT {
+                let mut settings = ProjectSettings::default();
+                settings.meta.name = format!("undo {i}");
+                undo_stack.push_back(settings);
+            }
+        }
+
+        assert!(ui_state.redo());
+
+        assert_eq!(name(&ui_state), "edited");
+        let undo_stack = ui_state.undo_stack.lock().unwrap();
+        assert_eq!(undo_stack.len(), UNDO_STACK_LIMIT);
+        assert_eq!(undo_stack.front().unwrap().meta.name, "undo 1");
+        assert_eq!(undo_stack.back().unwrap().meta.name, "");
+    }
+
+    // -- preferences ----------------------------------------------------------
+
+    /// A `UiState` whose user folder can't be created: its home is a file.
+    fn ui_state_that_cannot_save_settings() -> Arc<UiState> {
+        use std::sync::atomic::AtomicUsize;
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let folder = std::env::temp_dir()
+            .join("evanalyzer-gui-test-homes")
+            .join(format!(
+                "{}-blocked-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+        std::fs::create_dir_all(&folder).unwrap();
+        let home = folder.join("home");
+        std::fs::write(&home, "not a folder").unwrap();
+        let backend = evanalyzer_app::backends::local::LocalBackend::default()
+            .with_home(&home)
+            .expect("backend");
+        let owner = ProjectOwner::with_backend(Arc::new(backend));
+        Arc::new(UiState::new(
+            owner.handle(),
+            slint::Weak::default(),
+            slint::Weak::default(),
+        ))
+    }
+
+    #[test]
+    fn viewport_memory_settings_are_saved_on_this_computer_and_read_back() {
+        let ui_state = test_ui_state();
+        let mut viewport = ui_state.viewport_memory_settings();
+        viewport.tile_history_budget_mb += 123;
+
+        ui_state.save_viewport_memory_settings(viewport.clone());
+
+        assert_eq!(ui_state.viewport_memory_settings(), viewport);
+        assert_eq!(ui_state.load_app_settings().viewport, viewport);
+    }
+
+    #[test]
+    fn preferences_that_cannot_be_saved_are_still_kept_in_memory() {
+        let ui_state = ui_state_that_cannot_save_settings();
+
+        ui_state.update_app_settings(|settings| settings.dark_mode = true);
+        assert!(ui_state.load_app_settings().dark_mode);
+
+        let mut viewport = ui_state.viewport_memory_settings();
+        viewport.tile_history_budget_mb += 7;
+        ui_state.save_viewport_memory_settings(viewport.clone());
+        assert_eq!(ui_state.load_app_settings().viewport, viewport);
+
+        ui_state.remember_server(evanalyzer_app::global::RecentServer {
+            url: "ws://localhost:7400".into(),
+            user: "alice".into(),
+            fingerprint: None,
+        });
+        assert!(ui_state.recent_servers().is_empty());
+    }
+
+    #[test]
+    fn reload_app_settings_reads_what_the_backend_saved() {
+        let ui_state = test_ui_state();
+        ui_state.update_app_settings(|settings| settings.dark_mode = true);
+        *ui_state.app_settings.lock().unwrap() = Default::default();
+
+        ui_state.reload_app_settings();
+
+        assert!(ui_state.load_app_settings().dark_mode);
+    }
+
+    // -- startup / about dialog -----------------------------------------------
+
+    #[test]
+    fn the_about_dialog_shows_the_crate_version_and_the_licenses() {
+        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+
+        load_about_dialog_information(&ui);
+
+        let info = ui.global::<AppInfoState>();
+        assert_eq!(info.get_version(), env!("CARGO_PKG_VERSION"));
+        assert!(slint::Model::row_count(&info.get_license_paragraphs()) > 0);
+        assert_eq!(
+            slint::Model::row_count(&info.get_third_party_licenses()) > 0,
+            info.get_third_party_package_count() > 0
+        );
+    }
+
+    #[test]
+    fn opening_the_about_dialog_shows_this_computers_system() {
+        use crate::helper::ui_thread::drain_ui_queue;
+        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui_state = crate::editor::test_support::ui_state_with_windows(
+            &ui,
+            &results_ui,
+            ProjectWithRuntime::default(),
+        );
+        attach_system_info(&ui, Arc::clone(&ui_state));
+        let info = ui.global::<AppInfoState>();
+
+        info.invoke_refresh_system_info();
+        assert_eq!(info.get_system_source(), "this computer");
+        assert!(info.get_system_loading());
+        drain_ui_queue();
+
+        assert!(!info.get_system_loading());
+        assert_eq!(info.get_system_os(), std::env::consts::OS);
+        assert!(info.get_cpu_cores() > 0);
+        assert!(info.get_ram_total().ends_with(" GB"));
+        assert_eq!(info.get_system_error(), "");
+    }
+
+    #[test]
+    fn refreshing_the_system_info_after_the_window_closed_does_nothing() {
+        use crate::helper::ui_thread::drain_ui_queue;
+        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui_state = test_ui_state();
+        attach_system_info(&ui, ui_state);
+        let info = ui.global::<AppInfoState>();
+        info.invoke_refresh_system_info();
+        drop(info);
+        drop(ui);
+        drain_ui_queue();
+    }
+
+    #[test]
+    fn format_ram_shows_gigabytes_with_one_decimal() {
+        assert_eq!(format_ram(0), "0.0 GB");
+        assert_eq!(format_ram(1_073_741_824), "1.0 GB");
+        assert_eq!(format_ram(3 * 536_870_912), "1.5 GB");
+    }
+
+    #[test]
+    fn toggling_dark_mode_is_remembered_and_applied_to_the_results_window() {
+        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui_state = crate::editor::test_support::ui_state_with_windows(
+            &ui,
+            &results_ui,
+            ProjectWithRuntime::default(),
+        );
+        apply_user_settings(&ui, &results_ui, &ui_state);
+
+        ui.global::<Appearance>().invoke_dark_mode_toggled(true);
+        assert!(ui_state.load_app_settings().dark_mode);
+
+        ui.global::<Appearance>().invoke_dark_mode_toggled(false);
+        assert!(!ui_state.load_app_settings().dark_mode);
+
+        drop(results_ui);
+        ui.global::<Appearance>().invoke_dark_mode_toggled(true);
+        assert!(ui_state.load_app_settings().dark_mode);
+    }
+
+    #[test]
+    fn reconnect_now_on_this_computer_does_nothing() {
+        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        let backend: Arc<dyn Backend> =
+            Arc::new(evanalyzer_app::backends::local::LocalBackend::default());
+        let _timer = show_connection(&ui, None, move || Arc::clone(&backend), || {});
+
+        ui.global::<ConnectionState>().invoke_reconnect_now();
+
+        assert!(ui.global::<ConnectionState>().get_connected());
+    }
+
+    /// Without an event loop (the headless test platform has none) the GUI
+    /// sets everything up, then reports the error instead of panicking.
+    #[test]
+    fn starting_the_frontend_without_an_event_loop_returns_instead_of_panicking() {
+        use crate::helper::ui_thread::drain_ui_queue;
+        crate::editor::test_support::ensure_slint_test_platform();
+        crate::helper::ui_thread::fresh_test_queue();
+        let owner = crate::editor::test_support::test_project_owner();
+        let missing = std::env::temp_dir().join("evanalyzer-gui-no-such-project.evaproj");
+
+        let frontend = Box::new(create().with_project(Some(missing)));
+        assert!(frontend.project.is_some());
+        frontend.start(owner);
+        drain_ui_queue();
+    }
+
     // -- settings dialog ----------------------------------------------------
 
     /// The settings list scrolls far enough to reach the last setting of the

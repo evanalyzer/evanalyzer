@@ -7640,6 +7640,140 @@ mod tests {
     }
 
     #[test]
+    fn the_component_dialogs_cancel_buttons_just_close_their_dialog() {
+        let (ui, ui_state, _controller) = with_a_component();
+        let before = serde_json::to_value(&ui_state.get_project().components).unwrap();
+        let cancels: [(DialogType, &dyn Fn(&AppWindow)); 4] = [
+            (DialogType::ComponentEditChoice, &|ui| {
+                ui.global::<ComponentEditChoiceState>().invoke_cancel()
+            }),
+            (DialogType::ExposeChoice, &|ui| {
+                ui.global::<ExposeChoiceState>().invoke_cancel()
+            }),
+            (DialogType::ComponentUpdate, &|ui| {
+                ui.global::<ComponentUpdateState>().invoke_cancel()
+            }),
+            (DialogType::CreateComponent, &|ui| {
+                ui.global::<CreateComponentState>().invoke_cancel()
+            }),
+        ];
+        for (open, cancel) in cancels {
+            ui.global::<GlobalAppState>().set_active_dialog(open);
+            cancel(&ui);
+            drain_ui_queue();
+            assert_eq!(active_dialog(&ui), DialogType::None, "{open:?}");
+        }
+        assert_eq!(
+            serde_json::to_value(&ui_state.get_project().components).unwrap(),
+            before,
+            "nothing changed"
+        );
+    }
+
+    /// A component opened only to look at can't be changed - whatever is
+    /// clicked on its cards.
+    #[test]
+    fn a_component_opened_to_view_refuses_every_change() {
+        let (ui, ui_state, _controller) = with_a_nested_component();
+        let snapshot = || {
+            let project = ui_state.get_project();
+            serde_json::to_value((&project.components, &project.pipelines)).unwrap()
+        };
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_view_component(0);
+        drain_ui_queue();
+        assert!(panel.get_open_component_read_only());
+        let before = snapshot();
+
+        panel.invoke_expand_component(1);
+        panel.invoke_toggle_exposed(0, "segmentation_class".into());
+        panel.invoke_save_component_to_library(1);
+        panel.invoke_update_component(1);
+        panel.invoke_create_component(0);
+        panel.invoke_open_component_settings();
+        panel.invoke_param_changed(0, "segmentation_class".into(), "3".into());
+        drain_ui_queue();
+
+        assert_eq!(snapshot(), before);
+        assert_eq!(active_dialog(&ui), DialogType::None);
+        assert!(panel.get_open_component_read_only(), "still only viewed");
+    }
+
+    #[test]
+    fn save_to_library_on_a_component_card_asks_for_its_metadata() {
+        let (ui, _ui_state, _controller) = with_a_nested_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        let meta = || ui.global::<crate::TemplateMetaState>();
+
+        panel.invoke_save_component_to_library(0);
+        drain_ui_queue();
+        assert_eq!(meta().get_dialog_title(), "Save Component to Library");
+        assert_eq!(meta().get_meta().name, "Outer");
+
+        // A component nested in the opened one: its own name.
+        panel.invoke_open_component(0);
+        drain_ui_queue();
+        panel.invoke_save_component_to_library(1);
+        drain_ui_queue();
+        assert_eq!(meta().get_meta().name, "Smooth");
+    }
+
+    #[test]
+    fn a_created_component_is_authored_by_the_user() {
+        let (ui, ui_state, _controller) =
+            selected(vec![step("Threshold"), step("Blur"), step("Blur")]);
+        ui_state.update_app_settings(|settings| {
+            settings.author = Some(evanalyzer_app::global::UserInformation {
+                full_name: "Ada Lovelace".into(),
+                organization: "Analytical Engines".into(),
+            });
+        });
+        ui.global::<PipelinesPanelState>()
+            .invoke_create_component(1);
+        drain_ui_queue();
+        let state = ui.global::<CreateComponentState>();
+        state.set_name("Smooth".into());
+        state.invoke_confirm();
+        drain_ui_queue();
+
+        let project = ui_state.get_project();
+        let author = &project.components[0].meta.authors[0];
+        assert_eq!(
+            (author.full_name.as_str(), author.organization.as_str()),
+            ("Ada Lovelace", "Analytical Engines")
+        );
+    }
+
+    #[test]
+    fn edit_or_view_on_a_command_card_opens_nothing() {
+        let (ui, _ui_state, _controller) = with_a_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(0);
+        panel.invoke_view_component(0);
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_name(), "", "step 1 is a threshold");
+        assert_eq!(active_dialog(&ui), DialogType::None);
+    }
+
+    #[test]
+    fn removing_a_component_by_an_id_the_picker_doesnt_have_does_nothing() {
+        let (ui, ui_state, _controller) = with_a_component();
+        let picker = ui.global::<CommandPickerState>();
+        // A command's id, a library component's, a component that isn't there.
+        for id in [
+            3,
+            LIBRARY_COMPONENT_PICKER_ID_BASE,
+            COMPONENT_PICKER_ID_BASE + 9,
+        ] {
+            picker.invoke_remove_component(id);
+        }
+        // The one there is used - it stays.
+        picker.invoke_remove_component(COMPONENT_PICKER_ID_BASE);
+        drain_ui_queue();
+        assert_eq!(ui_state.get_project().components.len(), 1);
+    }
+
+    #[test]
     fn a_nested_component_that_is_gone_is_closed_and_its_outer_one_shown() {
         let (ui, ui_state, controller) = with_a_nested_component();
         let panel = ui.global::<PipelinesPanelState>();

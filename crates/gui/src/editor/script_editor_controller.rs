@@ -978,4 +978,140 @@ mod tests {
         assert_eq!(to_offset("ab", 99), 2);
         assert_eq!(to_offset("ab", -3), 0);
     }
+
+    #[test]
+    fn tokenizer_handles_constants_macro_calls_and_unterminated_literals() {
+        use TokenKind::*;
+        assert_eq!(
+            kinds("true false"),
+            vec![(Number, "true"), (Number, "false")]
+        );
+        assert_eq!(
+            kinds("print!(0b101)"),
+            vec![
+                (Function, "print"),
+                (Punct, "!"),
+                (Punct, "("),
+                (Number, "0b101"),
+                (Punct, ")"),
+            ]
+        );
+        assert_eq!(kinds("x!y"), vec![(Ident, "x"), (Punct, "!"), (Ident, "y")]);
+        assert_eq!(kinds("/* open"), vec![(Comment, "/* open")]);
+        assert_eq!(kinds("`never\nclosed"), vec![(String, "`never\nclosed")]);
+    }
+
+    /// The first numeric settable parameter of `key`'s snippet.
+    fn numeric_param(key: &str) -> ParameterDef {
+        let cmd = PipelineCommand::default_for_key(key).unwrap();
+        snippet_params(&cmd)
+            .into_iter()
+            .map(|(_, def)| def)
+            .find(|def| {
+                matches!(
+                    def.param_type,
+                    ParamType::Number | ParamType::Spinner | ParamType::Slider
+                )
+            })
+            .expect("a number parameter")
+    }
+
+    #[test]
+    fn a_number_parameter_that_is_not_a_number_becomes_zero() {
+        let mut def = numeric_param("gaussian_blur");
+        def.value = "not a number".into();
+        assert_eq!(script_literal(&def), "0");
+        def.value = "2.5".into();
+        assert_eq!(script_literal(&def), "2.5");
+    }
+
+    // -- the Slint callbacks ----------------------------------------------
+
+    use slint::Model as _;
+
+    fn attached_state() -> AppWindow {
+        let (ui, _results_ui) = crate::editor::test_support::test_ui_windows();
+        ScriptEditorController::new(ui.as_weak()).attach_callbacks();
+        ui
+    }
+
+    #[test]
+    fn attach_callbacks_without_a_window_does_nothing() {
+        ScriptEditorController::new(slint::Weak::default()).attach_callbacks();
+    }
+
+    #[test]
+    fn the_editor_callbacks_highlight_check_and_format_the_text() {
+        let ui = attached_state();
+        let state = ui.global::<ScriptEditorState>();
+
+        let shown = state.invoke_highlight("let x = f(1); // c".into());
+        let expected: ScriptHighlight = highlight("let x = f(1); // c").into();
+        assert_eq!(shown.keywords, expected.keywords);
+        assert_eq!(shown.functions, expected.functions);
+        assert_eq!(shown.numbers, expected.numbers);
+        assert_eq!(shown.comments, expected.comments);
+        assert_eq!(shown.line_numbers, expected.line_numbers);
+
+        let ok = state.invoke_check("let x = 1;".into());
+        assert!(ok.ok);
+        let bad = state.invoke_check("let x = ;".into());
+        assert!(!bad.ok);
+        assert_eq!(bad.line, 1);
+        assert!(!bad.message.is_empty());
+
+        assert_eq!(
+            state.invoke_format("if x {\ny();\n}".into()),
+            format_script("if x {\ny();\n}")
+        );
+    }
+
+    #[test]
+    fn the_editor_callbacks_indent_break_lines_and_close_brackets() {
+        let ui = attached_state();
+        let state = ui.global::<ScriptEditorState>();
+
+        let edit = state.invoke_indent("x".into(), 0);
+        assert_eq!(edit.text, "    x");
+        assert_eq!(edit.cursor, 4);
+
+        let edit = state.invoke_newline("if x {}".into(), 6);
+        assert_eq!((edit.text.to_string(), edit.cursor as usize), {
+            let e = newline("if x {}", 6);
+            (e.text, e.cursor)
+        });
+
+        let edit = state.invoke_close_bracket("{\n    ".into(), 6, "}".into());
+        let expected = close_bracket("{\n    ", 6, '}');
+        assert_eq!(edit.text, expected.text.as_str());
+        assert_eq!(edit.cursor as usize, expected.cursor);
+
+        // No bracket given: a closing brace.
+        let edit = state.invoke_close_bracket("{\n    ".into(), 6, "".into());
+        assert_eq!(edit.text, expected.text.as_str());
+    }
+
+    #[test]
+    fn the_command_list_is_filtered_and_inserts_a_snippet_at_the_cursor() {
+        let ui = attached_state();
+        let state = ui.global::<ScriptEditorState>();
+
+        let all = state.invoke_filter_commands("".into());
+        assert_eq!(all.row_count(), command_docs().len());
+        let found = state.invoke_filter_commands("gauss".into());
+        let keys: Vec<String> = found.iter().map(|d| d.key.to_string()).collect();
+        assert!(keys.contains(&"gaussian_blur".to_string()), "{keys:?}");
+        let blur = found.iter().find(|d| d.key == "gaussian_blur").unwrap();
+        assert!(!blur.name.is_empty());
+        assert!(blur.doc.contains("kernel_size"));
+
+        let edit = state.invoke_insert_command("  ".into(), 2, "gaussian_blur".into());
+        let snippet = run_snippet("gaussian_blur", "  ").unwrap();
+        assert_eq!(edit.text, format!("  {snippet}").as_str());
+        assert_eq!(edit.cursor as usize, 2 + snippet.len());
+
+        let edit = state.invoke_insert_command("abc".into(), 1, "no_such_command".into());
+        assert_eq!(edit.text, "abc");
+        assert_eq!(edit.cursor, 1);
+    }
 }

@@ -2222,4 +2222,256 @@ pub(crate) mod tests {
             .dispatch_event(slint::platform::WindowEvent::CloseRequested);
         assert_eq!(clean.dialog(), DialogType::None);
     }
+
+    #[test]
+    fn importing_a_legacy_project_uses_the_image_folder_next_to_it() {
+        let w = with_window(ProjectWithRuntime::default());
+        let images = w.dir.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        let path = w
+            .dir
+            .path()
+            .join(format!("old.{LEGACY_PROJECT_FILE_EXTENSION}"));
+        std::fs::write(
+            &path,
+            r#"{
+                "meta": { "name": "X" },
+                "projectSettings": {
+                    "classification": { "classes": [] },
+                    "plate": { "imageFolder": "images" }
+                },
+                "imageSetup": {},
+                "pipelines": []
+            }"#,
+        )
+        .unwrap();
+
+        Arc::clone(&w.controller).import_legacy_project_file(&path);
+        drain_ui_queue();
+
+        assert_eq!(w.ui_state.get_project().images.root, Some(images.clone()));
+        assert_eq!(
+            w.ui.global::<ImagesListState>().get_act_image_root_dir(),
+            images.to_string_lossy().as_ref()
+        );
+        assert!(w.ui_state.is_dirty());
+    }
+
+    #[test]
+    fn closing_the_window_while_an_analysis_runs_asks_about_it_first() {
+        let w = with_window(project_with_pipeline("P"));
+        w.controller
+            .pipelines_controller
+            .analysis_running
+            .store(true, Ordering::SeqCst);
+
+        w.ui.window()
+            .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+        drain_ui_queue();
+
+        assert_eq!(w.dialog(), DialogType::AnalysisRunningClose);
+        let question = w.ui.global::<AnalysisRunningCloseState>();
+        assert!(!question.get_remote());
+        assert!(!question.get_disconnecting());
+        question.invoke_back();
+
+        // Keeping it running on a clean project quits right away.
+        question.invoke_keep_running();
+        drain_ui_queue();
+        assert!(w.controller.pending_action.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn cancelling_the_running_analysis_before_quitting_asks_about_unsaved_changes() {
+        let w = with_window(project_with_pipeline("P"));
+        w.controller
+            .pipelines_controller
+            .analysis_running
+            .store(true, Ordering::SeqCst);
+        let cancel = evanalyzer_app::analysis::CancelHandle::with_callback(|| {});
+        *w.controller
+            .pipelines_controller
+            .pipeline_cancel_flag
+            .lock()
+            .unwrap() = Some(cancel.clone());
+        w.ui_state.mark_dirty();
+
+        w.ui.window()
+            .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+        drain_ui_queue();
+        w.ui.global::<AnalysisRunningCloseState>()
+            .invoke_cancel_analysis();
+        drain_ui_queue();
+
+        assert!(cancel.is_cancelled());
+        assert_eq!(w.dialog(), DialogType::UnsavedChangesConfirm);
+        assert!(matches!(
+            *w.controller.pending_action.lock().unwrap(),
+            Some(PendingAction::Quit)
+        ));
+    }
+
+    #[test]
+    fn cancelling_the_analysis_question_without_an_analysis_handle_still_goes_on() {
+        let w = with_window(project_with_pipeline("P"));
+        w.ui_state.mark_dirty();
+        w.ui.global::<AnalysisRunningCloseState>()
+            .invoke_cancel_analysis();
+        drain_ui_queue();
+        assert_eq!(w.dialog(), DialogType::UnsavedChangesConfirm);
+    }
+
+    #[test]
+    fn connect_on_a_clean_project_opens_the_connect_dialog_and_disconnect_locally_does_nothing() {
+        let w = with_window(project_with_pipeline("P"));
+
+        w.toolbar().invoke_disconnect_clicked();
+        drain_ui_queue();
+        assert_eq!(w.dialog(), DialogType::None);
+        assert_eq!(w.pipeline_names(), ["P"]);
+
+        w.toolbar().invoke_connect_clicked();
+        drain_ui_queue();
+        assert_eq!(w.dialog(), DialogType::ConnectServer);
+    }
+
+    #[test]
+    fn connecting_while_an_analysis_runs_here_shows_a_warning() {
+        let w = with_window(project_with_pipeline("P"));
+        w.controller
+            .pipelines_controller
+            .analysis_running
+            .store(true, Ordering::SeqCst);
+
+        w.toolbar().invoke_connect_clicked();
+        drain_ui_queue();
+
+        assert_eq!(w.dialog(), DialogType::Warning);
+        assert_eq!(
+            w.ui.global::<WarningState>().get_title(),
+            "An analysis is running"
+        );
+    }
+
+    #[test]
+    fn disconnecting_from_a_server_while_its_analysis_runs_asks_first_then_comes_back() {
+        let w = with_window(project_with_pipeline("P"));
+        let local = w.ui_state.backend();
+        w.controller.switch_backend(remote_backend());
+        drain_ui_queue();
+        assert!(w.ui_state.backend().is_remote());
+        w.controller
+            .pipelines_controller
+            .analysis_running
+            .store(true, Ordering::SeqCst);
+
+        w.toolbar().invoke_disconnect_clicked();
+        drain_ui_queue();
+        assert_eq!(w.dialog(), DialogType::AnalysisRunningClose);
+        let question = w.ui.global::<AnalysisRunningCloseState>();
+        assert!(question.get_remote());
+        assert!(question.get_disconnecting());
+
+        w.controller
+            .pipelines_controller
+            .analysis_running
+            .store(false, Ordering::SeqCst);
+        question.invoke_keep_running();
+        drain_ui_queue();
+        assert!(Arc::ptr_eq(&w.ui_state.backend(), &local));
+    }
+
+    #[test]
+    fn disconnecting_from_a_server_with_unsaved_changes_asks_about_them() {
+        let w = with_window(project_with_pipeline("P"));
+        w.controller.switch_backend(remote_backend());
+        drain_ui_queue();
+        w.ui_state.mark_dirty();
+
+        w.toolbar().invoke_disconnect_clicked();
+        drain_ui_queue();
+
+        assert_eq!(w.dialog(), DialogType::UnsavedChangesConfirm);
+        assert!(matches!(
+            *w.controller.pending_action.lock().unwrap(),
+            Some(PendingAction::Disconnect)
+        ));
+        assert!(w.ui_state.backend().is_remote());
+    }
+
+    /// Opens a file dialog with `open`, then closes it with "Cancel".
+    fn cancel_file_dialog(w: &Window, open: impl FnOnce(&ToolbarState<'_>)) {
+        open(&w.toolbar());
+        drain_ui_queue();
+        let browser = w.ui.global::<crate::FileBrowserState>();
+        assert!(browser.get_visible(), "a file dialog is open");
+        browser.invoke_cancel();
+        drain_ui_queue();
+    }
+
+    #[test]
+    fn cancelling_the_open_save_as_and_citation_dialogs_changes_nothing() {
+        let w = with_window(project_with_pipeline("P"));
+        w.ui_state.mark_dirty();
+
+        cancel_file_dialog(&w, |t| t.invoke_open_file_clicked());
+        cancel_file_dialog(&w, |t| t.invoke_save_as_file_clicked());
+        cancel_file_dialog(&w, |t| t.invoke_cite_project_clicked());
+
+        assert_eq!(w.pipeline_names(), ["P"]);
+        assert!(w.ui_state.is_dirty());
+        assert!(
+            w.ui_state
+                .get_project()
+                .tmp_settings
+                .current_project
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn save_project_then_reports_a_failed_save_and_keeps_the_project_dirty() {
+        let (ui_state, controller) = make_controller();
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("a-file");
+        std::fs::write(&blocker, "not a folder").unwrap();
+        ui_state.get_project_write().tmp_settings.current_project =
+            Some(blocker.join("project.evaproj"));
+        ui_state.mark_dirty();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        controller.save_project_then(move |ok| tx.send(ok).unwrap());
+        drain_ui_queue();
+
+        assert!(!rx.recv().unwrap(), "the save failed");
+        assert!(ui_state.is_dirty());
+    }
+
+    #[test]
+    fn templates_loaded_after_the_picker_closed_are_not_shown() {
+        let w = with_window(project_with_pipeline("P"));
+        w.toolbar().invoke_new_from_project_template_clicked();
+        assert_eq!(w.dialog(), DialogType::ProjectTemplate);
+        w.ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::None);
+
+        drain_ui_queue();
+
+        let picker = w.ui.global::<ProjectTemplateState>();
+        assert_eq!(picker.get_templates().row_count(), 0);
+    }
+
+    #[test]
+    fn template_picker_updates_without_a_window_do_nothing() {
+        let (ui_state, controller) = make_controller();
+        *controller.project_templates.lock().unwrap() =
+            vec![template("T", "", &[], vec![pipeline(3, "From template")])];
+
+        controller.refresh_filtered_templates();
+        controller.apply_project_template(0);
+        controller.open_project_template_dialog();
+        drain_ui_queue();
+
+        assert!(ui_state.get_project().pipelines.is_empty());
+    }
 }

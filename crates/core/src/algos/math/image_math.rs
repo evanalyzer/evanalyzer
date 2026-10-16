@@ -494,4 +494,158 @@ mod tests {
         let res2 = run_math_test(Operand::Add, 0.1, 0.4, true);
         assert_eq!(res1, res2);
     }
+
+    fn rgb_ctx(val: f32) -> PipelineContext {
+        let mut ctx = PipelineContext::new_from_image_test_rgb(
+            Image::<f32, 3>::new(
+                ImageSize {
+                    width: 2,
+                    height: 2,
+                },
+                vec![val; 12],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        ctx.prepare_scratch_matching_image().unwrap();
+        ctx
+    }
+
+    fn rgb_values(ctx: &PipelineContext) -> Vec<f32> {
+        match ctx.image.as_ref() {
+            ImageContainer::F32Rgb(img) => img.as_slice().to_vec(),
+            other => panic!("expected F32Rgb, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn operand_none_leaves_the_image_untouched() {
+        let mut ctx = rgb_ctx(0.3);
+        ImageMath {
+            operand: Operand::None,
+            second_image_address: ImageAddress::None,
+            swap_operands: false,
+        }
+        .execute(&mut ctx, &mut GlobalPipelineCache::default())
+        .unwrap();
+        assert_eq!(rgb_values(&ctx), vec![0.3; 12]);
+    }
+
+    #[test]
+    fn invert_works_on_rgb_images() {
+        let mut ctx = rgb_ctx(0.25);
+        ImageMath {
+            operand: Operand::Invert,
+            second_image_address: ImageAddress::Scratchpad,
+            swap_operands: false,
+        }
+        .execute(&mut ctx, &mut GlobalPipelineCache::default())
+        .unwrap();
+        assert_eq!(rgb_values(&ctx), vec![0.75; 12]);
+    }
+
+    #[test]
+    fn invert_refuses_a_label_image() {
+        let mut ctx = PipelineContext::new_from_u32_image_test(
+            Image::<u32, 1>::new(
+                ImageSize {
+                    width: 2,
+                    height: 1,
+                },
+                vec![1, 2],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let err = ImageMath {
+            operand: Operand::Invert,
+            second_image_address: ImageAddress::Scratchpad,
+            swap_operands: false,
+        }
+        .execute(&mut ctx, &mut GlobalPipelineCache::default())
+        .unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::FormatMismatch { expected, .. } if expected.contains("F32Rgb or F32Gray")),
+            "{err:?}"
+        );
+    }
+
+    /// A binary operation can read an image channel of the current tile as
+    /// its second operand, and works on RGB images pixel by pixel.
+    #[test]
+    fn binary_math_on_rgb_reads_a_channel_of_the_current_tile() {
+        let mut ctx = rgb_ctx(0.25);
+        let second = rgb_ctx(0.5);
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_cache.insert(
+            CacheAddress::Channel((2, ctx.image_meta.image_tile_info.clone())),
+            Arc::clone(&second.image),
+        );
+        ImageMath {
+            operand: Operand::Add,
+            second_image_address: ImageAddress::Channel(2),
+            swap_operands: false,
+        }
+        .execute(&mut ctx, &mut cache)
+        .unwrap();
+        assert_eq!(rgb_values(&ctx), vec![0.75; 12]);
+    }
+
+    #[test]
+    fn binary_math_rejects_a_none_second_image() {
+        let mut ctx = rgb_ctx(0.25);
+        let err = ImageMath {
+            operand: Operand::Add,
+            second_image_address: ImageAddress::None,
+            swap_operands: false,
+        }
+        .execute(&mut ctx, &mut GlobalPipelineCache::default())
+        .unwrap_err();
+        assert!(matches!(err, InternalErrors::InvalidArgument(_)), "{err:?}");
+    }
+
+    #[test]
+    fn binary_math_rejects_a_gray_second_image_for_an_rgb_image() {
+        let mut ctx = rgb_ctx(0.25);
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_cache.insert(
+            CacheAddress::Memory(MemoryId::PipelineContext(1)),
+            Arc::new(create_test_gray(0.5)),
+        );
+        let err = ImageMath {
+            operand: Operand::Add,
+            second_image_address: ImageAddress::Memory(MemoryId::PipelineContext(1)),
+            swap_operands: false,
+        }
+        .execute(&mut ctx, &mut cache)
+        .unwrap_err();
+        assert!(
+            matches!(&err, InternalErrors::FormatMismatch { expected, .. } if expected.contains("Matching formats")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn dividing_by_a_zero_pixel_keeps_the_dividend() {
+        assert_eq!(run_math_test(Operand::Divide, 0.6, 0.0, false), 0.6);
+    }
+
+    #[test]
+    fn only_a_binary_operation_on_the_scratch_pad_reads_it_as_data() {
+        let math = |operand, second_image_address| ImageMath {
+            operand,
+            second_image_address,
+            swap_operands: false,
+        };
+        assert!(!math(Operand::Add, ImageAddress::Scratchpad).scratch_is_workspace());
+        assert!(math(Operand::Invert, ImageAddress::Scratchpad).scratch_is_workspace());
+        assert!(math(Operand::None, ImageAddress::Scratchpad).scratch_is_workspace());
+        assert!(
+            math(
+                Operand::Add,
+                ImageAddress::Memory(MemoryId::PipelineContext(1))
+            )
+            .scratch_is_workspace()
+        );
+    }
 }

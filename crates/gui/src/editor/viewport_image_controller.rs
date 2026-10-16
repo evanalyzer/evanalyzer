@@ -1158,4 +1158,464 @@ mod tests {
             "toggling play off must stop the timer"
         );
     }
+
+    // -- callbacks, timers and the pixel-info HUD (live AppWindow) ---------------
+
+    use crate::editor::view_channel::ViewChannel;
+    use crate::editor::viewport_cache::ReadContext;
+    use crate::helper::ui_thread::drain_ui_queue;
+    use evanalyzer_app::images::{ImageChannel, ImageContainer, ManagedImage, Point2d};
+
+    fn advance(ms: u64) {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(ms));
+    }
+
+    /// Whether a drawing task waits in `container`'s slot - and takes it.
+    fn take_task(container: &crate::editor::viewport_controller::DrawingTaskContainer) -> bool {
+        container.task_request.0.lock().unwrap().take().is_some()
+    }
+
+    fn take_high_res_task(controller: &ViewportImageController) -> bool {
+        take_task(&controller.viewport_controller.drawing_tasks.high_res_task)
+    }
+
+    fn take_low_res_task(controller: &ViewportImageController) -> bool {
+        take_task(&controller.viewport_controller.drawing_tasks.low_res_task)
+    }
+
+    fn attached() -> (
+        AppWindow,
+        crate::ResultsWindow,
+        Arc<UiState>,
+        Arc<ViewportImageController>,
+    ) {
+        let (ui, results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+        (ui, results_ui, ui_state, controller)
+    }
+
+    #[test]
+    fn the_memory_settings_in_effect_are_shown_when_the_settings_dialog_opens() {
+        let (ui, _results_ui, _, controller) = attached();
+        let state = ui.global::<ViewportMemoryState>();
+        state.set_tile_history_budget_mb(-1);
+        state.set_auto_cache_note("".into());
+
+        state.invoke_load();
+
+        let settings = controller.viewport_controller.memory_settings();
+        assert_eq!(
+            state.get_tile_history_budget_mb(),
+            settings.tile_history_budget_mb as i32
+        );
+        assert_eq!(
+            state.get_tile_history_enabled(),
+            settings.tile_history_enabled
+        );
+        let (tile_mb, overview_mb) = effective_cache_mb(&settings);
+        assert_eq!(state.get_tile_cache_mb(), tile_mb as i32);
+        assert_eq!(state.get_overview_cache_mb(), overview_mb as i32);
+        assert!(state.get_auto_cache_note().contains("GB RAM"));
+    }
+
+    #[test]
+    fn applying_the_settings_dialog_stores_and_saves_the_new_memory_settings() {
+        let (ui, _results_ui, ui_state, controller) = attached();
+        let state = ui.global::<ViewportMemoryState>();
+        state.set_tile_history_enabled(true);
+        state.set_tile_history_budget_mb(77);
+        state.set_object_overlay_margin_px(-5);
+        state.set_cache_sizes_auto(false);
+        state.set_tile_cache_mb(0);
+        state.set_overview_cache_mb(300);
+        state.set_free_caches_on_analysis(false);
+
+        state.invoke_apply();
+        drain_ui_queue();
+
+        let expected = ViewportMemorySettings {
+            tile_history_enabled: true,
+            tile_history_budget_mb: 77,
+            object_overlay_margin_px: 0,
+            cache_sizes_auto: false,
+            tile_cache_mb: ViewportMemorySettings::MIN_CACHE_MB,
+            overview_cache_mb: 300.max(ViewportMemorySettings::MIN_CACHE_MB),
+            free_caches_on_analysis: false,
+        };
+        assert_eq!(controller.viewport_controller.memory_settings(), expected);
+        assert_eq!(
+            ui_state.viewport_memory_settings(),
+            expected,
+            "saved on this computer"
+        );
+    }
+
+    #[test]
+    fn applying_an_unchanged_settings_dialog_saves_nothing() {
+        let (ui, _results_ui, ui_state, _) = attached();
+        let before = ui_state.viewport_memory_settings();
+        let mut saved = before.clone();
+        saved.tile_history_budget_mb += 1;
+        // Saved behind the controller's back: an Apply without changes in
+        // the dialog must not write the controller's settings over it.
+        ui_state.save_viewport_memory_settings(saved.clone());
+
+        ui.global::<ViewportMemoryState>().invoke_apply();
+
+        assert_eq!(ui_state.viewport_memory_settings(), saved);
+    }
+
+    #[test]
+    fn resetting_the_settings_dialog_shows_the_defaults_without_applying_them() {
+        let (ui, _results_ui, _, controller) = attached();
+        let state = ui.global::<ViewportMemoryState>();
+        state.set_tile_history_budget_mb(12345);
+        let before = controller.viewport_controller.memory_settings();
+
+        state.invoke_reset_to_defaults();
+
+        assert_eq!(
+            state.get_tile_history_budget_mb(),
+            ViewportMemorySettings::default().tile_history_budget_mb as i32
+        );
+        assert_eq!(controller.viewport_controller.memory_settings(), before);
+    }
+
+    #[test]
+    fn viewport_size_pan_and_zoom_reports_reach_the_viewport_state() {
+        let (ui, _results_ui, _, controller) = attached();
+        let view = ui.global::<ViewportSlintState>();
+
+        view.invoke_report_viewport_size(640.0, 480.0);
+        view.invoke_report_viewport_zoomed(2.0, 5.0, 6.0);
+        view.invoke_report_viewport_moved(-3.0, 4.0);
+        view.invoke_report_mouse_moved(11.0, 12.0);
+
+        let vp = controller
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap();
+        assert_eq!((vp.viewport_width, vp.viewport_height), (640.0, 480.0));
+        assert_eq!(vp.zoom, 2.0);
+        assert_eq!((vp.offset_x, vp.offset_y), (-3.0, 4.0));
+        assert_eq!((vp.mouse_pos_x, vp.mouse_pos_y), (11.0, 12.0));
+    }
+
+    #[test]
+    fn the_first_valid_viewport_size_redraws_a_waiting_image_fitted_to_it() {
+        let (_, controller) = make_controller();
+
+        controller
+            .update_viewport_size_in_viewport_state(400.0, 300.0)
+            .unwrap();
+
+        let task = controller
+            .viewport_controller
+            .drawing_tasks
+            .high_res_task
+            .task_request
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("a redraw of the waiting image");
+        assert!(task.fit_to_screen && task.is_new_image);
+    }
+
+    #[test]
+    fn a_resize_redraws_the_sharp_view_only_once_the_gesture_settled() {
+        crate::editor::test_support::ensure_slint_test_platform();
+        let (_, controller) = make_controller();
+        controller
+            .update_viewport_size_in_viewport_state(400.0, 300.0)
+            .unwrap();
+        take_high_res_task(&controller);
+
+        controller
+            .update_viewport_size_in_viewport_state(500.0, 300.0)
+            .unwrap();
+        controller
+            .update_viewport_size_in_viewport_state(600.0, 300.0)
+            .unwrap();
+        assert!(!take_high_res_task(&controller), "debounced");
+
+        advance(200);
+        assert!(take_high_res_task(&controller));
+        assert!(!controller.redraw_debounce_timer.running());
+    }
+
+    #[test]
+    fn the_low_res_redraw_runs_at_once_then_coalesces_until_the_throttle_window_ends() {
+        crate::editor::test_support::ensure_slint_test_platform();
+        let (_, controller) = make_controller();
+        *controller.last_low_res_redraw.lock().unwrap() = Instant::now() - Duration::from_secs(1);
+
+        controller.trigger_redraw_low_res_throttled();
+        assert!(take_low_res_task(&controller), "the first one at once");
+        assert!(!controller.low_res_throttle_timer.running());
+
+        // Within the throttle window, however slowly this test runs.
+        *controller.last_low_res_redraw.lock().unwrap() =
+            Instant::now() + Duration::from_secs(3600);
+        controller.trigger_redraw_low_res_throttled();
+        controller.trigger_redraw_low_res_throttled();
+        assert!(!take_low_res_task(&controller), "coalesced");
+        assert!(controller.low_res_throttle_timer.running());
+
+        advance(20);
+        assert!(take_low_res_task(&controller), "the trailing one");
+        assert!(!take_low_res_task(&controller), "just one");
+    }
+
+    #[test]
+    fn channel_state_callbacks_update_the_project() {
+        let (ui, _results_ui, ui_state, _) = attached();
+        let state = ui.global::<ChannelState>();
+
+        state.invoke_channel_state_changed(
+            std::rc::Rc::new(slint::VecModel::from(vec![
+                channel(0, false),
+                channel(1, true),
+            ]))
+            .into(),
+            0,
+            2,
+            4,
+            IntensityProjection::Max,
+            0,
+            3,
+        );
+        state.invoke_active_channel_changed(1);
+        drain_ui_queue();
+
+        let project = ui_state.get_project();
+        let visibilities = project.get_image_channel_visibilities();
+        assert_eq!(visibilities.get(&0), Some(&false));
+        assert_eq!(visibilities.get(&1), Some(&true));
+        assert_eq!(
+            project.get_z_stack().unwrap().z_projection,
+            ZStackHandling::MaxIntensity
+        );
+        let t = project.get_t_stack().unwrap();
+        assert_eq!((t.t_stack, t.playback_speed), (4, 3.0));
+        assert_eq!(project.get_selected_image_channel_idx(), 1);
+        assert_eq!(state.get_active_count(), 1);
+        drop(project);
+
+        state.invoke_active_series_changed(1);
+        drain_ui_queue();
+        assert_eq!(
+            ui_state.get_project().images.settings.selected_series,
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn in_grayscale_the_channel_list_shows_the_one_channel_left_visible() {
+        let (ui, _results_ui, ui_state, controller) = attached();
+        let state = ui.global::<ChannelState>();
+        state.set_channels(
+            std::rc::Rc::new(slint::VecModel::from(vec![
+                channel(0, true),
+                channel(1, false),
+            ]))
+            .into(),
+        );
+        controller.update_channel_options_in_project(
+            vec![channel(0, true), channel(1, false)],
+            0,
+            0,
+            IntensityProjection::SingleStack,
+            1.0,
+        );
+        ui_state.get_project_write().set_grayscale(true);
+
+        controller.update_channel_options_in_project(
+            vec![channel(0, true), channel(1, true)],
+            0,
+            0,
+            IntensityProjection::SingleStack,
+            1.0,
+        );
+        drain_ui_queue();
+
+        let rows: Vec<(i32, bool)> = state
+            .get_channels()
+            .iter()
+            .map(|c| (c.idx, c.active))
+            .collect();
+        assert_eq!(rows, vec![(0, false), (1, true)]);
+        assert_eq!(state.get_active_count(), 1);
+    }
+
+    /// An active high-res frame: one 4x4 channel of `value`, drawn 2x
+    /// magnified at (10, 20).
+    fn seed_high_res_frame(controller: &ViewportImageController, value: f32) {
+        let image = kornia_image::Image::<f32, 1>::new(
+            kornia_image::ImageSize {
+                width: 4,
+                height: 4,
+            },
+            vec![value; 16],
+        )
+        .unwrap();
+        let channel = ImageChannel {
+            image: Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: image,
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: None,
+            })),
+            color: [1.0, 1.0, 1.0],
+            is_visible: true,
+            c_stack: 0,
+            name: "DAPI".into(),
+            is_rgb: false,
+        };
+        *controller
+            .viewport_cache
+            .active_high_res_data
+            .write()
+            .unwrap() = Some((
+            Arc::new(vec![ViewChannel::wrap(&channel)]),
+            ReadContext {
+                draw_x: 10.0,
+                draw_y: 20.0,
+                zoomed_w: 8.0,
+                zoomed_h: 8.0,
+                image_w: 4,
+                image_h: 4,
+                bit_depth: 8,
+                ..Default::default()
+            },
+        ));
+    }
+
+    fn pixel_info(ui: &AppWindow) -> (String, String) {
+        let info = ui.global::<ImagePixelInfo>();
+        (
+            info.get_pixel_value().to_string(),
+            info.get_mouse_pos().to_string(),
+        )
+    }
+
+    #[test]
+    fn the_pixel_info_shows_the_values_and_position_under_the_cursor() {
+        let (ui, _results_ui, ui_state, controller) = attached();
+        controller.update_channel_options_in_project(
+            vec![],
+            2,
+            0,
+            IntensityProjection::SingleStack,
+            1.0,
+        );
+        seed_high_res_frame(&controller, 0.5);
+        // Screen (15, 23) is image pixel (2.5, 1.5).
+        controller.update_mouse_position_in_viewport_state(15.0, 23.0);
+
+        controller.sync_actual_mouse_position_information_to_slint();
+        drain_ui_queue();
+
+        let sizes = ui_state.get_project().get_pixel_sizes();
+        let (value, pos) = pixel_info(&ui);
+        assert_eq!(value, "DAPI: 128 (50.0000%)");
+        assert_eq!(
+            pos,
+            format!(
+                "({:.1} {:.1} {:.1}) nm",
+                2.5 * sizes.x,
+                1.5 * sizes.y,
+                3.0 * sizes.z
+            ),
+            "the z of the shown plane"
+        );
+    }
+
+    #[test]
+    fn the_pixel_info_keeps_its_last_value_while_the_cursor_is_off_the_image() {
+        let (ui, _results_ui, _, controller) = attached();
+        seed_high_res_frame(&controller, 0.5);
+        ui.global::<ImagePixelInfo>().set_pixel_value("old".into());
+
+        for (x, y) in [(5.0, 23.0), (15.0, 10.0), (18.0, 23.0), (15.0, 28.0)] {
+            controller.update_mouse_position_in_viewport_state(x, y);
+            controller.sync_actual_mouse_position_information_to_slint();
+        }
+        drain_ui_queue();
+
+        assert_eq!(pixel_info(&ui).0, "old");
+    }
+
+    #[test]
+    fn mouse_moves_update_the_pixel_info_at_once_then_throttled() {
+        let (ui, _results_ui, _, controller) = attached();
+        seed_high_res_frame(&controller, 0.5);
+        *controller.last_pixel_info_sync.lock().unwrap() = Instant::now() - Duration::from_secs(1);
+
+        ui.global::<ViewportSlintState>()
+            .invoke_report_mouse_moved(11.0, 21.0);
+        drain_ui_queue();
+        assert_eq!(pixel_info(&ui).0, "DAPI: 128 (50.0000%)", "at once");
+
+        // The image changes; further moves within the throttle window wait
+        // (the window held open however slowly this test runs).
+        *controller.last_pixel_info_sync.lock().unwrap() =
+            Instant::now() + Duration::from_secs(3600);
+        seed_high_res_frame(&controller, 0.25);
+        ui.global::<ViewportSlintState>()
+            .invoke_report_mouse_moved(12.0, 22.0);
+        drain_ui_queue();
+        assert_eq!(pixel_info(&ui).0, "DAPI: 128 (50.0000%)", "throttled");
+        assert!(controller.pixel_info_throttle_timer.running());
+
+        advance(40);
+        drain_ui_queue();
+        assert_eq!(
+            pixel_info(&ui).0,
+            "DAPI: 64 (25.0000%)",
+            "the trailing update"
+        );
+    }
+
+    #[test]
+    fn playback_steps_through_the_frames_and_wraps_around() {
+        let (ui, _results_ui, _, _controller) = attached();
+        let state = ui.global::<ChannelState>();
+        ui.global::<ImageMetaData>().set_nr_t_stacks(3);
+        state.set_play_back_speed_hz(10);
+        state.set_selected_t_stack(1);
+        state.set_is_play_active(true);
+        state.invoke_toggle_play(true);
+
+        advance(100);
+        assert_eq!(state.get_selected_t_stack(), 2);
+        advance(100);
+        assert_eq!(state.get_selected_t_stack(), 0, "wraps around");
+    }
+
+    #[test]
+    fn playback_without_frames_stays_put() {
+        let (ui, _results_ui, _, controller) = attached();
+        let state = ui.global::<ChannelState>();
+        ui.global::<ImageMetaData>().set_nr_t_stacks(0);
+        // A speed of zero falls back to one frame per second.
+        state.set_play_back_speed_hz(0);
+        state.set_is_play_active(true);
+        state.invoke_toggle_play(true);
+        assert_eq!(
+            controller.playback_timer.interval(),
+            Duration::from_millis(1000)
+        );
+
+        advance(1100);
+        assert_eq!(state.get_selected_t_stack(), 0);
+    }
+
+    #[test]
+    fn toggling_play_without_a_window_does_nothing() {
+        let (_, controller) = make_controller();
+        controller.handle_play_button_toggled();
+        assert!(!controller.playback_timer.running());
+    }
 }

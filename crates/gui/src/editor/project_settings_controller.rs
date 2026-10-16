@@ -781,4 +781,195 @@ mod tests {
         let controller = make_controller(ui_state);
         controller.sync_project_settings_to_slint();
     }
+
+    // -- attach_callbacks on live windows ---------------------------------
+
+    use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
+    use crate::helper::ui_thread::drain_ui_queue;
+    use evanalyzer_app::project::ProjectWithRuntime;
+
+    fn attached_controller(
+        ui: &AppWindow,
+        results_ui: &ResultsWindow,
+    ) -> (Arc<UiState>, Arc<ProjectSettingsController>) {
+        let ui_state = ui_state_with_windows(ui, results_ui, ProjectWithRuntime::default());
+        let controller = Arc::new(ProjectSettingsController::new(
+            ui.as_weak(),
+            results_ui.as_weak(),
+            ui_state.clone(),
+        ));
+        controller.attach_callbacks();
+        drain_ui_queue();
+        (ui_state, controller)
+    }
+
+    #[test]
+    fn attach_callbacks_shows_the_remembered_author_in_both_windows() {
+        let (ui, results_ui) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &results_ui, ProjectWithRuntime::default());
+        ui_state.update_app_settings(|settings| {
+            settings.author = Some(UserInformation {
+                full_name: "Grace Hopper".into(),
+                organization: "Navy".into(),
+            });
+        });
+        let controller = Arc::new(ProjectSettingsController::new(
+            ui.as_weak(),
+            results_ui.as_weak(),
+            ui_state,
+        ));
+
+        controller.attach_callbacks();
+        drain_ui_queue();
+
+        for settings in [
+            ui.global::<ProjectSettingsState>().get_settings(),
+            results_ui.global::<ProjectSettingsState>().get_settings(),
+        ] {
+            assert_eq!(settings.author_name, "Grace Hopper");
+            assert_eq!(settings.organization_name, "Navy");
+        }
+        assert!(
+            ui.global::<ProjectSettingsState>()
+                .get_plate_size_labels()
+                .row_count()
+                > 0
+        );
+    }
+
+    #[test]
+    fn applying_the_dialog_stores_the_settings_and_shows_them_in_the_results_window() {
+        let (ui, results_ui) = test_ui_windows();
+        let (ui_state, controller) = attached_controller(&ui, &results_ui);
+        let listened = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = listened.clone();
+        controller.on_plate_settings_changed(move || {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        ui.global::<ProjectSettingsState>()
+            .invoke_project_settings_changed(sample_settings());
+        drain_ui_queue();
+
+        assert_eq!(ui_state.get_project().meta.name, "Test Project");
+        assert!(ui_state.is_dirty());
+        assert_eq!(listened.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let shown = results_ui.global::<ProjectSettingsState>().get_settings();
+        assert_eq!(shown.project_name, "Test Project");
+        assert_eq!(shown.well_rows, 2);
+        assert_eq!(shown.well_columns, 3);
+        assert!(!shown.well_auto);
+        assert_eq!(shown.custom_regex, "^(x)");
+    }
+
+    #[test]
+    fn applying_the_results_window_settings_stores_them_and_shows_them_in_the_dialog() {
+        let (ui, results_ui) = test_ui_windows();
+        let (ui_state, _controller) = attached_controller(&ui, &results_ui);
+        let mut settings = sample_settings();
+        settings.project_name = "From results".into();
+
+        results_ui
+            .global::<ProjectSettingsState>()
+            .invoke_project_settings_changed(settings);
+        drain_ui_queue();
+
+        assert_eq!(ui_state.get_project().meta.name, "From results");
+        assert_eq!(
+            ui.global::<ProjectSettingsState>()
+                .get_settings()
+                .project_name,
+            "From results"
+        );
+    }
+
+    #[test]
+    fn cancelling_in_either_window_restores_the_stored_settings() {
+        let (ui, results_ui) = test_ui_windows();
+        let (ui_state, _controller) = attached_controller(&ui, &results_ui);
+        ui_state.get_project_write().meta.name = "Stored".into();
+
+        for state in [
+            ui.global::<ProjectSettingsState>(),
+            results_ui.global::<ProjectSettingsState>(),
+        ] {
+            let mut edited = state.get_settings();
+            edited.project_name = "Unsaved edit".into();
+            state.set_settings(edited);
+        }
+        ui.global::<ProjectSettingsState>()
+            .invoke_project_settings_canceled();
+        drain_ui_queue();
+        assert_eq!(
+            ui.global::<ProjectSettingsState>()
+                .get_settings()
+                .project_name,
+            "Stored"
+        );
+
+        let state = results_ui.global::<ProjectSettingsState>();
+        let mut edited = state.get_settings();
+        edited.project_name = "Unsaved edit".into();
+        state.set_settings(edited);
+        state.invoke_project_settings_canceled();
+        drain_ui_queue();
+        assert_eq!(state.get_settings().project_name, "Stored");
+    }
+
+    /// Sets a fixed 2x2 well layout in `state`, with its own well order model.
+    fn show_two_by_two_wells(state: &ProjectSettingsState<'_>) {
+        let mut settings = state.get_settings();
+        settings.well_rows = 2;
+        settings.well_columns = 2;
+        settings.well_values = ModelRc::new(VecModel::from(vec![1, 2, 3, 4]));
+        state.set_settings(settings);
+    }
+
+    #[test]
+    fn well_edits_in_the_dialog_change_its_well_order() {
+        let (ui, results_ui) = test_ui_windows();
+        let (_ui_state, _controller) = attached_controller(&ui, &results_ui);
+        let state = ui.global::<ProjectSettingsState>();
+        show_two_by_two_wells(&state);
+
+        state.invoke_well_value_changed(1, 7);
+        let values = state.get_settings().well_values;
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![1, 7, 3, 4]);
+
+        state.invoke_well_dims_changed(3, 2);
+        assert_eq!(state.get_settings().well_values.row_count(), 6);
+    }
+
+    #[test]
+    fn well_edits_in_the_results_window_change_its_well_order() {
+        let (ui, results_ui) = test_ui_windows();
+        let (_ui_state, _controller) = attached_controller(&ui, &results_ui);
+        let state = results_ui.global::<ProjectSettingsState>();
+        show_two_by_two_wells(&state);
+
+        state.invoke_well_value_changed(0, 9);
+        let values = state.get_settings().well_values;
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![9, 2, 3, 4]);
+
+        state.invoke_well_dims_changed(1, 2);
+        assert_eq!(state.get_settings().well_values.row_count(), 2);
+    }
+
+    #[test]
+    fn toggling_a_tile_merge_class_flips_its_flag_in_either_window() {
+        let (ui, results_ui) = test_ui_windows();
+        let (_ui_state, _controller) = attached_controller(&ui, &results_ui);
+        for state in [
+            ui.global::<ProjectSettingsState>(),
+            results_ui.global::<ProjectSettingsState>(),
+        ] {
+            let flags = state.get_settings().tile_merge_classes_to_not_merge_flags;
+            assert_eq!(flags.row_data(2).unwrap(), "0");
+
+            state.invoke_tile_merge_class_toggled("toggle:2".into());
+
+            let flags = state.get_settings().tile_merge_classes_to_not_merge_flags;
+            assert_eq!(flags.row_data(2).unwrap(), "1");
+        }
+    }
 }

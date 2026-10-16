@@ -1658,4 +1658,109 @@ mod tests {
              of SeedSource::Intensity"
         );
     }
+
+    /// Smoothing applies to the intensity surface seeds are found on, too:
+    /// a mild blur keeps the two well-separated brightness peaks apart.
+    #[test]
+    fn intensity_seeding_with_smoothing_still_splits_the_diffuse_blob() {
+        let (canvas_width, canvas_height) = (28usize, 14usize);
+        let (peak1, peak2) = (5i32, 22i32);
+        let mut ctx =
+            diffuse_blob_with_two_intensity_peaks(canvas_width, canvas_height, 2, peak1, peak2);
+        let mut cache = GlobalPipelineCache::default();
+        Watershed {
+            maximum_finder_tolerance: 2.0,
+            smoothing_sigma: 0.5,
+            min_object_size: 0,
+            seed_source: SeedSource::Intensity,
+        }
+        .execute(&mut ctx, &mut cache)
+        .expect("Watershed (Intensity, smoothed) failed");
+        let out = ctx.instance_map.expect("no instance map");
+        let out = out.as_slice();
+        let label1 = out[(canvas_height / 2) * canvas_width + peak1 as usize];
+        let label2 = out[(canvas_height / 2) * canvas_width + peak2 as usize];
+        assert_ne!(label1, 0);
+        assert_ne!(label2, 0);
+        assert_ne!(label1, label2, "the two brightness peaks must stay split");
+        let unique: HashSet<u32> = out.iter().copied().filter(|&v| v > 0).collect();
+        assert_eq!(unique.len(), 2);
+    }
+
+    /// Labels `mask` with `ConnectedComponents`, then runs `Watershed` on it;
+    /// returns (component count, object count after the watershed, the
+    /// input mask, the final instance map).
+    fn components_then_watershed(mask: Vec<u32>, size: usize) -> (u32, u32, Vec<u32>, Vec<u32>) {
+        let image_size = ImageSize {
+            width: size,
+            height: size,
+        };
+        let mut ctx = PipelineContext::new_test::<F32Gray>(image_size).unwrap();
+        ctx.segmentation_map = Some(Image::<u32, 1>::new(image_size, mask.clone()).unwrap());
+        let mut cache = GlobalPipelineCache::default();
+        crate::algos::segmentation::connected_components::ConnectedComponents { min_size: 0 }
+            .execute(&mut ctx, &mut cache)
+            .expect("ConnectedComponents failed");
+        let max = |ctx: &PipelineContext| {
+            ctx.instance_map
+                .as_ref()
+                .unwrap()
+                .as_slice()
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0)
+        };
+        let n_components = max(&ctx);
+        Watershed {
+            maximum_finder_tolerance: 0.5,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
+        }
+        .execute(&mut ctx, &mut cache)
+        .expect("Watershed failed");
+        let n_objects = max(&ctx);
+        let instances = ctx.instance_map.unwrap().as_slice().to_vec();
+        (n_components, n_objects, mask, instances)
+    }
+
+    /// A small version of the noisy-image scenario the ignored timing repro
+    /// runs at scale: watershed never merges components and never labels a
+    /// pixel outside the input footprint.
+    #[test]
+    fn watershed_on_noise_specks_never_merges_components_or_grows_the_footprint() {
+        let (n_components, n_objects, mask, instances) =
+            components_then_watershed(noisy_mask(96, 60, 12345), 96);
+        assert!(n_components > 0, "the noise mask must contain specks");
+        assert!(
+            n_objects >= n_components,
+            "{n_objects} objects after the watershed, {n_components} components before"
+        );
+        assert!(
+            mask.iter()
+                .zip(&instances)
+                .all(|(&m, &label)| label == 0 || m != 0),
+            "a watershed label outside the input footprint"
+        );
+    }
+
+    /// The clumped counterpart: overlapping discs merge into a few large
+    /// components, which the watershed splits into more objects.
+    #[test]
+    fn watershed_splits_clumped_discs_into_more_objects_than_components() {
+        let (n_components, n_objects, mask, instances) =
+            components_then_watershed(clumped_mask(128, 25, 8, 12345), 128);
+        assert!(n_components > 0);
+        assert!(
+            n_objects > n_components,
+            "{n_objects} objects after the watershed, {n_components} components before"
+        );
+        assert!(
+            mask.iter()
+                .zip(&instances)
+                .all(|(&m, &label)| label == 0 || m != 0),
+            "a watershed label outside the input footprint"
+        );
+    }
 }

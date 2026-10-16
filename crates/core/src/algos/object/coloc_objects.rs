@@ -2304,4 +2304,43 @@ mod tests {
             "CLASS_B's own record must point back at the merged object, not a stale fragment id"
         );
     }
+
+    /// A hub overlapping two spokes that don't overlap each other is
+    /// colocalized with both, but there is no common area of all three - so
+    /// no overlap object is added, even with an overlap class set.
+    #[test]
+    fn three_class_hub_spoke_adds_no_overlap_object_without_a_common_area() {
+        let coloc = Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
+            filter_classes: vec![],
+            exclude_classes: vec![],
+            class_for_overlapping_areas: CLASS_OVERLAP,
+            multiplicity: ColocMultiplicity::ManyToMany,
+            min_coloc_area: 0.0,
+            size_unit: SizeUnitsRel::Pixels,
+        };
+        let mut cache = GlobalPipelineCache::default();
+        let object_a = make_filled_object(ID_A, [0, 0, 10, 10], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [1, 1, 4, 4], ImagePlane::default(), CLASS_B);
+        let object_c = make_filled_object(ID_C, [6, 6, 9, 9], ImagePlane::default(), CLASS_C);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
+        cache.object_cache.insert(object_c.id.clone(), object_c);
+
+        run(&coloc, &mut cache);
+
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(a.colocalized_with.contains_key(&CLASS_B));
+        assert!(a.colocalized_with.contains_key(&CLASS_C));
+        assert_eq!(
+            cache
+                .object_cache
+                .values()
+                .filter(|r| r.is_of(&CLASS_OVERLAP, Scope::Global))
+                .count(),
+            0,
+            "B and C share no area inside A"
+        );
+        assert_eq!(cache.object_cache.len(), 3);
+    }
 }

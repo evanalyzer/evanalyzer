@@ -3190,4 +3190,129 @@ mod tests {
         assert_ne!(cell_format(&cell(false, true), None), plain);
         assert_eq!(cell_format(&cell(false, false), None), plain);
     }
+
+    #[test]
+    fn plate_and_well_documents_are_written_even_without_any_class_column_combination() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            columns: vec![Column::AreaSizePx],
+            // No aggregation: nothing to compute per class and column.
+            aggregations: Vec::new(),
+            with_plate_view_heatmap: true,
+            with_well_view_heatmap: true,
+            with_plate_view_list: true,
+            with_well_view_list: true,
+            ..Default::default()
+        };
+
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("xlsx export without combinations");
+
+        for name in [
+            "plate.xlsx",
+            "well.xlsx",
+            "plate_list.xlsx",
+            "well_list.xlsx",
+        ] {
+            assert!(out_dir.join(name).is_file(), "{name} missing");
+        }
+    }
+
+    #[test]
+    fn plate_and_well_exports_do_nothing_when_none_of_their_views_is_wanted() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            ..Default::default()
+        };
+
+        export
+            .export_plate_and_well(&database, &no_cancel(), &mut no_progress())
+            .unwrap();
+        export
+            .export_plate_and_well_as_flat_list(&database, &no_cancel(), &mut no_progress())
+            .unwrap();
+
+        assert!(!out_dir.exists(), "no document written");
+    }
+
+    #[test]
+    fn listing_no_images_never_queries_a_page() {
+        let (database, _) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            z_stacks,
+            t_stacks,
+            columns: vec![Column::AreaSizePx],
+            ..Default::default()
+        };
+        let mut pages = 0;
+
+        stream_list_pages(
+            &database,
+            &no_cancel(),
+            &export,
+            &[],
+            &None,
+            false,
+            |_, _| {
+                pages += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(pages, 0);
+    }
+
+    #[test]
+    fn grouped_rows_without_values_report_a_zero_range_instead_of_infinities() {
+        let (database, _) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let filter = GroupedByImageFilter {
+            plane: PlaneFilter {
+                z_stack: 0,
+                t_stack: 0,
+            },
+            images: Some(vec!["not-in-the-database.tif".into()]),
+            object_classes: None,
+            columns: vec![Column::AreaSizePx],
+            aggregation: vec![Aggregation::Avg],
+            page: Pagination {
+                limit: 1,
+                after: None,
+            },
+            transpond_table: false,
+        };
+
+        let merged = fetch_all_grouped_by_image_rows(&database, &filter).unwrap();
+
+        assert!(merged.rows.is_empty());
+        assert_eq!((merged.min, merged.max), (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_csv_document_that_cannot_be_created_is_an_error_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a-file");
+        std::fs::write(&file, b"").unwrap();
+
+        // Its folder would have to be inside a file.
+        let Err(e) = create_csv_writer(&file.join("list.csv")) else {
+            panic!("expected an error");
+        };
+        assert!(e.to_string().contains("could not create"), "{e}");
+
+        // The document's own path is a folder.
+        let Err(e) = create_csv_writer(dir.path()) else {
+            panic!("expected an error");
+        };
+        assert!(e.to_string().contains("could not create"), "{e}");
+    }
 }
