@@ -112,6 +112,55 @@ pub fn created_classes(command: &PipelineCommand) -> Vec<(String, ObjectClass)> 
     }
 }
 
+/// The classes of objects `command` works on: (path, class) - the classes
+/// it selects its input objects by. Not the classes it only filters the
+/// result by.
+pub fn read_classes(command: &PipelineCommand) -> Vec<(String, ObjectClass)> {
+    let list = |path: &str, classes: &[ObjectClass]| -> Vec<(String, ObjectClass)> {
+        classes.iter().map(|c| (path.to_string(), *c)).collect()
+    };
+    let mut read = match command {
+        PipelineCommand::ClassifyObjects(s) => {
+            let mut read = list("input_classes", &s.input_classes);
+            read.push(("overlapping_with".into(), s.overlapping_with));
+            read
+        }
+        PipelineCommand::AiObjectClassifier(s) => list("input_classes", &s.input_classes),
+        PipelineCommand::Colocalization(s) => list("classes_to_coloc", &s.classes_to_coloc),
+        PipelineCommand::ObjectMath(s) => vec![
+            ("input_class".into(), s.input_class),
+            ("other_class".into(), s.other_class),
+        ],
+        PipelineCommand::Voronoi(s) => vec![("centers".into(), s.centers), ("mask".into(), s.mask)],
+        PipelineCommand::TransformObjects(s) => vec![("input_class".into(), s.input_class)],
+        _ => Vec::new(),
+    };
+    read.retain(|(_, c)| *c != ObjectClass::Unset);
+    read
+}
+
+/// The classes `command` gives objects - creating them ([`created_classes`])
+/// or classifying existing ones - and whether it may give any class (it
+/// loads annotations with the classes they were given).
+pub fn assigned_classes(command: &PipelineCommand) -> (Vec<ObjectClass>, bool) {
+    let mut assigned: Vec<ObjectClass> = created_classes(command)
+        .into_iter()
+        .map(|(_, c)| c)
+        .collect();
+    let mut any = false;
+    match command {
+        PipelineCommand::ClassifyObjects(s) => assigned.push(s.output_class),
+        PipelineCommand::AiObjectClassifier(s) => {
+            assigned.extend(s.segmentation_mapping.iter().map(|m| m.output_class))
+        }
+        PipelineCommand::Script(s) => assigned.extend(s.classes.iter().copied()),
+        PipelineCommand::LoadAnnotatedObjects(s) => any = s.keep_annotated_classes,
+        _ => {}
+    }
+    assigned.retain(|c| *c != ObjectClass::Unset);
+    (assigned, any)
+}
+
 /// The image channels `command` reads: (path, channel) - a channel setting,
 /// or an image source set to a channel.
 pub fn channels_read(command: &PipelineCommand) -> Vec<(String, i32)> {

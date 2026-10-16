@@ -108,6 +108,17 @@ export component Toolbar inherits Rectangle {
             }
         }
 
+        // Debug mode: how components are wired inside.
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/bug.svg");
+            checked: PipelinesPanelState.debug-mode;
+            accessible-role: button;
+            accessible-label: "Debug mode";
+            clicked => {
+                PipelinesPanelState.debug-mode-toggled(!PipelinesPanelState.debug-mode);
+            }
+        }
+
         VerticalDivider { }
 
         ToolToggleButton {

@@ -136,6 +136,9 @@ pub struct PipelinesController {
     /// What the checks found when the panel was last filled - the problems
     /// `show-problem`/`fix-problem` refer to by their index.
     last_problems: Mutex<Vec<evanalyzer_app::components::ComponentProblem>>,
+
+    /// Debug mode (toolbar): settings show what they're wired to.
+    debug_mode: std::sync::atomic::AtomicBool,
 }
 
 /// One level of [`PipelinesController::open_component`].
@@ -176,6 +179,7 @@ impl PipelinesController {
             pending_update: Mutex::new(None),
             parameter_edit_snapshot: Mutex::new(None),
             last_problems: Mutex::new(Vec::new()),
+            debug_mode: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -318,6 +322,30 @@ impl PipelinesController {
                     state.set_settings_step_id(step_id);
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::StepSettings);
+                });
+
+            // Debug mode (user preference): settings show their wiring.
+            let debug_mode = self.app_state.load_app_settings().debug_mode;
+            self.debug_mode
+                .store(debug_mode, std::sync::atomic::Ordering::Relaxed);
+            ui.global::<PipelinesPanelState>()
+                .set_debug_mode(debug_mode);
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_debug_mode_toggled(move |on| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<PipelinesPanelState>();
+                    state.set_debug_mode(on);
+                    manager
+                        .debug_mode
+                        .store(on, std::sync::atomic::Ordering::Relaxed);
+                    manager
+                        .app_state
+                        .update_app_settings(|settings| settings.debug_mode = on);
+                    let pipeline_id = PipelineId(state.get_active_pipeline_id() as u32);
+                    manager.sync_steps_of_selected_pipeline_to_slint(pipeline_id, false);
                 });
 
             // "Always show advanced settings" (user preference)
@@ -2982,6 +3010,7 @@ impl PipelinesController {
         evanalyzer_app::components::prune_component_values(&mut self.app_state.get_project_write());
         self.app_state.mark_dirty();
         self.focus_controller.refresh();
+        self.refresh_problems();
 
         // Trigger preview if auto preview is enabled
         let auto_preview = *self.auto_preview_enabled.lock().expect("Poisned");
@@ -3526,6 +3555,139 @@ impl PipelinesController {
         }
     }
 
+    /// Checks the project again and patches what the checks found into the
+    /// panel in place - its problem list, the opened component's, each
+    /// card's and its settings' - without rebuilding the cards, so a field
+    /// being edited keeps its focus. Edits that only patch their card (a
+    /// changed setting) would leave the old problems up otherwise.
+    fn refresh_problems(self: &Arc<Self>) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<PipelinesPanelState>();
+        let pipeline_id = PipelineId(state.get_active_pipeline_id() as u32);
+        let debug_mode = self.debug_mode.load(std::sync::atomic::Ordering::Relaxed);
+        let open_component = self.open_component_key(pipeline_id.0);
+        let viewed_from = self.viewed_from(pipeline_id);
+        let (data, open_problem, marks) = {
+            let project = self.app_state.get_project();
+            let problems = evanalyzer_app::components::check_project(&project);
+            let data = problem_data(&project, &problems, debug_mode);
+            let open_definition = open_component
+                .as_ref()
+                .and_then(|key| project.components.iter().find(|d| &d.key == key));
+            let open_problem = open_definition
+                .map(|d| {
+                    problems
+                        .iter()
+                        .filter(|p| p.step.is_none() && p.component.as_deref() == Some(&d.key))
+                        .map(|p| p.message.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n⚠ ")
+                })
+                .unwrap_or_default();
+            let shown: Vec<PipelineStepSettings> = self
+                .viewed_steps(&project, pipeline_id.0)
+                .or_else(|| open_definition.map(evanalyzer_app::components::apply_defaults))
+                .or_else(|| {
+                    project
+                        .pipelines
+                        .iter()
+                        .find(|p| p.id == pipeline_id)
+                        .map(|p| p.steps.clone())
+                })
+                .unwrap_or_default();
+            let context = Marks {
+                project: &project,
+                problems: &problems,
+                data: &data,
+                pipeline_id,
+                in_pipeline: open_component.is_none(),
+                open_definition,
+                viewed_from,
+                debug_mode,
+            };
+            let marks: Vec<(
+                SharedString,
+                Vec<ProblemData>,
+                std::collections::HashMap<String, ParamNote>,
+            )> = shown
+                .iter()
+                .map(|step| {
+                    let (problems, notes) = step_marks(&context, step);
+                    (step_id_text(step.id), problems, notes)
+                })
+                .collect();
+            *self.last_problems.lock().expect("Poisoned") = problems;
+            (data, open_problem, marks)
+        };
+
+        state.set_open_component_problem(open_problem.into());
+        state.set_project_problem_errors(data.iter().filter(|p| p.error).count() as i32);
+        state.set_project_problems(ModelRc::new(VecModel::from(
+            data.into_iter().map(problem_item).collect::<Vec<_>>(),
+        )));
+        let cards = state.get_active_commands();
+        for (i, (step_id, problems, notes)) in marks.into_iter().enumerate() {
+            let Some(mut card) = cards.row_data(i) else {
+                continue;
+            };
+            if card.step_id != step_id {
+                continue;
+            }
+            let mut changed = false;
+            for list in [card.parameters.clone(), card.advanced_parameters.clone()] {
+                for k in 0..list.row_count() {
+                    let Some(mut parameter) = list.row_data(k) else {
+                        continue;
+                    };
+                    let note = notes
+                        .get(parameter.name.as_str())
+                        .cloned()
+                        .unwrap_or_default();
+                    if parameter.wiring != note.wiring.as_str()
+                        || parameter.problem != note.problem.as_str()
+                        || parameter.problem_error != note.error
+                    {
+                        parameter.wiring = note.wiring.into();
+                        parameter.problem = note.problem.into();
+                        parameter.problem_error = note.error;
+                        list.set_row_data(k, parameter);
+                    }
+                }
+            }
+            let shown: Vec<(SharedString, bool, SharedString)> = card
+                .problems
+                .iter()
+                .map(|p| (p.text, p.error, p.fix_label))
+                .collect();
+            let now: Vec<(SharedString, bool, SharedString)> = problems
+                .iter()
+                .map(|p| (p.text.as_str().into(), p.error, p.fix_label.as_str().into()))
+                .collect();
+            if shown != now || card.problems.row_count() != problems.len() {
+                card.problem_errors = problems.iter().filter(|p| p.error).count() as i32;
+                card.problems = ModelRc::new(VecModel::from(
+                    problems.into_iter().map(problem_item).collect::<Vec<_>>(),
+                ));
+                changed = true;
+            } else {
+                // Same problems, maybe at other places in the list.
+                for (k, p) in problems.into_iter().enumerate() {
+                    if let Some(mut item) = card.problems.row_data(k)
+                        && item.index != p.index
+                    {
+                        item.index = p.index;
+                        card.problems.set_row_data(k, item);
+                    }
+                }
+            }
+            if changed {
+                cards.set_row_data(i, card);
+            }
+        }
+    }
+
     /// Shows problem `index` of the panel's list (see `last_problems`): its
     /// pipeline, the card of its step expanded. A component's own problem:
     /// the first pipeline step using the component, opened to edit.
@@ -3620,6 +3782,23 @@ impl PipelinesController {
         if let Some(ui) = self.ui.upgrade() {
             let pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
             self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+        }
+    }
+
+    /// The pipeline step the component shown in pipeline `pipeline_id`'s
+    /// panel is only viewed from - when it's the first level opened.
+    fn viewed_from(&self, pipeline_id: PipelineId) -> Option<(PipelineId, StepId)> {
+        match self.open_component_path(pipeline_id.0).as_slice() {
+            [level] => level.viewing_from.and_then(|idx| {
+                self.app_state
+                    .get_project()
+                    .pipelines
+                    .iter()
+                    .find(|p| p.id == pipeline_id)
+                    .and_then(|p| p.steps.get(idx))
+                    .map(|step| (pipeline_id, step.id))
+            }),
+            _ => None,
         }
     }
 
@@ -4283,32 +4462,6 @@ impl PipelinesController {
             /// Per setting (its name): what it's wired to, what a check found.
             notes: std::collections::HashMap<String, ParamNote>,
         }
-        #[derive(Clone)]
-        struct ProblemData {
-            text: String,
-            error: bool,
-            place: String,
-            fix_label: String,
-            index: i32,
-        }
-        #[derive(Clone, Default)]
-        struct ParamNote {
-            wiring: String,
-            problem: String,
-            error: bool,
-        }
-        /// Marks setting `name` with `problem` - the first one about it.
-        fn mark_note(
-            notes: &mut std::collections::HashMap<String, ParamNote>,
-            name: &str,
-            problem: &evanalyzer_app::components::ComponentProblem,
-        ) {
-            let note = notes.entry(name.to_string()).or_default();
-            if note.problem.is_empty() {
-                note.problem = problem.message.clone();
-                note.error = problem.severity == evanalyzer_app::components::Severity::Error;
-            }
-        }
         // The opened component's name, or empty. A component that's gone (e.g. undone)
         // is closed - and the ones opened inside it.
         let mut path = self.open_component_path(pipeline_id.0);
@@ -4337,37 +4490,14 @@ impl PipelinesController {
         // What the checks find in the whole project: the panel's list, and
         // the marks on the cards and settings.
         let problems = evanalyzer_app::components::check_project(&self.app_state.get_project());
-        let problem_data: Vec<ProblemData> = {
-            let project = self.app_state.get_project();
-            problems
-                .iter()
-                .enumerate()
-                .map(|(index, problem)| ProblemData {
-                    text: problem.message.clone(),
-                    error: problem.severity == evanalyzer_app::components::Severity::Error,
-                    place: problem_place(&project, problem),
-                    fix_label: problem.fix.as_ref().map(|f| f.label()).unwrap_or_default(),
-                    index: index as i32,
-                })
-                .collect()
-        };
+        let debug_mode = self.debug_mode.load(std::sync::atomic::Ordering::Relaxed);
+        let problem_data = problem_data(&self.app_state.get_project(), &problems, debug_mode);
         *self.last_problems.lock().expect("Poisoned") = problems.clone();
         // A component only looked at from a pipeline step (and the ones it
         // contains): shown with that step's values, not the defaults.
         let viewed_steps = self.viewed_steps(&self.app_state.get_project(), pipeline_id.0);
         // The pipeline step it's looked at from - whose problems mark its settings.
-        let viewed_from: Option<(PipelineId, StepId)> = match path.as_slice() {
-            [level] => level.viewing_from.and_then(|idx| {
-                self.app_state
-                    .get_project()
-                    .pipelines
-                    .iter()
-                    .find(|p| p.id == pipeline_id)
-                    .and_then(|p| p.steps.get(idx))
-                    .map(|step| (pipeline_id, step.id))
-            }),
-            _ => None,
-        };
+        let viewed_from = self.viewed_from(pipeline_id);
         let open_component_values: String = match (&viewed_steps, path.first()) {
             (Some(_), Some(level)) => level
                 .viewing_from
@@ -4477,85 +4607,19 @@ impl PipelinesController {
                     .iter()
                     .enumerate()
                     .map(|(idx, step)| {
-                        let in_pipeline = open_component.is_none();
-                        let at_step = |p: &evanalyzer_app::components::ComponentProblem| {
-                            in_pipeline && p.step == Some((pipeline_id, step.id))
-                        };
-                        let step_problems: Vec<ProblemData> = problems
-                            .iter()
-                            .zip(&problem_data)
-                            .filter(|(p, _)| at_step(p))
-                            .map(|(_, data)| data.clone())
-                            .collect();
-                        let mut notes: std::collections::HashMap<String, ParamNote> =
-                            std::collections::HashMap::new();
-                        // A component card: what each parameter sets, and the
-                        // problems about it - at this step, else the component's own.
-                        if let StepContent::Component(instance) = &step.content {
-                            for problem in problems.iter().filter(|p| {
-                                at_step(p)
-                                    || (p.step.is_none()
-                                        && p.component.as_deref() == Some(instance.key.as_str()))
-                            }) {
-                                for key in &problem.parameters {
-                                    mark_note(&mut notes, key.as_str(), problem);
-                                }
-                            }
-                            for (key, text) in evanalyzer_app::components::parameter_wiring(
-                                &project.components,
-                                &instance.key,
-                            ) {
-                                if !text.is_empty() {
-                                    notes.entry(key.0).or_default().wiring = format!("Sets {text}");
-                                }
-                            }
-                        }
-                        // A step of the opened component: which parameter sets each
-                        // setting, and the problems about that parameter (a list
-                        // entry's on its list).
-                        if let Some(definition) = open_definition {
-                            let about_it: Vec<&evanalyzer_app::components::ComponentProblem> =
-                                problems
-                                    .iter()
-                                    .filter(|p| {
-                                        (p.step.is_none()
-                                            && p.component.as_deref()
-                                                == Some(definition.key.as_str()))
-                                            || (viewed_from.is_some() && p.step == viewed_from)
-                                    })
-                                    .collect();
-                            for (path, _, label) in
-                                evanalyzer_app::components::step_settings(&project.components, step)
-                            {
-                                let top = path.split('.').next().unwrap_or(&path).to_string();
-                                if let Some(wiring) = evanalyzer_app::components::setting_wiring(
-                                    definition, step.id, &path,
-                                ) {
-                                    let text = if top == path {
-                                        wiring
-                                    } else {
-                                        format!("{label}: {wiring}")
-                                    };
-                                    let note = notes.entry(top.clone()).or_default();
-                                    if note.wiring.is_empty() {
-                                        note.wiring = text;
-                                    } else {
-                                        note.wiring = format!("{}\n{text}", note.wiring);
-                                    }
-                                }
-                                for problem in &about_it {
-                                    let sets_it = definition.parameters.iter().any(|p| {
-                                        problem.parameters.contains(&p.key)
-                                            && p.bindings
-                                                .iter()
-                                                .any(|b| b.step == step.id && b.param == path)
-                                    });
-                                    if sets_it {
-                                        mark_note(&mut notes, &top, problem);
-                                    }
-                                }
-                            }
-                        }
+                        let (step_problems, notes) = step_marks(
+                            &Marks {
+                                project: &project,
+                                problems: &problems,
+                                data: &problem_data,
+                                pipeline_id,
+                                in_pipeline: open_component.is_none(),
+                                open_definition,
+                                viewed_from,
+                                debug_mode,
+                            },
+                            step,
+                        );
                         match &step.content {
                             StepContent::Command(command) => StepData {
                                 idx: idx as i32,
@@ -4681,15 +4745,6 @@ impl PipelinesController {
                 )
             }
         };
-        fn problem_item(p: ProblemData) -> ProblemItem {
-            ProblemItem {
-                text: p.text.into(),
-                error: p.error,
-                r#where: p.place.into(),
-                fix_label: p.fix_label.into(),
-                index: p.index,
-            }
-        }
         let pid = pipeline_id.0 as i32;
         // Model files are read through the backend (the server's, remotely).
         let backend = self.app_state.backend();
@@ -5012,6 +5067,193 @@ impl PipelinesController {
             warn!("Failed to sync steps to Slint: {}", e);
         }
     }
+}
+
+/// A problem as the panel shows it - `Send`, so it can cross to the UI thread.
+#[derive(Clone, PartialEq)]
+struct ProblemData {
+    text: String,
+    error: bool,
+    place: String,
+    fix_label: String,
+    /// Its number in `PipelinesController::last_problems`.
+    index: i32,
+}
+
+/// What's shown below a setting: what it's wired to (only in debug mode),
+/// and the first problem about it.
+#[derive(Clone, Default, PartialEq)]
+struct ParamNote {
+    wiring: String,
+    problem: String,
+    error: bool,
+}
+
+/// `problems` as the panel shows them.
+fn problem_data(
+    project: &ProjectSettings,
+    problems: &[evanalyzer_app::components::ComponentProblem],
+    debug_mode: bool,
+) -> Vec<ProblemData> {
+    problems
+        .iter()
+        .enumerate()
+        .filter(|(_, problem)| shown_in_pipelines(problem, debug_mode))
+        .map(|(index, problem)| ProblemData {
+            text: if debug_mode && !problem.detail.is_empty() {
+                format!("{} · in {}", problem.message, problem.detail)
+            } else {
+                problem.message.clone()
+            },
+            error: problem.severity == evanalyzer_app::components::Severity::Error,
+            place: problem_place(project, problem),
+            fix_label: problem.fix.as_ref().map(|f| f.label()).unwrap_or_default(),
+            index: index as i32,
+        })
+        .collect()
+}
+
+/// Whether `problem` shows outside its component - in the panel's list and
+/// on the cards: a warning about a component's own definition only in debug
+/// mode (who doesn't look into components can't act on it; a run works).
+/// Opened, a component shows all of its own.
+fn shown_in_pipelines(
+    problem: &evanalyzer_app::components::ComponentProblem,
+    debug_mode: bool,
+) -> bool {
+    debug_mode
+        || problem.step.is_some()
+        || problem.severity == evanalyzer_app::components::Severity::Error
+}
+
+fn problem_item(p: ProblemData) -> ProblemItem {
+    ProblemItem {
+        text: p.text.into(),
+        error: p.error,
+        r#where: p.place.into(),
+        fix_label: p.fix_label.into(),
+        index: p.index,
+    }
+}
+
+/// Marks setting `name` with `problem` - the first one about it.
+fn mark_note(
+    notes: &mut std::collections::HashMap<String, ParamNote>,
+    name: &str,
+    problem: &evanalyzer_app::components::ComponentProblem,
+) {
+    let note = notes.entry(name.to_string()).or_default();
+    if note.problem.is_empty() {
+        note.problem = problem.message.clone();
+        note.error = problem.severity == evanalyzer_app::components::Severity::Error;
+    }
+}
+
+/// What [`step_marks`] marks the shown steps from.
+struct Marks<'a> {
+    project: &'a ProjectSettings,
+    problems: &'a [evanalyzer_app::components::ComponentProblem],
+    /// `problems` as the panel shows them.
+    data: &'a [ProblemData],
+    pipeline_id: PipelineId,
+    /// The panel shows the pipeline's steps (no component opened).
+    in_pipeline: bool,
+    open_definition: Option<&'a ComponentDefinition>,
+    /// The pipeline step an opened component is only viewed from.
+    viewed_from: Option<(PipelineId, StepId)>,
+    /// Show what parameters and settings are wired to.
+    debug_mode: bool,
+}
+
+/// The problems of shown step `step`, and the notes below its settings:
+/// on a component card, the problems about each parameter (at this step,
+/// else the component's own) and what it sets; in an opened component,
+/// which parameter sets each setting, and the problems about that
+/// parameter (a list entry's on its list).
+fn step_marks(
+    marks: &Marks,
+    step: &PipelineStepSettings,
+) -> (
+    Vec<ProblemData>,
+    std::collections::HashMap<String, ParamNote>,
+) {
+    let at_step = |p: &evanalyzer_app::components::ComponentProblem| {
+        marks.in_pipeline && p.step == Some((marks.pipeline_id, step.id))
+    };
+    let step_problems: Vec<ProblemData> = marks
+        .problems
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| at_step(p))
+        .filter_map(|(index, _)| marks.data.iter().find(|d| d.index == index as i32))
+        .cloned()
+        .collect();
+    let mut notes: std::collections::HashMap<String, ParamNote> = std::collections::HashMap::new();
+    if let StepContent::Component(instance) = &step.content {
+        for problem in marks.problems.iter().filter(|p| {
+            at_step(p)
+                || (p.step.is_none()
+                    && p.component.as_deref() == Some(instance.key.as_str())
+                    && (!marks.in_pipeline || shown_in_pipelines(p, marks.debug_mode)))
+        }) {
+            for key in &problem.parameters {
+                mark_note(&mut notes, key.as_str(), problem);
+            }
+        }
+        if marks.debug_mode {
+            for (key, text) in evanalyzer_app::components::parameter_wiring(
+                &marks.project.components,
+                &instance.key,
+            ) {
+                if !text.is_empty() {
+                    notes.entry(key.0).or_default().wiring = format!("Sets {text}");
+                }
+            }
+        }
+    }
+    if let Some(definition) = marks.open_definition {
+        let about_it: Vec<&evanalyzer_app::components::ComponentProblem> = marks
+            .problems
+            .iter()
+            .filter(|p| {
+                (p.step.is_none() && p.component.as_deref() == Some(definition.key.as_str()))
+                    || (marks.viewed_from.is_some() && p.step == marks.viewed_from)
+            })
+            .collect();
+        for (path, _, label) in
+            evanalyzer_app::components::step_settings(&marks.project.components, step)
+        {
+            let top = path.split('.').next().unwrap_or(&path).to_string();
+            if marks.debug_mode
+                && let Some(wiring) =
+                    evanalyzer_app::components::setting_wiring(definition, step.id, &path)
+            {
+                let text = if top == path {
+                    wiring
+                } else {
+                    format!("{label}: {wiring}")
+                };
+                let note = notes.entry(top.clone()).or_default();
+                if note.wiring.is_empty() {
+                    note.wiring = text;
+                } else {
+                    note.wiring = format!("{}\n{text}", note.wiring);
+                }
+            }
+            for problem in &about_it {
+                let sets_it = definition.parameters.iter().any(|p| {
+                    problem.parameters.contains(&p.key)
+                        && p.bindings
+                            .iter()
+                            .any(|b| b.step == step.id && b.param == path)
+                });
+                if sets_it {
+                    mark_note(&mut notes, &top, problem);
+                }
+            }
+        }
+    }
+    (step_problems, notes)
 }
 
 /// Where `problem` is, for the panel's problem list: "Channel1 · #3" (the
@@ -10107,6 +10349,14 @@ mod tests {
         }
         assert_eq!(
             ui_param(&ui, 0, "spot_output_class").wiring,
+            "",
+            "the wiring only in debug mode"
+        );
+        ui.global::<PipelinesPanelState>()
+            .invoke_debug_mode_toggled(true);
+        drain_ui_queue();
+        assert_eq!(
+            ui_param(&ui, 0, "spot_output_class").wiring,
             "Sets ExtractObjects › Class Mapping 1 · Object Class (step 1)"
         );
         let listed = panel_problems(&ui);
@@ -10190,6 +10440,10 @@ mod tests {
             "{}",
             mapping.problem
         );
+        assert_eq!(mapping.wiring, "", "only in debug mode");
+        panel.invoke_debug_mode_toggled(true);
+        drain_ui_queue();
+        let mapping = ui_param(&ui, 1, "class_mapping");
         assert!(
             mapping.wiring.contains("Set by “Output class” (Bead)"),
             "{}",
@@ -10203,6 +10457,135 @@ mod tests {
         drain_ui_queue();
         assert_eq!(panel.get_open_component_values(), "");
         assert_eq!(class_of(1), "2");
+    }
+
+    /// A changed setting only patches its card - the problems are checked
+    /// again all the same: fixed, they're gone from the card, its settings
+    /// and the panel's list.
+    #[test]
+    fn changing_a_setting_checks_the_problems_again() {
+        let (ui, _ui_state, _controller) = with_spots(1);
+        assert_eq!(panel_problems(&ui).len(), 1);
+        ui.global::<PipelinesPanelState>().invoke_param_changed(
+            0,
+            "bead_output_class".into(),
+            "2".into(),
+        );
+        drain_ui_queue();
+        assert!(panel_problems(&ui).is_empty(), "{:?}", panel_problems(&ui));
+        let card = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(0)
+            .unwrap();
+        assert_eq!(card.problems.row_count(), 0);
+        assert_eq!(ui_param(&ui, 0, "spot_output_class").problem, "");
+        assert_eq!(ui_param(&ui, 0, "bead_output_class").value, "2");
+
+        // And back.
+        ui.global::<PipelinesPanelState>().invoke_param_changed(
+            0,
+            "bead_output_class".into(),
+            "1".into(),
+        );
+        drain_ui_queue();
+        assert_eq!(panel_problems(&ui).len(), 1);
+        assert!(
+            ui_param(&ui, 0, "bead_output_class")
+                .problem
+                .contains("both create")
+        );
+    }
+
+    /// Debug mode shows what only who looks into components can act on: a
+    /// component's own warnings, and where inside it a problem is.
+    #[test]
+    fn debug_mode_shows_a_components_own_warnings_and_where_inside_problems_are() {
+        let (ui, ui_state, controller) = with_spots(7);
+        ui_state.get_project_write().components[0].parameters.push(
+            evanalyzer_cfg::settings::components::ComponentParameterDef {
+                key: ComponentParamKey::from("unused"),
+                label: "Unused".into(),
+                description: String::new(),
+                section: String::new(),
+                default: ParamValue::Int(0),
+                bindings: vec![],
+            },
+        );
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), false);
+        drain_ui_queue();
+        let texts = |ui: &AppWindow| -> Vec<String> {
+            panel_problems(ui)
+                .iter()
+                .map(|p| p.text.to_string())
+                .collect()
+        };
+        assert_eq!(
+            texts(&ui),
+            ["“Output class” (Bead) is class 7, which the project doesn't have"]
+        );
+        ui.global::<PipelinesPanelState>()
+            .invoke_debug_mode_toggled(true);
+        drain_ui_queue();
+        let all = texts(&ui);
+        assert!(
+            all.contains(
+                &"“Output class” (Bead) is class 7, which the project doesn't have · in \
+                  ExtractObjects (its step 2)"
+                    .to_string()
+            ),
+            "{all:?}"
+        );
+        assert!(
+            all.iter().any(|t| t.contains("\"Unused\" sets nothing")),
+            "{all:?}"
+        );
+    }
+
+    #[test]
+    fn debug_mode_is_remembered() {
+        let (ui, ui_state, _controller) = with_spots(1);
+        let panel = ui.global::<PipelinesPanelState>();
+        assert!(!panel.get_debug_mode());
+        panel.invoke_debug_mode_toggled(true);
+        drain_ui_queue();
+        assert!(panel.get_debug_mode());
+        assert!(ui_state.load_app_settings().debug_mode);
+        panel.invoke_debug_mode_toggled(false);
+        drain_ui_queue();
+        assert!(!ui_state.load_app_settings().debug_mode);
+        assert_eq!(ui_param(&ui, 0, "spot_output_class").wiring, "");
+    }
+
+    /// The problem strip is as high as its content: it doesn't stretch and
+    /// take height from the step list - an open list used to push the
+    /// cards down with a gap, more the taller the window.
+    #[test]
+    fn the_problem_strip_doesnt_stretch() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _ui_state, _controller) = with_spots(7);
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = commands.row_data(0).unwrap();
+        card.expanded = true;
+        commands.set_row_data(0, card);
+        let y_of = |label: &str| {
+            ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+                .absolute_position()
+                .y
+        };
+        ui.global::<PipelinesPanelState>()
+            .set_problems_expanded(true);
+        let at = |height: f32| {
+            ui.window()
+                .set_size(slint::LogicalSize::new(1280.0, height));
+            (y_of("Problems"), y_of("1 problems"))
+        };
+        let short = at(500.0);
+        assert_eq!(at(700.0), short, "the strip's head and the card below it");
+        assert_eq!(at(900.0), short);
     }
 
     /// The panel shows the problems: a strip with their count (its list

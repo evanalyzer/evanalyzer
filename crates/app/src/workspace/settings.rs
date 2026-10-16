@@ -21,6 +21,11 @@ pub struct AppSettings {
     #[serde(default)]
     pub always_show_advanced_settings: bool,
 
+    /// Debug mode: the pipeline editor shows how components are wired
+    /// inside - what a parameter sets, which parameter sets a setting.
+    #[serde(default)]
+    pub debug_mode: bool,
+
     /// Servers connected to from the GUI, most recent first - see
     /// [`AppSettings::remember_server`]. Kept on this computer only.
     #[serde(default)]
