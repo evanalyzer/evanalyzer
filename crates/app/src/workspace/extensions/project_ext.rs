@@ -1774,7 +1774,7 @@ pub fn load_project(
     crate::workspace::component_editing::prune_component_values(&mut inner);
 
     // Component mistakes show in the editor too; here they're logged.
-    for problem in crate::workspace::component_checks::check_components(&inner) {
+    for problem in crate::workspace::component_checks::check_project(&inner) {
         warn!("{}", problem.message);
     }
 

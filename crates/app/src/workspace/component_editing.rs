@@ -1283,9 +1283,9 @@ pub fn toggle_exposed(
 }
 
 /// A key for a new parameter of `definition` labelled `label`: the label in
-/// `snake_case` ("Min Size" → `min_size`), with `_2`, `_3` … if taken. It
-/// stays when the label changes later - the instances' values are keyed by
-/// it.
+/// `snake_case` ("Min Size" → `min_size`), with `_2`, `_3` … if taken. When
+/// its section or label changes, `rekey_parameters` gives it the key they
+/// make - and the instances' values, which are keyed by it, follow.
 pub fn new_parameter_key(definition: &ComponentDefinition, label: &str) -> ComponentParamKey {
     let mut base = String::new();
     for c in label.trim().chars() {
@@ -1311,8 +1311,8 @@ pub fn new_parameter_key(definition: &ComponentDefinition, label: &str) -> Compo
     ComponentParamKey(key)
 }
 
-/// Renames parameter `key` of `definition` (its key stays) and sets its
-/// help text. Returns whether the parameter exists.
+/// Renames parameter `key` of `definition` and sets its help text. Its key
+/// stays until `rekey_parameters`. Returns whether the parameter exists.
 pub fn edit_parameter(
     definition: &mut ComponentDefinition,
     key: &ComponentParamKey,
@@ -1610,11 +1610,14 @@ pub fn compatible_parameters(
 }
 
 /// Whether a component parameter shown with the control of setting `shown`
-/// (its first binding) can also set `other`: the same type and options -
-/// or `shown` is a single object class and `other` a class list (the value
-/// is then a list of one). Not the other way round: a list picks several
-/// classes, a single class setting takes one. A segmentation class is its
-/// own kind: a segmentation's number, not a project class.
+/// (its first binding) can also set `other`: the same type and, for a type
+/// whose options are its choices (a dropdown, units, file types), the same
+/// options - or `shown` is a single object class and `other` a class list
+/// (the value is then a list of one). Not the other way round: a list picks
+/// several classes, a single class setting takes one. A segmentation class
+/// is its own kind: a segmentation's number, not a project class. The
+/// options of a class list or an image source are its current value (the
+/// selected classes, the source pre-split), so they don't make a kind.
 pub(crate) fn same_kind(shown: &ParameterDef, other: &ParameterDef) -> bool {
     if shown.param_type == ParamType::ObjClass
         && matches!(
@@ -1624,7 +1627,11 @@ pub(crate) fn same_kind(shown: &ParameterDef, other: &ParameterDef) -> bool {
     {
         return true;
     }
-    shown.param_type == other.param_type && shown.options == other.options
+    let options_are_choices = matches!(
+        shown.param_type,
+        ParamType::Dropdown | ParamType::PixelUnits | ParamType::SizeUnits | ParamType::FilePath
+    );
+    shown.param_type == other.param_type && (!options_are_choices || shown.options == other.options)
 }
 
 /// Adds setting `path` of step `step_id` to parameter `key` of

@@ -66,8 +66,9 @@ pub struct ComponentDefinition {
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentParameterDef {
-    /// Unique within the component definition, readable (`"min_size"`); the
-    /// instances' values are keyed by it.
+    /// Unique within the component definition, made from its section and
+    /// label (`"tetraspeck_output_class"`) so a project file says what a
+    /// value is; the instances' values are keyed by it.
     pub key: ComponentParamKey,
 
     /// Name shown to the user, e.g. "Cell class".

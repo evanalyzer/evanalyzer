@@ -11,8 +11,8 @@ use crate::{
     ComponentClassRow, ComponentClassesState, ComponentEditChoiceState, ComponentParamRow,
     ComponentSettingsState, ComponentUpdateState, CreateComponentState, DefaultParamPreview,
     ExposeChoiceState, GlobalAppState, GroupItem, LeafParam, ParamType, Pipeline,
-    PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, RunAnalysisState,
-    StepCategory, UiState, WarningState,
+    PipelineCommand as SlintPipelineCommand, PipelineStatus, PipelinesPanelState, ProblemItem,
+    RunAnalysisState, StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use crate::{ResultItemData, ResultsListState};
@@ -27,6 +27,7 @@ use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::core_types::SegmentationClass;
+use evanalyzer_cfg::core_types::StepId;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
 use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningClassifierSettings, AiLearningSettings, ObjectClassLabel, PixelClassLabel,
@@ -127,6 +128,14 @@ pub struct PipelinesController {
 
     /// A component waiting for "Update": (its key, index into `component_library`).
     pending_update: Mutex<Option<(String, usize)>>,
+
+    /// The opened component as it was when a parameter was opened to edit in
+    /// its settings dialog (✎) - what Cancel goes back to.
+    parameter_edit_snapshot: Mutex<Option<ComponentDefinition>>,
+
+    /// What the checks found when the panel was last filled - the problems
+    /// `show-problem`/`fix-problem` refer to by their index.
+    last_problems: Mutex<Vec<evanalyzer_app::components::ComponentProblem>>,
 }
 
 /// One level of [`PipelinesController::open_component`].
@@ -165,6 +174,8 @@ impl PipelinesController {
             pending_expose: Mutex::new(None),
             component_library: Mutex::new(Vec::new()),
             pending_update: Mutex::new(None),
+            parameter_edit_snapshot: Mutex::new(None),
+            last_problems: Mutex::new(Vec::new()),
         }
     }
 
@@ -1181,6 +1192,18 @@ impl PipelinesController {
                     manager.open_component_in_panel(pipeline_id, step_idx as usize, true);
                 });
 
+            // A problem in the panel's list: its pipeline, with the card of its
+            // step expanded - for a component's own, the first step using it,
+            // opened.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_show_problem(move |index| manager.show_problem(index as usize));
+
+            // A problem's fix ("Add class 1").
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_fix_problem(move |index| manager.fix_problem(index as usize));
+
             // "Edit" in the bar of a viewed component: as "Edit" on its card. In
             // a component opened inside a viewed one, the first viewed one is
             // opened to edit - the ones inside it can then be opened to edit.
@@ -1442,9 +1465,66 @@ impl PipelinesController {
                     }
                 });
 
-            // Close: the panel shows the new name and ◆/◇.
+            // ✎: what changes from now on can be undone with Cancel.
+            let manager = self.clone();
+            ui.global::<ComponentSettingsState>()
+                .on_parameter_edit_started(move |_key| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    let Some(key) = manager.open_component_key(pipeline_id) else {
+                        return;
+                    };
+                    *manager.parameter_edit_snapshot.lock().expect("Poisoned") = manager
+                        .app_state
+                        .get_project()
+                        .components
+                        .iter()
+                        .find(|d| d.key == key)
+                        .cloned();
+                });
+
+            // Apply: the changes stay.
+            let manager = self.clone();
+            ui.global::<ComponentSettingsState>()
+                .on_parameter_edit_applied(move || {
+                    *manager.parameter_edit_snapshot.lock().expect("Poisoned") = None;
+                    manager.rekey_open_component();
+                    manager.fill_component_settings(-1);
+                });
+
+            // Cancel: the component as it was at ✎.
+            let manager = self.clone();
+            ui.global::<ComponentSettingsState>()
+                .on_parameter_edit_cancelled(move || {
+                    let Some(snapshot) = manager
+                        .parameter_edit_snapshot
+                        .lock()
+                        .expect("Poisoned")
+                        .take()
+                    else {
+                        return;
+                    };
+                    if manager.edit_open_component_definition(|definition| {
+                        if definition.key != snapshot.key {
+                            return false;
+                        }
+                        *definition = snapshot;
+                        true
+                    }) {
+                        manager.pipeline_settings_changed();
+                    }
+                    manager.fill_component_settings(-1);
+                });
+
+            // Close: the panel shows the new name and ◆/◇. A parameter still
+            // opened keeps its changes.
             let manager = self.clone();
             ui.global::<ComponentSettingsState>().on_close(move || {
+                *manager.parameter_edit_snapshot.lock().expect("Poisoned") = None;
+                manager.rekey_open_component();
                 let Some(ui) = manager.ui.upgrade() else {
                     return;
                 };
@@ -3229,12 +3309,48 @@ impl PipelinesController {
                 .and_then(|key| definition.parameters.iter().position(|p| p.key == key))
                 .map_or(-1, |index| index as i32)
         };
+        // Opened at a parameter (✎ next to an exposed setting): it's being
+        // edited from the start.
+        *self.parameter_edit_snapshot.lock().expect("Poisoned") = if focus_index >= 0 {
+            self.app_state
+                .get_project()
+                .components
+                .iter()
+                .find(|d| d.key == key)
+                .cloned()
+        } else {
+            None
+        };
         self.fill_component_settings(focus_index);
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::ComponentSettings);
     }
 
     /// The component settings dialog's parameter rows, from the opened component.
+    /// Gives the opened component's parameters the keys their sections and
+    /// labels make - its uses follow (see `rekey_parameters`). Done when a
+    /// parameter's edit is done, not while: the settings dialog's rows name
+    /// the parameters by their keys.
+    fn rekey_open_component(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+        if self.viewing(pipeline_id) {
+            return;
+        }
+        let Some(key) = self.open_component_key(pipeline_id) else {
+            return;
+        };
+        let renamed = evanalyzer_app::components::rekey_parameters(
+            &mut self.app_state.get_project_write(),
+            &key,
+        );
+        if renamed > 0 {
+            self.app_state.mark_dirty();
+        }
+    }
+
     fn fill_component_settings(&self, focus_index: i32) {
         let Some(ui) = self.ui.upgrade() else {
             return;
@@ -3408,6 +3524,138 @@ impl PipelinesController {
                 .find(|p| p.id.0 == pipeline_id)
                 .map(|p| &p.steps),
         }
+    }
+
+    /// Shows problem `index` of the panel's list (see `last_problems`): its
+    /// pipeline, the card of its step expanded. A component's own problem:
+    /// the first pipeline step using the component, opened to edit.
+    fn show_problem(self: &Arc<Self>, index: usize) {
+        let Some(problem) = self
+            .last_problems
+            .lock()
+            .expect("Poisoned")
+            .get(index)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let target: Option<(PipelineId, Option<StepId>, bool)> =
+            match (problem.step, &problem.component) {
+                (Some((pipeline, step)), _) => Some((pipeline, Some(step), false)),
+                (None, Some(key)) => self.app_state.get_project().pipelines.iter().find_map(|p| {
+                    p.steps
+                        .iter()
+                        .find(|s| matches!(&s.content, StepContent::Component(i) if &i.key == key))
+                        .map(|s| (p.id, Some(s.id), true))
+                }),
+                (None, None) => None,
+            };
+        let Some((pipeline_id, step_id, open)) = target else {
+            return;
+        };
+        self.close_open_component();
+        ui.global::<PipelinesPanelState>()
+            .set_active_pipeline_id(pipeline_id.0 as i32);
+        self.sync_steps_of_selected_pipeline_to_slint(pipeline_id, true);
+        let Some(step_id) = step_id.filter(|s| *s != StepId::UNASSIGNED) else {
+            return;
+        };
+        if open {
+            let index = self
+                .app_state
+                .get_project()
+                .pipelines
+                .iter()
+                .find(|p| p.id == pipeline_id)
+                .and_then(|p| p.steps.iter().position(|s| s.id == step_id));
+            if let Some(index) = index {
+                self.open_component_in_panel(pipeline_id.0, index, false);
+            }
+            return;
+        }
+        // After the sync above (the event loop runs them in order).
+        let ui_weak = self.ui.clone();
+        let wanted = step_id_text(step_id);
+        if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+            for i in 0..commands.row_count() {
+                if let Some(mut command) = commands.row_data(i)
+                    && command.step_id == wanted
+                {
+                    command.expanded = true;
+                    commands.set_row_data(i, command);
+                }
+            }
+        }) {
+            warn!("Failed to show a problem's step: {e}");
+        }
+    }
+
+    /// Makes the fix of problem `index` of the panel's list (see `last_problems`).
+    fn fix_problem(self: &Arc<Self>, index: usize) {
+        let Some(fix) = self
+            .last_problems
+            .lock()
+            .expect("Poisoned")
+            .get(index)
+            .and_then(|p| p.fix.clone())
+        else {
+            return;
+        };
+        let fixed =
+            evanalyzer_app::components::apply_fix(&mut self.app_state.get_project_write(), &fix);
+        if !fixed {
+            return;
+        }
+        self.pipeline_settings_changed();
+        if matches!(fix, evanalyzer_app::components::ProblemFix::AddClass(_)) {
+            self.focus_controller.classes_changed();
+        }
+        if let Some(ui) = self.ui.upgrade() {
+            let pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+            self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+        }
+    }
+
+    /// The steps of the component shown in pipeline `pipeline_id`'s panel
+    /// with the values of the step it's viewed from - when it and each
+    /// component around it are only viewed, from a pipeline step on. `None`
+    /// otherwise: then it shows its defaults.
+    fn viewed_steps(
+        &self,
+        project: &ProjectSettings,
+        pipeline_id: u32,
+    ) -> Option<Vec<PipelineStepSettings>> {
+        let path = self.open_component_path(pipeline_id);
+        if path.is_empty() {
+            return None;
+        }
+        let mut steps = project
+            .pipelines
+            .iter()
+            .find(|p| p.id.0 == pipeline_id)?
+            .steps
+            .clone();
+        for level in &path {
+            let StepContent::Component(instance) = &steps.get(level.viewing_from?)?.content else {
+                return None;
+            };
+            if instance.key != level.key {
+                return None;
+            }
+            steps = evanalyzer_app::components::component_steps_with_values(
+                instance,
+                &project.components,
+            )
+            .ok()?;
+        }
+        Some(steps)
     }
 
     /// [`Self::shown_steps`], to edit - `None` while a component is only viewed.
@@ -4030,6 +4278,36 @@ impl PipelinesController {
             update_version: String,
             /// What the command or component does (the card's "?").
             help: String,
+            /// What the checks found about the step.
+            problems: Vec<ProblemData>,
+            /// Per setting (its name): what it's wired to, what a check found.
+            notes: std::collections::HashMap<String, ParamNote>,
+        }
+        #[derive(Clone)]
+        struct ProblemData {
+            text: String,
+            error: bool,
+            place: String,
+            fix_label: String,
+            index: i32,
+        }
+        #[derive(Clone, Default)]
+        struct ParamNote {
+            wiring: String,
+            problem: String,
+            error: bool,
+        }
+        /// Marks setting `name` with `problem` - the first one about it.
+        fn mark_note(
+            notes: &mut std::collections::HashMap<String, ParamNote>,
+            name: &str,
+            problem: &evanalyzer_app::components::ComponentProblem,
+        ) {
+            let note = notes.entry(name.to_string()).or_default();
+            if note.problem.is_empty() {
+                note.problem = problem.message.clone();
+                note.error = problem.severity == evanalyzer_app::components::Severity::Error;
+            }
         }
         // The opened component's name, or empty. A component that's gone (e.g. undone)
         // is closed - and the ones opened inside it.
@@ -4045,15 +4323,58 @@ impl PipelinesController {
             self.set_open_path(pipeline_id.0, path.clone());
         }
         let open_component = path.last().map(|level| level.key.clone());
+        // Each problem of the opened component, on a line of its own.
         let open_component_problem: String = open_component
             .as_ref()
-            .and_then(|key| {
+            .map(|key| {
                 evanalyzer_app::components::check_component(&self.app_state.get_project(), key)
                     .into_iter()
-                    .next()
+                    .map(|problem| problem.message)
+                    .collect::<Vec<_>>()
+                    .join("\n⚠ ")
             })
-            .map(|problem| problem.message)
             .unwrap_or_default();
+        // What the checks find in the whole project: the panel's list, and
+        // the marks on the cards and settings.
+        let problems = evanalyzer_app::components::check_project(&self.app_state.get_project());
+        let problem_data: Vec<ProblemData> = {
+            let project = self.app_state.get_project();
+            problems
+                .iter()
+                .enumerate()
+                .map(|(index, problem)| ProblemData {
+                    text: problem.message.clone(),
+                    error: problem.severity == evanalyzer_app::components::Severity::Error,
+                    place: problem_place(&project, problem),
+                    fix_label: problem.fix.as_ref().map(|f| f.label()).unwrap_or_default(),
+                    index: index as i32,
+                })
+                .collect()
+        };
+        *self.last_problems.lock().expect("Poisoned") = problems.clone();
+        // A component only looked at from a pipeline step (and the ones it
+        // contains): shown with that step's values, not the defaults.
+        let viewed_steps = self.viewed_steps(&self.app_state.get_project(), pipeline_id.0);
+        // The pipeline step it's looked at from - whose problems mark its settings.
+        let viewed_from: Option<(PipelineId, StepId)> = match path.as_slice() {
+            [level] => level.viewing_from.and_then(|idx| {
+                self.app_state
+                    .get_project()
+                    .pipelines
+                    .iter()
+                    .find(|p| p.id == pipeline_id)
+                    .and_then(|p| p.steps.get(idx))
+                    .map(|step| (pipeline_id, step.id))
+            }),
+            _ => None,
+        };
+        let open_component_values: String = match (&viewed_steps, path.first()) {
+            (Some(_), Some(level)) => level
+                .viewing_from
+                .map(|idx| format!("Shown with the values of step {} in this pipeline", idx + 1))
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
         let read_only = open_component.is_some() && self.viewing(pipeline_id.0);
         // "Outer › ◆ Inner" for a component opened inside another.
         let open_component_name: String = {
@@ -4143,7 +4464,9 @@ impl PipelinesController {
                 // An opened component's settings as a use without values of its
                 // own runs them: a setting a parameter sets shows the
                 // parameter's default.
-                let with_defaults = open_definition.map(evanalyzer_app::components::apply_defaults);
+                let with_defaults = viewed_steps
+                    .clone()
+                    .or_else(|| open_definition.map(evanalyzer_app::components::apply_defaults));
                 let shown = match &with_defaults {
                     Some(steps) => steps,
                     None => self
@@ -4153,83 +4476,182 @@ impl PipelinesController {
                 let steps: Vec<StepData> = shown
                     .iter()
                     .enumerate()
-                    .map(|(idx, step)| match &step.content {
-                        StepContent::Command(command) => StepData {
-                            idx: idx as i32,
-                            id: step.id,
-                            name: command.name().to_owned(),
-                            // What a run would refuse (e.g. a component's class
-                            // outside a component), else the settings' summary.
-                            summary: match open_component {
-                                Some(_) => command.to_summary(),
-                                None => evanalyzer_app::components::step_problem(&project, step)
-                                    .map(|problem| format!("⚠ {problem}"))
-                                    .unwrap_or_else(|| command.to_summary()),
-                            },
-                            category: step_category(*command.category()),
-                            enabled: step.enabled,
-                            parameters: evanalyzer_app::settings_of::command_parameters(command),
-                            exposed: open_definition
-                                .map(|d| evanalyzer_app::components::exposed_settings(d, step.id))
-                                .unwrap_or_default(),
-                            update_version: String::new(),
-                            help: command_help(command.name()),
-                        },
-                        // The component's name and parameters - each shown with the
-                        // control of the inner setting it's bound to.
-                        StepContent::Component(component) => {
-                            let (summary, parameters) =
-                                match evanalyzer_app::components::component_parameters(
-                                    component,
-                                    &project.components,
+                    .map(|(idx, step)| {
+                        let in_pipeline = open_component.is_none();
+                        let at_step = |p: &evanalyzer_app::components::ComponentProblem| {
+                            in_pipeline && p.step == Some((pipeline_id, step.id))
+                        };
+                        let step_problems: Vec<ProblemData> = problems
+                            .iter()
+                            .zip(&problem_data)
+                            .filter(|(p, _)| at_step(p))
+                            .map(|(_, data)| data.clone())
+                            .collect();
+                        let mut notes: std::collections::HashMap<String, ParamNote> =
+                            std::collections::HashMap::new();
+                        // A component card: what each parameter sets, and the
+                        // problems about it - at this step, else the component's own.
+                        if let StepContent::Component(instance) = &step.content {
+                            for problem in problems.iter().filter(|p| {
+                                at_step(p)
+                                    || (p.step.is_none()
+                                        && p.component.as_deref() == Some(instance.key.as_str()))
+                            }) {
+                                for key in &problem.parameters {
+                                    mark_note(&mut notes, key.as_str(), problem);
+                                }
+                            }
+                            for (key, text) in evanalyzer_app::components::parameter_wiring(
+                                &project.components,
+                                &instance.key,
+                            ) {
+                                if !text.is_empty() {
+                                    notes.entry(key.0).or_default().wiring = format!("Sets {text}");
+                                }
+                            }
+                        }
+                        // A step of the opened component: which parameter sets each
+                        // setting, and the problems about that parameter (a list
+                        // entry's on its list).
+                        if let Some(definition) = open_definition {
+                            let about_it: Vec<&evanalyzer_app::components::ComponentProblem> =
+                                problems
+                                    .iter()
+                                    .filter(|p| {
+                                        (p.step.is_none()
+                                            && p.component.as_deref()
+                                                == Some(definition.key.as_str()))
+                                            || (viewed_from.is_some() && p.step == viewed_from)
+                                    })
+                                    .collect();
+                            for (path, _, label) in
+                                evanalyzer_app::components::step_settings(&project.components, step)
+                            {
+                                let top = path.split('.').next().unwrap_or(&path).to_string();
+                                if let Some(wiring) = evanalyzer_app::components::setting_wiring(
+                                    definition, step.id, &path,
                                 ) {
-                                    Ok(parameters) => (
-                                        evanalyzer_app::components::step_problem(&project, step)
-                                            .map(|problem| format!("⚠ {problem}"))
-                                            .unwrap_or_else(|| "Component".to_string()),
-                                        parameters,
-                                    ),
-                                    Err(e) => (format!("⚠ {e}"), Vec::new()),
-                                };
-                            StepData {
+                                    let text = if top == path {
+                                        wiring
+                                    } else {
+                                        format!("{label}: {wiring}")
+                                    };
+                                    let note = notes.entry(top.clone()).or_default();
+                                    if note.wiring.is_empty() {
+                                        note.wiring = text;
+                                    } else {
+                                        note.wiring = format!("{}\n{text}", note.wiring);
+                                    }
+                                }
+                                for problem in &about_it {
+                                    let sets_it = definition.parameters.iter().any(|p| {
+                                        problem.parameters.contains(&p.key)
+                                            && p.bindings
+                                                .iter()
+                                                .any(|b| b.step == step.id && b.param == path)
+                                    });
+                                    if sets_it {
+                                        mark_note(&mut notes, &top, problem);
+                                    }
+                                }
+                            }
+                        }
+                        match &step.content {
+                            StepContent::Command(command) => StepData {
                                 idx: idx as i32,
                                 id: step.id,
-                                name: project
-                                    .components
-                                    .iter()
-                                    .find(|d| d.key == component.key)
-                                    .map_or_else(|| component.key.clone(), |d| d.meta.name.clone()),
-                                summary,
-                                category: StepCategory::Component,
+                                name: command.name().to_owned(),
+                                // What a run would refuse (e.g. a component's class
+                                // outside a component), else the settings' summary.
+                                summary: match open_component {
+                                    Some(_) => command.to_summary(),
+                                    None => {
+                                        evanalyzer_app::components::step_problem(&project, step)
+                                            .map(|problem| format!("⚠ {problem}"))
+                                            .unwrap_or_else(|| command.to_summary())
+                                    }
+                                },
+                                category: step_category(*command.category()),
                                 enabled: step.enabled,
-                                parameters,
-                                // Inside an opened component: its parameters
-                                // that are the opened one's.
+                                parameters: evanalyzer_app::settings_of::command_parameters(
+                                    command,
+                                ),
                                 exposed: open_definition
                                     .map(|d| {
                                         evanalyzer_app::components::exposed_settings(d, step.id)
                                     })
                                     .unwrap_or_default(),
-                                update_version: project
-                                    .components
-                                    .iter()
-                                    .find(|d| d.key == component.key)
-                                    .and_then(|d| {
-                                        evanalyzer_app::components::update_available(
-                                            d,
-                                            &self.component_library.lock().expect("Poisoned"),
-                                        )
-                                    })
-                                    .map(|(_, version)| version.to_string())
-                                    .unwrap_or_default(),
-                                help: project
-                                    .components
-                                    .iter()
-                                    .find(|d| d.key == component.key)
-                                    .map(|d| {
-                                        join_help(&d.meta.short_description, &d.meta.description)
-                                    })
-                                    .unwrap_or_default(),
+                                update_version: String::new(),
+                                help: command_help(command.name()),
+                                problems: step_problems,
+                                notes,
+                            },
+                            // The component's name and parameters - each shown with the
+                            // control of the inner setting it's bound to.
+                            StepContent::Component(component) => {
+                                let (summary, parameters) =
+                                    match evanalyzer_app::components::component_parameters(
+                                        component,
+                                        &project.components,
+                                    ) {
+                                        Ok(parameters) => (
+                                            evanalyzer_app::components::step_problem(
+                                                &project, step,
+                                            )
+                                            .map(|problem| format!("⚠ {problem}"))
+                                            .unwrap_or_else(|| "Component".to_string()),
+                                            parameters,
+                                        ),
+                                        Err(e) => (format!("⚠ {e}"), Vec::new()),
+                                    };
+                                StepData {
+                                    idx: idx as i32,
+                                    id: step.id,
+                                    name: project
+                                        .components
+                                        .iter()
+                                        .find(|d| d.key == component.key)
+                                        .map_or_else(
+                                            || component.key.clone(),
+                                            |d| d.meta.name.clone(),
+                                        ),
+                                    summary,
+                                    category: StepCategory::Component,
+                                    enabled: step.enabled,
+                                    parameters,
+                                    // Inside an opened component: its parameters
+                                    // that are the opened one's.
+                                    exposed: open_definition
+                                        .map(|d| {
+                                            evanalyzer_app::components::exposed_settings(d, step.id)
+                                        })
+                                        .unwrap_or_default(),
+                                    update_version: project
+                                        .components
+                                        .iter()
+                                        .find(|d| d.key == component.key)
+                                        .and_then(|d| {
+                                            evanalyzer_app::components::update_available(
+                                                d,
+                                                &self.component_library.lock().expect("Poisoned"),
+                                            )
+                                        })
+                                        .map(|(_, version)| version.to_string())
+                                        .unwrap_or_default(),
+                                    help: project
+                                        .components
+                                        .iter()
+                                        .find(|d| d.key == component.key)
+                                        .map(|d| {
+                                            join_help(
+                                                &d.meta.short_description,
+                                                &d.meta.description,
+                                            )
+                                        })
+                                        .unwrap_or_default(),
+                                    problems: step_problems,
+                                    notes,
+                                }
                             }
                         }
                     })
@@ -4259,6 +4681,15 @@ impl PipelinesController {
                 )
             }
         };
+        fn problem_item(p: ProblemData) -> ProblemItem {
+            ProblemItem {
+                text: p.text.into(),
+                error: p.error,
+                r#where: p.place.into(),
+                fix_label: p.fix_label.into(),
+                index: p.index,
+            }
+        }
         let pid = pipeline_id.0 as i32;
         // Model files are read through the backend (the server's, remotely).
         let backend = self.app_state.backend();
@@ -4357,6 +4788,7 @@ impl PipelinesController {
                         let show_advanced = always_show_advanced || step_show_advanced;
                         let (advanced_count, advanced_changed) = advanced_stats(&d.parameters);
                         let exposed = d.exposed.clone();
+                        let notes = d.notes.clone();
                         let (advanced_defs, basic_defs): (Vec<ParameterDef>, Vec<ParameterDef>) =
                             filter_for_display(d.parameters, show_advanced)
                                 .into_iter()
@@ -4443,7 +4875,11 @@ impl PipelinesController {
                             let has_model_info = (is_pixel_classifier || is_ai_object_classifier)
                                 && p_name == "model_path"
                                 && !p.value.is_empty();
+                            let note = notes.get(&p_name).cloned().unwrap_or_default();
                             CommandParameter {
+                                wiring: note.wiring.into(),
+                                problem: note.problem.into(),
+                                problem_error: note.error,
                                 name: p.name.into(),
                                 display_name: p.display_name.into(),
                                 description: p.description.into(),
@@ -4517,6 +4953,10 @@ impl PipelinesController {
                             update_version: d.update_version.into(),
                             help: d.help.into(),
                             sections: ModelRc::new(VecModel::from(sections)),
+                            problem_errors: d.problems.iter().filter(|p| p.error).count() as i32,
+                            problems: ModelRc::new(VecModel::from(
+                                d.problems.into_iter().map(problem_item).collect::<Vec<_>>(),
+                            )),
                         }
                     })
                     .collect();
@@ -4540,6 +4980,16 @@ impl PipelinesController {
                             .collect::<Vec<_>>(),
                     )));
                 state.set_open_component_problem(open_component_problem.into());
+                state.set_open_component_values(open_component_values.into());
+                state.set_project_problem_errors(
+                    problem_data.iter().filter(|p| p.error).count() as i32
+                );
+                state.set_project_problems(ModelRc::new(VecModel::from(
+                    problem_data
+                        .into_iter()
+                        .map(problem_item)
+                        .collect::<Vec<_>>(),
+                )));
                 state.set_open_component_read_only(read_only);
                 state.set_active_pipeline_image_source(pipeline_image_source.into());
                 state.set_active_commands(ModelRc::new(VecModel::from(commands)));
@@ -4562,6 +5012,39 @@ impl PipelinesController {
             warn!("Failed to sync steps to Slint: {}", e);
         }
     }
+}
+
+/// Where `problem` is, for the panel's problem list: "Channel1 · #3" (the
+/// step's id, as its card shows it), "Channel1" for the pipeline itself,
+/// "◆ Coloc 3CH" for a component.
+fn problem_place(
+    project: &ProjectSettings,
+    problem: &evanalyzer_app::components::ComponentProblem,
+) -> String {
+    if let Some((pipeline_id, step_id)) = problem.step {
+        let name = project
+            .pipelines
+            .iter()
+            .find(|p| p.id == pipeline_id)
+            .map_or_else(|| pipeline_id.0.to_string(), |p| p.name.clone());
+        return if step_id == StepId::UNASSIGNED {
+            name
+        } else {
+            format!("{name} · #{}", step_id_text(step_id))
+        };
+    }
+    problem
+        .component
+        .as_ref()
+        .map(|key| {
+            let name = project
+                .components
+                .iter()
+                .find(|d| &d.key == key)
+                .map_or_else(|| key.clone(), |d| d.meta.name.clone());
+            format!("◆ {name}")
+        })
+        .unwrap_or_default()
 }
 
 /// The step-card / picker category of a command category.
@@ -7744,6 +8227,32 @@ mod tests {
         );
     }
 
+    /// The opened component's bar stays on top - it isn't part of the
+    /// scrolling step list.
+    #[test]
+    fn the_opened_components_bar_stays_above_the_scrolling_steps() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _ui_state, _controller) = with_a_component();
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 800.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<PipelinesPanelState>().invoke_open_component(1);
+        drain_ui_queue();
+        let back = ElementHandle::find_by_accessible_label(&ui, "‹ Back")
+            .next()
+            .expect("the bar's Back");
+        let y = back.absolute_position().y;
+        let inside_a_scroll_area = ElementHandle::find_by_element_type_name(&ui, "ScrollView")
+            .filter(|e| e.absolute_position().x < 400.0)
+            .any(|e| {
+                let top = e.absolute_position().y;
+                top <= y && y < top + e.size().height
+            });
+        assert!(
+            !inside_a_scroll_area,
+            "the bar doesn't scroll with the steps"
+        );
+    }
+
     #[test]
     fn edit_or_view_on_a_command_card_opens_nothing() {
         let (ui, _ui_state, _controller) = with_a_component();
@@ -8529,6 +9038,85 @@ mod tests {
                 .bindings
                 .len(),
             1
+        );
+    }
+
+    /// A parameter opened with ✎ is edited until Apply or Cancel: Cancel
+    /// undoes everything since ✎ - its name and what it sets too.
+    #[test]
+    fn cancel_undoes_a_parameters_edit_and_apply_keeps_it() {
+        let (ui, ui_state, _controller) = with_a_component();
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(1);
+        drain_ui_queue();
+        panel.invoke_toggle_exposed(0, "kernel_size".into());
+        drain_ui_queue();
+        panel.invoke_open_component_settings();
+        drain_ui_queue();
+        let dialog = ui.global::<ComponentSettingsState>();
+        let key = dialog.get_parameters().row_data(0).unwrap().key;
+        let parameter =
+            |ui_state: &UiState| ui_state.get_project().components[0].parameters[0].clone();
+        let before = parameter(&ui_state);
+
+        let edit = |dialog: &ComponentSettingsState| {
+            dialog.invoke_parameter_edit_started(key.clone());
+            dialog.invoke_parameter_name_edited(key.clone(), "Radius".into());
+            let row = dialog.get_parameters().row_data(0).unwrap();
+            let other_blur = (1..row.addable.row_count())
+                .position(|i| row.addable.row_data(i).unwrap().contains("Blur"))
+                .expect("the other blur's kernel size");
+            dialog.invoke_binding_added(key.clone(), other_blur as i32);
+            drain_ui_queue();
+        };
+
+        edit(&dialog);
+        assert_eq!(parameter(&ui_state).label, "Radius");
+        assert_eq!(parameter(&ui_state).bindings.len(), 2);
+        dialog.invoke_parameter_edit_cancelled();
+        drain_ui_queue();
+        let cancelled = parameter(&ui_state);
+        assert_eq!(
+            (cancelled.label, cancelled.bindings),
+            (before.label.clone(), before.bindings.clone()),
+            "as it was at ✎"
+        );
+        assert_eq!(
+            dialog.get_parameters().row_data(0).unwrap().label,
+            before.label,
+            "the row shows it too"
+        );
+
+        edit(&dialog);
+        dialog.invoke_parameter_edit_applied();
+        drain_ui_queue();
+        assert_eq!(parameter(&ui_state).label, "Radius");
+        assert_eq!(parameter(&ui_state).bindings.len(), 2);
+        // Nothing left to cancel.
+        dialog.invoke_parameter_edit_cancelled();
+        drain_ui_queue();
+        assert_eq!(parameter(&ui_state).label, "Radius");
+    }
+
+    /// Opened from ✎ next to an exposed setting, the parameter is edited from
+    /// the start - Cancel works without pressing ✎ first.
+    #[test]
+    fn a_parameter_opened_from_its_setting_can_be_cancelled_right_away() {
+        let (ui, ui_state, _controller) = with_two_parameters();
+        ui.global::<PipelinesPanelState>()
+            .invoke_edit_exposed(0, "kernel_size".into());
+        drain_ui_queue();
+        let dialog = ui.global::<ComponentSettingsState>();
+        let key = dialog.get_parameters().row_data(0).unwrap().key;
+        let label = ui_state.get_project().components[0].parameters[0]
+            .label
+            .clone();
+        dialog.invoke_parameter_name_edited(key, "Something else".into());
+        dialog.invoke_parameter_edit_cancelled();
+        drain_ui_queue();
+        assert_eq!(
+            ui_state.get_project().components[0].parameters[0].label,
+            label
         );
     }
 
@@ -9401,6 +9989,274 @@ mod tests {
         ui.global::<CommandPickerState>().invoke_import_bioimageio();
         drain_ui_queue();
         assert!(step_names(&ui_state, 1).is_empty());
+    }
+
+    // ---- problems, wiring, viewing with values, keys ----
+
+    /// Pipeline 1 uses SPOTS once: it extracts spots (its "Spot › Output
+    /// class") and beads ("Bead › Output class"); the step gives the beads
+    /// `bead_class`. The project has class 1 "Spot" and 2 "Bead".
+    fn with_spots(bead_class: i64) -> (AppWindow, Arc<UiState>, Arc<PipelinesController>) {
+        use evanalyzer_cfg::settings::classification_settings::Class;
+        use evanalyzer_cfg::settings::components::{
+            ComponentInstance, ComponentParameterDef, ParamBinding,
+        };
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ExtractClassMappingSettings, ExtractObjectsSettings,
+        };
+        let (ui, ui_state, controller) = selected(vec![]);
+        {
+            let mut project = ui_state.get_project_write();
+            for (id, name) in [(1, "Spot"), (2, "Bead")] {
+                project.classification.classes_mut().push(Class {
+                    id,
+                    name: name.into(),
+                    ..Default::default()
+                });
+            }
+            let extract = |id: u32, class: u32| PipelineStepSettings {
+                id: StepId(id),
+                enabled: true,
+                content: StepContent::Command(PipelineCommand::ExtractObjects(
+                    ExtractObjectsSettings {
+                        class_mapping: vec![ExtractClassMappingSettings {
+                            segmentation_class: SegmentationClass(1),
+                            object_class: ObjectClass::Global(class),
+                        }],
+                        ..Default::default()
+                    },
+                )),
+            };
+            let parameter =
+                |key: &str, section: &str, default: i64, step: u32| ComponentParameterDef {
+                    key: ComponentParamKey::from(key),
+                    label: "Output class".into(),
+                    description: String::new(),
+                    section: section.into(),
+                    default: ParamValue::Int(default),
+                    bindings: vec![ParamBinding {
+                        step: StepId(step),
+                        param: "class_mapping.0.object_class".into(),
+                    }],
+                };
+            project.components.push(ComponentDefinition {
+                key: "SPOTS".into(),
+                meta: MetaData {
+                    name: "Spots".into(),
+                    ..Default::default()
+                },
+                classes: vec![],
+                steps: vec![extract(1, 1), extract(2, 2)],
+                parameters: vec![
+                    parameter("spot_output_class", "Spot", 1, 1),
+                    parameter("bead_output_class", "Bead", 2, 2),
+                ],
+                origin: None,
+            });
+            project.pipelines[0].steps = vec![PipelineStepSettings {
+                id: StepId(1),
+                enabled: true,
+                content: StepContent::Component(ComponentInstance {
+                    key: "SPOTS".into(),
+                    values: [(
+                        ComponentParamKey::from("bead_output_class"),
+                        ParamValue::Int(bead_class),
+                    )]
+                    .into(),
+                }),
+            }];
+        }
+        controller.sync_steps_of_selected_pipeline_to_slint(PipelineId(1), true);
+        drain_ui_queue();
+        (ui, ui_state, controller)
+    }
+
+    fn panel_problems(ui: &AppWindow) -> Vec<ProblemItem> {
+        ui.global::<PipelinesPanelState>()
+            .get_project_problems()
+            .iter()
+            .collect()
+    }
+
+    /// Beads given the spots' class: the card says so, at both parameters,
+    /// and the panel lists it with where it is.
+    #[test]
+    fn a_problem_shows_on_the_card_at_its_parameters_and_in_the_panels_list() {
+        let (ui, _ui_state, _controller) = with_spots(1);
+        let card = ui
+            .global::<PipelinesPanelState>()
+            .get_active_commands()
+            .row_data(0)
+            .unwrap();
+        let texts: Vec<String> = card.problems.iter().map(|p| p.text.to_string()).collect();
+        assert_eq!(texts.len(), 1, "{texts:?}");
+        assert!(
+            texts[0].contains("both create objects of class 1 “Spot”"),
+            "{}",
+            texts[0]
+        );
+        assert_eq!(card.problem_errors, 0);
+        for key in ["spot_output_class", "bead_output_class"] {
+            let parameter = ui_param(&ui, 0, key);
+            assert!(
+                parameter.problem.contains("both create"),
+                "{key}: {}",
+                parameter.problem
+            );
+            assert!(!parameter.problem_error);
+        }
+        assert_eq!(
+            ui_param(&ui, 0, "spot_output_class").wiring,
+            "Sets ExtractObjects › Class Mapping 1 · Object Class (step 1)"
+        );
+        let listed = panel_problems(&ui);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].r#where, "Pipeline 1 · #1");
+        assert_eq!(listed[0].text, card.problems.row_data(0).unwrap().text);
+
+        // Each its own class: nothing to show.
+        let (ui, _ui_state, _controller) = with_spots(2);
+        assert!(panel_problems(&ui).is_empty());
+        assert_eq!(ui_param(&ui, 0, "bead_output_class").problem, "");
+    }
+
+    #[test]
+    fn a_problems_fix_is_made_from_the_panel() {
+        let (ui, ui_state, _controller) = with_spots(7);
+        let listed = panel_problems(&ui);
+        let missing = listed
+            .iter()
+            .find(|p| p.fix_label == "Add class 7")
+            .unwrap_or_else(|| panic!("{listed:?}"));
+        ui.global::<PipelinesPanelState>()
+            .invoke_fix_problem(missing.index);
+        drain_ui_queue();
+        assert!(
+            ui_state
+                .get_project()
+                .classification
+                .classes()
+                .iter()
+                .any(|c| c.id == 7)
+        );
+        assert!(
+            panel_problems(&ui)
+                .iter()
+                .all(|p| p.fix_label != "Add class 7"),
+            "gone once fixed"
+        );
+    }
+
+    #[test]
+    fn showing_a_problem_expands_the_card_of_its_step() {
+        let (ui, _ui_state, _controller) = with_spots(1);
+        let panel = ui.global::<PipelinesPanelState>();
+        assert!(!panel.get_active_commands().row_data(0).unwrap().expanded);
+        panel.invoke_show_problem(panel_problems(&ui)[0].index);
+        drain_ui_queue();
+        assert_eq!(panel.get_active_pipeline_id(), 1);
+        assert!(panel.get_active_commands().row_data(0).unwrap().expanded);
+    }
+
+    /// "View" on a card shows the component with that step's values - and
+    /// the step's problems at the settings they're about.
+    #[test]
+    fn viewing_a_component_shows_the_values_of_the_step_its_viewed_from() {
+        let (ui, _ui_state, _controller) = with_spots(1);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_view_component(0);
+        drain_ui_queue();
+        assert!(panel.get_open_component_read_only());
+        assert_eq!(
+            panel.get_open_component_values(),
+            "Shown with the values of step 1 in this pipeline"
+        );
+        let class_of = |step: usize| -> String {
+            let mapping = ui_param(&ui, step, "class_mapping");
+            mapping
+                .group_items
+                .row_data(0)
+                .unwrap()
+                .fields
+                .iter()
+                .find(|f| f.name == "object_class")
+                .map(|f| f.value.to_string())
+                .unwrap()
+        };
+        assert_eq!(class_of(1), "1", "the step's value, not the default 2");
+        let mapping = ui_param(&ui, 1, "class_mapping");
+        assert!(
+            mapping.problem.contains("both create"),
+            "{}",
+            mapping.problem
+        );
+        assert!(
+            mapping.wiring.contains("Set by “Output class” (Bead)"),
+            "{}",
+            mapping.wiring
+        );
+
+        // Opened to edit: the defaults.
+        panel.invoke_close_component();
+        drain_ui_queue();
+        panel.invoke_open_component(0);
+        drain_ui_queue();
+        assert_eq!(panel.get_open_component_values(), "");
+        assert_eq!(class_of(1), "2");
+    }
+
+    /// The panel shows the problems: a strip with their count (its list
+    /// opens on a click, a fix as a button), a badge on the card.
+    #[test]
+    fn the_panel_shows_a_problem_strip_and_a_badge_on_the_card() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, _ui_state, _controller) = with_spots(7);
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        let count = |label: &str| ElementHandle::find_by_accessible_label(&ui, label).count();
+        assert_eq!(count("Problems"), 1, "the strip");
+        assert_eq!(count("1 problems"), 1, "the card's badge");
+        assert_eq!(count("Add class 7"), 0, "the list is closed");
+        ui.global::<PipelinesPanelState>()
+            .set_problems_expanded(true);
+        // The button, and its text.
+        assert!(count("Add class 7") > 0, "the fix in the open list");
+    }
+
+    /// A parameter's key follows its section and label once the settings
+    /// dialog is closed - and the pipeline's values follow it.
+    #[test]
+    fn closing_the_settings_dialog_gives_parameters_keys_from_section_and_label() {
+        let (ui, ui_state, _controller) = with_spots(5);
+        let panel = ui.global::<PipelinesPanelState>();
+        panel.invoke_open_component(0);
+        drain_ui_queue();
+        panel.invoke_open_component_settings();
+        drain_ui_queue();
+        let dialog = ui.global::<ComponentSettingsState>();
+        dialog.invoke_parameter_name_edited("bead_output_class".into(), "Class".into());
+        drain_ui_queue();
+        assert_eq!(
+            ui_state.get_project().components[0].parameters[1]
+                .key
+                .as_str(),
+            "bead_output_class",
+            "not while the dialog is open"
+        );
+        dialog.invoke_close();
+        drain_ui_queue();
+        let project = ui_state.get_project();
+        assert_eq!(
+            project.components[0].parameters[1].key.as_str(),
+            "bead_class"
+        );
+        let StepContent::Component(instance) = &project.pipelines[0].steps[0].content else {
+            panic!("a component step");
+        };
+        assert_eq!(
+            instance.values.get(&ComponentParamKey::from("bead_class")),
+            Some(&ParamValue::Int(5))
+        );
     }
 }
 
