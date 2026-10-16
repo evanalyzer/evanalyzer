@@ -94,6 +94,26 @@ export struct CommandParameter {
         short-description: string,
         // `description` says more than `short-description`.
         more-help: bool,
+        // A component parameter: what it sets ("Sets ExtractObjects › …"); a
+        // setting of an opened component: the parameter setting it. Else empty.
+        wiring: string,
+        // What a check found about this setting, or empty.
+        problem: string,
+        problem-error: bool,
+    }
+
+// A problem the checks found (`check_project`) - in the panel's problem list
+// and on the card of the step it's about.
+export struct ProblemItem {
+        text: string,
+        // A run fails (else: works, but probably isn't meant).
+        error: bool,
+        // Where it is: "Channel1 · step 1", "Component Coloc 3CH".
+        where: string,
+        // The one-click fix's button ("Add class 1"), or empty.
+        fix-label: string,
+        // Its number in the project's list - what show/fix refer to.
+        index: int,
     }
 
 export struct PipelineCommand {
@@ -126,6 +146,10 @@ export struct PipelineCommand {
         // The sections of `parameters`, in order - "" (no section) first
         // when there are such settings. The settings dialog's sections.
         sections: [string],
+        // What the checks found about this step.
+        problems: [ProblemItem],
+        // How many of `problems` are errors.
+        problem-errors: int,
     }
 
 export struct Pipeline {
@@ -2058,6 +2082,100 @@ component ParamControls inherits Rectangle {
         if PipelinesPanelState.open-component-read-only: TouchArea { }
     }
 
+// Below a setting: what it's wired to, and what a check found about it.
+component ParamNotes inherits VerticalLayout {
+        in property <CommandParameter> p;
+        spacing: 2px;
+        if p.wiring != "": Text {
+            text: p.wiring;
+            font-size: 9.5px;
+            color: Theme.cat-component.with-alpha(0.85);
+            wrap: word-wrap;
+            height: self.preferred-height;
+        }
+        if p.problem != "": Text {
+            text: "⚠ \{p.problem}";
+            font-size: 10px;
+            color: p.problem-error ? Theme.err : Theme.warn;
+            wrap: word-wrap;
+            height: self.preferred-height;
+        }
+    }
+
+// One problem: what it is, where (`show-where`), and its fix. Clicking the
+// text shows the step it's about.
+component ProblemRow inherits HorizontalLayout {
+        in property <ProblemItem> item;
+        in property <bool> show-where: true;
+        spacing: 6px;
+
+        VerticalLayout {
+            alignment: start;
+            padding-top: 4px;
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: item.error ? Theme.err : Theme.warn;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 1px;
+            if root.show-where && item.where != "": Text {
+                text: item.where;
+                font-size: 9.5px;
+                font-weight: 600;
+                color: Theme.text-mute;
+                overflow: elide;
+            }
+            problem-text := Text {
+                text: item.text;
+                font-size: 10.5px;
+                color: problem-ta.has-hover && root.show-where ? Theme.text : Theme.text-dim;
+                wrap: word-wrap;
+                height: self.preferred-height;
+                problem-ta := TouchArea {
+                    mouse-cursor: root.show-where ? pointer : default;
+                    clicked => {
+                        if root.show-where {
+                            PipelinesPanelState.show-problem(item.index);
+                        }
+                    }
+                }
+            }
+        }
+
+        if item.fix-label != "": VerticalLayout {
+            alignment: start;
+            Rectangle {
+                height: 20px;
+                width: fix-text.preferred-width + 14px;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: fix-ta.has-hover ? Theme.raised : transparent;
+                accessible-role: button;
+                accessible-label: item.fix-label;
+                fix-text := Text {
+                    text: item.fix-label;
+                    font-size: 10px;
+                    color: Theme.text;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fix-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        PipelinesPanelState.fix-problem(item.index);
+                    }
+                }
+            }
+        }
+    }
+
 component ParamRow inherits VerticalLayout {
         in property <CommandParameter> p;
         // Show `p.section-header` (the settings dialog has its own).
@@ -2112,6 +2230,10 @@ component ParamRow inherits VerticalLayout {
             edit-item-exposed(i, n) => {
                 root.edit-item-exposed(i, n);
             }
+        }
+
+        ParamNotes {
+            p: root.p;
         }
     }
 
@@ -2171,6 +2293,10 @@ component WideParamRow inherits VerticalLayout {
                     color: Theme.text-dim;
                     wrap: word-wrap;
                     height: self.preferred-height;
+                }
+
+                ParamNotes {
+                    p: root.p;
                 }
             }
 
@@ -2389,6 +2515,24 @@ component StepRow inherits Rectangle {
                                 }
                             }
 
+                            if step.problems.length > 0: Rectangle {
+                                y: (parent.height - self.height) / 2;
+                                height: 14px;
+                                width: badge-text.preferred-width + 8px;
+                                border-radius: 7px;
+                                background: (step.problem-errors > 0 ? Theme.err : Theme.warn).with-alpha(0.2);
+                                accessible-role: text;
+                                accessible-label: "\{step.problems.length} problems";
+                                badge-text := Text {
+                                    text: "⚠ \{step.problems.length}";
+                                    font-size: 9px;
+                                    font-weight: 600;
+                                    color: step.problem-errors > 0 ? Theme.err : Theme.warn;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
                             Rectangle {
                                 horizontal-stretch: 1;
                             }
@@ -2491,6 +2635,14 @@ component StepRow inherits Rectangle {
                     padding-top: 12px;
                     padding-bottom: 12px;
                     spacing: 10px;
+
+                    if step.problems.length > 0: VerticalLayout {
+                        spacing: 6px;
+                        for item in step.problems: ProblemRow {
+                            item: item;
+                            show-where: false;
+                        }
+                    }
 
                     for p in step.parameters: ParamRow {
                         p: p;
@@ -3032,6 +3184,18 @@ export global PipelinesPanelState {
         in property <string> open-component-name: "";
         /// What's wrong with the opened component (its checks), or empty.
         in property <string> open-component-problem: "";
+        // A component only looked at from a pipeline step: that it shows the
+        // step's values ("Shown with the values of step 1 …"), else empty.
+        in property <string> open-component-values: "";
+        // What the checks found in the whole project (`check_project`).
+        in property <[ProblemItem]> project-problems: [];
+        // How many of `project-problems` are errors.
+        in property <int> project-problem-errors: 0;
+        in-out property <bool> problems-expanded: false;
+        // Shows the step a problem is about (its `index`).
+        callback show-problem(int);
+        // Makes a problem's fix (its `index`).
+        callback fix-problem(int);
         /// The opened component is only being looked at ("View"): nothing can be
         /// changed.
         in property <bool> open-component-read-only: false;
@@ -3338,6 +3502,72 @@ export component PipelinesPanel inherits Rectangle {
                 }
             }
 
+            // --- 3b. The project's problems ---
+            if PipelinesPanelState.project-problems.length > 0: Rectangle {
+                background: Theme.bg;
+                VerticalLayout {
+                    padding-left: 14px;
+                    padding-right: 10px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    spacing: 6px;
+
+                    problems-head := HorizontalLayout {
+                        spacing: 6px;
+                        accessible-role: button;
+                        accessible-label: "Problems";
+                        Text {
+                            text: PipelinesPanelState.problems-expanded ? "▾" : "▸";
+                            font-size: 10px;
+                            color: Theme.text-mute;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: PipelinesPanelState.project-problem-errors > 0
+                                ? "⚠ \{PipelinesPanelState.project-problems.length} problems in the project - \{PipelinesPanelState.project-problem-errors} make a run fail"
+                                : "⚠ \{PipelinesPanelState.project-problems.length} things that look unintended";
+                            font-size: 11px;
+                            font-weight: 500;
+                            color: PipelinesPanelState.project-problem-errors > 0 ? Theme.err : Theme.warn;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if PipelinesPanelState.problems-expanded: ScrollView {
+                        height: min(problem-list.preferred-height, 220px);
+                        problem-list := VerticalLayout {
+                            spacing: 8px;
+                            padding-right: 6px;
+                            for item in PipelinesPanelState.project-problems: ProblemRow {
+                                item: item;
+                            }
+                        }
+                    }
+                }
+
+                // The head toggles the list (over the head only).
+                TouchArea {
+                    x: 0px;
+                    y: 0px;
+                    width: 100%;
+                    height: problems-head.height + 12px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        PipelinesPanelState.problems-expanded = !PipelinesPanelState.problems-expanded;
+                    }
+                }
+
+                Rectangle {
+                    x: 0px;
+                    y: parent.height - 1px;
+                    width: 100%;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+            }
+
             // --- 4. Category filter chips ---
        /*
         Rectangle {
@@ -3392,23 +3622,15 @@ export component PipelinesPanel inherits Rectangle {
         }
 */
         // --- 5. Step list (scrolling) ---
-        Rectangle {
+        // An opened component's bar stays on top while its steps scroll.
+        VerticalLayout {
                 vertical-stretch: 1;
 
-                ScrollView {
-                    VerticalLayout {
-                        // Steps at their own height - with a short pipeline the
-                        // stretchable parts of an expanded card (a section
-                        // header, the card's bottom) would fill the panel.
-                        alignment: start;
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        padding-bottom: 4px;
-                        padding-top: 8px;
-                        spacing: 0px;
-
-                        // -- An opened component --
-                    if PipelinesPanelState.open-component-name != "": Rectangle {
+                if PipelinesPanelState.open-component-name != "": VerticalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 8px;
+                    Rectangle {
                             // As high as its (wrapping) text needs.
                             height: bar.preferred-height;
                             border-radius: 6px;
@@ -3462,6 +3684,14 @@ export component PipelinesPanel inherits Rectangle {
                                         text: PipelinesPanelState.open-component-read-only ? "Viewing · read only" : "Changes apply to every use of this component · ◇ exposes a setting";
                                         font-size: 10px;
                                         color: Theme.text-mute;
+                                        wrap: word-wrap;
+                                        height: self.preferred-height;
+                                    }
+
+                                    if PipelinesPanelState.open-component-values != "": Text {
+                                        text: PipelinesPanelState.open-component-values;
+                                        font-size: 10px;
+                                        color: Theme.text-dim;
                                         wrap: word-wrap;
                                         height: self.preferred-height;
                                     }
@@ -3526,6 +3756,21 @@ export component PipelinesPanel inherits Rectangle {
                                 }
                             }
                         }
+
+                }
+
+                ScrollView {
+                vertical-stretch: 1;
+                    VerticalLayout {
+                        // Steps at their own height - with a short pipeline the
+                        // stretchable parts of an expanded card (a section
+                        // header, the card's bottom) would fill the panel.
+                        alignment: start;
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        padding-bottom: 4px;
+                        padding-top: 8px;
+                        spacing: 0px;
 
                         // -- EMPTY STATE --
                     if PipelinesPanelState.active-commands.length == 0: Rectangle {

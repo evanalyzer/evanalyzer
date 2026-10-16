@@ -128,6 +128,13 @@ impl FocusController {
         }
     }
 
+    /// Shows the project's classes again - after a pipeline edit added one
+    /// (a problem's "Add class" fix).
+    pub fn classes_changed(&self) {
+        self.classification_controller
+            .sync_classification_to_slint();
+    }
+
     fn focus(&self, pipeline_id: i32) {
         if pipeline_id < 0 {
             return;

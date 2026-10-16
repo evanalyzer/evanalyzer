@@ -33,7 +33,11 @@ pub mod settings_of {
 /// checks.
 pub mod components {
     pub use crate::workspace::component_checks::{
-        ComponentProblem, Severity, check_component, check_components, step_problem,
+        ComponentProblem, ProblemFix, Severity, apply_fix, check_component, check_components,
+        check_project, problems_at, step_problem,
+    };
+    pub use crate::workspace::component_insights::{
+        parameter_key, parameter_wiring, rekey_parameters, setting_wiring,
     };
     pub use crate::workspace::component_editing::{
         ClassRole, ComponentPlan, ComponentPlanClass, StepList, add_binding, apply_defaults,

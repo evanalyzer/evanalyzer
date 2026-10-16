@@ -661,7 +661,7 @@
           "default": ""
         },
         "key": {
-          "description": "Unique within the component definition, readable (`\"min_size\"`); the\ninstances' values are keyed by it.",
+          "description": "Unique within the component definition, made from its section and\nlabel (`\"tetraspeck_output_class\"`) so a project file says what a\nvalue is; the instances' values are keyed by it.",
           "$ref": "#/$defs/ComponentParamKey"
         },
         "label": {

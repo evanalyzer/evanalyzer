@@ -5,12 +5,20 @@
 //! what a run would refuse, reported per component and per step using it. The
 //! rest are things expansion can't see: duplicate keys, parameters binding
 //! settings of different kinds, and warnings for what works but probably
-//! isn't meant.
+//! isn't meant. [`check_project`] adds what only the whole project shows: a
+//! step's commands with its values against the images' channels, the
+//! classification and the other steps.
 
-use crate::workspace::component_editing::{same_kind, setting_at};
+use crate::workspace::component_editing::{remove_binding, same_kind, setting_at};
+use crate::workspace::component_insights::{
+    ResolvedCommand, channels_read, classes_in, created_classes, creates_objects, image_channels,
+    parameters_setting, resolved_commands,
+};
+use crate::workspace::extensions::classification_ext::ClassificationExt;
 use evanalyzer_cfg::{
-    core_types::{ObjectClass, PipelineId, StepId},
+    core_types::{ComponentParamKey, ImageAddress, ObjectClass, PipelineId, StepId},
     settings::{
+        classification_settings::Class,
         components::{ComponentDefinition, ComponentInstance},
         pipeline_command::PipelineCommand,
         pipeline_settings::{PipelineStepSettings, StepContent},
@@ -33,9 +41,75 @@ pub struct ComponentProblem {
     pub severity: Severity,
     /// The component it's about, if any.
     pub component: Option<String>,
-    /// The pipeline step it's about, if any: (pipeline, step id).
+    /// The pipeline step it's about, if any: (pipeline, step id) - the step
+    /// id [`StepId::UNASSIGNED`] for the pipeline itself (its image source).
     pub step: Option<(PipelineId, StepId)>,
     pub message: String,
+    /// The component parameters it's about: of the step's component for a
+    /// problem at a step, else of `component`.
+    pub parameters: Vec<ComponentParamKey>,
+    /// What fixes it with one click, if anything does.
+    pub fix: Option<ProblemFix>,
+}
+
+/// A fix [`apply_fix`] makes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProblemFix {
+    /// Adds project class `id` to the classification.
+    AddClass(u32),
+    /// Parameter `parameter` of component `component` stops setting `path`
+    /// of step `step` (labelled `label`).
+    RemoveBinding {
+        component: String,
+        parameter: ComponentParamKey,
+        step: StepId,
+        path: String,
+        label: String,
+    },
+}
+
+impl ProblemFix {
+    /// What the fix's button says.
+    pub fn label(&self) -> String {
+        match self {
+            ProblemFix::AddClass(id) => format!("Add class {id}"),
+            ProblemFix::RemoveBinding { label, .. } => format!("Stop setting {label}"),
+        }
+    }
+}
+
+/// Makes `fix` in `project`. Returns whether something changed.
+pub fn apply_fix(project: &mut ProjectSettings, fix: &ProblemFix) -> bool {
+    match fix {
+        ProblemFix::AddClass(id) => project
+            .classification
+            .add_class_with_id(Class {
+                id: *id,
+                color: class_color(*id),
+                name: format!("Class {id}"),
+                notes: String::new(),
+            })
+            .is_ok(),
+        ProblemFix::RemoveBinding {
+            component,
+            parameter,
+            step,
+            path,
+            ..
+        } => project
+            .components
+            .iter_mut()
+            .find(|d| &d.key == component)
+            .is_some_and(|d| remove_binding(d, parameter, *step, path)),
+    }
+}
+
+/// A color for a class added by a fix - one of a few distinct ones.
+fn class_color(id: u32) -> u32 {
+    const COLORS: [u32; 8] = [
+        0xe6194b, 0x3cb44b, 0xffe119, 0x4363d8, 0xf58231, 0x911eb4, 0x46f0f0, 0xf032e6,
+    ];
+    COLORS[id as usize % COLORS.len()]
 }
 
 impl ComponentProblem {
@@ -45,7 +119,19 @@ impl ComponentProblem {
             component: component.map(str::to_string),
             step,
             message,
+            parameters: Vec::new(),
+            fix: None,
         }
+    }
+
+    fn about(mut self, parameters: Vec<ComponentParamKey>) -> Self {
+        self.parameters = parameters;
+        self
+    }
+
+    fn fixed_by(mut self, fix: ProblemFix) -> Self {
+        self.fix = Some(fix);
+        self
     }
 
     fn warning(
@@ -119,11 +205,12 @@ pub fn check_components(project: &ProjectSettings) -> Vec<ComponentProblem> {
                     {
                         problems.push(ComponentProblem::error(None, at, e.to_string()));
                     }
-                    problems.extend(
-                        missing_mapped_classes(project, command)
-                            .into_iter()
-                            .map(|message| ComponentProblem::warning(None, at, message)),
-                    );
+                    problems.extend(missing_created_classes(project, command).into_iter().map(
+                        |(message, id, _)| {
+                            ComponentProblem::warning(None, at, message)
+                                .fixed_by(ProblemFix::AddClass(id))
+                        },
+                    ));
                 }
             }
         }
@@ -156,6 +243,284 @@ pub fn step_problem(project: &ProjectSettings, step: &PipelineStepSettings) -> O
         .map(|e| e.to_string())
 }
 
+/// Every problem of the project: [`check_components`]'s, and what the
+/// steps do with their values - the classes they create (of the
+/// classification, twice, by two parameters of one component step), the
+/// channels they read (of the images), an overlap with the class itself.
+pub fn check_project(project: &ProjectSettings) -> Vec<ComponentProblem> {
+    let mut problems = check_components(project);
+    problems.extend(check_steps(project));
+    problems
+}
+
+/// The problems at pipeline step `step_id` of pipeline `pipeline` among
+/// `problems` (as [`check_project`] finds them).
+pub fn problems_at(
+    problems: &[ComponentProblem],
+    pipeline: PipelineId,
+    step_id: StepId,
+) -> Vec<&ComponentProblem> {
+    problems
+        .iter()
+        .filter(|p| p.step == Some((pipeline, step_id)))
+        .collect()
+}
+
+/// A class as a message names it: `3 “Nuclei”`, or `3` if the project
+/// doesn't have it.
+fn class_label(project: &ProjectSettings, class: ObjectClass) -> String {
+    match class {
+        ObjectClass::Global(n) => project
+            .classification
+            .classes()
+            .iter()
+            .find(|c| c.id == n)
+            .filter(|c| !c.name.is_empty())
+            .map_or_else(|| n.to_string(), |c| format!("{n} “{}”", c.name)),
+        other => other.to_text(),
+    }
+}
+
+/// A component parameter as a message names it: “Output class” (Tetraspeck).
+fn parameter_label(definition: &ComponentDefinition, key: &ComponentParamKey) -> String {
+    definition
+        .parameters
+        .iter()
+        .find(|p| &p.key == key)
+        .map_or_else(
+            || key.to_string(),
+            |p| match p.section.as_str() {
+                "" => format!("“{}”", p.label),
+                section => format!("“{}” ({section})", p.label),
+            },
+        )
+}
+
+/// What [`check_project`] adds to [`check_components`].
+fn check_steps(project: &ProjectSettings) -> Vec<ComponentProblem> {
+    let mut problems = Vec::new();
+    let channels = image_channels(project);
+    // Each project class created: by which step (pipeline, step, a label).
+    let mut creators: Vec<(u32, (PipelineId, StepId), String)> = Vec::new();
+
+    for pipeline in &project.pipelines {
+        if let (Some(channels), ImageAddress::Channel(channel)) = (&channels, pipeline.image_source)
+            && channel as usize >= channels.fewest
+        {
+            problems.push(ComponentProblem::error(
+                None,
+                Some((pipeline.id, StepId::UNASSIGNED)),
+                format!(
+                    "Pipeline “{}” starts from channel {channel}, but {}",
+                    pipeline.name,
+                    channels.describe()
+                ),
+            ));
+        }
+
+        for (index, step) in pipeline.steps.iter().enumerate() {
+            let at = Some((pipeline.id, step.id));
+            let instance = match &step.content {
+                StepContent::Component(instance) => Some(instance),
+                StepContent::Command(_) => None,
+            };
+            let definition =
+                instance.and_then(|i| project.components.iter().find(|d| d.key == i.key));
+            let resolved = resolved_commands(step, &project.components);
+            // The step's parameters setting `path` of `command`.
+            let setting = |command: &ResolvedCommand, path: &str| match definition {
+                Some(definition) => {
+                    parameters_setting(definition, &project.components, &command.steps, path)
+                }
+                None => Vec::new(),
+            };
+            // "ClassifyObjects (its step 14)" - "(its step 8 › 7)" nested -
+            // or the command's name.
+            let what = |command: &ResolvedCommand| match command.steps.as_slice() {
+                [] => command.command.name().to_string(),
+                steps => format!(
+                    "{} (its step {})",
+                    command.command.name(),
+                    steps
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" › ")
+                ),
+            };
+            let this_step = match definition {
+                Some(d) => format!(
+                    "step {} “{}” of “{}”",
+                    index + 1,
+                    d.meta.name,
+                    pipeline.name
+                ),
+                None => format!(
+                    "step {} ({}) of “{}”",
+                    index + 1,
+                    step.command().map_or("", |c| c.name()),
+                    pipeline.name
+                ),
+            };
+
+            for command in &resolved {
+                if let Some(channels) = &channels {
+                    for (path, channel) in channels_read(&command.command) {
+                        if channel as usize >= channels.fewest {
+                            problems.push(
+                                ComponentProblem::error(
+                                    None,
+                                    at,
+                                    format!(
+                                        "{} reads channel {channel}, but {}",
+                                        what(command),
+                                        channels.describe()
+                                    ),
+                                )
+                                .about(setting(command, &path)),
+                            );
+                        }
+                    }
+                }
+
+                if let PipelineCommand::ClassifyObjects(classify) = &command.command
+                    && classify.overlapping_with != ObjectClass::Unset
+                    && classify.input_classes.contains(&classify.overlapping_with)
+                {
+                    let mut about = setting(command, "overlapping_with");
+                    about.extend(setting(command, "input_classes"));
+                    about.dedup();
+                    problems.push(
+                        ComponentProblem::warning(
+                            None,
+                            at,
+                            format!(
+                                "{} looks at class {} objects overlapping another class {} \
+                                 object - “Overlapping with” is usually another class",
+                                what(command),
+                                class_label(project, classify.overlapping_with),
+                                class_label(project, classify.overlapping_with),
+                            ),
+                        )
+                        .about(about),
+                    );
+                }
+
+                for (path, class) in created_classes(&command.command) {
+                    let ObjectClass::Global(n) = class else {
+                        continue;
+                    };
+                    if !creators
+                        .iter()
+                        .any(|(c, s, _)| *c == n && *s == (pipeline.id, step.id))
+                    {
+                        creators.push((n, (pipeline.id, step.id), this_step.clone()));
+                    }
+                    // A command step's are reported by `check_components`.
+                    if definition.is_some()
+                        && !project.classification.classes().iter().any(|c| c.id == n)
+                        && !problems.iter().any(|p: &ComponentProblem| {
+                            p.step == at && p.fix == Some(ProblemFix::AddClass(n))
+                        })
+                    {
+                        problems.push(
+                            ComponentProblem::warning(
+                                None,
+                                at,
+                                format!(
+                                    "{} creates objects of class {n}, which the project \
+                                     doesn't have",
+                                    what(command)
+                                ),
+                            )
+                            .about(setting(command, &path))
+                            .fixed_by(ProblemFix::AddClass(n)),
+                        );
+                    }
+                }
+            }
+
+            // Two parameters of one component step creating the same class.
+            if let (Some(instance), Some(definition)) = (instance, definition) {
+                problems.extend(colliding_parameters(project, definition, instance, at));
+            }
+        }
+    }
+
+    // The same class created by different steps.
+    for (n, at, _) in &creators {
+        let others: Vec<&str> = creators
+            .iter()
+            .filter(|(m, other, _)| m == n && other != at)
+            .map(|(_, _, label)| label.as_str())
+            .collect();
+        if !others.is_empty() {
+            problems.push(ComponentProblem::warning(
+                None,
+                Some(*at),
+                format!(
+                    "Class {} is also created by {} - objects of both end up in one class",
+                    class_label(project, ObjectClass::Global(*n)),
+                    others.join(", ")
+                ),
+            ));
+        }
+    }
+    problems
+}
+
+/// Warnings for the parameters of `instance` (a step at `at`) that create
+/// objects of the same class - their objects can't be told apart after.
+fn colliding_parameters(
+    project: &ProjectSettings,
+    definition: &ComponentDefinition,
+    instance: &ComponentInstance,
+    at: Option<(PipelineId, StepId)>,
+) -> Vec<ComponentProblem> {
+    // Class → the parameters creating it, in parameter order.
+    let mut by_class: Vec<(ObjectClass, Vec<ComponentParamKey>)> = Vec::new();
+    for parameter in &definition.parameters {
+        if !creates_objects(definition, &project.components, parameter) {
+            continue;
+        }
+        let value = instance
+            .values
+            .get(&parameter.key)
+            .unwrap_or(&parameter.default);
+        for class in classes_in(value) {
+            match by_class.iter_mut().find(|(c, _)| *c == class) {
+                Some((_, keys)) => keys.push(parameter.key.clone()),
+                None => by_class.push((class, vec![parameter.key.clone()])),
+            }
+        }
+    }
+    by_class
+        .into_iter()
+        .filter(|(_, keys)| keys.len() > 1)
+        .map(|(class, keys)| {
+            let names: Vec<String> = keys
+                .iter()
+                .map(|k| parameter_label(definition, k))
+                .collect();
+            let names = match names.split_last() {
+                Some((last, [])) => last.clone(),
+                Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+                None => String::new(),
+            };
+            ComponentProblem::warning(
+                Some(&definition.key),
+                at,
+                format!(
+                    "{names} both create objects of class {} - their objects can't be told \
+                     apart after; give each its own class",
+                    class_label(project, class)
+                ),
+            )
+            .about(keys)
+        })
+        .collect()
+}
+
 fn check_definition(
     project: &ProjectSettings,
     definition: &ComponentDefinition,
@@ -178,11 +543,14 @@ fn check_definition(
 
     for parameter in &definition.parameters {
         if parameter.bindings.is_empty() {
-            problems.push(ComponentProblem::warning(
-                key,
-                None,
-                named(format!("parameter \"{}\" sets nothing", parameter.label)),
-            ));
+            problems.push(
+                ComponentProblem::warning(
+                    key,
+                    None,
+                    named(format!("parameter \"{}\" sets nothing", parameter.label)),
+                )
+                .about(vec![parameter.key.clone()]),
+            );
             continue;
         }
         // What kind of setting each binding sets - all the same, or the
@@ -195,7 +563,7 @@ fn check_definition(
             };
             if let Some(command) = step.command() {
                 match setting_at(command, &binding.param) {
-                    Some((setting, label)) => kinds.push((setting, label)),
+                    Some((setting, label)) => kinds.push((setting, label, binding)),
                     None => problems.push(error(named(format!(
                         "parameter \"{}\" is bound to {} of step {}, which {} doesn't have",
                         parameter.label,
@@ -206,15 +574,26 @@ fn check_definition(
                 }
             }
         }
-        if let Some((first_setting, first)) = kinds.first()
-            && let Some((_, other)) = kinds
+        if let Some((first_setting, first, _)) = kinds.first()
+            && let Some((_, other, binding)) = kinds
                 .iter()
-                .find(|(setting, _)| !same_kind(first_setting, setting))
+                .find(|(setting, _, _)| !same_kind(first_setting, setting))
         {
-            problems.push(error(named(format!(
-                "parameter \"{}\" sets {first} and {other}, which are different kinds of setting",
-                parameter.label
-            ))));
+            problems.push(
+                error(named(format!(
+                    "parameter \"{}\" sets {first} and {other}, which are different kinds of \
+                     setting",
+                    parameter.label
+                )))
+                .about(vec![parameter.key.clone()])
+                .fixed_by(ProblemFix::RemoveBinding {
+                    component: definition.key.clone(),
+                    parameter: parameter.key.clone(),
+                    step: binding.step,
+                    path: binding.param.clone(),
+                    label: format!("{other} (step {})", binding.step),
+                }),
+            );
         }
     }
 
@@ -256,36 +635,58 @@ fn check_definition(
                 )),
             ));
         }
-        problems.extend(
-            missing_mapped_classes(project, command)
-                .into_iter()
-                .map(|message| ComponentProblem::warning(key, None, named(message))),
-        );
+        problems.extend(missing_created_classes(project, command).into_iter().map(
+            |(message, id, path)| {
+                ComponentProblem::warning(key, None, named(message))
+                    .about(parameters_setting(
+                        definition,
+                        &project.components,
+                        &[step.id],
+                        &path,
+                    ))
+                    .fixed_by(ProblemFix::AddClass(id))
+            },
+        ));
     }
     problems
 }
 
-/// An Extract Objects mapping to project classes the project doesn't have.
-fn missing_mapped_classes(project: &ProjectSettings, command: &PipelineCommand) -> Vec<String> {
-    let PipelineCommand::ExtractObjects(extract) = command else {
-        return Vec::new();
-    };
-    extract
-        .class_mapping
-        .iter()
-        .filter_map(|mapping| match mapping.object_class {
-            ObjectClass::Global(n)
-                if !project.classification.classes().iter().any(|c| c.id == n) =>
-            {
-                Some(format!(
-                    "Extract Objects maps segmentation class {} to class {n}, which the project \
-                     doesn't have",
-                    mapping.segmentation_class.0
-                ))
+/// The project classes `command` creates objects of that the project
+/// doesn't have: a message, the class, and the setting giving it.
+fn missing_created_classes(
+    project: &ProjectSettings,
+    command: &PipelineCommand,
+) -> Vec<(String, u32, String)> {
+    let mut missing: Vec<(String, u32, String)> = Vec::new();
+    for (path, class) in created_classes(command) {
+        let ObjectClass::Global(n) = class else {
+            continue;
+        };
+        if project.classification.classes().iter().any(|c| c.id == n)
+            || missing.iter().any(|(_, m, _)| *m == n)
+        {
+            continue;
+        }
+        let message = match (command, path.split('.').nth(1)) {
+            (PipelineCommand::ExtractObjects(extract), Some(index)) => {
+                let segmentation = index
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| extract.class_mapping.get(i))
+                    .map_or(0, |m| m.segmentation_class.0);
+                format!(
+                    "Extract Objects maps segmentation class {segmentation} to class {n}, which \
+                     the project doesn't have"
+                )
             }
-            _ => None,
-        })
-        .collect()
+            _ => format!(
+                "{} creates objects of class {n}, which the project doesn't have",
+                command.name()
+            ),
+        };
+        missing.push((message, n, path));
+    }
+    missing
 }
 
 #[cfg(test)]
@@ -514,5 +915,342 @@ mod tests {
             .collect();
         create_component(&mut project, PipelineId(1), 0..=1, "Twice", &roles).unwrap();
         assert_eq!(check_components(&project), []);
+    }
+
+    /// One parameter setting the input classes of a classify step and the
+    /// classes of a colocalization: both class lists, whatever they hold.
+    #[test]
+    fn class_lists_holding_different_classes_are_one_kind() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::ClassifyObjectsSettings;
+        let mut project = project();
+        let definition = &mut project.components[0];
+        definition.steps = vec![
+            step(
+                1,
+                PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                    input_classes: vec![ObjectClass::Global(1)],
+                    ..Default::default()
+                }),
+            ),
+            step(
+                2,
+                PipelineCommand::Colocalization(ColocalizationSettings {
+                    classes_to_coloc: vec![
+                        ObjectClass::Global(1),
+                        ObjectClass::Global(2),
+                        ObjectClass::Global(3),
+                    ],
+                    ..Default::default()
+                }),
+            ),
+        ];
+        definition.parameters[0].default = ParamValue::Int(1);
+        definition.parameters[0].bindings = vec![
+            ParamBinding {
+                step: StepId(1),
+                param: "input_classes".into(),
+            },
+            ParamBinding {
+                step: StepId(2),
+                param: "classes_to_coloc".into(),
+            },
+        ];
+        let text = messages(&check_component(&project, "SMOOTH")).join("\n");
+        assert!(!text.contains("different kinds"), "{text}");
+    }
+
+    #[test]
+    fn a_parameter_of_two_kinds_can_stop_setting_the_other() {
+        let mut project = project();
+        let definition = &mut project.components[0];
+        definition.steps.push(step(
+            2,
+            PipelineCommand::Voronoi(VoronoiSettings::default()),
+        ));
+        definition.parameters[0].bindings.push(ParamBinding {
+            step: StepId(2),
+            param: "output_class".into(),
+        });
+        let problems = check_component(&project, "SMOOTH");
+        let fix = problems
+            .iter()
+            .find_map(|p| p.fix.clone())
+            .expect("a fix for the second binding");
+        assert!(fix.label().starts_with("Stop setting"), "{}", fix.label());
+        assert!(apply_fix(&mut project, &fix));
+        assert_eq!(project.components[0].parameters[0].bindings.len(), 1);
+        assert_eq!(check_component(&project, "SMOOTH"), []);
+    }
+
+    /// The project's mistakes in small: SPOTS detects spots (its "Spot"
+    /// parameters) and beads ("Bead"), and removes spots on beads.
+    fn spots_project() -> ProjectSettings {
+        use evanalyzer_cfg::core_types::ImageChannelIdx;
+        use evanalyzer_cfg::settings::images_settings::{
+            ChannelSettings, ImageEntry, SeriesSettings,
+        };
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ClassifyObjectsSettings, LoadChannelSettings,
+        };
+        let extract = |class: u32| {
+            PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+                class_mapping: vec![ExtractClassMappingSettings {
+                    segmentation_class: SegmentationClass(1),
+                    object_class: ObjectClass::Global(class),
+                }],
+                ..Default::default()
+            })
+        };
+        let parameter =
+            |key: &str, section: &str, label: &str, default: i64, bindings: &[(u32, &str)]| {
+                ComponentParameterDef {
+                    key: ComponentParamKey::from(key),
+                    label: label.into(),
+                    description: String::new(),
+                    section: section.into(),
+                    default: ParamValue::Int(default),
+                    bindings: bindings
+                        .iter()
+                        .map(|(step, param)| ParamBinding {
+                            step: StepId(*step),
+                            param: param.to_string(),
+                        })
+                        .collect(),
+                }
+            };
+        let mut project = ProjectSettings::default();
+        for (id, name) in [(1, "Spot"), (2, "Bead")] {
+            project.classification.classes_mut().push(Class {
+                id,
+                name: name.into(),
+                ..Default::default()
+            });
+        }
+        let mut series = SeriesSettings::default();
+        for (channel, name) in ["CY5", "FITC"].iter().enumerate() {
+            series.channels.insert(
+                channel as i32,
+                ChannelSettings {
+                    name: name.to_string(),
+                    ..Default::default()
+                },
+            );
+        }
+        project.images.list.insert(
+            "a.vsi".into(),
+            ImageEntry {
+                series: [(0, series)].into(),
+                ..Default::default()
+            },
+        );
+        let mut definition = ComponentDefinition {
+            key: "SPOTS".into(),
+            meta: Default::default(),
+            classes: vec![],
+            steps: vec![
+                step(
+                    1,
+                    PipelineCommand::LoadChannel(LoadChannelSettings {
+                        channel: ImageChannelIdx(0),
+                    }),
+                ),
+                step(2, extract(1)),
+                step(
+                    3,
+                    PipelineCommand::LoadChannel(LoadChannelSettings {
+                        channel: ImageChannelIdx(1),
+                    }),
+                ),
+                step(4, extract(2)),
+                step(
+                    5,
+                    PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
+                        input_classes: vec![ObjectClass::Global(1)],
+                        overlapping_with: ObjectClass::Global(2),
+                        ..Default::default()
+                    }),
+                ),
+            ],
+            parameters: vec![
+                parameter("spot_channel", "Spot", "Channel", 0, &[(1, "channel")]),
+                parameter(
+                    "spot_class",
+                    "Spot",
+                    "Output class",
+                    1,
+                    &[(2, "class_mapping.0.object_class"), (5, "input_classes")],
+                ),
+                parameter("bead_channel", "Bead", "Channel", 1, &[(3, "channel")]),
+                parameter(
+                    "bead_class",
+                    "Bead",
+                    "Output class",
+                    2,
+                    &[(4, "class_mapping.0.object_class"), (5, "overlapping_with")],
+                ),
+            ],
+            origin: None,
+        };
+        definition.meta.name = "Spots".into();
+        project.components.push(definition);
+        project.pipelines.push(PipelineSettings {
+            id: PipelineId(1),
+            name: "Spots".into(),
+            description: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![uses(1, "SPOTS", &[])],
+        });
+        project
+    }
+
+    fn set(project: &mut ProjectSettings, step: usize, key: &str, value: i64) {
+        let StepContent::Component(instance) = &mut project.pipelines[0].steps[step].content else {
+            panic!("a component step");
+        };
+        instance
+            .values
+            .insert(ComponentParamKey::from(key), ParamValue::Int(value));
+    }
+
+    #[test]
+    fn the_spots_project_at_its_defaults_has_no_problems() {
+        assert_eq!(
+            messages(&check_project(&spots_project())),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Beads given the spots' class: the spots on beads are then compared
+    /// with spots, and beads count as spots.
+    #[test]
+    fn two_parameters_creating_one_class_are_named_at_the_step() {
+        let mut project = spots_project();
+        set(&mut project, 0, "bead_class", 1);
+        let problems = check_project(&project);
+        let collision = problems
+            .iter()
+            .find(|p| p.message.contains("both create objects of class 1 “Spot”"))
+            .unwrap_or_else(|| panic!("{:?}", messages(&problems)));
+        assert_eq!(collision.step, Some((PipelineId(1), StepId(1))));
+        assert!(
+            collision
+                .message
+                .starts_with("“Output class” (Spot) and “Output class” (Bead)"),
+            "{}",
+            collision.message
+        );
+        assert_eq!(
+            collision.parameters,
+            [
+                ComponentParamKey::from("spot_class"),
+                ComponentParamKey::from("bead_class")
+            ]
+        );
+        let overlap = problems
+            .iter()
+            .find(|p| p.message.contains("overlapping another class 1"))
+            .unwrap_or_else(|| panic!("{:?}", messages(&problems)));
+        assert!(
+            overlap.message.starts_with("ClassifyObjects (its step 5)"),
+            "{}",
+            overlap.message
+        );
+        assert_eq!(
+            overlap.parameters,
+            [
+                ComponentParamKey::from("bead_class"),
+                ComponentParamKey::from("spot_class")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_channel_the_images_dont_have_is_an_error_at_the_parameter_setting_it() {
+        let mut project = spots_project();
+        set(&mut project, 0, "bead_channel", 3);
+        project.pipelines[0].image_source = ImageAddress::Channel(2);
+        let problems = check_project(&project);
+        let errors: Vec<&ComponentProblem> = problems
+            .iter()
+            .filter(|p| p.severity == Severity::Error)
+            .collect();
+        assert_eq!(errors.len(), 2, "{:?}", messages(&problems));
+        assert_eq!(
+            errors[0].message,
+            "Pipeline “Spots” starts from channel 2, but the images have only channels 0–1 \
+             (CY5, FITC)"
+        );
+        assert_eq!(errors[0].step, Some((PipelineId(1), StepId::UNASSIGNED)));
+        assert_eq!(
+            errors[1].message,
+            "LoadChannel (its step 3) reads channel 3, but the images have only \
+             channels 0–1 (CY5, FITC)"
+        );
+        assert_eq!(
+            errors[1].parameters,
+            [ComponentParamKey::from("bead_channel")]
+        );
+    }
+
+    #[test]
+    fn a_class_created_by_two_steps_is_reported_at_both() {
+        let mut project = spots_project();
+        project.pipelines[0].steps.push(step(
+            2,
+            PipelineCommand::ExtractObjects(ExtractObjectsSettings {
+                class_mapping: vec![ExtractClassMappingSettings {
+                    segmentation_class: SegmentationClass(1),
+                    object_class: ObjectClass::Global(2),
+                }],
+                ..Default::default()
+            }),
+        ));
+        let problems = check_project(&project);
+        let at: Vec<Option<(PipelineId, StepId)>> = problems
+            .iter()
+            .filter(|p| p.message.starts_with("Class 2 “Bead” is also created by"))
+            .map(|p| p.step)
+            .collect();
+        assert_eq!(
+            at,
+            [
+                Some((PipelineId(1), StepId(1))),
+                Some((PipelineId(1), StepId(2)))
+            ],
+            "{:?}",
+            messages(&problems)
+        );
+        assert!(
+            problems.iter().any(|p| p.message
+                == "Class 2 “Bead” is also created by step 2 (ExtractObjects) of “Spots” - \
+                    objects of both end up in one class"),
+            "{:?}",
+            messages(&problems)
+        );
+    }
+
+    #[test]
+    fn a_class_a_step_creates_and_the_project_lacks_can_be_added() {
+        let mut project = spots_project();
+        set(&mut project, 0, "bead_class", 7);
+        let problems = check_project(&project);
+        let missing = problems
+            .iter()
+            .find(|p| p.fix == Some(ProblemFix::AddClass(7)))
+            .unwrap_or_else(|| panic!("{:?}", messages(&problems)));
+        assert_eq!(missing.parameters, [ComponentParamKey::from("bead_class")]);
+        assert_eq!(missing.fix.as_ref().unwrap().label(), "Add class 7");
+        assert!(apply_fix(&mut project, missing.fix.as_ref().unwrap()));
+        assert!(project.classification.classes().iter().any(|c| c.id == 7));
+        assert!(
+            !check_project(&project)
+                .iter()
+                .any(|p| p.fix == Some(ProblemFix::AddClass(7)))
+        );
+        assert!(
+            !apply_fix(&mut project, &ProblemFix::AddClass(7)),
+            "added already"
+        );
     }
 }
