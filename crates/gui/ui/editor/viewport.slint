@@ -1,19 +1,10 @@
+import { GlobalAppState, HistogramState } from "../api/state.slint";
+import { MarkerData, ToolState, ViewportObjectState, ViewportState } from "../api/viewport.slint";
+import { ClassificationState } from "../api/classification.slint";
 import { Theme } from "../style.slint";
-import {
-    GlobalAppState,
-    HistogramState,
-    ImagePixelInfo,
-} from "../state.slint";
+
 import { ScaleBar } from "viewport_scalebar.slint";
 import { Navigator } from "viewport_navigator.slint";
-import {
-    ViewportState,
-    ViewportObjectState,
-    ToolState,
-    MarkerData,
-} from "viewport_state.slint";
-import { ClassificationState } from "classification_panel.slint";
-
 
 export component Viewport inherits Rectangle {
     property <length> last_mouse_x: 0;
@@ -22,6 +13,10 @@ export component Viewport inherits Rectangle {
     in-out property <image> ghost_image;
     in-out property <image> object_image;
     in property <bool> enabled;
+    // Room the floating panels take at the left and right: the scale bar
+    // and the navigator stay beside them.
+    in property <length> inset-left: 0px;
+    in property <length> inset-right: 0px;
     property <duration> last-click-time: 0ms;
 
     background: Theme.bg-viewport;
@@ -289,72 +284,16 @@ export component Viewport inherits Rectangle {
         }
 
         ScaleBar {
-            x: 0;
+            x: root.inset-left;
             y: parent.height - self.height;
             bar_width: ViewportState.scale_bar_width;
             unit_text: ViewportState.scale_bar_text;
         }
     }
 
-    Rectangle {
-        x: 10px;
-        y: 10px;
-
-        hud_layout := VerticalLayout {
-            spacing: 2px;
-
-            // --- Position Line ---
-            Rectangle {
-                // The Rectangle will shrink-wrap the text
-                width: pos_label.width + 1px;
-                height: pos_label.height + 1px;
-
-                // Shadow (drawn first = bottom)
-                Text {
-                    x: 1px;
-                    y: 1px;
-                    text: "Position: " + ImagePixelInfo.mouse_pos;
-                    color: Theme.text;
-                    font-size: 12px;
-                }
-                // Main Text (drawn second = top)
-                pos_label := Text {
-                    x: 0px;
-                    y: 0px;
-                    text: "Position: " + ImagePixelInfo.mouse_pos;
-                    color: Theme.text-pixel-info;
-                    font-size: 12px;
-                }
-            }
-
-            // --- Value Line ---
-            Rectangle {
-                width: val_label.width + 1px;
-                height: val_label.height + 1px;
-
-                // Shadow
-                Text {
-                    x: 1px;
-                    y: 1px;
-                    text: "Value: " + ImagePixelInfo.pixel_value;
-                    color: Theme.text;
-                    font-size: 12px;
-                }
-                // Main Text
-                val_label := Text {
-                    x: 0px;
-                    y: 0px;
-                    text: "Value: " + ImagePixelInfo.pixel_value;
-                    color: Theme.text-pixel-info;
-                    font-size: 12px;
-                }
-            }
-        }
-    }
-
     Navigator {
         // Position it in the bottom right corner
-        x: parent.width - self.width - 15px;
+        x: parent.width - self.width - 15px - root.inset-right;
         y: parent.height - self.height - 15px;
 
         // Bind to your ViewportState properties
@@ -396,7 +335,7 @@ export component Viewport inherits Rectangle {
                 }
 
                     // Paint object
-                if (ViewportObjectState.act_tool_state != ToolState.Move && ViewportObjectState.act_tool_state != ToolState.Select && ViewportObjectState.act_tool_state != ToolState.PaintMarker) {
+                if (ViewportObjectState.act_tool_state == ToolState.PaintRectangle || ViewportObjectState.act_tool_state == ToolState.PaintOval || ViewportObjectState.act_tool_state == ToolState.PaintPolygon) {
                     if ClassificationState.selected_class_id < 0 {
                         // Tell the user to select a class
                     } else {
@@ -471,7 +410,6 @@ export component Viewport inherits Rectangle {
             let scale_factor = Math.pow(1 + zoom_intensity, raw_delta);
             let old_zoom = ViewportState.zoom_factor;
             let new_zoom = Math.max(0.005, ViewportState.zoom_factor * scale_factor);
-
 
             // Zoom towards center of the viewport
             // To zoom towards mouse, use self.mouse-x instead of root.width/2

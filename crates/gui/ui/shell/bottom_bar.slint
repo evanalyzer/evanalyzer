@@ -1,0 +1,118 @@
+// shell/bottom_bar.slint — the bar at the bottom: the modes (Images,
+// Pipelines, Results) and the status - where the work runs, what the
+// viewport does, objects, zoom.
+
+import { Ink, InkIcons, InkTone, InkModeTab, InkStatusItem, InkBarSeparator } from "../ink/ink.slint";
+import { LayoutState, WorkspaceMode } from "../api/layout.slint";
+import { ConnectionState, ImagePixelInfo } from "../api/state.slint";
+import { ViewportObjectState, ViewportState } from "../api/viewport.slint";
+import { ClassificationState } from "../api/classification.slint";
+import { ResultsState } from "../api/results.slint";
+
+export component BottomBar inherits Rectangle {
+    property <bool> secure: ConnectionState.encrypted && ConnectionState.verified;
+
+    height: Ink.status-h;
+    background: Ink.panel;
+
+    Rectangle {
+        y: 0px;
+        height: 1px;
+        background: Ink.border;
+    }
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 8px;
+        spacing: 2px;
+
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 2px;
+                InkModeTab {
+                    text: "Images";
+                    active: LayoutState.mode == WorkspaceMode.images;
+                    clicked => {
+                        LayoutState.mode = WorkspaceMode.images;
+                    }
+                }
+                InkModeTab {
+                    text: "Pipelines";
+                    active: LayoutState.mode == WorkspaceMode.pipelines;
+                    clicked => {
+                        LayoutState.mode = WorkspaceMode.pipelines;
+                    }
+                }
+                InkModeTab {
+                    text: "Results";
+                    active: LayoutState.mode == WorkspaceMode.results;
+                    clicked => {
+                        LayoutState.mode = WorkspaceMode.results;
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 2px;
+                // Results: the database shown.
+                if LayoutState.mode == WorkspaceMode.results: InkStatusItem {
+                    icon: ResultsState.loading ? InkIcons.busy : InkIcons.table;
+                    text: (ResultsState.loading ? "Loading" : "Ready") + (ResultsState.database-name == "" ? "" : " · " + ResultsState.database-name);
+                }
+                // Under the pointer.
+                if LayoutState.mode != WorkspaceMode.results: HorizontalLayout {
+                    spacing: 2px;
+                    InkStatusItem {
+                        visible: ImagePixelInfo.mouse_pos != "";
+                        text: ImagePixelInfo.mouse_pos;
+                        mono: true;
+                    }
+                    InkStatusItem {
+                        visible: ImagePixelInfo.pixel_value != "";
+                        text: ImagePixelInfo.pixel_value;
+                        mono: true;
+                    }
+                    InkBarSeparator {
+                        y: (parent.height - self.height) / 2;
+                    }
+                    InkStatusItem {
+                        icon: !ViewportState.high_res_ready ? InkIcons.busy : InkIcons.check;
+                        text: ViewportObjectState.is_drawing ? "Drawing" : !ViewportState.high_res_ready ? "Rendering" : "Ready";
+                    }
+                    InkStatusItem {
+                        icon: InkIcons.objects;
+                        text: ClassificationState.total_visible_objects + " objects";
+                        mono: true;
+                    }
+                    InkStatusItem {
+                        text: "Zoom " + round(ViewportState.zoom_factor * 100) + "%";
+                        mono: true;
+                    }
+                }
+                InkBarSeparator {
+                    y: (parent.height - self.height) / 2;
+                }
+                InkStatusItem {
+                    icon: !ConnectionState.remote ? InkIcons.computer : InkIcons.server;
+                    tone: !ConnectionState.remote ? InkTone.neutral
+                        : !ConnectionState.connected ? InkTone.err
+                        : !root.secure ? InkTone.warn
+                        : InkTone.ok;
+                    text: !ConnectionState.remote ? ConnectionState.label
+                        : !ConnectionState.connected ? ConnectionState.label + " - disconnected"
+                        : !ConnectionState.encrypted ? ConnectionState.label + " - unencrypted"
+                        : !ConnectionState.verified ? ConnectionState.label + " - server not verified"
+                        : ConnectionState.label;
+                }
+            }
+        }
+    }
+}

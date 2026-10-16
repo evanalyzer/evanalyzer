@@ -1,558 +1,527 @@
-// image_control_panel.slint - redesigned right-side image controls
-//
-// What changed vs. the original (and why):
-//   1. SERIES PICKER - cleaner: includes a "SERIES" caplet + series count so
-//      the user knows context, not just a generic dropdown.
-//   2. CHANNELS - adds a color swatch (toggle by click), name, intensity slider,
-//      and live % readout per channel. Replaces the simple Switch.
-//        Optional state-additions: extend ChannelState's channel struct with
-//          color: color,            // per-channel display color
-//          intensity: int,          // 0..100
-//        OR rely on the index-based helper `channel-color(i)` below which maps
-//        index 0..4 to the EVAnalyzer channel palette.
-//   3. Z-PROJECTION - segmented-pill mode selector (Single/Max/Min/Avg/Sum)
-//      instead of a 7-item dropdown. The slice number is shown as `12 / 25`
-//      with a SpinBox + slider - much faster to scrub.
-//   4. TIMELAPSE - adds a scrub slider with current-frame indicator,
-//      moves the frame counter inline with the play button.
-//   5. Section dividers are removed; spacing + uppercase caplet titles do the
-//      grouping work without visual noise.
+// editor/image_control_panel.slint — the Image panel: which series and
+// channels are shown and how - the objects overlay, the histogram (black
+// and white point), the Z projection or slice, the time frame.
 
-import {
-    LineEdit,
-    Button,
-    VerticalBox,
-    Slider,
-    ComboBox,
-    ScrollView,
-    Switch,
-    SpinBox,
-    Palette,
-} from "std-widgets.slint";
-import { Theme } from "../style.slint";
-import {
-    HistogramState,
-    GlobalAppState,
-    ChannelState,
-    IntensityProjection,
-} from "../state.slint";
-import { HistogramPanel } from "histogram_panel.slint";
-import { ImageMetaPanel, ImageMetaData } from "image_meta_panel.slint";
-import { ToolToggleButton } from "../components/toggle_button.slint";
-import { SeriesComboBox } from "../components/series_combobox.slint";
+import { ChannelState, HistogramState, IntensityProjection } from "../api/state.slint";
+import { ImageMetaData, SeriesInfo } from "../api/image_meta.slint";
+import { ViewportObjectState } from "../api/viewport.slint";
+import { LayoutState } from "../api/layout.slint";
+import { Ink, InkIcons, InkPanelHead, InkSwitch, InkNumberField, InkTextField, InkSegmented, InkSelect, InkCaption, InkIconButton, InkButton, InkButtonKind, InkDivider, InkMenuFrame, InkMenuItem } from "../ink/ink.slint";
 
-// ---------- Small reusable section-title cap ----------
-component SectionTitle inherits Text {
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.8px;
-    color: Theme.text-dim;
+global ImagePanelText {
+    pure public function series(s: SeriesInfo) -> string {
+        s.width > 0 && s.height > 0 ? "Series \{s.idx + 1} · \{s.width} × \{s.height}" : "Series \{s.idx + 1}"
+    }
 }
 
-// ---------- Single channel row ----------
+// One channel: its color (a click switches it on/off), name, index. The
+// selected one is the histogram's.
 component ChannelRow inherits Rectangle {
     in property <int> idx;
     in property <string> name;
-    in-out property <bool> active;
-    in-out property <int> intensity;    // 0..100
+    in property <color> tint;
+    in property <bool> active;
     in property <bool> selected;
-
     callback select;
     callback toggle;
-    callback intensity-changed(int);
 
     height: 26px;
-    background: selected ? Theme.accent-dim.with-alpha(0.4) : transparent;
-    border-radius: Theme.radius-sm;
-    TouchArea {
+    accessible-role: list-item;
+    accessible-label: root.name;
+    accessible-item-selected: root.selected;
+    accessible-checked: root.active;
+
+    face := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+
+        ta := TouchArea {
+            clicked => {
+                root.select();
+            }
+        }
+
         HorizontalLayout {
             padding-left: 6px;
-            padding-right: 6px;
+            padding-right: 4px;
             spacing: 8px;
-            alignment: stretch;
-
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 14px;
-                    height: 14px;
-                    border-radius: 3px;
-                    background: active ? root.channel-color(idx) : transparent;
-                    // A thin edge when active, so a white swatch (grayscale
-                    // mode, channels without colour) shows on a light panel.
-                    border-width: active ? 1px : 1.5px;
-                    border-color: Theme.border;
-                    TouchArea {
-                        clicked => {
-                            root.toggle();
-                        }
+            swatch := Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 12px;
+                height: 12px;
+                border-radius: 3px;
+                background: root.active ? root.tint : transparent;
+                border-width: 1px;
+                border-color: root.active ? Ink.shadow.with-alpha(0.2) : Ink.text-faint;
+                accessible-role: checkbox;
+                accessible-label: "Show " + root.name;
+                accessible-checked: root.active;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.toggle();
                     }
                 }
             }
-
             Text {
-                text: name;
-                font-size: 12px;
-                font-weight: 500;
-                color: active ? Theme.text : Theme.text-mute;
-                vertical-alignment: center;
                 horizontal-stretch: 1;
+                text: root.name;
+                font-size: Ink.fs-md;
+                font-weight: root.selected ? 600 : 400;
+                color: root.active ? Ink.text : Ink.text-mute;
+                vertical-alignment: center;
                 overflow: elide;
+                accessible-role: none;
             }
+            Text {
+                text: "ch " + root.idx;
+                font-size: Ink.fs-sm;
+                font-family: Ink.font-mono;
+                color: Ink.text-faint;
+                vertical-alignment: center;
+            }
+            InkIconButton {
+                y: (parent.height - self.height) / 2;
+                size: 22px;
+                icon: root.active ? InkIcons.visible : InkIcons.hidden;
+                label: root.active ? "Hide " + root.name : "Show " + root.name;
+                clicked => {
+                    root.toggle();
+                }
+            }
+        }
+    }
+}
 
-            VerticalLayout {
-                alignment: center;
-                Switch {
-                    checked: active;
-                    toggled => {
-                        ChannelState.channels[idx].active = !ChannelState.channels[idx].active;
-                        active = ChannelState.channels[idx].active;
-                        ChannelState.trigger_channel_state_changed();
-                        if active {
-                            intensity = 100;
-                        } else {
-                            intensity = 0;
+// The histogram of the selected channel; drag the two handles to set the
+// black and white point.
+component Histogram inherits Rectangle {
+    property <bool> dragging-min: false;
+    property <bool> dragging-max: false;
+
+    height: 96px;
+    accessible-role: slider;
+    accessible-label: "Histogram";
+
+    face := Rectangle {
+        background: Ink.field;
+        border-radius: Ink.radius-sm;
+        border-width: 1px;
+        border-color: Ink.border;
+        clip: true;
+
+        for hist in HistogramState.histogram_svg_path: Path {
+            width: 100%;
+            height: 100%;
+            commands: hist.path;
+            stroke: hist.color;
+            stroke-width: 1.25px;
+            fill: hist.color.with-alpha(0.18);
+            viewbox-width: 100;
+            viewbox-height: 100;
+        }
+
+        // Clipped to black / white.
+        Rectangle {
+            x: 0;
+            width: parent.width * HistogramState.histogram_min_val;
+            background: Ink.panel.with-alpha(0.6);
+        }
+        Rectangle {
+            x: parent.width * HistogramState.histogram_max_val;
+            width: parent.width * (1 - HistogramState.histogram_max_val);
+            background: Ink.panel.with-alpha(0.6);
+        }
+
+        Rectangle {
+            x: parent.width * HistogramState.histogram_min_val - 1px;
+            width: 2px;
+            background: root.dragging-min ? Ink.focus : Ink.text;
+        }
+        Rectangle {
+            x: parent.width * HistogramState.histogram_max_val - 1px;
+            width: 2px;
+            background: root.dragging-max ? Ink.focus : Ink.text;
+        }
+
+        TouchArea {
+            mouse-cursor: root.dragging-min || root.dragging-max ? col-resize : pointer;
+            pointer-event(event) => {
+                if event.button == PointerEventButton.left {
+                    if event.kind == PointerEventKind.down {
+                        let d-min = abs(self.mouse-x - parent.width * HistogramState.histogram_min_val);
+                        let d-max = abs(self.mouse-x - parent.width * HistogramState.histogram_max_val);
+                        if d-min < d-max && d-min < 20px {
+                            root.dragging-min = true;
+                        } else if d-max < 20px {
+                            root.dragging-max = true;
+                        }
+                    } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                        root.dragging-min = false;
+                        root.dragging-max = false;
+                    }
+                }
+            }
+            moved => {
+                if root.dragging-min || root.dragging-max {
+                    let rel = clamp(self.mouse-x / self.width, 0.0, 1.0);
+                    let range = HistogramState.histogram_max_lim - HistogramState.histogram_min_lim;
+                    if root.dragging-min {
+                        let r = min(rel, HistogramState.histogram_max_val - 0.01);
+                        HistogramState.histogram_min_val = r;
+                        HistogramState.histogram_min_val_abs = HistogramState.histogram_min_lim + r * range;
+                    } else {
+                        let r = max(rel, HistogramState.histogram_min_val + 0.01);
+                        HistogramState.histogram_max_val = r;
+                        HistogramState.histogram_max_val_abs = HistogramState.histogram_min_lim + r * range;
+                    }
+                    HistogramState.histogram_adjusted(
+                        HistogramState.histogram_min_val_abs,
+                        HistogramState.histogram_max_val_abs,
+                        HistogramState.histogram_min_lim,
+                        HistogramState.histogram_max_lim);
+                }
+            }
+        }
+    }
+}
+
+// "Label  [field]" in the panel's form layout.
+component FieldRow inherits Rectangle {
+    in property <string> label;
+    height: Ink.control-h;
+    Text {
+        x: 0px;
+        width: 64px;
+        text: root.label;
+        font-size: Ink.fs-sm;
+        color: Ink.text-dim;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+export component ImageControlPanel inherits Rectangle {
+    property <[string]> fps-names: ["1 fps", "2 fps", "5 fps", "10 fps", "20 fps", "25 fps"];
+    property <[int]> fps-values: [1, 2, 5, 10, 20, 25];
+    property <string> channel-name: ChannelState.channels.length > ChannelState.selected_channel_index
+        ? ChannelState.channels[ChannelState.selected_channel_index].name : "";
+    property <float> hist-range: HistogramState.histogram_max_lim - HistogramState.histogram_min_lim;
+
+    pure function fps-index(hz: int) -> int {
+        hz >= 25 ? 5 : hz >= 20 ? 4 : hz >= 10 ? 3 : hz >= 5 ? 2 : hz >= 2 ? 1 : 0
+    }
+
+    function projection(p: IntensityProjection) {
+        ChannelState.intensity_projection = p;
+        ChannelState.trigger_channel_state_changed();
+    }
+
+    // Black / white typed in: within the axis, the handles follow.
+    function set-black(v: float) {
+        let abs-v = clamp(v, HistogramState.histogram_min_lim, HistogramState.histogram_max_val_abs);
+        HistogramState.histogram_min_val_abs = abs-v;
+        if root.hist-range > 0.00001 {
+            HistogramState.histogram_min_val = (abs-v - HistogramState.histogram_min_lim) / root.hist-range;
+        }
+        HistogramState.histogram_adjusted(abs-v, HistogramState.histogram_max_val_abs, HistogramState.histogram_min_lim, HistogramState.histogram_max_lim);
+    }
+
+    function set-white(v: float) {
+        let abs-v = clamp(v, HistogramState.histogram_min_val_abs, HistogramState.histogram_max_lim);
+        HistogramState.histogram_max_val_abs = abs-v;
+        if root.hist-range > 0.00001 {
+            HistogramState.histogram_max_val = (abs-v - HistogramState.histogram_min_lim) / root.hist-range;
+        }
+        HistogramState.histogram_adjusted(HistogramState.histogram_min_val_abs, abs-v, HistogramState.histogram_min_lim, HistogramState.histogram_max_lim);
+    }
+
+    // The axis changed: black and white stay where they are (inside it).
+    function set-axis(new-min: float, new-max: float) {
+        let range = new-max - new-min;
+        let lo = clamp(HistogramState.histogram_min_val_abs, new-min, new-max);
+        let hi = clamp(HistogramState.histogram_max_val_abs, new-min, new-max);
+        HistogramState.histogram_min_lim = new-min;
+        HistogramState.histogram_max_lim = new-max;
+        if range > 0.00001 {
+            HistogramState.histogram_min_val = (lo - new-min) / range;
+            HistogramState.histogram_max_val = (hi - new-min) / range;
+        }
+        HistogramState.histogram_min_val_abs = lo;
+        HistogramState.histogram_max_val_abs = hi;
+        HistogramState.histogram_adjusted(lo, hi, new-min, new-max);
+    }
+
+    VerticalLayout {
+        spacing: 0px;
+
+        InkPanelHead {
+            title: "Image";
+            subtitle: ImageMetaData.nr_series > 1 ? "Series \{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series}" : "";
+            pinnable: true;
+            pinned: LayoutState.image-pinned;
+            has-more: ImageMetaData.nr_series > 1;
+            pin-toggled => {
+                LayoutState.image-pinned = !LayoutState.image-pinned;
+            }
+            more(x, y) => {
+                series-menu.show();
+            }
+            close => {
+                LayoutState.image-open = false;
+            }
+        }
+
+        Flickable {
+            vertical-stretch: 1;
+            content-height: body.preferred-height;
+
+            body := VerticalLayout {
+                padding: Ink.pad-panel;
+                padding-top: 8px;
+                spacing: 8px;
+                alignment: start;
+
+                // -- Channels --
+                VerticalLayout {
+                    spacing: 0px;
+                    for ch[i] in ChannelState.channels: ChannelRow {
+                        idx: ch.idx;
+                        name: ch.name;
+                        tint: ch.color;
+                        active: ch.active;
+                        selected: ChannelState.selected_channel_index == i;
+                        select => {
+                            ChannelState.selected_channel_index = i;
+                            ChannelState.trigger_active_channel_selection_changed();
+                        }
+                        toggle => {
+                            ChannelState.channels[i].active = !ChannelState.channels[i].active;
+                            ChannelState.trigger_channel_state_changed();
                         }
                     }
-                }
-            }
-
-            VerticalLayout {
-                alignment: center;
-                Text {
-                    text: "\{intensity}%";
-                    font-size: 10.5px;
-                    font-family: Theme.font-mono;
-                    color: Theme.text-mute;
-                    width: 28px;
-                    horizontal-alignment: right;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
-        clicked => {
-            root.select();
-        }
-    }
-
-    // Index-based fallback color. If your Channel struct gets a `color` field,
-    // replace `root.channel-color(idx)` with `channel.color`.
-    pure function channel-color(i: int) -> color {
-        if (ChannelState.channels.length > i) {
-            return ChannelState.channels[i].color;
-        } else {
-            return Theme.ch-0;
-        }
-    }
-}
-
-// ---------- Channel list ----------
-export component ChannelList inherits ScrollView {
-    height: Math.min(180px, layout.preferred-height + 4px);
-    content-height: layout.preferred-height;
-
-    layout := VerticalLayout {
-        spacing: 2px;
-        alignment: start;
-        for channel[i] in ChannelState.channels: ChannelRow {
-            idx: i;
-            name: channel.name;
-            active: channel.active;
-            // If your Channel struct doesn't yet have an `intensity` field,
-            // either add it (in state.slint) and bind here, or default to 100.
-            // intensity: channel.intensity;
-            intensity: 100;
-            selected: ChannelState.selected_channel_index == i;
-            select => {
-                ChannelState.selected_channel_index = i;
-                ChannelState.trigger_active_channel_selection_changed();
-            }
-            toggle => {
-                ChannelState.channels[i].active = !ChannelState.channels[i].active;
-                ChannelState.trigger_channel_state_changed();
-            }
-            intensity-changed(v) => {
-                // ChannelState.channels[i].intensity = v;
-                ChannelState.trigger_channel_state_changed();
-            }
-        }
-    }
-}
-
-// ---------- Z-projection mode chip ----------
-component ModeChip inherits Rectangle {
-    in property <string> label;
-    in property <bool> active;
-    callback clicked;
-    height: 22px;
-    width: 40px;
-    border-radius: Theme.radius-sm;
-    background: active ? Theme.bg : transparent;
-    Text {
-        text: label;
-        font-size: 10.5px;
-        color: active ? Theme.text : Theme.text-mute;
-        font-weight: 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        x: 8px;
-        y: 0;
-        width: parent.width - 16px;
-        height: parent.height;
-    }
-
-    TouchArea {
-        clicked => {
-            root.clicked();
-        }
-    }
-}
-
-// ---------- Z-projection segmented control + slice scrubber ----------
-export component ZProjectionControls inherits VerticalLayout {
-    spacing: 8px;
-    in property <int> z-stack-count: 25;  // host should bind to total z-slices
-
-    HorizontalLayout {
-        spacing: 0;
-        alignment: space-between;
-        SectionTitle {
-            text: "Z-STACK";
-            vertical-alignment: center;
-        }
-
-        Rectangle {
-            background: Theme.raised;
-            border-width: 1px;
-            border-color: Theme.border-soft;
-            border-radius: Theme.radius-sm;
-            HorizontalLayout {
-                padding: 2px;
-                spacing: 2px;
-                ModeChip {
-                    label: "Single";
-                    active: ChannelState.intensity_projection == IntensityProjection.single-stack;
-                    clicked => {
-                        ChannelState.intensity_projection = IntensityProjection.single-stack;
-                        ChannelState.trigger_channel_state_changed();
-                    }
-                }
-
-                ModeChip {
-                    label: "Max";
-                    active: ChannelState.intensity_projection == IntensityProjection.max;
-                    clicked => {
-                        ChannelState.intensity_projection = IntensityProjection.max;
-                        ChannelState.trigger_channel_state_changed();
-                    }
-                }
-
-                ModeChip {
-                    label: "Min";
-                    active: ChannelState.intensity_projection == IntensityProjection.min;
-                    clicked => {
-                        ChannelState.intensity_projection = IntensityProjection.min;
-                        ChannelState.trigger_channel_state_changed();
-                    }
-                }
-
-                ModeChip {
-                    label: "Avg";
-                    active: ChannelState.intensity_projection == IntensityProjection.avg;
-                    clicked => {
-                        ChannelState.intensity_projection = IntensityProjection.avg;
-                        ChannelState.trigger_channel_state_changed();
-                    }
-                }
-
-                ModeChip {
-                    label: "Sum";
-                    active: ChannelState.intensity_projection == IntensityProjection.sum;
-                    clicked => {
-                        ChannelState.intensity_projection = IntensityProjection.sum;
-                        ChannelState.trigger_channel_state_changed();
-                    }
-                }
-
-                ModeChip {
-                    label: "Mid";
-                    active: ChannelState.intensity_projection == IntensityProjection.middle;
-                    clicked => {
-                        ChannelState.intensity_projection = IntensityProjection.middle;
-                        ChannelState.trigger_channel_state_changed();
-                    }
-                }
-            }
-        }
-    }
-
-    // Slice scrubber + counter
-    HorizontalLayout {
-        spacing: 10px;
-        alignment: stretch;
-        Text {
-            text: "0";
-            font-size: 10px;
-            color: Theme.text-mute;
-            font-family: Theme.font-mono;
-            vertical-alignment: center;
-            width: 16px;
-        }
-
-        Slider {
-            horizontal-stretch: 1;
-            minimum: 0;
-            maximum: z-stack-count - 1;
-            value: ChannelState.selected_z_stack;
-            changed(v) => {
-                ChannelState.selected_z_stack = Math.round(v);
-                ChannelState.trigger_channel_state_changed();
-            }
-        }
-
-        Text {
-            text: "\{z-stack-count - 1}";
-            font-size: 10px;
-            color: Theme.text-mute;
-            font-family: Theme.font-mono;
-            vertical-alignment: center;
-            width: 20px;
-            horizontal-alignment: right;
-        }
-    }
-
-    HorizontalLayout {
-        alignment: space-between;
-        Text {
-            text: "Slice";
-            font-size: 11px;
-            color: Theme.text-dim;
-            vertical-alignment: center;
-        }
-
-        HorizontalLayout {
-            spacing: 5px;
-            Text {
-                text: "\{ChannelState.selected_z_stack + 1}";
-                font-size: 12px;
-                color: Theme.text;
-                font-family: Theme.font-mono;
-                vertical-alignment: center;
-            }
-
-            Text {
-                text: "/ \{z-stack-count}";
-                font-size: 11px;
-                color: Theme.text-mute;
-                font-family: Theme.font-mono;
-                vertical-alignment: center;
-            }
-        }
-    }
-}
-
-// ---------- Timelapse / video controls ----------
-export component VideoControls inherits VerticalLayout {
-    spacing: 8px;
-    alignment: start;
-    in property <int> t-frame-count: 120;   // host should bind to total frames
-
-    property <[string]> playback_speed_names: ["25 fps", "20 fps", "10 fps", "5 fps", "2 fps", "1 fps"];
-
-    // Header row: title + current frame
-    HorizontalLayout {
-        alignment: space-between;
-        SectionTitle {
-            text: "TIMELAPSE";
-            vertical-alignment: center;
-        }
-
-        Text {
-            text: "Frame \{ChannelState.selected_t_stack + 1} / \{t-frame-count}";
-            font-size: 10.5px;
-            color: Theme.text-mute;
-            font-family: Theme.font-mono;
-            vertical-alignment: center;
-        }
-    }
-
-    // Scrub slider - primary navigation through time
-    Slider {
-        height: 14px;
-        minimum: 0;
-        maximum: t-frame-count - 1;
-        value: ChannelState.selected_t_stack;
-        changed(v) => {
-            ChannelState.selected_t_stack = Math.round(v);
-            ChannelState.trigger_channel_state_changed();
-        }
-    }
-
-    // Play button + speed selector
-    HorizontalLayout {
-        spacing: 6px;
-        alignment: stretch;
-        height: 32px;
-
-        ToolToggleButton {
-            icon: @image-url("../icons/regular-black/play.svg");
-            width: 48px;
-            height: 48px;
-            checked: ChannelState.is_play_active;
-            clicked => {
-                ChannelState.is_play_active = !ChannelState.is_play_active;
-                ChannelState.toggle_play(ChannelState.is_play_active);
-            }
-        }
-
-        Rectangle {
-            horizontal-stretch: 1;
-            background: Theme.raised;
-            border-width: 1px;
-            border-color: Theme.border-soft;
-            border-radius: Theme.radius-md;
-            HorizontalLayout {
-                padding-left: 10px;
-                padding-right: 6px;
-                height: 24px;
-                alignment: space-between;
-                Text {
-                    text: "Speed";
-                    font-size: 11px;
-                    color: Theme.text-mute;
-                    vertical-alignment: center;
-                }
-
-                ComboBox {
-                    width: 88px;
-                    height: 24px;
-                    model: root.playback_speed_names;
-                    current-value: root.playback_speed_names[root.playback_speed_to_idx(ChannelState.play_back_speed_hz)];
-                    current-index: root.playback_speed_to_idx(ChannelState.play_back_speed_hz);
-                    selected(val) => {
-                        ChannelState.play_back_speed_hz = root.idx_to_playback_speed(self.current-index);
-                        ChannelState.is_play_active = false;
-                        ChannelState.toggle_play(ChannelState.is_play_active);
-                    }
-                }
-            }
-        }
-    }
-
-    pure function playback_speed_to_idx(p: int) -> int {
-        if (p == 25) {
-            return 0;
-        }
-        if (p == 20) {
-            return 1;
-        }
-        if (p == 10) {
-            return 2;
-        }
-        if (p == 5) {
-            return 3;
-        }
-        if (p == 2) {
-            return 4;
-        }
-        return 5; // 1 Hz default
-    }
-    pure function idx_to_playback_speed(i: int) -> int {
-        if (i == 0) {
-            return 25;
-        }
-        if (i == 1) {
-            return 20;
-        }
-        if (i == 2) {
-            return 10;
-        }
-        if (i == 3) {
-            return 5;
-        }
-        if (i == 4) {
-            return 2;
-        }
-        return 1;
-    }
-}
-
-// ===========================================================================
-// Main panel
-// ===========================================================================
-export component ImageControlPanel inherits Rectangle {
-
-    background: Theme.panel;
-
-    VerticalBox {
-        alignment: start;
-        spacing: 18px;
-        padding: Theme.panel-content-padding;
-
-        // ---- SERIES PICKER ----
-        HorizontalLayout {
-            spacing: 8px;
-            alignment: stretch;
-            height: 44px;
-
-            SeriesComboBox { }
-        }
-
-        // ---- HISTOGRAM ----
-        HistogramPanel { }
-
-        // ---- CHANNELS ----
-        VerticalLayout {
-            spacing: 8px;
-            HorizontalLayout {
-                spacing: 16px;
-                SectionTitle {
-                    text: "CHANNELS";
-                    font-size: 10.5px;
-                    font-weight: 600;
-                    letter-spacing: 0.8px;
-                    color: Theme.text-dim;
-                    vertical-alignment: center;
-                }
-
-                Text {
-                    text: "\{ChannelState.active_count}/\{ChannelState.channels.length}";
-                    font-size: 10.5px;
-                    font-family: Theme.font-mono;
-                    color: Theme.text-mute;
-                    vertical-alignment: center;
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
                 }
 
                 HorizontalLayout {
-                    spacing: 4px;
-                    Button {
+                    spacing: 16px;
+                    InkSwitch {
                         text: "Grayscale";
-                        height: 22px;
-                        primary: ChannelState.grayscale ? true : false;
+                        checked: ChannelState.grayscale;
+                        toggled(on) => {
+                            ChannelState.grayscale = on;
+                            ChannelState.grayscale_toggled(on);
+                        }
+                    }
+                    InkSwitch {
+                        text: "Show objects";
+                        checked: ViewportObjectState.show_objects;
+                        toggled(on) => {
+                            ViewportObjectState.show_objects = on;
+                        }
+                    }
+                }
+
+                FieldRow {
+                    label: "Overlay";
+                    InkNumberField {
+                        x: 72px;
+                        width: parent.width - 72px;
+                        label: "Overlay opacity in percent";
+                        value: round(ViewportObjectState.object_transparency * 100);
+                        step: 5;
+                        unit: "%";
+                        changed(text) => {
+                            ViewportObjectState.object_transparency = clamp(text.to-float(), 0, 100) / 100;
+                            ViewportObjectState.object_transparency_changed(ViewportObjectState.object_transparency);
+                        }
+                    }
+                }
+
+                InkDivider { }
+
+                // -- Histogram --
+                HorizontalLayout {
+                    spacing: 6px;
+                    InkCaption {
+                        horizontal-stretch: 1;
+                        text: "HISTOGRAM" + (root.channel-name != "" ? " · " + root.channel-name : "");
+                        overflow: elide;
+                    }
+                    InkButton {
+                        small: true;
+                        kind: InkButtonKind.quiet;
+                        text: "Auto-scale";
                         clicked => {
-                            ChannelState.grayscale = !ChannelState.grayscale;
-                            ChannelState.grayscale_toggled(ChannelState.grayscale);
+                            HistogramState.auto_adjust_clicked();
+                        }
+                    }
+                }
+
+                Histogram { }
+
+                GridLayout {
+                    spacing-horizontal: 6px;
+                    spacing-vertical: 4px;
+                    Row {
+                        Text {
+                            text: "Black / white";
+                            font-size: Ink.fs-xs;
+                            color: Ink.text-mute;
+                        }
+                        Text {
+                            text: "Axis min / max";
+                            font-size: Ink.fs-xs;
+                            color: Ink.text-mute;
+                        }
+                    }
+                    Row {
+                        InkTextField {
+                            mono: true;
+                            label: "Black point";
+                            text: round(HistogramState.histogram_min_val_abs * 1000) / 1000;
+                            accepted(t) => {
+                                root.set-black(t.to-float());
+                            }
+                        }
+                        InkTextField {
+                            mono: true;
+                            label: "Axis min";
+                            text <=> HistogramState.histogram_min_lim_txt;
+                            accepted(t) => {
+                                root.set-axis(t.to-float(), HistogramState.histogram_max_lim);
+                            }
+                        }
+                    }
+                    Row {
+                        InkTextField {
+                            mono: true;
+                            label: "White point";
+                            text: round(HistogramState.histogram_max_val_abs * 1000) / 1000;
+                            accepted(t) => {
+                                root.set-white(t.to-float());
+                            }
+                        }
+                        InkTextField {
+                            mono: true;
+                            label: "Axis max";
+                            text <=> HistogramState.histogram_max_lim_txt;
+                            accepted(t) => {
+                                root.set-axis(HistogramState.histogram_min_lim, t.to-float());
+                            }
+                        }
+                    }
+                }
+
+                // -- Z --
+                if ImageMetaData.nr_z_stacks > 1: VerticalLayout {
+                    spacing: 6px;
+                    InkDivider { }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        InkCaption {
+                            width: 16px;
+                            text: "Z";
+                        }
+                        InkSegmented {
+                            horizontal-stretch: 1;
+                            label: "Z projection";
+                            model: ["Slice", "Max", "Min", "Avg", "Sum", "Mid"];
+                            selected: ChannelState.intensity_projection == IntensityProjection.max ? 1
+                                : ChannelState.intensity_projection == IntensityProjection.min ? 2
+                                : ChannelState.intensity_projection == IntensityProjection.avg ? 3
+                                : ChannelState.intensity_projection == IntensityProjection.sum ? 4
+                                : ChannelState.intensity_projection == IntensityProjection.middle ? 5
+                                : 0;
+                            picked(i) => {
+                                root.projection(i == 1 ? IntensityProjection.max
+                                    : i == 2 ? IntensityProjection.min
+                                    : i == 3 ? IntensityProjection.avg
+                                    : i == 4 ? IntensityProjection.sum
+                                    : i == 5 ? IntensityProjection.middle
+                                    : IntensityProjection.single-stack);
+                            }
+                        }
+                    }
+                    if ChannelState.intensity_projection == IntensityProjection.single-stack: FieldRow {
+                        label: "Slice";
+                        InkNumberField {
+                            x: 72px;
+                            width: parent.width - 72px;
+                            label: "Z slice";
+                            value: ChannelState.selected_z_stack + 1;
+                            min: 1;
+                            max: ImageMetaData.nr_z_stacks;
+                            unit: "/ " + ImageMetaData.nr_z_stacks;
+                            changed(text) => {
+                                ChannelState.selected_z_stack = clamp(round(text.to-float()) - 1, 0, ImageMetaData.nr_z_stacks - 1);
+                                ChannelState.trigger_channel_state_changed();
+                            }
+                        }
+                    }
+                }
+
+                // -- T --
+                if ImageMetaData.nr_t_stacks > 1: VerticalLayout {
+                    spacing: 6px;
+                    InkDivider { }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        InkCaption {
+                            width: 16px;
+                            text: "T";
+                        }
+                        InkIconButton {
+                            size: Ink.control-h;
+                            icon: ChannelState.is_play_active ? InkIcons.pause : InkIcons.play;
+                            label: ChannelState.is_play_active ? "Pause" : "Play";
+                            active: ChannelState.is_play_active;
+                            clicked => {
+                                ChannelState.is_play_active = !ChannelState.is_play_active;
+                                ChannelState.toggle_play(ChannelState.is_play_active);
+                            }
+                        }
+                        InkNumberField {
+                            label: "Frame";
+                            value: ChannelState.selected_t_stack + 1;
+                            min: 1;
+                            max: ImageMetaData.nr_t_stacks;
+                            unit: "/ " + ImageMetaData.nr_t_stacks;
+                            changed(text) => {
+                                ChannelState.selected_t_stack = clamp(round(text.to-float()) - 1, 0, ImageMetaData.nr_t_stacks - 1);
+                                ChannelState.trigger_channel_state_changed();
+                            }
+                        }
+                        InkSelect {
+                            width: 76px;
+                            horizontal-stretch: 0;
+                            label: "Playback speed";
+                            model: root.fps-names;
+                            selected: root.fps-index(ChannelState.play_back_speed_hz);
+                            picked(i, name) => {
+                                ChannelState.play_back_speed_hz = root.fps-values[i];
+                                ChannelState.is_play_active = false;
+                                ChannelState.toggle_play(false);
+                            }
                         }
                     }
                 }
             }
-
-            ChannelList { }
         }
+    }
 
-        // ---- Z-STACK ----
-        ZProjectionControls {
-            z-stack-count: ImageMetaData.nr_z_stacks;
-        }
-
-        // ---- TIMELAPSE ----
-        VideoControls {
-            t-frame-count: ImageMetaData.nr_t_stacks;
+    series-menu := PopupWindow {
+        x: root.width - 240px;
+        y: Ink.head-h;
+        InkMenuFrame {
+            menu-width: 240px;
+            for s[i] in ImageMetaData.series_list: InkMenuItem {
+                text: ImagePanelText.series(s);
+                checked: ChannelState.selected_series == s.idx;
+                clicked => {
+                    ChannelState.selected_series = s.idx;
+                    ChannelState.trigger_active_series_changed();
+                }
+            }
         }
     }
 }

@@ -1,55 +1,43 @@
-import {
-    Button,
-    LineEdit,
-    ComboBox,
-    SpinBox,
-    VerticalBox,
-    HorizontalBox,
-    Palette,
-    CheckBox,
-    ScrollView,
-    ListView,
-    Spinner,
-} from "std-widgets.slint";
-import { DialogType, GlobalAppState } from "../state.slint";
-import { Theme } from "../style.slint";
-import { AppButton } from "../components/app_button.slint";
-import {
-    ClassificationPanel,
-    ClassListRow,
-    ClassificationState,
-} from "../editor/classification_panel.slint";
-import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
-import { ObjectListState } from "../editor/object_list_panel.slint";
+// dialogs/classification_select_dialog.slint — picks a class for the
+// selected object: set it (replacing its classes) or add it.
 
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { ClassificationState } from "../api/classification.slint";
+import { ObjectListState } from "../api/object_list.slint";
+import { ClassSelectDialogState } from "../api/classification_select.slint";
+import { Ink, InkDialog, InkDialogFooter, InkButton, InkButtonKind, InkListRow, InkBusy } from "../ink/ink.slint";
 
-export global ClassSelectDialogState {
-    in-out property <int> selected_class_id: -1;
-    in-out property <string> selected_class_name;
-}
-
-export component ClassSelectDialog inherits Dialog {
+export component ClassSelectDialog inherits InkDialog {
     title: "Select class";
-    dialog-height: 520px;
-    dialog-width: 480px;
-    close => {
+    subtitle: "for object " + ObjectListState.selected_object.id;
+    card-width: 380px;
+    card-height: 460px;
+
+    function done() {
         ClassSelectDialogState.selected_class_name = "";
         ClassSelectDialogState.selected_class_id = -1;
         GlobalAppState.active-dialog = DialogType.none;
     }
 
-    VerticalLayout {
-        spacing: 12px;
-        Rectangle {
-            vertical-stretch: 1;
+    close => {
+        root.done();
+    }
 
-            ListView {
-                for data in ClassificationState.classes_list: ClassListRow {
-                    data: data;
+    Rectangle {
+        vertical-stretch: 1;
+
+        Flickable {
+            content-height: rows.preferred-height;
+            rows := VerticalLayout {
+                alignment: start;
+                for data in ClassificationState.classes_list: InkListRow {
+                    title: data.name;
+                    tag: data.id < 10 ? "0" + data.id : data.id;
+                    swatch: data.color;
+                    trailing: data.count;
                     selected: ClassSelectDialogState.selected_class_id == data.id;
-
-                    row_clicked => {
-                        if (data.id == ClassSelectDialogState.selected_class_id) {
+                    clicked => {
+                        if data.id == ClassSelectDialogState.selected_class_id {
                             ClassSelectDialogState.selected_class_name = "";
                             ClassSelectDialogState.selected_class_id = -1;
                         } else {
@@ -57,58 +45,42 @@ export component ClassSelectDialog inherits Dialog {
                             ClassSelectDialogState.selected_class_id = data.id;
                         }
                     }
-                    visibility_clicked => {
-                        ClassificationState.class_visibility_toggled(data.id);
-                    }
                 }
-            }
-
-            // Scanning overlay
-            if (ClassificationState.is_scanning): Rectangle {
-                background: Theme.overlay-scrim;
-                Spinner {
-                    indeterminate: true;
-                }
-
-                TouchArea { }
             }
         }
 
-        DialogFooter {
-
-            AppButton {
-                text: "Close";
-                primary: false;
-                clicked => {
-                    ClassSelectDialogState.selected_class_name = "";
-                    ClassSelectDialogState.selected_class_id = -1;
-                    GlobalAppState.active-dialog = DialogType.none;
-                }
+        if ClassificationState.is_scanning: Rectangle {
+            background: Ink.glass;
+            TouchArea { }
+            InkBusy {
+                size: 18px;
             }
+        }
+    }
 
-            AppButton {
-                text: "Add class";
-                primary: false;
-                enabled: ClassSelectDialogState.selected_class_id >= 0;
-                clicked => {
-                    ObjectListState.object_add_class(ObjectListState.selected_object.id, ClassSelectDialogState.selected_class_id);
-                    ClassSelectDialogState.selected_class_name = "";
-                    ClassSelectDialogState.selected_class_id = -1;
-                    GlobalAppState.active-dialog = DialogType.none;
-                }
+    InkDialogFooter {
+        InkButton {
+            text: "Cancel";
+            kind: InkButtonKind.quiet;
+            clicked => {
+                root.done();
             }
-
-            AppButton {
-                text: "Set class";
-                primary: true;
-                enabled: ClassSelectDialogState.selected_class_id >= 0;
-                clicked => {
-                    ObjectListState.object_replace_class(ObjectListState.selected_object.id, ClassSelectDialogState.selected_class_id);
-                    ClassSelectDialogState.selected_class_name = "";
-                    ClassSelectDialogState.selected_class_id = -1;
-                    GlobalAppState.active-dialog = DialogType.none;
-                    GlobalAppState.active-dialog = DialogType.none;
-                }
+        }
+        InkButton {
+            text: "Add class";
+            enabled: ClassSelectDialogState.selected_class_id >= 0;
+            clicked => {
+                ObjectListState.object_add_class(ObjectListState.selected_object.id, ClassSelectDialogState.selected_class_id);
+                root.done();
+            }
+        }
+        InkButton {
+            text: "Set class";
+            kind: InkButtonKind.primary;
+            enabled: ClassSelectDialogState.selected_class_id >= 0;
+            clicked => {
+                ObjectListState.object_replace_class(ObjectListState.selected_object.id, ClassSelectDialogState.selected_class_id);
+                root.done();
             }
         }
     }

@@ -1,0 +1,18 @@
+// api/pipeline_running.slint — the Rust interface of dialogs/pipeline_running_dialog.slint: the state Rust
+// sets, the callbacks it answers.
+
+export global PipelineRunningState {
+    in-out property <int> processed: 0;
+    in-out property <int> total: 0;
+    // True once every tile is done and the pipeline has moved on to
+    // whole-image-scoped work (tile-merge, Voronoi, DB export, ...). The
+    // remaining `processed`/`total` units no longer correspond 1:1 to
+    // images, so the label switches to a phase description instead of a
+    // counter that would otherwise look "stuck".
+    in-out property <bool> whole-image-phase: false;
+    in-out property <bool> done: false;
+    in-out property <bool> has-error: false;
+    in-out property <string> status-message: "";
+    callback cancel();
+    callback close();
+}

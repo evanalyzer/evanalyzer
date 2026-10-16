@@ -1,251 +1,111 @@
-import {
-    Button,
-    VerticalBox,
-    ListView,
-    Spinner,
-    Palette,
-} from "std-widgets.slint";
-import { Theme } from "../style.slint";
-import { GlobalAppState } from "../state.slint";
-import { DialogType, ChannelState } from "../state.slint";
-import { AppButton } from "../components/app_button.slint";
+// editor/object_list_panel.slint — the Objects panel: the objects of the
+// open image (a virtual list: only the rows in view exist, so thousands
+// stay fast), and below it the selected object - its classes, area,
+// circularity, intensities - with what can be done to it.
 
-export struct ObjectItemDataSlint {
-    id: int,
-    name: string,
-    display_color: color,
-    display_name: string,
-    class_names: [string],
-    class_colors: [color],
-    class_ids: [int],
-    label_name: string,
-    label_id: int,
-    // Metrics – only populated for selected_object (empty string = not available)
-    area: int,
-    area_nm2: string,           // area in nm², formatted; empty string = not available
-    intensities: [string],      // sum intensity per channel; empty string = not available
-    intensity_avgs: [string],   // mean intensity per channel; parallel to intensities
-    circularity: string,
-    // Count of ROIs sharing the same segmentation label – populated for all rows
-    label_count: int,
-}
+import { ChannelState, DialogType, GlobalAppState } from "../api/state.slint";
+import { ObjectItemDataSlint, ObjectListState } from "../api/object_list.slint";
+import { ListView } from "std-widgets.slint";
+import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkChip, InkCaption, InkDivider, InkMenuFrame, InkMenuItem, InkHint } from "../ink/ink.slint";
 
-export global ObjectListState {
-    in-out property <bool> is_scanning: false;
-    in-out property <int> scroll_to_object_index: -1;
-    // Filled by Rust from the open image's objects.
-    in property <[ObjectItemDataSlint]> object_list: [];
+// "Area   1 204 px²" - a label and a mono value.
+component Fact inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> extra;
 
-    in-out property <ObjectItemDataSlint> selected_object;
-
-    callback object_selected(int);
-    callback object_copy(int);
-    callback object_edit(int);
-    callback object_delete(int);
-    callback object_delete_all_manual_annotated();
-    // Params: Adds the given class to the selected object (params are: object id, class id)
-    callback object_add_class(int, int);
-     // Params: Replaces all classed of the selected object by the given class (params are: object id, class id)
-    callback object_replace_class(int, int);
-    callback object_remove_class(int, int);
-}
-
-// ----------------------------------------------------------
-// Ghost icon button – same pattern as classification_panel
-component ActionButton inherits Rectangle {
-    in property <image> icon;
-    in property <bool> enabled: true;
-    in property <color> colorize: Theme.text;
-    callback clicked;
-
-    width: 28px;
-    height: 28px;
-    border-radius: 5px;
-    opacity: root.enabled ? 1.0 : 0.35;
-    background: root.enabled && ta.has-hover ? Theme.raised : transparent;
-    animate background { duration: 100ms; }
-
-    Image {
-        source: root.icon;
-        width: 13px;
-        height: 13px;
-        colorize: ta.has-hover && root.enabled ? root.colorize : Theme.text-dim;
-        animate colorize { duration: 100ms; }
-    }
-
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
+    height: 20px;
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            width: 80px;
+            text: root.label;
+            font-size: Ink.fs-sm;
+            color: Ink.text-dim;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.value;
+            font-size: Ink.fs-sm;
+            font-family: Ink.font-mono;
+            color: Ink.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: root.extra;
+            font-size: Ink.fs-sm;
+            font-family: Ink.font-mono;
+            color: Ink.text-mute;
+            vertical-alignment: center;
         }
     }
 }
 
-// ----------------------------------------------------------
-// Compact 32 px row – kept lean for large lists
-component ObjectListRow inherits Rectangle {
-    in property <ObjectItemDataSlint> data;
-    in property <bool> selected;
-    callback row_clicked;
-
-    height: 32px;
-
-    row_ta := TouchArea {
-        clicked => {
-            root.row_clicked();
-        }
-    }
-
-    Rectangle {
-        x: 2px;
-        y: 1px;
-        width: parent.width - 4px;
-        height: parent.height - 2px;
-        border-radius: Theme.radius-md;
-        background: root.selected ? Theme.list-select-row-bg : (row_ta.has-hover ? Theme.raised : transparent);
-        border-width: 1px;
-        border-color: root.selected ? Theme.list-select-row-border-color : transparent;
-        animate background { duration: 80ms; }
-
-        HorizontalLayout {
-            padding-left: 10px;
-            padding-right: 10px;
-            spacing: 8px;
-            alignment: stretch;
-
-            // Stacked color swatches (up to 4)
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 27px;
-                    height: 12px;
-
-                    for class_color[index] in data.class_colors: Rectangle {
-                        visible: index < 4;
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 3px;
-                        background: class_color;
-                        x: index * 5px;
-                    }
-
-                    // Fallback single swatch when no classes defined
-                    Rectangle {
-                        visible: data.class_colors.length == 0;
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 3px;
-                        background: data.display-color;
-                        x: 0px;
-                    }
-                }
-            }
-
-            // Primary label
-            Text {
-                text: data.label_name;
-                font-size: 13px;
-                color: root.selected ? Theme.text-bright : Theme.text;
-                font-weight: root.selected ? 500 : 400;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-
-            // Mono chip: label_count (how many ROIs share this label)
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    height: 16px;
-                    min-width: 24px;
-                    border-radius: 3px;
-                    background: root.selected ? rgba(255, 255, 255, 0.06) : transparent;
-                    HorizontalLayout {
-                        padding-left: 5px;
-                        padding-right: 5px;
-                        Text {
-                            text: data.label_count;
-                            font-size: 10px;
-                            font-family: Theme.font-mono;
-                            color: Theme.text-mute;
-                            vertical-alignment: center;
-                            horizontal-alignment: right;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ----------------------------------------------------------
 export component ObjectListPanel inherits Rectangle {
+    property <length> row-h: Ink.row-h;
+    property <ObjectItemDataSlint> sel: ObjectListState.selected_object;
 
-    VerticalBox {
-        spacing: 12px;
-        padding: Theme.panel-content-padding;
+    function unselect() {
+        ObjectListState.selected_object = {
+            id: 0,
+            name: "",
+            display_color: #000000,
+            display_name: "",
+            class_names: [],
+            class_colors: [],
+            class_ids: [],
+            label_name: "",
+            label_id: 0,
+            intensities: [],
+            intensity_avgs: [],
+        };
+        ObjectListState.object_selected(-1);
+    }
 
-        // ----- HEADER -----
-        HorizontalLayout {
-            alignment: space-between;
-            Text {
-                text: "Objects";
-                font-size: 14px;
-                font-weight: 600;
-                color: Theme.text;
-                vertical-alignment: center;
-            }
+    VerticalLayout {
+        spacing: 0px;
 
-            Text {
-                text: ObjectListState.object_list.length == 1 ? "1 object" : ObjectListState.object_list.length + " ROIs";
-                font-size: 11px;
-                font-family: Theme.font-mono;
-                color: Theme.text-mute;
-                vertical-alignment: center;
+        InkPanelHead {
+            title: "Objects";
+            count: ObjectListState.object_list.length;
+            closable: false;
+            has-more: true;
+            more(x, y) => {
+                list-menu.show();
             }
         }
 
-        // ----- object LIST -----
         Rectangle {
             vertical-stretch: 1;
+            min-height: 90px;
 
-            // Mirror global to react to viewport-driven selection changes
-            property <int> scroll_index: ObjectListState.scroll_to_object_index;
-            changed scroll_index => {
-                if (ObjectListState.scroll_to_object_index >= 0) {
-                    object_listview.content-y = Math.clamp(
-                        -(ObjectListState.scroll_to_object_index * 32px) + object_listview.height / 2 - 16px,
-                        object_listview.height - object_listview.content-height,
+            // Follow a selection made on the image.
+            property <int> scroll-index: ObjectListState.scroll_to_object_index;
+            changed scroll-index => {
+                if ObjectListState.scroll_to_object_index >= 0 {
+                    list.content-y = clamp(
+                        -(ObjectListState.scroll_to_object_index * root.row-h) + list.visible-height / 2 - root.row-h / 2,
+                        list.visible-height - list.content-height,
                         0px);
                 }
             }
 
-            object_listview := ListView {
-                width: 100%;
-                height: 100%;
-                horizontal-scrollbar-policy: always-off;
-
-                for data in ObjectListState.object_list: ObjectListRow {
-                    data: data;
-                    selected: ObjectListState.selected_object.id == data.id;
-
-                    row_clicked => {
-                        if (data.id == ObjectListState.selected_object.id) {
-                            ObjectListState.selected_object = {
-                                id: 0,
-                                name: "",
-                                display_color: #000000,
-                                display_name: "",
-                                class_names: [],
-                                class_colors: [],
-                                class_ids: [],
-                                label_name: "",
-                                label_id: 0,
-                                intensities: [],
-                                intensity_avgs: [],
-                            };
-                            ObjectListState.object_selected(-1);
+            list := ListView {
+                x: 4px;
+                width: parent.width - 8px;
+                for data in ObjectListState.object_list: InkListRow {
+                    height: root.row-h;
+                    title: data.label_name;
+                    swatch: data.class_colors.length > 0 ? data.class_colors[0] : data.display_color;
+                    tag: data.class_colors.length > 1 ? "+" + (data.class_colors.length - 1) : "";
+                    trailing: data.label_count;
+                    selected: root.sel.id == data.id;
+                    clicked => {
+                        if data.id == root.sel.id {
+                            root.unselect();
                         } else {
                             ObjectListState.selected_object = data;
                             ObjectListState.object_selected(data.id);
@@ -254,407 +114,140 @@ export component ObjectListPanel inherits Rectangle {
                 }
             }
 
-            // Scanning overlay
-            if ObjectListState.is_scanning: Rectangle {
-                background: Theme.overlay-scrim;
-                Spinner {
-                    indeterminate: true;
-                }
+            if ObjectListState.object_list.length == 0 && !ObjectListState.is_scanning: InkHint {
+                x: 14px;
+                width: parent.width - 28px;
+                text: "No objects in this image yet. Run the preview, or draw some in annotate mode.";
+            }
 
+            if ObjectListState.is_scanning: Rectangle {
+                background: Ink.glass;
                 TouchArea { }
+                InkBusy {
+                    size: 18px;
+                }
             }
         }
 
-        // ----- SELECTED object DETAIL -----
-        if ObjectListState.selected_object.id != 0: Rectangle {
-            background: Theme.raised;
-            border-radius: Theme.radius-md;
-            border-width: 1px;
-            border-color: Theme.border-soft;
-            max-height: 300px;
-
+        // -- The selected object --
+        if root.sel.id != 0: VerticalLayout {
+            InkDivider { }
             VerticalLayout {
-                padding: 8px;
+                padding: Ink.pad-panel;
+                padding-top: 8px;
                 spacing: 6px;
-                alignment: start;
 
-                // Label name + label count chip + display name
                 HorizontalLayout {
-                    alignment: space-between;
                     spacing: 6px;
-                    Text {
-                        text: ObjectListState.selected_object.label_name;
-                        font-size: 12px;
-                        font-weight: 500;
-                        color: Theme.text;
-                        vertical-alignment: center;
+                    InkCaption {
+                        horizontal-stretch: 1;
+                        text: "OBJECT " + root.sel.label_name;
                         overflow: elide;
+                    }
+                    InkIconButton {
+                        size: 22px;
+                        icon: InkIcons.close;
+                        label: "Unselect";
+                        clicked => {
+                            root.unselect();
+                        }
+                    }
+                }
+
+                if root.sel.display_name != "": Text {
+                    text: root.sel.display_name;
+                    font-size: Ink.fs-sm;
+                    color: Ink.text-mute;
+                    overflow: elide;
+                }
+
+                // Its classes, each removable.
+                if root.sel.class_names.length > 0: HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    for name[i] in root.sel.class_names: InkChip {
+                        text: name;
+                        swatch: root.sel.class_colors[i];
+                        removable: true;
+                        remove => {
+                            ObjectListState.object_remove_class(root.sel.id, root.sel.class_ids[i]);
+                        }
+                    }
+                }
+
+                Fact {
+                    label: "Area";
+                    value: root.sel.area > 0 ? root.sel.area + " px²" : "–";
+                    extra: root.sel.area_nm2 != "" ? root.sel.area_nm2 + " nm²" : "";
+                }
+                Fact {
+                    label: "Circularity";
+                    value: root.sel.circularity != "" ? root.sel.circularity : "–";
+                }
+                Fact {
+                    label: "Shared by";
+                    value: root.sel.label_count + " objects";
+                }
+                for sum[i] in root.sel.intensities: Fact {
+                    label: ChannelState.channels.length > i ? ChannelState.channels[i].name : "Ch " + (i + 1);
+                    value: "μ " + (root.sel.intensity_avgs.length > i && root.sel.intensity_avgs[i] != "" ? root.sel.intensity_avgs[i] : "–");
+                    extra: "Σ " + (sum != "" ? sum : "–");
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    padding-top: 4px;
+                    InkButton {
+                        small: true;
+                        text: "Set class…";
+                        kind: InkButtonKind.primary;
+                        clicked => {
+                            GlobalAppState.active-dialog = DialogType.classification_selection_dialog;
+                        }
+                    }
+                    Rectangle {
                         horizontal-stretch: 1;
                     }
-                    // Label count chip
-                    if ObjectListState.selected_object.label_count > 0: VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            height: 16px;
-                            min-width: 24px;
-                            border-radius: 3px;
-                            background: rgba(77, 141, 255, 0.10);
-                            border-width: 1px;
-                            border-color: rgba(77, 141, 255, 0.20);
-                            HorizontalLayout {
-                                padding-left: 5px;
-                                padding-right: 5px;
-                                Text {
-                                    text: ObjectListState.selected_object.label_count + "×";
-                                    font-size: 10px;
-                                    font-family: Theme.font-mono;
-                                    color: Theme.accent;
-                                    vertical-alignment: center;
-                                }
-                            }
+                    InkIconButton {
+                        size: 24px;
+                        icon: InkIcons.edit;
+                        label: "Edit";
+                        clicked => {
+                            ObjectListState.object_edit(root.sel.id);
                         }
                     }
-                    // Display name
-                    if ObjectListState.selected_object.display_name != "": Text {
-                        text: ObjectListState.selected_object.display_name;
-                        font-size: 10px;
-                        font-family: Theme.font-mono;
-                        color: Theme.text-mute;
-                        vertical-alignment: center;
-                        height: 10px;
-                    }
-                }
-
-                // Classes list (only when classes are defined)
-                if ObjectListState.selected_object.class_names.length > 0: Rectangle {
-                    background: rgba(255, 255, 255, 0.03);
-                    border-radius: 4px;
-
-                    VerticalLayout {
-                        spacing: 2px;
-                        padding: 4px;
-
-                        for class_name[index] in ObjectListState.selected_object.class_names: HorizontalLayout {
-                            spacing: 6px;
-                            height: 20px;
-
-                            VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    width: 8px;
-                                    height: 8px;
-                                    border-radius: 2px;
-                                    background: ObjectListState.selected_object.class_colors[index];
-                                }
-                            }
-
-                            Text {
-                                text: class_name;
-                                font-size: 11px;
-                                color: Theme.text-dim;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                                overflow: elide;
-                            }
-
-                            VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    width: 16px;
-                                    height: 16px;
-                                    border-radius: 3px;
-                                    background: rm_ta.has-hover ? rgba(248, 113, 113, 0.15) : transparent;
-                                    animate background { duration: 80ms; }
-
-                                    Text {
-                                        text: "×";
-                                        font-size: 11px;
-                                        color: Theme.text-faint;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
-                                    }
-
-                                    rm_ta := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            ObjectListState.object_remove_class(
-                                                ObjectListState.selected_object.id,
-                                                ObjectListState.selected_object.class_ids[index]);
-                                        }
-                                    }
-                                }
-                            }
+                    InkIconButton {
+                        size: 24px;
+                        icon: InkIcons.copy;
+                        label: "Copy";
+                        clicked => {
+                            ObjectListState.object_copy(root.sel.id);
                         }
                     }
-                }
-
-                // Divider
-                Rectangle {
-                    height: 1px;
-                    background: Theme.border;
-                    opacity: 0.4;
-                }
-
-                // Metrics – vertical stack
-                VerticalLayout {
-                    spacing: 4px;
-
-                    // AREA
-                    HorizontalLayout {
-                        alignment: space-between;
-                        height: 18px;
-                        Text {
-                            text: "AREA";
-                            font-size: 9px;
-                            font-family: Theme.font-mono;
-                            color: Theme.text-faint;
-                            vertical-alignment: center;
-                        }
-
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 1px;
-                            Text {
-                                text: ObjectListState.selected_object.area > 0 ? ObjectListState.selected_object.area + " px²" : "–";
-                                font-size: 11px;
-                                font-family: Theme.font-mono;
-                                color: Theme.text-mute;
-                                vertical-alignment: center;
-                                horizontal-alignment: right;
-                            }
-
-                            if ObjectListState.selected_object.area_nm2 != "": Text {
-                                text: ObjectListState.selected_object.area_nm2 + " nm²";
-                                font-size: 9px;
-                                font-family: Theme.font-mono;
-                                color: Theme.text-faint;
-                                vertical-alignment: center;
-                                horizontal-alignment: right;
-                            }
-                        }
-                    }
-
-                    // CIRCULARITY
-                    HorizontalLayout {
-                        alignment: space-between;
-                        height: 18px;
-                        Text {
-                            text: "CIRCULARITY";
-                            font-size: 9px;
-                            font-family: Theme.font-mono;
-                            color: Theme.text-faint;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: ObjectListState.selected_object.circularity != "" ? ObjectListState.selected_object.circularity : "–";
-                            font-size: 11px;
-                            font-family: Theme.font-mono;
-                            color: Theme.text-mute;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    // INTENSITY – section header
-                    HorizontalLayout {
-                        alignment: space-between;
-                        height: 18px;
-                        Text {
-                            text: "INTENSITY";
-                            font-size: 9px;
-                            font-family: Theme.font-mono;
-                            color: Theme.text-faint;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    // Per-channel intensity rows
-                    if ObjectListState.selected_object.intensities.length > 0: VerticalLayout {
-                        spacing: 2px;
-                        for intensity_val[i] in ObjectListState.selected_object.intensities: HorizontalLayout {
-                            alignment: space-between;
-                            padding-left: 6px;
-                            height: 18px;
-
-                            HorizontalLayout {
-                                spacing: 5px;
-                                alignment: start;
-
-                                // Channel color swatch (if channel info available)
-                                if ChannelState.channels.length > i: VerticalLayout {
-                                    alignment: center;
-                                    Rectangle {
-                                        width: 7px;
-                                        height: 7px;
-                                        border-radius: 2px;
-                                        background: ChannelState.channels[i].color;
-                                    }
-                                }
-
-                                Text {
-                                    text: ChannelState.channels.length > i ? ChannelState.channels[i].name : "Ch " + (i + 1);
-                                    font-size: 10px;
-                                    color: Theme.text-dim;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 6px;
-                                alignment: end;
-
-                                // Sum
-                                HorizontalLayout {
-                                    spacing: 2px;
-                                    Text {
-                                        text: "Σ";
-                                        font-size: 9px;
-                                        color: Theme.text-faint;
-                                        vertical-alignment: center;
-                                    }
-
-                                    Text {
-                                        text: intensity_val != "" ? intensity_val : "–";
-                                        font-size: 10px;
-                                        font-family: Theme.font-mono;
-                                        color: Theme.text-mute;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                // Avg
-                                HorizontalLayout {
-                                    spacing: 2px;
-                                    Text {
-                                        text: "μ";
-                                        font-size: 9px;
-                                        color: Theme.text-faint;
-                                        vertical-alignment: center;
-                                    }
-
-                                    Text {
-                                        text: ObjectListState.selected_object.intensity_avgs.length > i
-                                            ? (ObjectListState.selected_object.intensity_avgs[i] != ""
-                                            ? ObjectListState.selected_object.intensity_avgs[i]
-                                            : "–")
-                                            : "–";
-                                        font-size: 10px;
-                                        font-family: Theme.font-mono;
-                                        color: Theme.text-mute;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Fallback when no intensities computed yet
-                    if ObjectListState.selected_object.intensities.length == 0: HorizontalLayout {
-                        alignment: space-between;
-                        padding-left: 6px;
-                        height: 18px;
-                        Text {
-                            text: "–";
-                            font-size: 11px;
-                            font-family: Theme.font-mono;
-                            color: Theme.text-mute;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-        }
-
-        // ----- FOOTER TOOLBAR -----
-        Rectangle {
-            height: 38px;
-            background: Theme.bg;
-            border-width: 1px;
-            border-color: Theme.border-soft;
-            border-radius: Theme.radius-md;
-
-            HorizontalLayout {
-                padding-left: 4px;
-                padding-right: 4px;
-                spacing: 2px;
-                alignment: stretch;
-
-                VerticalLayout {
-                    alignment: center;
-                    ActionButton {
-                        icon: @image-url("../icons/regular-white/trash-simple.svg");
-                        enabled: ObjectListState.selected_object.id != 0;
+                    InkIconButton {
+                        size: 24px;
+                        icon: InkIcons.delete;
+                        label: "Delete object";
                         clicked => {
                             GlobalAppState.active_dialog = DialogType.object_confirm_delete;
                         }
                     }
                 }
+            }
+        }
+    }
 
-                VerticalLayout {
-                    alignment: center;
-                    ActionButton {
-                        icon: @image-url("../icons/regular-red/backspace.svg");
-                        colorize: Theme.err;
-                        clicked => {
-                            GlobalAppState.active_dialog = DialogType.object_confirm_delete_manual_annotated;
-                        }
-                    }
-                }
-
-                /*   VerticalLayout {
-                    alignment: center;
-                    ActionButton {
-                        icon: @image-url("../icons/regular-white/copy-simple.svg");
-                        enabled: ObjectListState.selected_object.id != 0;
-                        clicked => {
-                            ObjectListState.object_copy(ObjectListState.selected_object.id);
-                        }
-                    }
-                }
-                    */
-
-                /*
-                VerticalLayout {
-                    alignment: center;
-                    ActionButton {
-                        icon: @image-url("../icons/regular-white/pencil-simple.svg");
-                        enabled: ObjectListState.selected_object.id != 0;
-                        clicked => {
-                            ObjectListState.object_edit(ObjectListState.selected_object.id);
-                        }
-                    }
-                        
-            }*/
-
-            // Divider
-                VerticalLayout {
-                    alignment: center;
-                    padding-left: 4px;
-                    padding-right: 4px;
-                    Rectangle {
-                        width: 1px;
-                        height: 16px;
-                        background: Theme.border;
-                    }
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-
-                // Add class – primary action
-                VerticalLayout {
-                    alignment: center;
-                    Button {
-                        text: "Set class";
-                        primary: true;
-                        enabled: ObjectListState.selected_object.id != 0;
-                        clicked => {
-                            GlobalAppState.active-dialog = DialogType.classification_selection_dialog;
-                        }
-                    }
+    list-menu := PopupWindow {
+        x: root.width - 270px;
+        y: Ink.head-h;
+        InkMenuFrame {
+            menu-width: 270px;
+            InkMenuItem {
+                icon: InkIcons.delete;
+                text: "Delete all hand-annotated objects…";
+                danger: true;
+                clicked => {
+                    GlobalAppState.active_dialog = DialogType.object_confirm_delete_manual_annotated;
                 }
             }
         }

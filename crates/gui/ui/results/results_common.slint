@@ -3,16 +3,12 @@
 // on its right, per-spec: Z/T is a global filter, visible in every view),
 // legend bar, and small pill/chip primitives reused across List/Matrix/
 // Charts.
+import { BreadcrumbItem, ResultsRailMode, ResultsState } from "../api/results.slint";
 
 import { VerticalBox } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { NavIconLeft } from "../components/navicon_left.slint";
 import { AppButton } from "../components/app_button.slint";
-import {
-    ResultsState,
-    ResultsRailMode,
-    BreadcrumbItem,
-} from "results_state.slint";
 
 // -- Left icon rail: List / Matrix / Charts + Export at the bottom.
 // Reuses the same NavIconLeft button + panel styling as the main window's

@@ -1,0 +1,192 @@
+// ink/button.slint — buttons.
+//
+// `InkButton` for an action with a label: `secondary` by default, `primary`
+// for the one confirming action of a place, `danger` for a destructive one,
+// `quiet` for one beside them. `InkIconButton` for an icon alone (heads,
+// bars, rows), `InkToolButton` for a tool of a tool bar (can say "NEW").
+//
+// Roots carry only sizes and accessibility - see README.md.
+
+import { Ink } from "palette.slint";
+
+export enum InkButtonKind { secondary, primary, quiet, danger }
+
+export component InkButton inherits Rectangle {
+    in property <string> text;
+    in property <InkButtonKind> kind: InkButtonKind.secondary;
+    /// Optional icon before the text.
+    in property <image> icon;
+    in property <bool> enabled: true;
+    /// A smaller button, for rows and table cells.
+    in property <bool> small: false;
+    callback clicked;
+
+    property <bool> filled: root.kind == InkButtonKind.primary || root.kind == InkButtonKind.danger;
+    property <bool> has-icon: root.icon.width > 0;
+    property <color> fg: root.kind == InkButtonKind.primary ? Ink.on-primary
+        : root.kind == InkButtonKind.danger ? #FFFFFF
+        : root.kind == InkButtonKind.quiet ? Ink.text-dim
+        : Ink.text;
+
+    height: root.small ? 24px : Ink.button-h;
+    horizontal-stretch: 0;
+    min-width: root.kind == InkButtonKind.quiet || root.small ? 0px : 64px;
+    preferred-width: label.preferred-width + (root.has-icon ? 20px : 0px) + (root.small ? 16px : 24px);
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-md;
+        border-width: root.kind == InkButtonKind.secondary ? 1px : 0px;
+        border-color: ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
+        background: root.kind == InkButtonKind.primary ? (ta.has-hover && root.enabled ? Ink.primary-hover : Ink.primary)
+            : root.kind == InkButtonKind.danger ? (ta.has-hover && root.enabled ? Ink.err.darker(10%) : Ink.err)
+            : root.kind == InkButtonKind.quiet ? (ta.has-hover && root.enabled ? Ink.hover : transparent)
+            : (ta.pressed ? Ink.selection : ta.has-hover && root.enabled ? Ink.hover : Ink.panel);
+        opacity: root.enabled ? 1.0 : 0.45;
+        animate background { duration: 80ms; }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            if root.has-icon: Image {
+                source: root.icon;
+                width: 14px;
+                height: 14px;
+                y: (parent.height - self.height) / 2;
+                colorize: root.fg;
+            }
+            label := Text {
+                accessible-role: none;
+                text: root.text;
+                font-size: root.small ? Ink.fs-sm : Ink.fs-md;
+                font-weight: 600;
+                color: root.fg;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// An icon alone. `label` says what it does (screen readers, tooltips).
+export component InkIconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    /// Switched on (a toggled tool, an open panel).
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    /// The square's side: 24 in heads and rows, 28 in panels, 30 in the top bar.
+    in property <length> size: 28px;
+    /// Drawn in this color instead of the dim text color (a warning, an error).
+    in property <color> tint: transparent;
+    callback clicked;
+
+    width: root.size;
+    height: root.size;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-checked: root.active;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-md;
+        background: root.active ? Ink.selection : (ta.has-hover && root.enabled ? Ink.hover : transparent);
+        opacity: root.enabled ? 1.0 : 0.4;
+        animate background { duration: 80ms; }
+
+        Image {
+            source: root.icon;
+            width: round(root.size * 0.54 / 1px) * 1px;
+            height: self.width;
+            colorize: root.tint != transparent ? root.tint
+                : root.active || ta.has-hover ? Ink.text : Ink.text-dim;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// A tool of a tool bar (annotating): an icon, the active one marked, a
+/// "NEW" tag for a tool that just arrived.
+export component InkToolButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    in property <bool> is-new: false;
+    callback clicked;
+
+    width: 32px;
+    height: 32px;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-checked: root.active;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-md;
+        background: root.active ? Ink.primary : (ta.has-hover && root.enabled ? Ink.hover : transparent);
+        opacity: root.enabled ? 1.0 : 0.4;
+
+        Image {
+            source: root.icon;
+            width: 17px;
+            height: 17px;
+            colorize: root.active ? Ink.on-primary : ta.has-hover ? Ink.text : Ink.text-dim;
+        }
+    }
+
+    tag := Rectangle {
+        visible: root.is-new;
+        x: parent.width - self.width + 3px;
+        y: -5px;
+        width: new-text.preferred-width + 6px;
+        height: 11px;
+        border-radius: 5px;
+        background: Ink.new;
+        new-text := Text {
+            text: "NEW";
+            font-size: 7.5px;
+            font-weight: 700;
+            color: Ink.on-new;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

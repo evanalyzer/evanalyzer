@@ -1,354 +1,143 @@
-import {
-    LineEdit,
-    Button,
-    VerticalBox,
-    ListView,
-    Spinner,
-    Palette,
-} from "std-widgets.slint";
-import { Theme } from "../style.slint";
-import { ToolToggleButton } from "../components/toggle_button.slint";
-import { ToolToggleButtonLabeled } from "../components/tool_button.slint";
+// editor/images_list_panel.slint — the project's images: the folder they
+// come from, a search, and the list (a virtual list: only the rows in view
+// exist). Selecting one opens it.
 
-// ----------------------------------------------------------
-export struct ImageItemData {
-    name: string,
-    path: string,
-    image_dimension: string,
-    image_size: string,
-    has_annotations: bool,
-}
+import { ImageItemData, ImagesListState } from "../api/images_list.slint";
+import { ListView } from "std-widgets.slint";
+import { Ink, InkIcons, InkPanelHead, InkSearchField, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkHint } from "../ink/ink.slint";
 
-export global ImagesListState {
-    in property <bool> is_scanning: false;
-    in-out property <string> filter_text;
-    in-out property <string> act_image_root_dir;
-
-    callback new_image_root_folder_clicked();
-    callback open_images_folder_clicked();
-    callback refresh_images_clicked();
-    callback image_selected(string);
-    // Incremented (never read for its value) by the Ctrl+F global shortcut
-    // (see shortcuts.slint) to move keyboard focus into the search field
-    // below. A counter rather than a bool: `changed` below only fires on an
-    // actual value change, and a plain bool would miss every second request
-    // once it's already `true`. Handled directly in this file, not Rust -
-    // it's pure UI focus, nothing to persist.
-    in-out property <int> focus_search_requested: 0;
-    callback image_filter_text_changed(string);
-
-    in-out property <int> selected_image_index: -1;
-    // Index to scroll into view (e.g. when an image is opened from the results
-    // table or after a folder scan); -1 means "no scroll request".
-    in-out property <int> scroll_to_image_index: -1;
-    in property <[ImageItemData]> images_list: [];
-}
-
-// ----------------------------------------------------------
-// One image row - thumbnail + name + mono meta line.
-component ImageListRow inherits Rectangle {
-    in property <ImageItemData> data;
-    in property <bool> selected;
-    callback row_clicked;
-
-    // Two lines of text need a touch more than the default list-row-height.
-    height: 52px;
-
-    // Inner card, inset so the selection ring doesn't hug the panel edges.
-    Rectangle {
-        x: 2px;
-        y: 2px;
-        width: parent.width - 4px;
-        height: parent.height - 4px;
-        border-radius: Theme.radius-md;
-
-        background: root.selected ? Theme.list-select-row-bg
-            : (row_ta.has-hover ? Theme.raised : transparent);
-        border-width: 1px;
-        border-color: root.selected ? Theme.list-select-row-border-color
-            : transparent;
-        animate background { duration: 80ms; }
-
-        HorizontalLayout {
-            padding-left: 10px;
-            padding-right: 10px;
-            spacing: 10px;
-            alignment: stretch;
-
-            // Thumbnail placeholder - gradient tile with a tiny accent
-            // dot for images that already have annotations.
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: 5px;
-                    background: @linear-gradient(135deg, Theme.raised 0%, Theme.bg 100%);
-                    border-width: 1px;
-                    border-color: rgba(255, 255, 255, 0.05);
-
-                    // Annotation indicator dot
-                    if root.data.has-annotations: Rectangle {
-                        x: parent.width - 9px;
-                        y: 3px;
-                        width: 6px;
-                        height: 6px;
-                        border-radius: 3px;
-                        background: Theme.accent;
-                        // Subtle ring so it reads on the gradient
-                        border-width: 1px;
-                        border-color: Theme.bg;
-                    }
-                }
-            }
-
-            // Name (line 1) + meta (line 2)
-            VerticalLayout {
-                alignment: center;
-                spacing: 2px;
-                horizontal-stretch: 1;
-
-                Text {
-                    text: root.data.name;
-                    color: root.selected ? Theme.text-bright : Theme.text;
-                    font-size: 13px;
-                    font-weight: root.selected ? 500 : 400;
-                    overflow: elide;
-                    horizontal-alignment: left;
-                }
-
-                Text {
-                    text: root.data.image-dimension + "  ·  " + root.data.image-size;
-                    color: Theme.text-mute;
-                    font-size: 10.5px;
-                    font-family: Theme.font-mono;
-                    overflow: elide;
-                    horizontal-alignment: left;
-                }
-            }
-
-            // Annotation tag - only on hover/selected, otherwise the dot
-            // on the thumb is enough
-            if root.data.has-annotations && (row_ta.has-hover || root.selected): VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    height: 18px;
-                    min-width: 22px;
-                    border-radius: 3px;
-                    background: rgba(77, 141, 255, 0.12);
-                    border-width: 1px;
-                    border-color: rgba(77, 141, 255, 0.25);
-                    HorizontalLayout {
-                        padding-left: 6px;
-                        padding-right: 6px;
-                        Text {
-                            text: "ann";
-                            font-size: 9.5px;
-                            font-family: Theme.font-mono;
-                            color: Theme.accent;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    row_ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.row_clicked();
-        }
-    }
-}
-
-// ----------------------------------------------------------
 export component ImagesListPanel inherits Rectangle {
-    // Mirror the global so a change requested from outside (Ctrl+F, see
-    // shortcuts.slint) can be observed here - see the identical pattern for
-    // `scroll_index` further down.
-    property <int> focus_search_mirror: ImagesListState.focus_search_requested;
-    changed focus_search_mirror => {
-        search-input.focus();
+    property <length> row-h: 38px;
+
+    // Ctrl+F: the search field.
+    property <int> focus-search-mirror: ImagesListState.focus_search_requested;
+    changed focus-search-mirror => {
+        search.focus-input();
     }
 
-    VerticalBox {
-        spacing: 12px;
-        padding: Theme.panel-content-padding;
+    VerticalLayout {
+        spacing: 0px;
 
-        // ----- HEADER -----
-        HorizontalLayout {
-            alignment: space-between;
-            Text {
-                text: "Project Images";
-                font-size: 14px;
-                font-weight: 600;
-                color: Theme.text;
-                vertical-alignment: center;
-            }
-
-            Text {
-                text: ImagesListState.images_list.length == 1 ? "1 file" : ImagesListState.images_list.length + " files";
-                font-size: 11px;
-                font-family: Theme.font-mono;
-                color: Theme.text-mute;
-                vertical-alignment: center;
+        InkPanelHead {
+            title: "Images";
+            count: ImagesListState.images_list.length;
+            closable: false;
+            add-label: "Select the images folder";
+            add => {
+                ImagesListState.open_images_folder_clicked();
             }
         }
 
-        // ----- SEARCH + REFRESH -----
-        HorizontalLayout {
+        VerticalLayout {
+            padding: 8px;
+            padding-bottom: 4px;
             spacing: 6px;
-            search-input := LineEdit {
-                placeholder-text: "Search files…";
-                height: 32px;
-                horizontal-stretch: 1;
-                text: ImagesListState.filter_text;
-                edited(text) => {
-                    ImagesListState.filter_text = text;
-                    ImagesListState.image_filter_text_changed(text);
-                }
-            }
 
-            ToolToggleButton {
-                height: 32px;
-                width: 32px;
-                border-color: Theme.border;
-                border-width: 1px;
-                icon: @image-url("../icons/regular-white/arrow-clockwise.svg");
-                clicked => {
-                    ImagesListState.refresh_images_clicked();
-                }
-            }
-        }
-
-        // ----- PATH STRIP (root dir) -----
-        if ImagesListState.act_image_root_dir != "": Rectangle {
-            height: 26px;
-            background: Theme.raised;
-            border-width: 1px;
-            border-color: Theme.border-soft;
-            border-radius: Theme.radius-sm;
             HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 8px;
-                spacing: 6px;
-                alignment: start;
-                VerticalLayout {
-                    alignment: center;
-                    Image {
-                        source: @image-url("../icons/regular-white/folder.svg");
-                        width: 11px;
-                        height: 11px;
-                        colorize: Theme.text-mute;
+                spacing: 4px;
+                search := InkSearchField {
+                    placeholder: "Search images";
+                    text: ImagesListState.filter_text;
+                    edited(text) => {
+                        ImagesListState.filter_text = text;
+                        ImagesListState.image_filter_text_changed(text);
                     }
                 }
+                InkIconButton {
+                    size: Ink.control-h;
+                    icon: InkIcons.refresh;
+                    label: "Refresh the image list";
+                    clicked => {
+                        ImagesListState.refresh_images_clicked();
+                    }
+                }
+            }
 
+            if ImagesListState.act_image_root_dir != "": HorizontalLayout {
+                spacing: 6px;
+                Image {
+                    source: InkIcons.folder;
+                    width: 12px;
+                    colorize: Ink.text-mute;
+                }
                 Text {
-                    text: ImagesListState.act_image_root_dir;
-                    font-size: 10.5px;
-                    font-family: Theme.font-mono;
-                    color: Theme.text-dim;
-                    vertical-alignment: center;
-                    overflow: elide;
                     horizontal-stretch: 1;
+                    text: ImagesListState.act_image_root_dir;
+                    font-size: Ink.fs-sm;
+                    font-family: Ink.font-mono;
+                    color: Ink.text-mute;
+                    overflow: elide;
+                    vertical-alignment: center;
                 }
             }
         }
 
-        // ----- FILE LIST -----
         Rectangle {
             vertical-stretch: 1;
 
-            // Mirror the global so we can scroll the selected image into view
-            // when selection is driven from outside the list (results table,
-            // folder scan). Row height is 52px (see ImageListRow).
-            property <int> scroll_index: ImagesListState.scroll_to_image_index;
-            changed scroll_index => {
-                if (ImagesListState.scroll_to_image_index >= 0) {
-                    images_listview.content-y = Math.clamp(
-                        -(ImagesListState.scroll_to_image_index * 52px) + images_listview.height / 2 - 26px,
-                        images_listview.height - images_listview.content-height,
-                        0px
-                    );
+            property <int> scroll-index: ImagesListState.scroll_to_image_index;
+            changed scroll-index => {
+                if ImagesListState.scroll_to_image_index >= 0 {
+                    list.content-y = clamp(
+                        -(ImagesListState.scroll_to_image_index * root.row-h) + list.visible-height / 2 - root.row-h / 2,
+                        list.visible-height - list.content-height,
+                        0px);
                 }
             }
 
-            images_listview := ListView {
-                width: 100%;
-                height: 100%;
-                horizontal-scrollbar-policy: always-off;
-
-                for data[index] in ImagesListState.images_list: ImageListRow {
-                    data: data;
+            list := ListView {
+                x: 4px;
+                width: parent.width - 8px;
+                for data[index] in ImagesListState.images_list: InkListRow {
+                    height: root.row-h;
+                    title: data.name;
+                    subtitle: data.image_dimension + " · " + data.image_size;
+                    mono: true;
+                    icon: InkIcons.images;
+                    // Hand-annotated objects in it.
+                    mark: data.has_annotations ? Ink.focus : transparent;
                     selected: ImagesListState.selected_image_index == index;
-
-                    row_clicked => {
+                    clicked => {
                         ImagesListState.selected_image_index = index;
                         ImagesListState.image_selected(data.path);
                     }
                 }
             }
 
-            // Empty state - list is empty AND we aren't currently scanning
-            if ImagesListState.images_list.length == 0 && !ImagesListState.is_scanning: Rectangle {
-                VerticalLayout {
+            if ImagesListState.images_list.length == 0 && !ImagesListState.is_scanning: VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+                alignment: start;
+                Text {
+                    text: "No images yet";
+                    font-size: Ink.fs-lg;
+                    font-weight: 600;
+                    color: Ink.text;
+                    horizontal-alignment: center;
+                }
+                InkHint {
+                    text: "Select the folder with the images - TIFF, OME-TIFF, CZI, VSI …";
+                    horizontal-alignment: center;
+                }
+                HorizontalLayout {
                     alignment: center;
-                    spacing: 10px;
-                    padding: 20px;
-
-                    HorizontalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 56px;
-                            height: 56px;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: Theme.border;
-                            Image {
-                                source: @image-url("../icons/regular-white/image.svg");
-                                width: 22px;
-                                height: 22px;
-                                colorize: Theme.text-faint;
-                            }
+                    InkButton {
+                        text: "Select folder";
+                        kind: InkButtonKind.primary;
+                        icon: InkIcons.open;
+                        clicked => {
+                            ImagesListState.open_images_folder_clicked();
                         }
                     }
-
-                    Text {
-                        text: "No images loaded";
-                        font-size: 12px;
-                        color: Theme.text-dim;
-                        horizontal-alignment: center;
-                    }
-
-                    Text {
-                        text: "Select a folder to import TIFF, OME-TIFF or CZI files.";
-                        font-size: 11px;
-                        color: Theme.text-mute;
-                        wrap: word-wrap;
-                        horizontal-alignment: center;
-                    }
                 }
             }
 
-            // Scanning overlay
             if ImagesListState.is_scanning: Rectangle {
-                background: Theme.overlay-scrim;
-                Spinner {
-                    indeterminate: true;
-                }
-
+                background: Ink.glass;
                 TouchArea { }
-            }
-        }
-
-        // ----- FOOTER ACTION -----
-        ToolToggleButtonLabeled {
-            height: 36px;
-            text: "Select folder";
-            icon: @image-url("../icons/regular-white/folder.svg");
-            clicked => {
-                ImagesListState.open_images_folder_clicked();
+                InkBusy {
+                    size: 18px;
+                }
             }
         }
     }

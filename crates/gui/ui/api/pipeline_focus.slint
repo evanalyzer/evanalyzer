@@ -1,0 +1,20 @@
+// api/pipeline_focus.slint — the Rust interface of editor/pipeline_focus.slint: the state Rust
+// sets, the callbacks it answers.
+
+export global PipelineFocusState {
+    // Focus mode switch (header button). While on, selecting a pipeline
+    // focuses it.
+    in-out property <bool> enabled: false;
+    // Name of the focused pipeline; empty = no focus active.
+    in property <string> focused-pipeline-name: "";
+
+    // Header button: switches focus mode on/off (and remembers the choice).
+    callback toggle-mode();
+    // A pipeline was clicked in the list.
+    callback pipeline-selected(int);
+    // Alt+click on a pipeline, or F for the selected one: quick focus on it
+    // (or leave the focus when it already is the focused one).
+    callback toggle-pipeline-focus(int);
+    // "Show all" in the banner: leaves the focus.
+    callback exit();
+}

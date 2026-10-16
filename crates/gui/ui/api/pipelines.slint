@@ -1,0 +1,421 @@
+// api/pipelines.slint — the Rust interface of editor/pipelines_panel.slint: the state Rust
+// sets, the callbacks it answers.
+
+import { Theme } from "../style.slint";
+import { ClassItemData } from "classification.slint";
+
+export enum StepCategory { preprocess, segment, instance-segmentation, measure, object, dataset, component }
+
+export enum PipelineStatus { idle, queued, running, done, error }
+
+export enum ParamType {
+    number,
+    text,
+    dropdown,
+    toggle,
+    slider,
+    spinner,
+    group,
+    obj-class,
+    seg-class,
+    multi-obj-class,
+    multi-seg-class,
+    pixel-units,
+    size-units,
+    label,
+    file-path,
+    image-address,
+    image-channel,
+    script }
+
+export struct LeafParam {
+        name: string,
+        display-name: string,
+        description: string,
+        value: string,
+        param-type: ParamType,
+        options: [string],
+        min: float,
+        max: float,
+        step: float,
+        // Inside an opened component: this setting is a component parameter.
+        exposed: bool,
+    }
+
+export struct GroupItem {
+        fields: [LeafParam],
+    }
+
+export struct CommandParameter {
+        name: string,
+        display-name: string,
+        description: string,
+        value: string,
+        param-type: ParamType,
+        options: [string],
+        min: float,
+        max: float,
+        step: float,
+        group-items: [GroupItem],
+        // True only for a `PixelClassifier`/`AiObjectClassifier` step's
+        // `model_path` field, once a model is set - shows an info button that
+        // opens the model's saved metadata (name/description/classes).
+        // Computed in Rust rather than matched on `name`/`display-name` here,
+        // so this is the one place that knows which commands these are.
+        has-model-info: bool,
+        // Inside an opened component: this setting is a component parameter.
+        exposed: bool,
+        // The header shown above the setting where its section (`#[cmdsmeta(section)]`
+        // or a component parameter's) starts. Empty otherwise - also for the
+        // settings without a section, which come first.
+        section-header: string,
+        // The setting's section; empty: none.
+        section: string,
+        // The first paragraph of `description`, on one line - shown in the
+        // settings dialog, with "?" for the rest.
+        short-description: string,
+        // `description` says more than `short-description`.
+        more-help: bool,
+        // A component parameter: what it sets ("Sets ExtractObjects › …"); a
+        // setting of an opened component: the parameter setting it. Else empty.
+        wiring: string,
+        // What a check found about this setting, or empty.
+        problem: string,
+        problem-error: bool,
+    }
+
+// A problem the checks found (`check_project`) - in the panel's problem list
+// and on the card of the step it's about.
+export struct ProblemItem {
+        text: string,
+        // A run fails (else: works, but probably isn't meant).
+        error: bool,
+        // Where it is: "Channel1 · step 1", "Component Coloc 3CH".
+        where: string,
+        // The one-click fix's button ("Add class 1"), or empty.
+        fix-label: string,
+        // Its number in the project's list - what show/fix refer to.
+        index: int,
+    }
+
+// A section of a component card (see `PipelineCommand.section-views`).
+export struct SectionView {
+        name: string,
+        // Its settings' values on one line ("CY7 · 200 · ch1@coloc_ch3").
+        summary: string,
+        // Shows its settings (a collapsible section).
+        open: bool,
+        // 0: collapsible; 1: the first of a table's sections - shows table
+        // `table`; 2: another of that table's sections (shown by the first);
+        // 3: the settings without a section, always shown.
+        kind: int,
+        table: int,
+        // What a check found among its settings: 0 nothing, 1 a warning, 2 an error.
+        problem: int,
+        // Its settings.
+        params: [CommandParameter],
+    }
+
+// A row of a `CardTable`: a section, its settings as the cells.
+export struct CardTableRow {
+        name: string,
+        problem: int,
+        cells: [CommandParameter],
+    }
+
+// Sections with the same settings, as one table: a row per section, a
+// column per setting.
+export struct CardTable {
+        columns: [string],
+        rows: [CardTableRow],
+        // What the checks found about its cells, each once.
+        problems: [string],
+        problem-error: bool,
+    }
+
+export struct PipelineCommand {
+        // Position in the pipeline - what the step actions (remove, move,
+        // change a parameter) refer to; the list is rebuilt after each change.
+        id: int,
+        // The step's stable id - for what must stay with the step when steps
+        // above it are inserted or removed (breakpoint, expanded state).
+        step-id: string,
+        name: string,
+        category: StepCategory,
+        summary: string,        // "σ = 2.0 · per channel"
+        // What the command or component does - behind the card's "?" (empty: no "?").
+        help: string,
+        enabled: bool,
+        expanded: bool,
+        parameters: [CommandParameter],
+        // Settings marked `visibility = Advanced`: shown below the "Advanced
+        // settings" row, and only while it is expanded (empty otherwise).
+        advanced-parameters: [CommandParameter],
+        // The advanced section of this step is expanded (kept per step).
+        show-advanced: bool,
+        // How many advanced settings the step has, and how many of them differ
+        // from their default (shown on the collapsed row so changed hidden
+        // values never go unnoticed).
+        advanced-count: int,
+        advanced-changed: int,
+        // A component card: the component library has a newer version ("3"), or empty.
+        update-version: string,
+        // The sections of `parameters`, in order - "" (no section) first
+        // when there are such settings. The settings dialog's sections.
+        sections: [string],
+        // A component card with sections: how they're shown - collapsed to a
+        // summary, open, or as a table when several have the same settings.
+        // Empty otherwise (the settings one below the other).
+        section-views: [SectionView],
+        card-tables: [CardTable],
+        // What the checks found about this step.
+        problems: [ProblemItem],
+        // How many of `problems` are errors.
+        problem-errors: int,
+    }
+
+export struct Pipeline {
+        id: int,
+        name: string,
+        image-source: string,
+        enabled: bool,                 // included in "Run all"
+    dirty: bool,                   // unsaved changes
+    status: PipelineStatus,
+        total-step-count: int,         // pre-computed in host
+    enabled-step-count: int,       // pre-computed in host
+}
+
+export global Cat {
+        public pure function color(c: StepCategory) -> color {
+            if c == StepCategory.preprocess {
+                return Theme.cat-preprocess;
+            }
+            if c == StepCategory.segment {
+                return Theme.cat-segment;
+            }
+            if c == StepCategory.instance-segmentation {
+                return Theme.cat-object;
+            }
+            if c == StepCategory.measure {
+                return Theme.cat-measure;
+            }
+            if c == StepCategory.dataset {
+                return Theme.cat-dataset;
+            }
+            if c == StepCategory.component {
+                return Theme.cat-component;
+            }
+            return Theme.cat-classify;
+        }
+        public pure function tint(c: StepCategory) -> color {
+            return Cat.color(c).with-alpha(0.15);
+        }
+        public pure function name(c: StepCategory) -> string {
+            if c == StepCategory.preprocess {
+                return "Preprocess";
+            }
+            if c == StepCategory.segment {
+                return "Segment";
+            }
+            if c == StepCategory.instance-segmentation {
+                return "Instance Seg.";
+            }
+            if c == StepCategory.measure {
+                return "Measure";
+            }
+            if c == StepCategory.dataset {
+                return "Dataset";
+            }
+            if c == StepCategory.component {
+                return "Component";
+            }
+            return "Object";
+        }
+    }
+
+export global Status {
+        public pure function color(s: PipelineStatus) -> color {
+            if s == PipelineStatus.running {
+                return Theme.warn;
+            }
+            if s == PipelineStatus.queued {
+                return Theme.accent;
+            }
+            if s == PipelineStatus.done {
+                return Theme.ok;
+            }
+            if s == PipelineStatus.error {
+                return Theme.err;
+            }
+            return Theme.text-faint;
+        }
+        public pure function name(s: PipelineStatus) -> string {
+            if s == PipelineStatus.running {
+                return "RUN";
+            }
+            if s == PipelineStatus.queued {
+                return "QUEUED";
+            }
+            if s == PipelineStatus.done {
+                return "DONE";
+            }
+            if s == PipelineStatus.error {
+                return "ERR";
+            }
+            return "IDLE";
+        }
+    }
+
+/// The classes of the component opened in the pipelines panel ("L1", ...) -
+/// its class dropdowns offer them besides the project's.
+export global ComponentClassesState {
+    in property <[ClassItemData]> classes: [];
+}
+
+export global ClassHelper {
+        pure public function zeropad2(n: int) -> string {
+            n < 10 ? "0\{n}" : "\{n}"
+        }
+        pure public function label(val: string, prefix: string) -> string {
+            val == "-1" ? "Unset" : val == "4294967295" ? "Manual annotation" : val == "0" ? "Background" : !val.is-float() ? "◆ Component class " + val : prefix + " class " + ClassHelper.zeropad2(round(val.to-float()))
+        }
+    }
+
+// ══════════════════════════════════════════════════════════
+// Main panel
+export global PipelinesPanelState {
+        in property <[Pipeline]> pipelines: [];
+        in property <[PipelineCommand]> active-commands:[];
+        in property <string> active-pipeline-name;
+        in property <string> active-pipeline-image-source;
+        in property <int> enabled-pipeline-count;
+        in property <int> total-enabled-steps;
+        in property <string> eta-seconds-per-image: "0.00";
+        in property <int> cat-count-preprocess;
+        in property <int> cat-count-segment;
+        in property <int> cat-count-classify;
+        in property <int> cat-count-measure;
+
+        // -- User selection state --
+    in-out property <int> active-pipeline-id;
+        in-out property <int> selected-step-id;
+        in-out property <int> filter-category: -1;
+
+        // -- Breakpoint state (-1 / 0 = none) --
+    in-out property <int> breakpoint-pipeline-id: -1;
+        in-out property <string> breakpoint-step-id: "";
+    // 0 = off, 1 = Stop (pipeline halts at step), 2 = Snapshot (capture and continue)
+    in-out property <int> breakpoint-mode: 0;
+    // True while the viewport shows the breakpoint image instead of the original.
+    in-out property <bool> show-breakpoint-image: false;
+    // True once a breakpoint image has been captured (enables the toggle).
+    in-out property <bool> has-breakpoint-image: false;
+    // Which buffer the breakpoint preview renders: 0 = processed image,
+    // 1 = segmentation map, 2 = instance map.
+    in-out property <int> breakpoint-view-mode: 0;
+    // True once auto preview is enabled
+    in-out property <bool> auto-preview-enabled: false;
+
+        // -- Outbound callbacks --
+    // mode: 1 = Stop (pipeline halts at step), 2 = Snapshot (capture and continue)
+    callback set-breakpoint(int, string, int);   // pipeline-id, step-id, mode
+    callback clear-breakpoint();
+    // Fired whenever the breakpoint-image toggle changes so Rust can
+    // switch the viewport worker between original and breakpoint rendering.
+    callback show-breakpoint-image-changed(bool);
+    // Fired whenever the breakpoint view-mode dropdown changes (see
+    // breakpoint-view-mode above for the value meaning).
+    callback breakpoint-view-mode-changed(int);
+        callback select-pipeline(int);
+        callback toggle-pipeline(int);
+        callback move-pipeline-up(int);
+        callback move-pipeline-down(int);
+        callback new-pipeline();
+        callback duplicate-pipeline(int);
+        callback delete-pipeline(int);
+        callback pipeline-more(int);
+
+        callback toggle-step(int);
+        callback expand-step(int);
+        callback remove-step(int);
+        callback duplicate-step(int);
+        /// Opens "Create component" starting at this step (its index).
+        callback create-component(int);
+        /// The component opened in the panel (its steps are shown), or
+        /// empty.
+        in property <string> open-component-name: "";
+        /// What's wrong with the opened component (its checks), or empty.
+        in property <string> open-component-problem: "";
+        // A component only looked at from a pipeline step: that it shows the
+        // step's values ("Shown with the values of step 1 …"), else empty.
+        in property <string> open-component-values: "";
+        // What the checks found in the whole project (`check_project`).
+        in property <[ProblemItem]> project-problems: [];
+        // How many of `project-problems` are errors.
+        in property <int> project-problem-errors: 0;
+        in-out property <bool> problems-expanded: false;
+        // Opens or closes a section of a component card (step index, section).
+        callback toggle-section(int, string);
+        // Shows the step a problem is about (its `index`).
+        callback show-problem(int);
+        // Makes a problem's fix (its `index`).
+        callback fix-problem(int);
+        /// The opened component is only being looked at ("View"): nothing can be
+        /// changed.
+        in property <bool> open-component-read-only: false;
+        callback view-component(int);
+        /// "Edit" in the bar of a component opened with "View".
+        callback edit-open-component();
+        /// "Settings…" in the opened component's bar: its name, description and
+        /// parameters, in a dialog.
+        callback open-component-settings();
+        /// ✎ next to an exposed setting (step index, setting path): the
+        /// settings dialog at its parameter.
+        callback edit-exposed(int, string);
+        callback open-component(int);
+        callback close-component();
+        callback expand-component(int);
+        /// "Save to library…" on a component card (step index).
+        callback save-component-to-library(int);
+        /// "Update to vN" on a component card (step index).
+        callback update-component(int);
+        /// Exposes a setting of an opened component's step as a component parameter,
+        /// or hides it again: step index, setting path ("min_area",
+        /// "thresholds.1.min_threshold").
+        callback toggle-exposed(int, string);
+        callback insert-step(int, int);          // pipeline-id, after-idx
+    callback param-changed(int, string, string);
+        callback add-group-item(int, string);    // step-id, param-name
+        // Expands/collapses a step's advanced settings (step-id).
+        callback toggle-advanced(int);
+        // Debug mode (user preference, toolbar): settings show what they're
+        // wired to inside components.
+        in-out property <bool> debug-mode: false;
+        callback debug-mode-toggled(bool);
+        // "Always show advanced settings" (user preference, every step).
+        in-out property <bool> always-show-advanced: false;
+        callback always-show-advanced-toggled(bool);
+        callback remove-group-item(int, string, int); // step-id, param-name, item-idx
+    callback show-model-info(int); // step-id
+        // The step (step-id) whose settings the settings dialog shows.
+        in-out property <string> settings-step-id;
+        // Opens the settings dialog for a step (step-id).
+        callback open-step-settings(string);
+
+        callback run-all();
+        callback dry-run();
+        callback auto-preview(bool);
+        // Saves the pipeline's steps to the library as one component.
+        callback save-as-component();
+
+        // Opens the file browser for a file-path parameter, filtered to the given
+    // comma-separated extensions (empty = any file), starting from the
+    // current path's folder. The chosen path comes back asynchronously: Rust
+    // sets `browse-result-path`, then `browse-result-token` to the token the
+    // row passed, and the row with that token applies it (see
+    // `LeafParamRow`/`ParamRow`).
+    callback browse-file(string, string, int);
+        in-out property <int> browse-token-counter: 0;
+        in-out property <int> browse-result-token: -1;
+        in-out property <string> browse-result-path;
+    }

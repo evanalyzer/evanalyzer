@@ -1,39 +1,10 @@
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
 import { LineEdit, ComboBox } from "std-widgets.slint";
 import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
-import { DialogType, GlobalAppState } from "../state.slint";
+
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
-
-export struct ClassSettingsSlint {
-    // The class's id - negative for a new class.
-    class_id: int,
-    // The id it gets: -1 = automatic (a new class only).
-    new_id: int,
-    name: string,
-    notes: string,
-    color: color,
-}
-
-export global ClassificationSettingsState {
-    in-out property <ClassSettingsSlint> settings;
-    callback apply_classification_settings(ClassSettingsSlint);
-    // The id choices for a new class: "Auto (next id)", then the free ids.
-    in property <[string]> new-id-options: ["Auto"];
-    // The id choices shown: a new class's, or an edited class's own id then
-    // the free ones (set when a class is opened for editing).
-    in-out property <[string]> id-options: ["Auto"];
-    in-out property <int> id-index: 0;
-    public function reset_to_zero() {
-        self.id-options = self.new-id-options;
-        self.id-index = 0;
-        self.settings.class-id = -1;
-        self.settings.new-id = -1;
-        self.settings.name = "";
-        self.settings.notes = "";
-        self.settings.color = #FF00FF;
-    }
-}
-
 component ColorTile inherits Rectangle {
     in property <color> item_color;
     property <bool> is_selected: ClassificationSettingsState.settings.color == item_color;

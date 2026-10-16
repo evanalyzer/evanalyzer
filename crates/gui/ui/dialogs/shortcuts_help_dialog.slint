@@ -1,9 +1,10 @@
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { ShortcutsDoc } from "../api/shortcuts.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
-import { GlobalAppState, DialogType } from "../state.slint";
+
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
-import { ShortcutsDoc } from "../shortcuts.slint";
 
 component ShortcutRow inherits Rectangle {
     in property <string> combo;

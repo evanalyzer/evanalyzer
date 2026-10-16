@@ -1,0 +1,476 @@
+// ink/field.slint — fields: text, search, number, a choice.
+//
+// All share one look: `field` fill, a soft border, the focus color on the
+// border while typing. Height `Ink.control-h`.
+
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
+
+/// One line of text. `edited` on every keystroke, `accepted` on Enter.
+export component InkTextField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <bool> enabled: true;
+    in property <bool> read-only: false;
+    /// Monospaced, for numbers, paths, keys.
+    in property <bool> mono: false;
+    /// What the field is for, for screen readers.
+    in property <string> label;
+    out property <bool> has-focus: input.has-focus;
+    callback edited(string);
+    callback accepted(string);
+
+    public function focus-input() {
+        input.focus();
+    }
+
+    public function select-all() {
+        input.select-all();
+    }
+
+    height: Ink.control-h;
+    min-width: 40px;
+    horizontal-stretch: 1;
+
+    frame := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: Ink.field;
+        border-width: 1px;
+        border-color: input.has-focus ? Ink.focus : ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
+        opacity: root.enabled ? 1.0 : 0.5;
+        clip: true;
+
+        ta := TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => {
+                input.focus();
+            }
+        }
+
+        hint := Text {
+            x: 8px;
+            visible: input.text == "";
+            text: root.placeholder;
+            font-size: Ink.fs-md;
+            color: Ink.text-faint;
+            vertical-alignment: center;
+            height: parent.height;
+            accessible-role: none;
+        }
+
+        input := TextInput {
+            x: 8px;
+            width: parent.width - 16px;
+            height: parent.height;
+            text <=> root.text;
+            enabled: root.enabled;
+            read-only: root.read-only;
+            single-line: true;
+            vertical-alignment: center;
+            font-size: Ink.fs-md;
+            font-family: root.mono ? Ink.font-mono : Ink.font-sans;
+            color: Ink.text;
+            selection-background-color: Ink.focus-ring;
+            selection-foreground-color: Ink.text;
+            accessible-label: root.label;
+            edited => {
+                root.edited(self.text);
+            }
+            accepted => {
+                root.accepted(self.text);
+            }
+        }
+    }
+}
+
+/// A search box: a magnifier, the text, ✕ to clear it.
+export component InkSearchField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder: "Search";
+    out property <bool> has-focus: input.has-focus;
+    callback edited(string);
+    callback accepted(string);
+
+    public function focus-input() {
+        input.focus();
+    }
+
+    height: Ink.control-h;
+    min-width: 80px;
+    horizontal-stretch: 1;
+
+    frame := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: Ink.field;
+        border-width: 1px;
+        border-color: input.has-focus ? Ink.focus : Ink.border;
+        clip: true;
+
+        TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => {
+                input.focus();
+            }
+        }
+
+        Image {
+            x: 7px;
+            source: InkIcons.search;
+            width: 13px;
+            height: 13px;
+            colorize: Ink.text-mute;
+        }
+
+        Text {
+            x: 26px;
+            visible: input.text == "";
+            text: root.placeholder;
+            font-size: Ink.fs-md;
+            color: Ink.text-faint;
+            height: parent.height;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        input := TextInput {
+            x: 26px;
+            width: parent.width - 26px - 24px;
+            height: parent.height;
+            text <=> root.text;
+            single-line: true;
+            vertical-alignment: center;
+            font-size: Ink.fs-md;
+            color: Ink.text;
+            selection-background-color: Ink.focus-ring;
+            selection-foreground-color: Ink.text;
+            accessible-label: root.placeholder;
+            edited => {
+                root.edited(self.text);
+            }
+            accepted => {
+                root.accepted(self.text);
+            }
+        }
+
+        clear := Rectangle {
+            visible: input.text != "";
+            x: parent.width - 22px;
+            width: 18px;
+            height: 18px;
+            border-radius: Ink.radius-xs;
+            background: clear-ta.has-hover ? Ink.hover : transparent;
+            accessible-role: button;
+            accessible-label: "Clear";
+            Image {
+                source: InkIcons.close;
+                width: 10px;
+                height: 10px;
+                colorize: Ink.text-mute;
+            }
+            clear-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.text = "";
+                    root.edited("");
+                    input.focus();
+                }
+            }
+        }
+    }
+}
+
+// A − or + at the field's right end.
+component InkStepButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    width: 22px;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    face := Rectangle {
+        background: ta.pressed && root.enabled ? Ink.selection : ta.has-hover && root.enabled ? Ink.hover : transparent;
+        Image {
+            source: root.icon;
+            width: 9px;
+            height: 9px;
+            colorize: root.enabled ? Ink.text-dim : Ink.text-faint;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// A number: typed, or stepped by `step` with − / + (and ↑ / ↓ while it has
+/// focus), kept within `min`…`max`. Reports every change as text - what was
+/// typed, or the stepped number.
+export component InkNumberField inherits Rectangle {
+    in property <float> value;
+    in property <float> step: 1;
+    in property <float> min: 0;
+    in property <float> max: 100;
+    in property <bool> enabled: true;
+    /// A unit after the number ("px", "µm").
+    in property <string> unit;
+    /// What the field is for, for screen readers.
+    in property <string> label;
+    /// A narrow field (a table cell): no − / +; ↑ / ↓ still step.
+    in property <bool> compact: false;
+    out property <bool> has-focus: input.has-focus;
+    callback changed(string);
+
+    // Digits after the point a stepped number gets: as many as `step` has.
+    property <int> decimals: root.step == round(root.step) ? 0
+        : root.step * 10 == round(root.step * 10) ? 1
+        : root.step * 100 == round(root.step * 100) ? 2 : 3;
+    property <float> shown: input.text.to-float();
+    property <length> buttons-w: root.compact ? 0px : 45px;
+
+    function step-by(n: float) {
+        input.text = clamp(root.shown + n * root.step, root.min, root.max).to-fixed(root.decimals);
+        root.changed(input.text);
+    }
+
+    height: Ink.control-h;
+    min-width: root.compact ? 36px : 72px;
+    horizontal-stretch: 1;
+
+    frame := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: Ink.field;
+        border-width: 1px;
+        border-color: input.has-focus ? Ink.focus : frame-ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
+        opacity: root.enabled ? 1.0 : 0.5;
+        clip: true;
+
+        frame-ta := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: MouseCursor.text;
+            clicked => {
+                input.focus();
+            }
+        }
+
+        keys := FocusScope {
+            x: root.compact ? 6px : 8px;
+            width: parent.width - self.x - root.buttons-w - (unit-text.visible ? unit-text.width + 4px : 2px);
+            enabled: root.enabled;
+            key-pressed(event) => {
+                if event.text == Key.UpArrow {
+                    root.step-by(1);
+                    return accept;
+                }
+                if event.text == Key.DownArrow {
+                    root.step-by(-1);
+                    return accept;
+                }
+                reject
+            }
+
+            input := TextInput {
+                enabled: root.enabled;
+                text: "\{root.value}";
+                input-type: decimal;
+                single-line: true;
+                vertical-alignment: center;
+                font-size: Ink.fs-md;
+                font-family: Ink.font-mono;
+                color: Ink.text;
+                selection-background-color: Ink.focus-ring;
+                selection-foreground-color: Ink.text;
+                accessible-role: spinbox;
+                accessible-label: root.label;
+                edited => {
+                    root.changed(self.text);
+                }
+            }
+        }
+
+        unit-text := Text {
+            visible: root.unit != "";
+            x: parent.width - root.buttons-w - self.width - 6px;
+            height: parent.height;
+            text: root.unit;
+            font-size: Ink.fs-sm;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+        }
+
+        steps := HorizontalLayout {
+            visible: !root.compact;
+            x: parent.width - root.buttons-w;
+            width: root.buttons-w;
+            spacing: 0px;
+            Rectangle {
+                width: 1px;
+                background: Ink.border;
+            }
+            InkStepButton {
+                icon: InkIcons.remove;
+                label: "Decrease";
+                enabled: root.enabled && root.shown > root.min;
+                clicked => {
+                    root.step-by(-1);
+                }
+            }
+            InkStepButton {
+                icon: InkIcons.add;
+                label: "Increase";
+                enabled: root.enabled && root.shown < root.max;
+                clicked => {
+                    root.step-by(1);
+                }
+            }
+        }
+    }
+}
+
+/// A choice from a list: shows the chosen entry, opens the list on a click.
+/// `selected` is set when the user picks; `picked` reports it.
+export component InkSelect inherits Rectangle {
+    in property <[string]> model;
+    in-out property <int> selected: -1;
+    /// Shown while nothing is chosen.
+    in property <string> placeholder: "Choose…";
+    in property <bool> enabled: true;
+    in property <bool> mono: false;
+    /// A colored dot before the text (a channel's, a class's color).
+    in property <color> swatch: transparent;
+    in property <string> label;
+    callback picked(int, string);
+
+    property <string> current: root.selected >= 0 && root.selected < root.model.length ? root.model[root.selected] : "";
+
+    height: Ink.control-h;
+    min-width: 60px;
+    horizontal-stretch: 1;
+    accessible-role: combobox;
+    accessible-label: root.label;
+    accessible-value: root.current;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        popup.show();
+    }
+
+    frame := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: ta.has-hover && root.enabled ? Ink.hover : Ink.field;
+        border-width: 1px;
+        border-color: ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
+        opacity: root.enabled ? 1.0 : 0.5;
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 6px;
+            spacing: 6px;
+            Rectangle {
+                width: root.swatch == transparent ? 0px : 8px;
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: root.swatch;
+                }
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: root.current != "" ? root.current : root.placeholder;
+                font-size: Ink.fs-md;
+                font-family: root.mono ? Ink.font-mono : Ink.font-sans;
+                color: root.current != "" ? Ink.text : Ink.text-faint;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+            Image {
+                source: InkIcons.caret-down;
+                width: 10px;
+                colorize: Ink.text-mute;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            popup.show();
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 4px;
+        width: max(root.width, 140px);
+        height: min(list.preferred-height + 8px, 280px);
+
+        Rectangle {
+            background: Ink.panel;
+            border-radius: Ink.radius-md;
+            border-width: 1px;
+            border-color: Ink.border;
+            drop-shadow-blur: 16px;
+            drop-shadow-offset-y: 4px;
+            drop-shadow-color: Ink.shadow;
+        }
+
+        Flickable {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            content-height: list.preferred-height;
+
+            list := VerticalLayout {
+                spacing: 0px;
+                for entry[i] in root.model: Rectangle {
+                    height: 26px;
+                    border-radius: Ink.radius-sm;
+                    background: item-ta.has-hover ? Ink.hover : i == root.selected ? Ink.selection : transparent;
+                    accessible-role: list-item;
+                    accessible-label: entry;
+                    accessible-item-selected: i == root.selected;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        Text {
+                            horizontal-stretch: 1;
+                            text: entry;
+                            font-size: Ink.fs-md;
+                            font-family: root.mono ? Ink.font-mono : Ink.font-sans;
+                            font-weight: i == root.selected ? 600 : 400;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Image {
+                            source: InkIcons.check;
+                            width: 12px;
+                            opacity: i == root.selected ? 1 : 0;
+                            colorize: Ink.text;
+                        }
+                    }
+                    item-ta := TouchArea {
+                        clicked => {
+                            root.selected = i;
+                            root.picked(i, entry);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

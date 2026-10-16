@@ -1,10 +1,11 @@
 // results_list.slint — flat object table with an image/class filter bar and
 // a grouped column-visibility dropdown, both built on the shared
 // MultiSelectDropdown (components/multi_select_dropdown.slint).
+import { ResultsState } from "../api/results.slint";
 
 import { ScrollView, CheckBox } from "std-widgets.slint";
 import { Theme } from "../style.slint";
-import { ResultsState } from "results_state.slint";
+
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
 import { AppButton } from "../components/app_button.slint";
 import { VerticalDivider } from "../components/divider.slint";

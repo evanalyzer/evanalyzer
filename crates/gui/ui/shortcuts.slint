@@ -22,27 +22,23 @@
 // `key-pressed` handlers above (Slint callbacks aren't values, so there's no
 // way to enumerate "every branch below" automatically) - it only stays
 // accurate if every new shortcut updates both places.
-
-import { GlobalAppState, DialogType, UnsavedChangesState, AnalysisRunningCloseState, ConnectState } from "state.slint";
-import { ToolbarState } from "toolbar.slint";
-import { ToolState, ViewportObjectState } from "editor/viewport_state.slint";
-import { ImagesListState } from "editor/images_list_panel.slint";
-import { ObjectListState } from "editor/object_list_panel.slint";
-import { PipelinesPanelState } from "editor/pipelines_panel.slint";
-import { PipelineFocusState } from "editor/pipeline_focus.slint";
-import {
-    PipelineEditState,
-    PipelineDeleteConfirmState,
-} from "dialogs/pipeline_edit_dialog.slint";
-import { TemplateMetaState } from "dialogs/template_meta_dialog.slint";
-import { RunAnalysisState } from "dialogs/run_analysis_dialog.slint";
-import { AiLearningState } from "dialogs/ai_learning_dialog.slint";
-import { ProjectSettingsState } from "dialogs/project_settings_dialog.slint";
-import {
-    ClassificationSettingsState,
-} from "dialogs/classification_class_edit_dialog.slint";
-import { CommandPickerState } from "dialogs/command_selection_dialog.slint";
-import { ProjectTemplateState } from "dialogs/project_template_dialog.slint";
+import { LayoutState, WorkspaceMode } from "api/layout.slint";
+import { AnalysisRunningCloseState, ConnectState, DialogType, GlobalAppState, UnsavedChangesState } from "api/state.slint";
+import { ToolbarState } from "api/toolbar.slint";
+import { ToolState, ViewportObjectState } from "api/viewport.slint";
+import { ImagesListState } from "api/images_list.slint";
+import { ObjectListState } from "api/object_list.slint";
+import { PipelinesPanelState } from "api/pipelines.slint";
+import { PipelineFocusState } from "api/pipeline_focus.slint";
+import { PipelineDeleteConfirmState, PipelineEditState } from "api/pipeline_edit.slint";
+import { TemplateMetaState } from "api/template_meta.slint";
+import { RunAnalysisState } from "api/run_analysis.slint";
+import { AiLearningState } from "api/ai_learning.slint";
+import { ProjectSettingsState } from "api/project_settings.slint";
+import { ClassificationSettingsState } from "api/classification_class_edit.slint";
+import { CommandPickerState } from "api/command_selection.slint";
+import { ProjectTemplateState } from "api/project_template.slint";
+import { ShortcutsDoc } from "api/shortcuts.slint";
 
 export component GlobalShortcuts inherits FocusScope {
     // Ctrl+F both switches to the Images tab and focuses its search field.
@@ -165,30 +161,26 @@ export component GlobalShortcuts inherits FocusScope {
             return accept;
         }
 
-        // -- Left sidebar tabs -- Ctrl+1..4, the same convention browsers
-        // use for switching between a fixed row of tabs.
+        // -- Modes -- Ctrl+1..3, the same convention browsers use for
+        // switching between a fixed row of tabs.
         if (e.modifiers.control && e.text == "1") {
-            GlobalAppState.sidebar_left_active_tab = 0; // Images
+            LayoutState.mode = WorkspaceMode.images;
             return accept;
         }
         if (e.modifiers.control && e.text == "2") {
-            GlobalAppState.sidebar_left_active_tab = 1; // Meta
+            LayoutState.mode = WorkspaceMode.pipelines;
             return accept;
         }
         if (e.modifiers.control && e.text == "3") {
-            GlobalAppState.sidebar_left_active_tab = 2; // Pipelines
-            return accept;
-        }
-        if (e.modifiers.control && e.text == "4") {
-            GlobalAppState.sidebar_left_active_tab = 3; // Results
+            LayoutState.mode = WorkspaceMode.results;
             return accept;
         }
 
-        // Jump to the image search field, switching to the Images tab
-        // first if it isn't already showing (otherwise the field the
-        // counter below is meant to focus isn't even mounted yet).
+        // Jump to the image search field, switching to Images first if it
+        // isn't already showing (otherwise the field the counter below is
+        // meant to focus isn't even mounted yet).
         if (e.modifiers.control && e.text == "f") {
-            GlobalAppState.sidebar_left_active_tab = 0;
+            LayoutState.mode = WorkspaceMode.images;
             focus-search-timer.running = true;
             return accept;
         }
@@ -285,72 +277,3 @@ export component DialogShortcuts inherits FocusScope {
 //
 // Plain descriptive data, not wired to anything above - see the note at the
 // top of this file on keeping the two in sync by hand.
-
-export struct ShortcutRow {
-    combo: string,
-    label: string,
-}
-
-export struct ShortcutSection {
-    title: string,
-    rows: [ShortcutRow],
-}
-
-export global ShortcutsDoc {
-    out property <[ShortcutSection]> sections: [
-        {
-            title: "File",
-            rows: [
-                { combo: "Ctrl+S", label: "Save" },
-                { combo: "Ctrl+Shift+S", label: "Save As" },
-                { combo: "Ctrl+O", label: "Open" },
-            ],
-        },
-        {
-            title: "Edit",
-            rows: [
-                { combo: "Ctrl+Z", label: "Undo" },
-                { combo: "Ctrl+Y / Ctrl+Shift+Z", label: "Redo" },
-                { combo: "Delete", label: "Delete the selected object/ROI" },
-            ],
-        },
-        {
-            title: "Pipeline",
-            rows: [
-                { combo: "F5", label: "Refresh the preview" },
-                { combo: "F", label: "Focus on the selected pipeline (again: show all)" },
-                { combo: "Alt+click", label: "Focus on a pipeline (again: show all)" },
-                { combo: "Double-click", label: "Edit a pipeline's name and image source" },
-            ],
-        },
-        {
-            title: "Canvas tools",
-            rows: [
-                { combo: "M/Escape", label: "Move" },
-                { combo: "S", label: "Select" },
-                { combo: "K", label: "Paint marker" },
-                { combo: "R", label: "Paint rectangle" },
-                { combo: "O", label: "Paint oval" },
-                { combo: "P", label: "Paint polygon" },
-                { combo: "#", label: "Show/Hide objects" },
-            ],
-        },
-        {
-            title: "Navigation",
-            rows: [
-                { combo: "Ctrl+1", label: "Images tab" },
-                { combo: "Ctrl+2", label: "Meta tab" },
-                { combo: "Ctrl+3", label: "Pipelines tab" },
-                { combo: "Ctrl+4", label: "Results tab" },
-                { combo: "Ctrl+F", label: "Jump to the image search field" },
-            ],
-        },
-        {
-            title: "Dialogs",
-            rows: [
-                { combo: "Escape", label: "Close the open dialog" },
-                { combo: "F1", label: "Show this help" },
-            ],
-        },
-    ];
-}

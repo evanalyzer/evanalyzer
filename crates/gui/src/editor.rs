@@ -94,7 +94,6 @@ impl Editor {
 
         let project_settings_controller = Arc::new(ProjectSettingsController::new(
             ui.clone(),
-            results_ui.clone(),
             app_state.clone(),
         ));
 

@@ -9,8 +9,15 @@ const MAX_RECENT_SERVERS: usize = 10;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    /// The colors of the GUI.
     #[serde(default)]
-    pub dark_mode: bool,
+    pub color_scheme: ColorScheme,
+
+    /// What settings saved before there were color schemes had instead of
+    /// [`Self::color_scheme`]: turned into it on loading
+    /// ([`AppSettings::migrate`]), never saved.
+    #[serde(default, rename = "darkMode", skip_serializing)]
+    pub(crate) legacy_dark_mode: Option<bool>,
 
     /// Pipeline focus mode: selecting a pipeline shows only its image
     /// channel and object classes.
@@ -39,6 +46,29 @@ pub struct AppSettings {
     /// settings even when connected to a server.
     #[serde(default)]
     pub viewport: ViewportMemorySettings,
+}
+
+/// The colors of the GUI: light, dark, or a softer dark (`Dim`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorScheme {
+    #[default]
+    Light,
+    Dark,
+    Dim,
+}
+
+impl AppSettings {
+    /// Brings settings saved by an older version up to date: `darkMode`
+    /// becomes [`ColorScheme::Dark`] (or stays light).
+    fn migrate(mut self) -> Self {
+        if let Some(dark) = self.legacy_dark_mode.take()
+            && dark
+        {
+            self.color_scheme = ColorScheme::Dark;
+        }
+        self
+    }
 }
 
 /// Memory/smoothness trade-offs of the image viewport - see
@@ -215,7 +245,8 @@ pub fn settings_file_in(user_folder: &Path) -> PathBuf {
 pub fn load_app_settings_from(path: &Path) -> AppSettings {
     std::fs::read_to_string(path)
         .ok()
-        .and_then(|data| serde_json::from_str(&data).ok())
+        .and_then(|data| serde_json::from_str::<AppSettings>(&data).ok())
+        .map(AppSettings::migrate)
         .unwrap_or_default()
 }
 
@@ -271,8 +302,8 @@ mod tests {
     #[test]
     fn settings_from_before_recent_servers_still_load() {
         let settings: AppSettings = serde_json::from_str(r#"{"darkMode":true}"#).unwrap();
-        assert!(settings.dark_mode);
         assert!(settings.recent_servers.is_empty());
+        assert_eq!(settings.migrate().color_scheme, ColorScheme::Dark);
     }
 
     #[test]
@@ -292,18 +323,18 @@ mod tests {
     #[test]
     fn missing_file_returns_defaults() {
         let settings = AppSettings::default();
-        assert!(!settings.dark_mode);
+        assert_eq!(settings.color_scheme, ColorScheme::Light);
     }
 
     #[test]
     fn round_trips_through_json() {
         let settings = AppSettings {
-            dark_mode: true,
+            color_scheme: ColorScheme::Dim,
             ..Default::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: AppSettings = serde_json::from_str(&json).unwrap();
-        assert!(parsed.dark_mode);
+        assert_eq!(parsed.color_scheme, ColorScheme::Dim);
     }
 
     #[test]
@@ -313,7 +344,7 @@ mod tests {
 
         let settings = load_app_settings_from(&path);
 
-        assert!(!settings.dark_mode);
+        assert_eq!(settings.color_scheme, ColorScheme::Light);
     }
 
     #[test]
@@ -324,22 +355,41 @@ mod tests {
 
         let settings = load_app_settings_from(&path);
 
-        assert!(!settings.dark_mode);
+        assert_eq!(settings.color_scheme, ColorScheme::Light);
     }
 
     #[test]
-    fn save_then_load_round_trip_preserves_dark_mode() {
+    fn save_then_load_round_trip_preserves_the_color_scheme() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         let settings = AppSettings {
-            dark_mode: true,
+            color_scheme: ColorScheme::Dark,
             ..Default::default()
         };
 
         save_app_settings_to(&path, &settings).unwrap();
         let loaded = load_app_settings_from(&path);
 
-        assert!(loaded.dark_mode);
+        assert_eq!(loaded.color_scheme, ColorScheme::Dark);
+    }
+
+    #[test]
+    fn dark_mode_saved_by_an_older_version_becomes_the_dark_scheme_and_is_not_saved_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{ "darkMode": true, "debugMode": true }"#).unwrap();
+
+        let loaded = load_app_settings_from(&path);
+        assert_eq!(loaded.color_scheme, ColorScheme::Dark);
+        assert!(loaded.debug_mode);
+
+        save_app_settings_to(&path, &loaded).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("darkMode"), "{saved}");
+        assert!(saved.contains(r#""colorScheme": "dark""#), "{saved}");
+
+        std::fs::write(&path, r#"{ "darkMode": false }"#).unwrap();
+        assert_eq!(load_app_settings_from(&path).color_scheme, ColorScheme::Light);
     }
 
     #[test]
@@ -410,7 +460,7 @@ mod tests {
         // A settings file written before the field existed.
         std::fs::write(&path, r#"{ "darkMode": true }"#).unwrap();
         let loaded = load_app_settings_from(&path);
-        assert!(loaded.dark_mode);
+        assert_eq!(loaded.color_scheme, ColorScheme::Dark);
         assert!(!loaded.pipeline_focus_mode);
         assert!(!loaded.always_show_advanced_settings);
     }

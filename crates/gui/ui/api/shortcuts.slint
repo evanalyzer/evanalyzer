@@ -1,0 +1,72 @@
+// api/shortcuts.slint — the Rust interface of shortcuts.slint: the state Rust
+// sets, the callbacks it answers.
+
+import { Pipeline } from "pipelines.slint";
+
+export struct ShortcutRow {
+    combo: string,
+    label: string,
+}
+
+export struct ShortcutSection {
+    title: string,
+    rows: [ShortcutRow],
+}
+
+export global ShortcutsDoc {
+    out property <[ShortcutSection]> sections: [
+        {
+            title: "File",
+            rows: [
+                { combo: "Ctrl+S", label: "Save" },
+                { combo: "Ctrl+Shift+S", label: "Save As" },
+                { combo: "Ctrl+O", label: "Open" },
+            ],
+        },
+        {
+            title: "Edit",
+            rows: [
+                { combo: "Ctrl+Z", label: "Undo" },
+                { combo: "Ctrl+Y / Ctrl+Shift+Z", label: "Redo" },
+                { combo: "Delete", label: "Delete the selected object/ROI" },
+            ],
+        },
+        {
+            title: "Pipeline",
+            rows: [
+                { combo: "F5", label: "Refresh the preview" },
+                { combo: "F", label: "Focus on the selected pipeline (again: show all)" },
+                { combo: "Alt+click", label: "Focus on a pipeline (again: show all)" },
+                { combo: "Double-click", label: "Edit a pipeline's name and image source" },
+            ],
+        },
+        {
+            title: "Canvas tools",
+            rows: [
+                { combo: "M/Escape", label: "Move" },
+                { combo: "S", label: "Select" },
+                { combo: "K", label: "Paint marker" },
+                { combo: "R", label: "Paint rectangle" },
+                { combo: "O", label: "Paint oval" },
+                { combo: "P", label: "Paint polygon" },
+                { combo: "#", label: "Show/Hide objects" },
+            ],
+        },
+        {
+            title: "Navigation",
+            rows: [
+                { combo: "Ctrl+1", label: "Images" },
+                { combo: "Ctrl+2", label: "Pipelines" },
+                { combo: "Ctrl+3", label: "Results" },
+                { combo: "Ctrl+F", label: "Jump to the image search field" },
+            ],
+        },
+        {
+            title: "Dialogs",
+            rows: [
+                { combo: "Escape", label: "Close the open dialog" },
+                { combo: "F1", label: "Show this help" },
+            ],
+        },
+    ];
+}

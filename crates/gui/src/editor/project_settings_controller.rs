@@ -1,5 +1,5 @@
 use crate::UiState;
-use crate::{AppWindow, ProjectSettingsSlint, ProjectSettingsState, ResultsWindow};
+use crate::{AppWindow, ProjectSettingsSlint, ProjectSettingsState};
 use evanalyzer_app::global::UserInformation;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::plate_settings::{
@@ -9,18 +9,10 @@ use evanalyzer_cfg::settings::project_settings::TileMergeConnectivity;
 use slint::{ComponentHandle, Model, ModelRc, SharedString};
 use std::sync::{Arc, Mutex};
 
-/// `ProjectSettingsState` is edited from two places: the Project Settings
-/// dialog (on `AppWindow`) and the Results window's Matrix view settings
-/// strip (on `ResultsWindow`, see `results_matrix_controller.rs`). Slint
-/// gives each top-level window its own independent instance of every global
-/// it references — `AppWindow` and `ResultsWindow` do **not** share one
-/// `ProjectSettingsState` at runtime, even though both compile against the
-/// same `.slint` global declaration. Every callback below is therefore
-/// registered on *both* windows' instances, and `sync_project_settings_to_slint`
-/// pushes to both, so the two stay in lockstep instead of silently diverging.
+/// `ProjectSettingsState`: the Project Settings dialog, and the plate
+/// settings of the results' Matrix view (see `results_matrix_controller.rs`).
 pub struct ProjectSettingsController {
     pub(crate) ui: slint::Weak<AppWindow>,
-    pub(crate) results_ui: slint::Weak<ResultsWindow>,
     pub(crate) app_state: Arc<UiState>,
     // Called after the project's settings were (re)loaded into the dialog -
     // the results window follows the plate settings (wired in editor.rs).
@@ -28,14 +20,9 @@ pub struct ProjectSettingsController {
 }
 
 impl ProjectSettingsController {
-    pub fn new(
-        ui: slint::Weak<AppWindow>,
-        results_ui: slint::Weak<ResultsWindow>,
-        app_state: Arc<UiState>,
-    ) -> Self {
+    pub fn new(ui: slint::Weak<AppWindow>, app_state: Arc<UiState>) -> Self {
         Self {
             ui,
-            results_ui,
             app_state,
             plate_settings_listener: Mutex::new(None),
         }
@@ -104,62 +91,6 @@ impl ProjectSettingsController {
                     }
                 });
         }
-
-        if let Some(results_ui) = self.results_ui.upgrade() {
-            let manager = self.clone();
-            results_ui
-                .global::<ProjectSettingsState>()
-                .on_project_settings_changed(move |project_settings| {
-                    manager.update_project_settings_in_project(&project_settings);
-                    manager.sync_project_settings_to_slint();
-                });
-
-            let manager = self.clone();
-            results_ui
-                .global::<ProjectSettingsState>()
-                .on_project_settings_canceled(move || {
-                    manager.sync_project_settings_to_slint();
-                });
-
-            let results_ui_weak = self.results_ui.clone();
-            results_ui
-                .global::<ProjectSettingsState>()
-                .on_well_value_changed(move |index, value| {
-                    if let Some(results_ui) = results_ui_weak.upgrade() {
-                        let model = results_ui
-                            .global::<ProjectSettingsState>()
-                            .get_settings()
-                            .well_values;
-                        set_well_value(&model, index, value);
-                    }
-                });
-
-            let results_ui_weak = self.results_ui.clone();
-            results_ui
-                .global::<ProjectSettingsState>()
-                .on_well_dims_changed(move |rows, cols| {
-                    if let Some(results_ui) = results_ui_weak.upgrade() {
-                        let model = results_ui
-                            .global::<ProjectSettingsState>()
-                            .get_settings()
-                            .well_values;
-                        resize_well_values(&model, rows, cols);
-                    }
-                });
-
-            let results_ui_weak = self.results_ui.clone();
-            results_ui
-                .global::<ProjectSettingsState>()
-                .on_tile_merge_class_toggled(move |value| {
-                    if let Some(results_ui) = results_ui_weak.upgrade() {
-                        let model = results_ui
-                            .global::<ProjectSettingsState>()
-                            .get_settings()
-                            .tile_merge_classes_to_not_merge_flags;
-                        toggle_tile_merge_class(&model, &value);
-                    }
-                });
-        }
     }
 
     /// Synchronizes project configuration from the Slint UI settings dialog back to the internal project state.
@@ -212,7 +143,6 @@ impl ProjectSettingsController {
     pub fn sync_project_settings_to_slint(&self) {
         let project = self.app_state.get_project();
         let ui_handle = self.ui.clone();
-        let results_ui_handle = self.results_ui.clone();
 
         let (author_name, organization) = {
             let addr = &*self.app_state.app_settings.lock().expect("Poisened");
@@ -291,11 +221,6 @@ impl ProjectSettingsController {
 
             if let Some(ui) = ui_handle.upgrade() {
                 let state = ui.global::<ProjectSettingsState>();
-                state.set_plate_size_labels(labels());
-                state.set_settings(build_settings());
-            }
-            if let Some(results_ui) = results_ui_handle.upgrade() {
-                let state = results_ui.global::<ProjectSettingsState>();
                 state.set_plate_size_labels(labels());
                 state.set_settings(build_settings());
             }
@@ -541,7 +466,7 @@ mod tests {
     }
 
     fn make_controller(ui_state: Arc<UiState>) -> ProjectSettingsController {
-        ProjectSettingsController::new(slint::Weak::default(), slint::Weak::default(), ui_state)
+        ProjectSettingsController::new(slint::Weak::default(), ui_state)
     }
 
     #[test]
@@ -782,20 +707,16 @@ mod tests {
         controller.sync_project_settings_to_slint();
     }
 
-    // -- attach_callbacks on live windows ---------------------------------
+    // -- attach_callbacks on a live window --------------------------------
 
     use crate::editor::test_support::{test_ui_windows, ui_state_with_windows};
     use crate::helper::ui_thread::drain_ui_queue;
     use evanalyzer_app::project::ProjectWithRuntime;
 
-    fn attached_controller(
-        ui: &AppWindow,
-        results_ui: &ResultsWindow,
-    ) -> (Arc<UiState>, Arc<ProjectSettingsController>) {
-        let ui_state = ui_state_with_windows(ui, results_ui, ProjectWithRuntime::default());
+    fn attached_controller(ui: &AppWindow) -> (Arc<UiState>, Arc<ProjectSettingsController>) {
+        let ui_state = ui_state_with_windows(ui, ui, ProjectWithRuntime::default());
         let controller = Arc::new(ProjectSettingsController::new(
             ui.as_weak(),
-            results_ui.as_weak(),
             ui_state.clone(),
         ));
         controller.attach_callbacks();
@@ -804,31 +725,23 @@ mod tests {
     }
 
     #[test]
-    fn attach_callbacks_shows_the_remembered_author_in_both_windows() {
-        let (ui, results_ui) = test_ui_windows();
-        let ui_state = ui_state_with_windows(&ui, &results_ui, ProjectWithRuntime::default());
+    fn attach_callbacks_shows_the_remembered_author() {
+        let (ui, _) = test_ui_windows();
+        let ui_state = ui_state_with_windows(&ui, &ui, ProjectWithRuntime::default());
         ui_state.update_app_settings(|settings| {
             settings.author = Some(UserInformation {
                 full_name: "Grace Hopper".into(),
                 organization: "Navy".into(),
             });
         });
-        let controller = Arc::new(ProjectSettingsController::new(
-            ui.as_weak(),
-            results_ui.as_weak(),
-            ui_state,
-        ));
+        let controller = Arc::new(ProjectSettingsController::new(ui.as_weak(), ui_state));
 
         controller.attach_callbacks();
         drain_ui_queue();
 
-        for settings in [
-            ui.global::<ProjectSettingsState>().get_settings(),
-            results_ui.global::<ProjectSettingsState>().get_settings(),
-        ] {
-            assert_eq!(settings.author_name, "Grace Hopper");
-            assert_eq!(settings.organization_name, "Navy");
-        }
+        let settings = ui.global::<ProjectSettingsState>().get_settings();
+        assert_eq!(settings.author_name, "Grace Hopper");
+        assert_eq!(settings.organization_name, "Navy");
         assert!(
             ui.global::<ProjectSettingsState>()
                 .get_plate_size_labels()
@@ -838,9 +751,9 @@ mod tests {
     }
 
     #[test]
-    fn applying_the_dialog_stores_the_settings_and_shows_them_in_the_results_window() {
-        let (ui, results_ui) = test_ui_windows();
-        let (ui_state, controller) = attached_controller(&ui, &results_ui);
+    fn applying_the_settings_stores_and_shows_them() {
+        let (ui, _) = test_ui_windows();
+        let (ui_state, controller) = attached_controller(&ui);
         let listened = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = listened.clone();
         controller.on_plate_settings_changed(move || {
@@ -854,7 +767,7 @@ mod tests {
         assert_eq!(ui_state.get_project().meta.name, "Test Project");
         assert!(ui_state.is_dirty());
         assert_eq!(listened.load(std::sync::atomic::Ordering::SeqCst), 1);
-        let shown = results_ui.global::<ProjectSettingsState>().get_settings();
+        let shown = ui.global::<ProjectSettingsState>().get_settings();
         assert_eq!(shown.project_name, "Test Project");
         assert_eq!(shown.well_rows, 2);
         assert_eq!(shown.well_columns, 3);
@@ -863,56 +776,18 @@ mod tests {
     }
 
     #[test]
-    fn applying_the_results_window_settings_stores_them_and_shows_them_in_the_dialog() {
-        let (ui, results_ui) = test_ui_windows();
-        let (ui_state, _controller) = attached_controller(&ui, &results_ui);
-        let mut settings = sample_settings();
-        settings.project_name = "From results".into();
-
-        results_ui
-            .global::<ProjectSettingsState>()
-            .invoke_project_settings_changed(settings);
-        drain_ui_queue();
-
-        assert_eq!(ui_state.get_project().meta.name, "From results");
-        assert_eq!(
-            ui.global::<ProjectSettingsState>()
-                .get_settings()
-                .project_name,
-            "From results"
-        );
-    }
-
-    #[test]
-    fn cancelling_in_either_window_restores_the_stored_settings() {
-        let (ui, results_ui) = test_ui_windows();
-        let (ui_state, _controller) = attached_controller(&ui, &results_ui);
+    fn cancelling_restores_the_stored_settings() {
+        let (ui, _) = test_ui_windows();
+        let (ui_state, _controller) = attached_controller(&ui);
         ui_state.get_project_write().meta.name = "Stored".into();
 
-        for state in [
-            ui.global::<ProjectSettingsState>(),
-            results_ui.global::<ProjectSettingsState>(),
-        ] {
-            let mut edited = state.get_settings();
-            edited.project_name = "Unsaved edit".into();
-            state.set_settings(edited);
-        }
-        ui.global::<ProjectSettingsState>()
-            .invoke_project_settings_canceled();
-        drain_ui_queue();
-        assert_eq!(
-            ui.global::<ProjectSettingsState>()
-                .get_settings()
-                .project_name,
-            "Stored"
-        );
-
-        let state = results_ui.global::<ProjectSettingsState>();
+        let state = ui.global::<ProjectSettingsState>();
         let mut edited = state.get_settings();
         edited.project_name = "Unsaved edit".into();
         state.set_settings(edited);
         state.invoke_project_settings_canceled();
         drain_ui_queue();
+
         assert_eq!(state.get_settings().project_name, "Stored");
     }
 
@@ -926,9 +801,9 @@ mod tests {
     }
 
     #[test]
-    fn well_edits_in_the_dialog_change_its_well_order() {
-        let (ui, results_ui) = test_ui_windows();
-        let (_ui_state, _controller) = attached_controller(&ui, &results_ui);
+    fn well_edits_change_the_well_order() {
+        let (ui, _) = test_ui_windows();
+        let (_ui_state, _controller) = attached_controller(&ui);
         let state = ui.global::<ProjectSettingsState>();
         show_two_by_two_wells(&state);
 
@@ -941,35 +816,16 @@ mod tests {
     }
 
     #[test]
-    fn well_edits_in_the_results_window_change_its_well_order() {
-        let (ui, results_ui) = test_ui_windows();
-        let (_ui_state, _controller) = attached_controller(&ui, &results_ui);
-        let state = results_ui.global::<ProjectSettingsState>();
-        show_two_by_two_wells(&state);
+    fn toggling_a_tile_merge_class_flips_its_flag() {
+        let (ui, _) = test_ui_windows();
+        let (_ui_state, _controller) = attached_controller(&ui);
+        let state = ui.global::<ProjectSettingsState>();
+        let flags = state.get_settings().tile_merge_classes_to_not_merge_flags;
+        assert_eq!(flags.row_data(2).unwrap(), "0");
 
-        state.invoke_well_value_changed(0, 9);
-        let values = state.get_settings().well_values;
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![9, 2, 3, 4]);
+        state.invoke_tile_merge_class_toggled("toggle:2".into());
 
-        state.invoke_well_dims_changed(1, 2);
-        assert_eq!(state.get_settings().well_values.row_count(), 2);
-    }
-
-    #[test]
-    fn toggling_a_tile_merge_class_flips_its_flag_in_either_window() {
-        let (ui, results_ui) = test_ui_windows();
-        let (_ui_state, _controller) = attached_controller(&ui, &results_ui);
-        for state in [
-            ui.global::<ProjectSettingsState>(),
-            results_ui.global::<ProjectSettingsState>(),
-        ] {
-            let flags = state.get_settings().tile_merge_classes_to_not_merge_flags;
-            assert_eq!(flags.row_data(2).unwrap(), "0");
-
-            state.invoke_tile_merge_class_toggled("toggle:2".into());
-
-            let flags = state.get_settings().tile_merge_classes_to_not_merge_flags;
-            assert_eq!(flags.row_data(2).unwrap(), "1");
-        }
+        let flags = state.get_settings().tile_merge_classes_to_not_merge_flags;
+        assert_eq!(flags.row_data(2).unwrap(), "1");
     }
 }

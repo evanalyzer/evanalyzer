@@ -1,0 +1,82 @@
+// api/export.slint — the Rust interface of results/export_dialog.slint: the state Rust
+// sets, the callbacks it answers.
+
+import { MultiSelectItem } from "../components/multi_select_dropdown.slint";
+
+export global ExportDialogState {
+    in-out property <bool> active: false;
+
+    // -- Output --
+    in-out property <string> output-dir: "";
+    in-out property <string> output-file-prefix: "";
+    callback pick-output-dir();
+
+    // -- Format --
+    in-out property <[MultiSelectItem]> format-items: [];
+    in-out property <string> format-summary: "XLSX";
+
+    // -- Z/T range (exclusive end, matching `ResultExport`'s `Range<u32>`) --
+    in-out property <string> z-start: "0";
+    in-out property <string> z-end: "1";
+    in-out property <string> t-start: "0";
+    in-out property <string> t-end: "1";
+
+    // -- Filters --
+    // Only the rows matching `image-filter-text` - the actual selection
+    // lives in Rust (see `export_image_selection`), so hidden rows keep
+    // their checkmark while the search box narrows the view.
+    in-out property <[MultiSelectItem]> image-items: [];
+    in-out property <string> image-filter-text: "";
+    in-out property <string> image-summary: "All images";
+    in-out property <[MultiSelectItem]> class-items: [];
+    in-out property <string> class-summary: "All classes";
+    in-out property <[MultiSelectItem]> column-items: [];
+    in-out property <[string]> column-groups: [];
+    in-out property <string> column-summary: "";
+
+    // -- Plate/Well/Heatmap options --
+    in-out property <[MultiSelectItem]> aggregation-items: [];
+    in-out property <string> aggregation-summary: "";
+    in-out property <[MultiSelectItem]> color-schema-items: [];
+    in-out property <string> color-schema-summary: "Viridis";
+    in-out property <[MultiSelectItem]> square-size-items: [];
+    in-out property <string> square-size-summary: "256 px";
+
+    // -- What to export --
+    in-out property <bool> with-list-view: false;
+    in-out property <bool> with-list-coloc-details: false;
+    in-out property <bool> with-list-one-file-per-image: true;
+    in-out property <bool> with-grouped-by-image-list: true;
+    in-out property <bool> transpond-output-table: false;
+    in-out property <bool> with-heatmap: false;
+
+    in-out property <bool> with-plate-heatmap-view: false;
+    in-out property <bool> with-well-heatmap-view: false;
+    in-out property <bool> with-plate-list: false;
+    in-out property <bool> with-well-list: false;
+
+    // -- Progress (set from Rust while the background export thread runs) --
+    in-out property <bool> is-exporting: false;
+    in-out property <string> progress-message: "";
+    in-out property <int> progress-current: 0;
+    in-out property <int> progress-total: 0;
+    in-out property <bool> done: false;
+    in-out property <bool> has-error: false;
+    in-out property <string> error-message: "";
+
+    callback image-item-selected(string, bool);
+    callback image-select-all();
+    callback image-select-none();
+    callback image-filter-changed(string);
+    callback class-item-selected(string, bool);
+    callback class-select-all();
+    callback class-select-none();
+    callback column-item-selected(string, bool);
+    callback column-select-all();
+    callback column-select-none();
+    callback aggregation-item-selected(string, bool);
+
+    callback start-clicked();
+    callback close-clicked();
+    callback cancel-clicked();
+}

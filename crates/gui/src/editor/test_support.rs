@@ -217,8 +217,7 @@ pub(crate) fn test_ui_windows() -> (AppWindow, ResultsWindow) {
     crate::helper::ui_thread::fresh_test_queue();
     let ui =
         AppWindow::new().expect("AppWindow::new must succeed under the headless test platform");
-    let results_ui = ResultsWindow::new()
-        .expect("ResultsWindow::new must succeed under the headless test platform");
+    let results_ui = slint::ComponentHandle::clone_strong(&ui);
     (ui, results_ui)
 }
 
@@ -245,7 +244,6 @@ pub(crate) fn ui_state_with_windows_on(
     use slint::ComponentHandle;
     let ui_state = Arc::new(UiState::new(handle, ui.as_weak(), results_ui.as_weak()));
     ui_state.file_browser.attach(ui);
-    ui_state.results_file_browser.attach(results_ui);
     ui_state
 }
 

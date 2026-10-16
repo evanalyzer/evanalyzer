@@ -1,0 +1,347 @@
+// ink/panel.slint — what holds things: floating panels and their heads,
+// dialogs, sections, labels of a form, dividers.
+//
+// Only `InkPanel`, `InkDialog` and `InkDialogFooter` take children - they're
+// copied where they're used, so they stay small. A form row is a plain
+// `HorizontalLayout { InkLabel { … } <field> }`, not a component.
+
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
+import { InkIconButton } from "button.slint";
+import { InkBadge } from "marker.slint";
+
+/// A floating panel over the image: glass, a soft border, a shadow. Content
+/// usually starts with an `InkPanelHead`.
+export component InkPanel inherits Rectangle {
+    background: Ink.glass;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: Ink.shadow;
+    clip: true;
+
+    // Clicks on the panel don't reach the image below.
+    TouchArea { }
+
+    VerticalLayout {
+        spacing: 0px;
+        @children
+    }
+}
+
+/// A panel's or dialog's head: title, a dimmer subtitle, a count, then pin
+/// and ✕ when wanted.
+export component InkPanelHead inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    /// A count after the title; "" none.
+    in property <string> count;
+    in property <bool> closable: true;
+    /// A pin: the panel stays open when another opens.
+    in property <bool> pinnable: false;
+    in property <bool> pinned: false;
+    /// A + button, saying what it adds ("New class"); "" none.
+    in property <string> add-label;
+    /// A ⋯ menu button.
+    in property <bool> has-more: false;
+    /// No line below it.
+    in property <bool> borderless: false;
+    callback close;
+    callback add;
+    callback pin-toggled;
+    /// ⋯ was clicked, at this point (in the head's coordinates).
+    callback more(length, length);
+
+    height: Ink.head-h;
+    accessible-role: groupbox;
+    accessible-label: root.title;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 6px;
+        spacing: 8px;
+
+        title-text := Text {
+            text: root.title;
+            font-size: Ink.fs-lg;
+            font-weight: 600;
+            color: Ink.text;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+
+        Rectangle {
+            width: root.count == "" ? 0px : badge.width;
+            badge := InkBadge {
+                visible: root.count != "";
+                text: root.count;
+            }
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.subtitle;
+            font-size: Ink.fs-sm;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            spacing: 2px;
+            alignment: end;
+            if root.add-label != "": InkIconButton {
+                y: (Ink.head-h - self.height) / 2;
+                size: 24px;
+                icon: InkIcons.add;
+                label: root.add-label;
+                clicked => {
+                    root.add();
+                }
+            }
+            if root.pinnable: InkIconButton {
+                y: (Ink.head-h - self.height) / 2;
+                size: 24px;
+                icon: root.pinned ? InkIcons.unpin : InkIcons.pin;
+                label: root.pinned ? "Unpin" : "Pin";
+                active: root.pinned;
+                clicked => {
+                    root.pin-toggled();
+                }
+            }
+            if root.has-more: more-button := InkIconButton {
+                y: (Ink.head-h - self.height) / 2;
+                size: 24px;
+                icon: InkIcons.more;
+                label: "More";
+                clicked => {
+                    root.more(self.x, self.y + self.height);
+                }
+            }
+            if root.closable: InkIconButton {
+                y: (Ink.head-h - self.height) / 2;
+                size: 24px;
+                icon: InkIcons.close;
+                label: "Close";
+                clicked => {
+                    root.close();
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: !root.borderless;
+        y: parent.height - 1px;
+        height: 1px;
+        background: Ink.border-soft;
+    }
+}
+
+/// A dialog: a light scrim over the window, the card - centered, or below
+/// the point it was opened from (`anchor-x`/`anchor-y` ≥ 0). Head, content,
+/// an `InkDialogFooter` last. Esc and ✕ call `close`.
+///
+///     InkDialog {
+///         title: "Delete class";
+///         close => { State.cancel(); }
+///         Text { text: "…"; }
+///         InkDialogFooter {
+///             InkButton { text: "Cancel"; clicked => { State.cancel(); } }
+///             InkButton { text: "Delete"; kind: InkButtonKind.danger; … }
+///         }
+///     }
+export component InkDialog inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <length> card-width: 420px;
+    /// 0px: as high as the content (at most the window's height).
+    in property <length> card-height: 0px;
+    /// Where it was opened from, in the dialog's (the window's) coordinates;
+    /// -1px: centered.
+    in property <length> anchor-x: -1px;
+    in property <length> anchor-y: -1px;
+    in property <bool> closable: true;
+    /// Esc calls `close` too (off while Esc must not throw work away).
+    in property <bool> close-on-escape: true;
+    /// A click on the scrim calls `close`.
+    in property <bool> close-on-backdrop: false;
+    /// Padding around the content; 0px for content that fills the card.
+    in property <length> content-padding: Ink.pad-dialog;
+    callback close;
+
+    background: Ink.scrim;
+
+    TouchArea {
+        clicked => {
+            if root.close-on-backdrop {
+                root.close();
+            }
+        }
+    }
+
+    card := Rectangle {
+        width: min(root.card-width, root.width - 32px);
+        height: root.card-height > 0 ? min(root.card-height, root.height - 32px) : min(layout.preferred-height, root.height - 32px);
+        x: root.anchor-x < 0 ? (parent.width - self.width) / 2 : clamp(root.anchor-x, 16px, parent.width - self.width - 16px);
+        y: root.anchor-y < 0 ? (parent.height - self.height) / 2 : clamp(root.anchor-y, 16px, parent.height - self.height - 16px);
+        background: Ink.panel;
+        border-radius: Ink.radius-lg;
+        border-width: 1px;
+        border-color: Ink.border;
+        drop-shadow-blur: 30px;
+        drop-shadow-offset-y: 10px;
+        drop-shadow-color: Ink.shadow;
+        clip: true;
+        accessible-role: groupbox;
+        accessible-label: root.title;
+
+        TouchArea { }
+
+        keys := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Escape && root.closable && root.close-on-escape {
+                    root.close();
+                    return accept;
+                }
+                reject
+            }
+
+            layout := VerticalLayout {
+                spacing: 0px;
+                InkPanelHead {
+                    title: root.title;
+                    subtitle: root.subtitle;
+                    closable: root.closable;
+                    close => {
+                        root.close();
+                    }
+                }
+
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    padding: root.content-padding;
+                    padding-top: root.content-padding > 0 ? 12px : 0px;
+                    spacing: 10px;
+                    @children
+                }
+            }
+        }
+    }
+
+    init => {
+        keys.focus();
+    }
+}
+
+/// A dialog's buttons, bottom right, on a line - the confirming one last.
+/// Something that stretches (`horizontal-stretch: 1`) before them goes left.
+export component InkDialogFooter inherits Rectangle {
+    // Inside the dialog's padding: reach out to its edges.
+    height: Ink.button-h + 21px;
+
+    Rectangle {
+        x: -Ink.pad-dialog;
+        width: parent.width + 2 * Ink.pad-dialog;
+        y: 0px;
+        height: 1px;
+        background: Ink.border-soft;
+    }
+
+    HorizontalLayout {
+        y: 11px;
+        height: Ink.button-h;
+        alignment: end;
+        spacing: 6px;
+        @children
+    }
+}
+
+/// A form's label, in the label column (`Ink.label-w` wide).
+export component InkLabel inherits Text {
+    width: Ink.label-w;
+    font-size: Ink.fs-sm;
+    color: Ink.text-dim;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+/// Small capitals over a group: "CHANNELS", "OUTPUT".
+export component InkCaption inherits Text {
+    font-size: Ink.fs-xs;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    color: Ink.text-mute;
+    vertical-alignment: center;
+}
+
+/// A dim hint under a field or in an empty place.
+export component InkHint inherits Text {
+    font-size: Ink.fs-sm;
+    color: Ink.text-mute;
+    wrap: word-wrap;
+}
+
+/// The head of a collapsible section: ▸ caption, a count, click to open.
+export component InkSectionHead inherits Rectangle {
+    in property <string> text;
+    in property <bool> expanded: true;
+    in property <string> count;
+    callback toggled;
+
+    height: 24px;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-expanded: root.expanded;
+    accessible-expandable: true;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    HorizontalLayout {
+        spacing: 4px;
+        Image {
+            source: root.expanded ? InkIcons.caret-down : InkIcons.caret-right;
+            width: 10px;
+            colorize: ta.has-hover ? Ink.text : Ink.text-mute;
+        }
+        InkCaption {
+            text: root.text;
+            color: ta.has-hover ? Ink.text : Ink.text-mute;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.count;
+            font-size: Ink.fs-xs;
+            font-family: Ink.font-mono;
+            color: Ink.text-faint;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+}
+
+/// A line between things, across.
+export component InkDivider inherits Rectangle {
+    height: 1px;
+    background: Ink.border-soft;
+}
+
+/// A short line between groups of buttons in a bar.
+export component InkBarSeparator inherits Rectangle {
+    width: 13px;
+    height: 18px;
+    Rectangle {
+        width: 1px;
+        background: Ink.border;
+    }
+}

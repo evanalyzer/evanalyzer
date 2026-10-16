@@ -1,0 +1,439 @@
+// shell/top_bar.slint — the bar at the top: the EVA menu, the quick
+// actions, the image shown, the project's name, preview and Run.
+
+import { Ink, InkScheme, InkIcons, InkButton, InkButtonKind, InkIconButton, InkBarSeparator, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
+import { Appearance } from "../api/appearance.slint";
+import { LayoutState, WorkspaceMode } from "../api/layout.slint";
+import { ToolbarState } from "../api/toolbar.slint";
+import { GlobalAppState, DialogType, ConnectionState } from "../api/state.slint";
+import { PipelinesPanelState } from "../api/pipelines.slint";
+import { ImageMetaData } from "../api/image_meta.slint";
+import { AiLearningState } from "../api/ai_learning.slint";
+
+// "EVA ▾": opens the app's one menu.
+component EvaButton inherits Rectangle {
+    callback clicked;
+
+    width: row.preferred-width + 20px;
+    height: 28px;
+    accessible-role: button;
+    accessible-label: "EVA menu";
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-md;
+        background: ta.has-hover ? Ink.selection : Ink.raised;
+        row := HorizontalLayout {
+            alignment: center;
+            spacing: 5px;
+            Text {
+                text: "EVA";
+                font-size: 13px;
+                font-weight: 700;
+                color: Ink.text;
+                vertical-alignment: center;
+            }
+            Image {
+                source: InkIcons.caret-down;
+                width: 9px;
+                colorize: Ink.text-dim;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The image shown: its name; a click goes to the images.
+component ImageChip inherits Rectangle {
+    width: min(row.preferred-width + 20px, 320px);
+    height: 26px;
+    accessible-role: button;
+    accessible-label: "Image: " + ImageMetaData.image_name;
+    accessible-action-default => {
+        LayoutState.mode = WorkspaceMode.images;
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-md;
+        background: ta.has-hover ? Ink.hover : transparent;
+        border-width: 1px;
+        border-color: Ink.border;
+        row := HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            spacing: 6px;
+            Image {
+                source: InkIcons.images;
+                width: 13px;
+                colorize: Ink.text-mute;
+            }
+            Text {
+                text: ImageMetaData.image_name;
+                font-size: Ink.fs-md;
+                font-family: Ink.font-mono;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            LayoutState.mode = WorkspaceMode.images;
+        }
+    }
+}
+
+// "● Auto preview": on, the preview follows every change.
+component AutoPreviewToggle inherits Rectangle {
+    property <bool> on: PipelinesPanelState.auto-preview-enabled;
+
+    width: row.preferred-width + 20px;
+    height: 28px;
+    accessible-role: switch;
+    accessible-label: "Auto preview";
+    accessible-checked: root.on;
+    accessible-action-default => {
+        root.flip();
+    }
+
+    function flip() {
+        PipelinesPanelState.auto-preview-enabled = !root.on;
+        PipelinesPanelState.auto-preview(PipelinesPanelState.auto-preview-enabled);
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-md;
+        background: ta.has-hover ? Ink.hover : transparent;
+        row := HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            Rectangle {
+                width: 7px;
+                Rectangle {
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 3.5px;
+                    background: root.on ? Ink.ok : Ink.text-faint;
+                }
+            }
+            Text {
+                text: "Auto preview";
+                font-size: Ink.fs-md;
+                font-weight: 500;
+                color: root.on ? Ink.text : Ink.text-dim;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.flip();
+        }
+    }
+}
+
+export component TopBar inherits Rectangle {
+    /// The project's name (and an unsaved-changes mark).
+    in property <string> title;
+
+    height: Ink.bar-h;
+    background: Ink.panel;
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 8px;
+        spacing: 2px;
+
+        VerticalLayout {
+            alignment: center;
+            EvaButton {
+                clicked => {
+                    eva-menu.show();
+                }
+            }
+        }
+
+        InkBarSeparator {
+            y: (Ink.bar-h - self.height) / 2;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 2px;
+                InkIconButton {
+                    size: 30px;
+                    icon: InkIcons.undo;
+                    label: "Undo";
+                    enabled: ToolbarState.can_undo;
+                    clicked => {
+                        ToolbarState.undo_clicked();
+                    }
+                }
+                InkIconButton {
+                    size: 30px;
+                    icon: InkIcons.redo;
+                    label: "Redo";
+                    enabled: ToolbarState.can_redo;
+                    clicked => {
+                        ToolbarState.redo_clicked();
+                    }
+                }
+                Rectangle {
+                    width: 30px;
+                    height: 30px;
+                    InkIconButton {
+                        size: 30px;
+                        icon: InkIcons.save;
+                        label: "Save";
+                        clicked => {
+                            ToolbarState.save_file_clicked();
+                        }
+                    }
+                    // Unsaved changes.
+                    Rectangle {
+                        visible: ToolbarState.has_unsaved_changes;
+                        x: 20px;
+                        y: 5px;
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Ink.warn;
+                    }
+                }
+                InkIconButton {
+                    size: 30px;
+                    icon: InkIcons.refresh;
+                    label: "Refresh preview";
+                    clicked => {
+                        PipelinesPanelState.dry-run();
+                    }
+                }
+                InkIconButton {
+                    size: 30px;
+                    icon: InkIcons.annotate;
+                    label: "Annotate";
+                    active: LayoutState.annotate;
+                    clicked => {
+                        LayoutState.annotate = !LayoutState.annotate;
+                    }
+                }
+            }
+        }
+
+        InkBarSeparator {
+            y: (Ink.bar-h - self.height) / 2;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            ImageChip { }
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.title;
+            font-size: Ink.fs-md;
+            color: Ink.text-mute;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            HorizontalLayout {
+                spacing: 6px;
+                InkIconButton {
+                    size: 28px;
+                    icon: InkIcons.debug;
+                    label: "Debug mode";
+                    active: PipelinesPanelState.debug-mode;
+                    clicked => {
+                        PipelinesPanelState.debug-mode-toggled(!PipelinesPanelState.debug-mode);
+                    }
+                }
+                AutoPreviewToggle { }
+                InkButton {
+                    text: "Run";
+                    kind: InkButtonKind.primary;
+                    icon: InkIcons.run;
+                    clicked => {
+                        PipelinesPanelState.run-all();
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Ink.border;
+    }
+
+    eva-menu := PopupWindow {
+        x: 6px;
+        y: Ink.bar-h - 2px;
+
+        InkMenuFrame {
+            menu-width: 260px;
+
+            InkMenuCaption { text: "PROJECT"; }
+            InkMenuItem {
+                icon: InkIcons.add;
+                text: "New";
+                clicked => {
+                    ToolbarState.new_file_clicked();
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.open;
+                text: "Open…";
+                shortcut: "Ctrl O";
+                clicked => {
+                    ToolbarState.open_file_clicked();
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.copy;
+                text: "New from template…";
+                clicked => {
+                    ToolbarState.new_from_project_template_clicked();
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.save;
+                text: "Save";
+                shortcut: "Ctrl S";
+                clicked => {
+                    ToolbarState.save_file_clicked();
+                }
+            }
+            InkMenuItem {
+                text: "Save as…";
+                clicked => {
+                    ToolbarState.save_as_file_clicked();
+                }
+            }
+            InkMenuItem {
+                text: "Save as template…";
+                clicked => {
+                    ToolbarState.save_project_as_template_clicked();
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.settings;
+                text: "Project settings…";
+                clicked => {
+                    GlobalAppState.active-dialog = DialogType.project-settings;
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.link;
+                text: "Cite project";
+                clicked => {
+                    ToolbarState.cite_project_clicked();
+                }
+            }
+
+            InkMenuSeparator { }
+            InkMenuCaption { text: "TOOLS"; }
+            InkMenuItem {
+                icon: InkIcons.ai;
+                text: "AI training…";
+                clicked => {
+                    AiLearningState.open_requested();
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.debug;
+                text: "Debug mode";
+                checked: PipelinesPanelState.debug-mode;
+                clicked => {
+                    PipelinesPanelState.debug-mode-toggled(!PipelinesPanelState.debug-mode);
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.server;
+                text: ConnectionState.remote ? "Connect to other server…" : "Connect to server…";
+                clicked => {
+                    ToolbarState.connect_clicked();
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.computer;
+                text: "Disconnect";
+                enabled: ConnectionState.remote;
+                clicked => {
+                    ToolbarState.disconnect_clicked();
+                }
+            }
+
+            InkMenuSeparator { }
+            InkMenuCaption { text: "COLORS"; }
+            InkMenuItem {
+                icon: InkIcons.sun;
+                text: "Light";
+                checked: Ink.scheme == InkScheme.light;
+                clicked => {
+                    Appearance.pick(InkScheme.light);
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.moon;
+                text: "Dark";
+                checked: Ink.scheme == InkScheme.dark;
+                clicked => {
+                    Appearance.pick(InkScheme.dark);
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.moon;
+                text: "Dim";
+                checked: Ink.scheme == InkScheme.dim;
+                clicked => {
+                    Appearance.pick(InkScheme.dim);
+                }
+            }
+
+            InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.keyboard;
+                text: "Shortcuts";
+                shortcut: "F1";
+                clicked => {
+                    GlobalAppState.active-dialog = DialogType.shortcuts-help;
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.help;
+                text: "evanalyzer.org";
+                clicked => {
+                    ToolbarState.open_website();
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.info;
+                text: "About";
+                clicked => {
+                    GlobalAppState.active-dialog = DialogType.about;
+                }
+            }
+        }
+    }
+}

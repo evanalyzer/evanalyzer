@@ -1,106 +1,20 @@
-// components/button.slint — the app's buttons. `AppButton` for every
-// action with a label (dialog footers, panel actions): secondary by default,
-// `primary` for the one confirming action, `danger` for a destructive one,
-// `ghost` for a quiet one beside them. `IconButton` for an icon alone.
+// components/button.slint — the buttons of the views not yet rebuilt on
+// Ink: `AppButton` and `IconButton` are Ink's buttons under their old
+// names (`primary`, `danger`, `ghost` pick the Ink kind). New code uses
+// `InkButton` / `InkIconButton` directly.
 
-import { Theme } from "../../style.slint";
+import { InkButton, InkButtonKind, InkIconButton } from "../../ink/ink.slint";
 
-export component AppButton inherits Rectangle {
-    in property <string> text;
+export component AppButton inherits InkButton {
     in property <bool> primary: false;
     in property <bool> danger: false;
     // No frame, no fill until hovered: a quiet action next to the others.
     in property <bool> ghost: false;
-    in property <bool> enabled: true;
-    callback clicked;
 
-    accessible-role: button;
-    accessible-label: root.text;
-    accessible-enabled: root.enabled;
-    accessible-action-default => {
-        if root.enabled {
-            root.clicked();
-        }
-    }
-
-    property <bool> filled: root.primary || root.danger;
-
-    height: 34px;
-    min-width: root.ghost ? 0px : 88px;
-    border-radius: Theme.radius-md;
-    border-width: root.filled || root.ghost ? 0px : 1px;
-    border-color: ta.has-hover && root.enabled ? Theme.border : Theme.border-soft;
-    background: root.danger ? (ta.pressed ? Theme.err.darker(12%) : ta.has-hover ? Theme.err : Theme.err.with-alpha(0.9))
-        : root.primary ? (ta.pressed ? Theme.accent.darker(12%) : ta.has-hover ? Theme.accent.brighter(8%) : Theme.accent)
-        : root.ghost ? (ta.has-hover && root.enabled ? Theme.raised : transparent)
-        : (ta.pressed ? Theme.hover : ta.has-hover && root.enabled ? Theme.raised.brighter(4%) : Theme.raised);
-    opacity: root.enabled ? 1.0 : 0.5;
-    animate background { duration: 80ms; }
-
-    HorizontalLayout {
-        padding-left: root.ghost ? 10px : 16px;
-        padding-right: root.ghost ? 10px : 16px;
-        alignment: center;
-        Text {
-            // The button itself carries the label.
-            accessible-role: none;
-            text: root.text;
-            font-size: 12.5px;
-            font-weight: 600;
-            color: root.filled ? #FFFFFF : root.ghost ? Theme.text-dim : Theme.text;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-    }
-
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: root.enabled ? pointer : default;
-        clicked => {
-            root.clicked();
-        }
-    }
+    kind: root.danger ? InkButtonKind.danger
+        : root.primary ? InkButtonKind.primary
+        : root.ghost ? InkButtonKind.quiet
+        : InkButtonKind.secondary;
 }
 
-// Square icon-only button (rail entries, toolbar glyphs, chip removes, a
-// dialog's ✕). `label` says what it does, for screen readers.
-export component IconButton inherits Rectangle {
-    in property <image> icon;
-    in property <string> label;
-    in property <bool> active: false;
-    in property <bool> enabled: true;
-    in property <length> size: 28px;
-    callback clicked;
-
-    width: root.size;
-    height: root.size;
-    border-radius: Theme.radius-sm;
-    background: root.active ? Theme.accent-dim : (ta.has-hover && root.enabled ? Theme.raised : transparent);
-    opacity: root.enabled ? 1.0 : 0.4;
-    animate background { duration: 80ms; }
-    accessible-role: button;
-    accessible-label: root.label;
-    accessible-enabled: root.enabled;
-    accessible-action-default => {
-        if root.enabled {
-            root.clicked();
-        }
-    }
-
-    ta := TouchArea {
-        mouse-cursor: root.enabled ? pointer : default;
-        enabled: root.enabled;
-        clicked => {
-            root.clicked();
-        }
-    }
-
-    Image {
-        source: root.icon;
-        width: root.size * 0.5;
-        height: root.size * 0.5;
-        colorize: root.active ? Theme.accent : Theme.text-dim;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-    }
-}
+export component IconButton inherits InkIconButton { }

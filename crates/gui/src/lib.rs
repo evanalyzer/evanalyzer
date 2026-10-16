@@ -2,8 +2,13 @@
 
 pub use evanalyzer_gui_slint::*;
 
+/// The results are shown in the main window now (its Results mode). Code
+/// that still names a separate results window gets the main window.
+// TODO(one-window): drop the `results_ui` handles and parameters.
+pub type ResultsWindow = AppWindow;
+
 use evanalyzer_app::backends::{Backend, ConnectionSecurity};
-use evanalyzer_app::global::{AppHandle, Frontend};
+use evanalyzer_app::global::{AppHandle, ColorScheme, Frontend};
 use evanalyzer_app::images::ImageMeta;
 use evanalyzer_app::images::ImageSource;
 use evanalyzer_app::project::{ProjectOwner, ProjectWithRuntime};
@@ -47,10 +52,9 @@ pub struct UiState {
     pub app: AppHandle, // cloneable handle - no Arc needed, AppHandle is already Arc inside
     pub ui_handle: slint::Weak<AppWindow>,
     pub results_ui_handle: slint::Weak<ResultsWindow>,
-    /// The in-app open/save dialog of each window - browses the backend's
-    /// files, so remote mode shows the server's folders.
+    /// The in-app open/save dialog - browses the backend's files, so remote
+    /// mode shows the server's folders.
     pub file_browser: Arc<FileBrowser<AppWindow>>,
-    pub results_file_browser: Arc<FileBrowser<ResultsWindow>>,
     /// Mirrors `ToolbarState.has_unsaved_changes`, but readable synchronously
     /// from any thread (the Slint property can only be read/written on the
     /// UI thread via `invoke_from_event_loop`) - lets background threads
@@ -108,7 +112,6 @@ impl UiState {
         };
         Self {
             file_browser: Arc::new(FileBrowser::new(handle.clone(), Arc::clone(&backend))),
-            results_file_browser: Arc::new(FileBrowser::new(results_handle.clone(), backend)),
             app,
             ui_handle: handle,
             results_ui_handle: results_handle,
@@ -516,7 +519,7 @@ fn run(
 
     let ui = AppWindow::new()?;
     let ui_handle = ui.as_weak();
-    let results_ui = ResultsWindow::new()?;
+    let results_ui = ui.clone_strong();
     let results_ui_handle = results_ui.as_weak();
 
     load_about_dialog_information(&ui);
@@ -536,7 +539,6 @@ fn run(
     apply_user_settings(&ui, &results_ui, &ui_state);
     attach_system_info(&ui, Arc::clone(&ui_state));
     ui_state.file_browser.attach(&ui);
-    ui_state.results_file_browser.attach(&results_ui);
 
     // Attach callbacks synchronously before the event loop starts.
     // Using invoke_from_event_loop here caused the initial `changed width/height`
@@ -774,26 +776,43 @@ fn fill_connection_state(state: &ConnectionState<'_>, backend: &dyn Backend) {
     state.set_verified(security != ConnectionSecurity::EncryptedUnverified);
 }
 
-/// Applies the remembered appearance to both windows and saves a dark-mode
-/// toggle - through `ui_state`, so in remote mode they live on the worker.
+/// Applies the remembered appearance to both windows and saves the color
+/// scheme the user picks - through `ui_state`, so in remote mode it lives
+/// on the worker.
 fn apply_user_settings(ui: &AppWindow, results_ui: &ResultsWindow, ui_state: &Arc<UiState>) {
     apply_appearance(ui, results_ui, ui_state);
 
     let results_ui_handle = results_ui.as_weak();
     let ui_state = Arc::clone(ui_state);
-    ui.global::<Appearance>().on_dark_mode_toggled(move |dark| {
-        ui_state.update_app_settings(|settings| settings.dark_mode = dark);
+    ui.global::<Appearance>().on_scheme_changed(move |scheme| {
+        ui_state.update_app_settings(|settings| settings.color_scheme = color_scheme_from_ui(scheme));
         if let Some(results_ui) = results_ui_handle.upgrade() {
-            results_ui.global::<Appearance>().invoke_apply(dark);
+            results_ui.global::<Appearance>().invoke_apply(scheme);
         }
     });
 }
 
-/// The remembered dark/light mode, on both windows.
+/// The remembered color scheme, on both windows.
 pub(crate) fn apply_appearance(ui: &AppWindow, results_ui: &ResultsWindow, ui_state: &UiState) {
-    let dark_mode = ui_state.load_app_settings().dark_mode;
-    ui.global::<Appearance>().invoke_apply(dark_mode);
-    results_ui.global::<Appearance>().invoke_apply(dark_mode);
+    let scheme = color_scheme_to_ui(ui_state.load_app_settings().color_scheme);
+    ui.global::<Appearance>().invoke_apply(scheme);
+    results_ui.global::<Appearance>().invoke_apply(scheme);
+}
+
+fn color_scheme_to_ui(scheme: ColorScheme) -> InkScheme {
+    match scheme {
+        ColorScheme::Light => InkScheme::Light,
+        ColorScheme::Dark => InkScheme::Dark,
+        ColorScheme::Dim => InkScheme::Dim,
+    }
+}
+
+fn color_scheme_from_ui(scheme: InkScheme) -> ColorScheme {
+    match scheme {
+        InkScheme::Light => ColorScheme::Light,
+        InkScheme::Dark => ColorScheme::Dark,
+        InkScheme::Dim => ColorScheme::Dim,
+    }
 }
 
 #[cfg(test)]
@@ -858,7 +877,7 @@ mod ui_state_tests {
         let current = Arc::new(Mutex::new(Arc::clone(&local)));
 
         let ui = AppWindow::new().unwrap();
-        let results_ui = ResultsWindow::new().unwrap();
+        let results_ui = ui.clone_strong();
         let shown = Arc::clone(&current);
         let _timer = show_connection(
             &ui,
@@ -1124,8 +1143,8 @@ mod ui_state_tests {
     fn preferences_that_cannot_be_saved_are_still_kept_in_memory() {
         let ui_state = ui_state_that_cannot_save_settings();
 
-        ui_state.update_app_settings(|settings| settings.dark_mode = true);
-        assert!(ui_state.load_app_settings().dark_mode);
+        ui_state.update_app_settings(|settings| settings.color_scheme = ColorScheme::Dim);
+        assert_eq!(ui_state.load_app_settings().color_scheme, ColorScheme::Dim);
 
         let mut viewport = ui_state.viewport_memory_settings();
         viewport.tile_history_budget_mb += 7;
@@ -1143,12 +1162,12 @@ mod ui_state_tests {
     #[test]
     fn reload_app_settings_reads_what_the_backend_saved() {
         let ui_state = test_ui_state();
-        ui_state.update_app_settings(|settings| settings.dark_mode = true);
+        ui_state.update_app_settings(|settings| settings.color_scheme = ColorScheme::Dark);
         *ui_state.app_settings.lock().unwrap() = Default::default();
 
         ui_state.reload_app_settings();
 
-        assert!(ui_state.load_app_settings().dark_mode);
+        assert_eq!(ui_state.load_app_settings().color_scheme, ColorScheme::Dark);
     }
 
     // -- startup / about dialog -----------------------------------------------
@@ -1213,7 +1232,7 @@ mod ui_state_tests {
     }
 
     #[test]
-    fn toggling_dark_mode_is_remembered_and_applied_to_the_results_window() {
+    fn a_picked_color_scheme_is_remembered_and_applied_to_the_results_window() {
         let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
         let ui_state = crate::editor::test_support::ui_state_with_windows(
             &ui,
@@ -1222,15 +1241,36 @@ mod ui_state_tests {
         );
         apply_user_settings(&ui, &results_ui, &ui_state);
 
-        ui.global::<Appearance>().invoke_dark_mode_toggled(true);
-        assert!(ui_state.load_app_settings().dark_mode);
-
-        ui.global::<Appearance>().invoke_dark_mode_toggled(false);
-        assert!(!ui_state.load_app_settings().dark_mode);
+        for (picked, saved) in [
+            (InkScheme::Dark, ColorScheme::Dark),
+            (InkScheme::Dim, ColorScheme::Dim),
+            (InkScheme::Light, ColorScheme::Light),
+        ] {
+            ui.global::<Appearance>().invoke_pick(picked);
+            assert_eq!(ui_state.load_app_settings().color_scheme, saved);
+            assert_eq!(results_ui.global::<Ink>().get_scheme(), picked);
+            assert_eq!(ui.global::<Ink>().get_scheme(), picked);
+        }
 
         drop(results_ui);
-        ui.global::<Appearance>().invoke_dark_mode_toggled(true);
-        assert!(ui_state.load_app_settings().dark_mode);
+        ui.global::<Appearance>().invoke_pick(InkScheme::Dark);
+        assert_eq!(ui_state.load_app_settings().color_scheme, ColorScheme::Dark);
+    }
+
+    #[test]
+    fn the_remembered_color_scheme_is_applied_at_start() {
+        let (ui, results_ui) = crate::editor::test_support::test_ui_windows();
+        let ui_state = crate::editor::test_support::ui_state_with_windows(
+            &ui,
+            &results_ui,
+            ProjectWithRuntime::default(),
+        );
+        ui_state.update_app_settings(|settings| settings.color_scheme = ColorScheme::Dim);
+
+        apply_user_settings(&ui, &results_ui, &ui_state);
+
+        assert_eq!(ui.global::<Ink>().get_scheme(), InkScheme::Dim);
+        assert_eq!(results_ui.global::<Ink>().get_scheme(), InkScheme::Dim);
     }
 
     #[test]

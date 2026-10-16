@@ -1,11 +1,8 @@
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { ObjectListState } from "../api/object_list.slint";
 import { Theme } from "../style.slint";
 import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
-import {
-    GlobalAppState,
-    DialogType,
-} from "../state.slint";
 
-import { ObjectListState } from "../editor/object_list_panel.slint";
 import { AppButton } from "../components/app_button.slint";
 
 export component ConfirmDeleteManualAnnotatedObjectDialog inherits Dialog {

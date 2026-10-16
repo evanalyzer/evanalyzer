@@ -1,121 +1,93 @@
-import { Palette } from "std-widgets.slint";
+// style.slint — the colors and sizes of the views not yet rebuilt on Ink,
+// read from Ink: they follow the color scheme (light, dark, dim) like the
+// rest. Goes away with the last of those views; new code uses `Ink`.
+
+import { Ink } from "ink/palette.slint";
 
 export global Theme {
-    // -- Mode switch ----------------------------------------------------------
-    in-out property <bool> dark-mode: Palette.color-scheme == ColorScheme.dark;
+    out property <bool> dark-mode: Ink.dark;
 
-    // -- Surface layers -------------------------------------------------------
-    // Dark mode: neutral mid-dark grays as in photo editors, each layer a
-    // visible step lighter. Text levels keep >= 4.5:1 contrast on `panel`
-    // (text-faint, for hints only, ~3.7:1).
-    out property <color> bg:          dark-mode ? #1F1F1F : #F4F5F7;
-    // Around the image: darker than the panels, so fluorescence images keep
-    // their contrast, but not black.
-    out property <color> bg-viewport:          dark-mode ? #1A1A1A : #0E0F12;
-    out property <color> panel:       dark-mode ? #2B2B2B : #FFFFFF;
-    out property <color> raised:      dark-mode ? #363636 : #EBEBED;
-    out property <color> rail:        dark-mode ? #252525 : #E0E0E2;
-    // Subtle zebra-striping for the results table's alternate rows — close to
-    // `panel` so it reads as a faint tint, not a strong band.
-    out property <color> list-row-alt-bg: dark-mode ? #303030 : #F7F8FA;
+    // -- Surfaces --
+    out property <color> bg: Ink.ground;
+    out property <color> bg-viewport: Ink.viewport;
+    out property <color> panel: Ink.panel;
+    out property <color> raised: Ink.raised;
+    out property <color> rail: Ink.raised;
+    out property <color> list-row-alt-bg: Ink.field;
 
-    // -- Strokes / dividers ---------------------------------------------------
-    out property <color> border:      dark-mode ? #4F4F4F : #D0D2D8;
-    out property <color> border-soft: dark-mode ? #3D3D3D : #E5E5E8;
+    // -- Lines --
+    out property <color> border: Ink.border;
+    out property <color> border-soft: Ink.border-soft;
 
-    // -- Text -----------------------------------------------------------------
-    out property <color> text-bright: dark-mode ? #FFFFFF : #000000;
-    out property <color> text:        dark-mode ? #EDEDED : #1A1A1E;
-    out property <color> text-dim:    dark-mode ? #C2C2C2 : #5A5E6A;
-    out property <color> text-mute:   dark-mode ? #A3A3A3 : #888C98;
-    out property <color> text-faint:  dark-mode ? #828282 : #B0B3BD;
+    // -- Text --
+    out property <color> text-bright: Ink.text;
+    out property <color> text: Ink.text;
+    out property <color> text-dim: Ink.text-dim;
+    out property <color> text-mute: Ink.text-mute;
+    out property <color> text-faint: Ink.text-faint;
+    // On the image: always white.
+    out property <color> text-pixel-info: #FFFFFF;
+    out property <color> text-scalebar: #FFFFFF;
 
-    out property <color> text-pixel-info: dark-mode ? #FFFFFF : #FFFFFF;
-    out property <color> text-scalebar: dark-mode ? #FFFFFF : #FFFFFF;
+    // -- Accent and states --
+    out property <color> accent: Ink.focus;
+    out property <color> accent-dim: Ink.selection;
+    out property <color> ok: Ink.ok;
+    out property <color> warn: Ink.warn;
+    out property <color> err: Ink.err;
 
-    // -- Accent + semantics ---------------------------------------------------
-    out property <color> accent:      dark-mode ? #5C9BFF : #2A6BDF;
-    out property <color> accent-dim:  dark-mode ? #2A4A7A : #DDEEFF;
-    out property <color> ok:          dark-mode ? #34D399 : #1A8A5A;
-    out property <color> warn:        dark-mode ? #F59E0B : #C07800;
-    out property <color> err:         dark-mode ? #F87171 : #D03030;
+    // -- Overlays --
+    out property <color> modal-overlay: Ink.scrim;
+    out property <color> modal-dim: Ink.scrim;
+    out property <color> overlay-scrim: Ink.glass;
+    out property <color> shadow: Ink.shadow;
 
-    // -- Modal / overlay ------------------------------------------------------
-    out property <color> modal-overlay: #000000AA;          // dialog backdrop dim
-    out property <color> modal-dim:     #00000055;          // lighter backdrop
-    out property <color> overlay-scrim: dark-mode ? #1F1F1F.with-alpha(0.6) : #F4F5F7.with-alpha(0.7);
-    out property <color> shadow:        #00000088;          // drop-shadow base
+    // -- Pipelines --
+    out property <color> sidebar: Ink.panel;
+    out property <color> sidebar-list: Ink.raised;
+    out property <color> sidebar-step-active: Ink.selection;
+    out property <color> sidebar-step-idle: Ink.field;
+    out property <color> status-done: Ink.ok;
+    out property <color> status-idle: Ink.text-faint;
 
-    // -- Sidebar / Pipeline view ----------------------------------------------
-    out property <color> sidebar:             dark-mode ? #262626 : #F0F0F2;
-    out property <color> sidebar-list:        dark-mode ? #303030 : #E8E8EA;
-    out property <color> sidebar-step-active: dark-mode ? #3A4152 : #D8DCF8;
-    out property <color> sidebar-step-idle:   dark-mode ? #2E2E2E : #EFEFEF;
+    out property <color> icon-bg-default: Ink.warn-tint;
+    out property <color> icon-bg-info: Ink.info;
 
-    // -- Status indicators (pipeline steps) -----------------------------------
-    out property <color> status-done: dark-mode ? #4CAF50 : #2E8B40;
-    out property <color> status-idle: dark-mode ? #5E5E5E : #CCCCCC;
-
-    // -- Icon badge backgrounds ------------------------------------------------
-    out property <color> icon-bg-default: #ffcc0022;
-    out property <color> icon-bg-info:    #517891;
-
-    // -- Game / BioRunner (warm paper palette - intentionally theme-independent)
-    out property <color> game-paper:    #F0EDD6;
-    out property <color> game-ink:      #2a2a2a;
-    out property <color> game-title:    #C8C0A4;
+    // BioRunner (the game): a warm paper look, the same in every scheme.
+    out property <color> game-paper: #F0EDD6;
+    out property <color> game-ink: #2a2a2a;
+    out property <color> game-title: #C8C0A4;
     out property <color> game-subtitle: #C0BAA0;
-    out property <color> game-green:    #4aaa55;
+    out property <color> game-green: #4aaa55;
 
-    // -- Category palette (pipeline step type stripes) ------------------------
-    out property <color> cat-preprocess: #22D3EE;
-    out property <color> cat-segment:    #E879F9;
-    out property <color> cat-object:     #F97316;
-    out property <color> cat-measure:    #FACC15;
-    out property <color> cat-classify:   #34D399;
-    out property <color> cat-dataset:    #818CF8;
-    // Components - a step made of other steps, not a category of its own.
-    out property <color> cat-component:      #FB7185;
+    // -- Step categories --
+    out property <color> cat-preprocess: Ink.cat-preprocess;
+    out property <color> cat-segment: Ink.cat-segment;
+    out property <color> cat-object: Ink.cat-object;
+    out property <color> cat-measure: Ink.cat-measure;
+    out property <color> cat-classify: Ink.cat-classify;
+    out property <color> cat-dataset: Ink.cat-dataset;
+    out property <color> cat-component: Ink.cat-component;
 
-    // -- Channel palette (multi-channel image overlay) ------------------------
+    // -- Default channel colors (data, the same in every scheme) --
     out property <color> ch-0: #22D3EE;
     out property <color> ch-1: #E879F9;
     out property <color> ch-2: #FACC15;
     out property <color> ch-3: #34D399;
     out property <color> ch-4: #F87171;
 
-    // -- Spacing / sizing -----------------------------------------------------
-    out property <length> panel-content-padding: 14px;
-    out property <length> radius-sm: 4px;
-    out property <length> radius-md: 6px;
-    out property <length> radius-lg: 10px;
+    // -- Sizes --
+    out property <length> panel-content-padding: Ink.pad-panel;
+    out property <length> radius-sm: Ink.radius-sm;
+    out property <length> radius-md: Ink.radius-md;
+    out property <length> radius-lg: Ink.radius-lg;
 
-    // -- Interactive ----------------------------------------------------------
-    in-out property <color> hover: dark-mode ? #444444 : #E0E0E8;
+    out property <color> hover: Ink.hover;
 
-    // -- Tables / Lists -------------------------------------------------------
     out property <length> list-row-height: 40px;
-    out property <color> list-select-row-bg:           dark-mode ? #2A4A7A : #DDEEFF;
-    out property <color> list-select-row-border-color: dark-mode ? #5C9BFF : #2A6BDF;
+    out property <color> list-select-row-bg: Ink.selection;
+    out property <color> list-select-row-border-color: Ink.focus;
 
-    // -- Typography -----------------------------------------------------------
-    out property <string> font-sans: "IBM Plex Sans";
-    out property <string> font-mono: "IBM Plex Mono";
-}
-
-// Drives `Palette.color-scheme` explicitly (instead of leaving it at the
-// default `Unknown`, which lets the OS theme leak into std-widgets controls
-// while `Theme.dark-mode` above stays literally light/dark) so the whole
-// window - our own `Theme` colors and std-widgets alike - always agrees.
-// Each top-level window (`AppWindow`, `ResultsWindow`) gets its own instance
-// of this global, so Rust calls `apply()` on both after construction and on
-// every toggle to keep them in sync.
-export global Appearance {
-    // Fired whenever the user flips the toggle, so Rust can persist the
-    // choice and push it into the other window.
-    callback dark-mode-toggled(bool);
-
-    public function apply(dark: bool) {
-        Palette.color-scheme = dark ? ColorScheme.dark : ColorScheme.light;
-    }
+    out property <string> font-sans: Ink.font-sans;
+    out property <string> font-mono: Ink.font-mono;
 }

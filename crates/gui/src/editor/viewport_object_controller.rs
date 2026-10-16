@@ -75,6 +75,8 @@ impl ViewPortObjectController {
                         ToolState::Move => return,
                         ToolState::Select => return,
                         ToolState::PaintMarker => return,
+                        // Not wired up yet.
+                        ToolState::Brush | ToolState::Eraser => return,
                         ToolState::PaintRectangle => manager.add_object_from_rect(&points),
                         ToolState::PaintOval => manager.add_oval_from_rect(&points),
                         ToolState::PaintPolygon => {
@@ -1026,7 +1028,13 @@ mod tests {
     #[test]
     fn finishing_a_gesture_with_a_non_painting_tool_adds_no_object() {
         let live = live_controller(true);
-        for tool in [ToolState::Move, ToolState::Select, ToolState::PaintMarker] {
+        for tool in [
+            ToolState::Move,
+            ToolState::Select,
+            ToolState::PaintMarker,
+            ToolState::Brush,
+            ToolState::Eraser,
+        ] {
             live.object_state().invoke_object_paint_finished(
                 points(&[(2.0, 2.0), (5.0, 5.0), (2.0, 8.0)]),
                 tool,

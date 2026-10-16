@@ -1,0 +1,124 @@
+// api/project_settings.slint — the Rust interface of dialogs/project_settings_dialog.slint: the state Rust
+// sets, the callbacks it answers.
+
+import { MultiClassDropdown } from "../editor/pipelines_panel.slint";
+
+export struct ProjectSettingsSlint {
+    well_rows: int,
+    well_columns: int,
+    project_name: string,
+    author_name: string,
+    organization_name: string,
+    // 0 Auto, 1 Custom regex, 2 Folder (`GroupingMode`).
+    grouping_mode: int,
+    custom_regex: string,
+    // Index into `ProjectSettingsState.plate-size-labels` (`PlateSize::ALL`,
+    // 0 = Auto) - the same list as the results window's PLATE SIZE.
+    plate_size_index: int,
+    // Well size fitted to the images (true) or `well_rows` x `well_columns`.
+    well_auto: bool,
+    // For a fixed well size: the image number at each position, row by row.
+    well_values: [int],
+    // Cross-tile object merging (docs/tile_merge_plan.md). On by default -
+    // a user has no reason to know or care about tiles, they just expect
+    // objects to be detected correctly. `enabled: false` fully restores the
+    // old per-tile-only export path (a complete no-op). When enabled, every
+    // object class merges by default - `classes_to_not_merge_flags` is the
+    // same 33-element ("1"/"0" for classes 0-32) selection-flags shape
+    // `MultiClassDropdown` uses elsewhere, marking which classes are opted
+    // *out* of merging; all-"0" (the default) merges everything.
+    // `connectivity`: 0 = four-connected, 1 = eight-connected.
+    tile_merge_enabled: bool,
+    tile_merge_classes_to_not_merge_flags: [string],
+    tile_merge_connectivity: int,
+    tile_merge_max_fragments_per_group: int,
+}
+
+export global ProjectSettingsState {
+    in-out property <ProjectSettingsSlint> settings: {
+        well_rows: 4,
+        well_columns: 4,
+        project_name: "",
+        author_name: "",
+        organization_name: "",
+        custom_regex: "",
+        plate_size_index: 0,
+        well_auto: true,
+        well_values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        tile_merge_enabled: true,
+        tile_merge_classes_to_not_merge_flags: [
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+        tile_merge_connectivity: 1,
+        tile_merge_max_fragments_per_group: 10000,
+    };
+
+    // Every plate size choice, set from Rust (`PlateSize::label`).
+    in property <[string]> plate-size-labels: ["Auto"];
+
+    callback project_settings_changed(ProjectSettingsSlint);
+    callback project_settings_canceled();
+    callback well_value_changed(int, int);
+    callback well_dims_changed(int, int);
+    // Fired as "toggle:N" from the tile-merge exclude-classes MultiClassDropdown.
+    callback tile_merge_class_toggled(string);
+
+    public function trigger_project_settings_accepted() {
+        project_settings_changed(root.settings);
+    }
+}
+
+// The viewport's RAM/smoothness trade-offs (Viewport section). Kept on this
+// computer, not in the project - they are about its RAM.
+export global ViewportMemoryState {
+    in-out property <bool> tile_history_enabled: false;
+    in-out property <int> tile_history_budget_mb: 512;
+    in-out property <int> object_overlay_margin_px: 256;
+    in-out property <bool> cache_sizes_auto: true;
+    // What automatic sizing gives on this computer, e.g. "16 GB RAM: 1024 MB
+    // tiles, 256 MB overviews" - set from Rust.
+    in property <string> auto_cache_note;
+    in-out property <int> tile_cache_mb: 1024;
+    in-out property <int> overview_cache_mb: 256;
+    in-out property <bool> free_caches_on_analysis: true;
+
+    // Show the settings in effect - each time the dialog opens, so edits
+    // left by a Cancel are gone.
+    callback load();
+    // Take over what is shown (Apply).
+    callback apply();
+    // Show the defaults; Apply saves them.
+    callback reset_to_defaults();
+}

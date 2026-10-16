@@ -1,0 +1,240 @@
+// ink/toggle.slint — on/off and one-of-a-few: checkbox, switch, segmented
+// control, the mode tabs of the top bar.
+
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
+
+/// A checkbox, with its text to the right (optional).
+export component InkCheckbox inherits Rectangle {
+    in-out property <bool> checked;
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+
+    function flip() {
+        root.checked = !root.checked;
+        root.toggled(root.checked);
+    }
+
+    height: 20px;
+    horizontal-stretch: 0;
+    preferred-width: 14px + (root.text == "" ? 0px : 8px + label.preferred-width);
+    accessible-role: checkbox;
+    accessible-label: root.text;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.flip();
+        }
+    }
+
+    body := Rectangle {
+        opacity: root.enabled ? 1.0 : 0.45;
+        box := Rectangle {
+            x: 0px;
+            width: 14px;
+            height: 14px;
+            border-radius: Ink.radius-xs;
+            border-width: root.checked ? 0px : 1px;
+            border-color: ta.has-hover ? Ink.text-mute : Ink.text-faint;
+            background: root.checked ? Ink.primary : Ink.field;
+            Image {
+                visible: root.checked;
+                source: InkIcons.check;
+                width: 10px;
+                height: 10px;
+                colorize: Ink.on-primary;
+            }
+        }
+        label := Text {
+            x: 22px;
+            height: parent.height;
+            text: root.text;
+            font-size: Ink.fs-md;
+            color: Ink.text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.flip();
+        }
+    }
+}
+
+/// A switch, with its text to the left (optional) - for settings that act
+/// at once.
+export component InkSwitch inherits Rectangle {
+    in-out property <bool> checked;
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+
+    function flip() {
+        root.checked = !root.checked;
+        root.toggled(root.checked);
+    }
+
+    height: 20px;
+    horizontal-stretch: 0;
+    preferred-width: 26px + (root.text == "" ? 0px : 8px + label.preferred-width);
+    accessible-role: switch;
+    accessible-label: root.text;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.flip();
+        }
+    }
+
+    body := Rectangle {
+        opacity: root.enabled ? 1.0 : 0.45;
+        label := Text {
+            x: 0px;
+            width: parent.width - 34px;
+            height: parent.height;
+            text: root.text;
+            font-size: Ink.fs-md;
+            color: Ink.text;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        track := Rectangle {
+            x: parent.width - self.width;
+            width: 26px;
+            height: 14px;
+            border-radius: 7px;
+            background: root.checked ? Ink.primary : Ink.border;
+            animate background { duration: 120ms; }
+            knob := Rectangle {
+                x: root.checked ? 14px : 2px;
+                width: 10px;
+                height: 10px;
+                border-radius: 5px;
+                background: root.checked ? Ink.on-primary : Ink.panel;
+                animate x { duration: 120ms; easing: ease-out; }
+            }
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.flip();
+        }
+    }
+}
+
+/// One of a few, side by side in a track ("Max · Min · Avg", "Plate · List
+/// · Charts"). `selected` is set on a click; `picked` reports it.
+export component InkSegmented inherits Rectangle {
+    in property <[string]> model;
+    in-out property <int> selected: 0;
+    in property <bool> enabled: true;
+    in property <string> label;
+    callback picked(int);
+
+    height: 24px;
+    preferred-width: row.preferred-width + 4px;
+    accessible-role: tab-list;
+    accessible-label: root.label;
+
+    track := Rectangle {
+        border-radius: Ink.radius-md;
+        background: Ink.raised;
+        opacity: root.enabled ? 1.0 : 0.45;
+
+        row := HorizontalLayout {
+            padding: 2px;
+            spacing: 2px;
+            for entry[i] in root.model: Rectangle {
+                horizontal-stretch: 1;
+                min-width: seg-text.preferred-width + 14px;
+                border-radius: Ink.radius-sm;
+                background: i == root.selected ? Ink.panel : seg-ta.has-hover ? Ink.hover : transparent;
+                drop-shadow-blur: i == root.selected ? 2px : 0px;
+                drop-shadow-color: Ink.shadow.with-alpha(0.15);
+                accessible-role: tab;
+                accessible-label: entry;
+                accessible-item-selected: i == root.selected;
+                seg-text := Text {
+                    text: entry;
+                    font-size: Ink.fs-sm;
+                    font-weight: i == root.selected ? 600 : 400;
+                    color: i == root.selected ? Ink.text : Ink.text-dim;
+                }
+                seg-ta := TouchArea {
+                    enabled: root.enabled;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.selected = i;
+                        root.picked(i);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A mode of the top bar (Steps, Images, Results …): text, the active one
+/// filled.
+export component InkModeTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    /// A count after the text (problems, images), 0: none.
+    in property <int> count: 0;
+    in property <bool> warn: false;
+    callback clicked;
+
+    height: 24px;
+    horizontal-stretch: 0;
+    preferred-width: label.preferred-width + (root.count > 0 ? count-text.preferred-width + 6px : 0px) + 18px;
+    accessible-role: tab;
+    accessible-label: root.text;
+    accessible-item-selected: root.active;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: root.active ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+        HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            label := Text {
+                text: root.text;
+                font-size: Ink.fs-md;
+                font-weight: root.active ? 600 : 500;
+                color: root.active ? Ink.text : Ink.text-dim;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+            count-text := Text {
+                visible: root.count > 0;
+                width: root.count > 0 ? self.preferred-width : 0px;
+                text: root.count;
+                font-size: Ink.fs-xs;
+                font-weight: 600;
+                font-family: Ink.font-mono;
+                color: root.warn ? Ink.warn : Ink.text-mute;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

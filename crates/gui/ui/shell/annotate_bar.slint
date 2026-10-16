@@ -1,0 +1,193 @@
+// shell/annotate_bar.slint — the tool bar of annotate mode, floating over
+// the image: the tools, the class painted into, the brush size.
+
+import { Ink, InkIcons, InkIconButton, InkToolButton, InkBarSeparator, InkNumberField } from "../ink/ink.slint";
+import { LayoutState } from "../api/layout.slint";
+import { ToolState, ViewportObjectState } from "../api/viewport.slint";
+import { ClassificationState } from "../api/classification.slint";
+
+export component AnnotateBar inherits Rectangle {
+    property <ToolState> tool: ViewportObjectState.act_tool_state;
+    // Shapes need a class to paint into.
+    property <bool> has-class: ClassificationState.selected_class_id >= 0;
+
+    width: row.preferred-width + 12px;
+    height: 44px;
+    accessible-role: groupbox;
+    accessible-label: "Annotate";
+
+    glass := Rectangle {
+        background: Ink.glass;
+        border-radius: Ink.radius-lg;
+        border-width: 1px;
+        border-color: Ink.border;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-color: Ink.shadow;
+
+        TouchArea { }
+
+        row := HorizontalLayout {
+            padding-left: 6px;
+            padding-right: 6px;
+            spacing: 2px;
+            alignment: center;
+
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: 2px;
+                    InkToolButton {
+                        icon: InkIcons.move;
+                        label: "Move (M)";
+                        active: root.tool == ToolState.Move;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.Move;
+                        }
+                    }
+                    InkToolButton {
+                        icon: InkIcons.select;
+                        label: "Select (S)";
+                        active: root.tool == ToolState.Select;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.Select;
+                        }
+                    }
+                    InkBarSeparator { }
+                    InkToolButton {
+                        icon: InkIcons.marker;
+                        label: "Marker (K)";
+                        active: root.tool == ToolState.PaintMarker;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.PaintMarker;
+                        }
+                    }
+                    InkToolButton {
+                        icon: InkIcons.rectangle;
+                        label: "Rectangle (R)";
+                        enabled: root.has-class;
+                        active: root.tool == ToolState.PaintRectangle;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.PaintRectangle;
+                        }
+                    }
+                    InkToolButton {
+                        icon: InkIcons.ellipse;
+                        label: "Ellipse (O)";
+                        enabled: root.has-class;
+                        active: root.tool == ToolState.PaintOval;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.PaintOval;
+                        }
+                    }
+                    InkToolButton {
+                        icon: InkIcons.polygon;
+                        label: "Polygon (P)";
+                        enabled: root.has-class;
+                        active: root.tool == ToolState.PaintPolygon;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
+                        }
+                    }
+                    InkToolButton {
+                        icon: InkIcons.brush;
+                        label: "Brush";
+                        is-new: true;
+                        enabled: root.has-class;
+                        active: root.tool == ToolState.Brush;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.Brush;
+                        }
+                    }
+                    InkToolButton {
+                        icon: InkIcons.eraser;
+                        label: "Eraser";
+                        is-new: true;
+                        active: root.tool == ToolState.Eraser;
+                        clicked => {
+                            ViewportObjectState.act_tool_state = ToolState.Eraser;
+                        }
+                    }
+                    InkBarSeparator { }
+                }
+            }
+
+            // The class painted into.
+            Text {
+                text: "Paint as";
+                font-size: Ink.fs-sm;
+                color: Ink.text-mute;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                padding-left: 4px;
+                padding-right: 8px;
+                Rectangle {
+                    height: Ink.control-h;
+                    width: min(class-row.preferred-width + 16px, 180px);
+                    border-radius: Ink.radius-sm;
+                    border-width: 1px;
+                    border-color: Ink.border;
+                    background: Ink.field;
+                    class-row := HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 6px;
+                        Text {
+                            text: root.has-class ? ClassificationState.selected_class_name : "Pick a class";
+                            font-size: Ink.fs-md;
+                            color: root.has-class ? Ink.text : Ink.text-faint;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            LayoutState.classes-open = true;
+                        }
+                    }
+                }
+            }
+
+            if root.tool == ToolState.Brush || root.tool == ToolState.Eraser: HorizontalLayout {
+                spacing: 6px;
+                padding-right: 6px;
+                Text {
+                    text: "Size";
+                    font-size: Ink.fs-sm;
+                    color: Ink.text-mute;
+                    vertical-alignment: center;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    InkNumberField {
+                        width: 92px;
+                        label: "Brush size";
+                        value: LayoutState.brush-size;
+                        min: 1;
+                        max: 200;
+                        unit: "px";
+                        changed(text) => {
+                            LayoutState.brush-size = text.to-float();
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                InkIconButton {
+                    size: 28px;
+                    icon: InkIcons.close;
+                    label: "Leave annotate mode";
+                    clicked => {
+                        LayoutState.annotate = false;
+                        ViewportObjectState.act_tool_state = ToolState.Move;
+                    }
+                }
+            }
+        }
+    }
+}

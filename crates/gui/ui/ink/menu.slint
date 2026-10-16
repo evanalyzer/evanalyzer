@@ -1,0 +1,139 @@
+// ink/menu.slint — menus: the EVA menu, ⋯ menus, context menus. A menu is
+// a `PopupWindow` where it's opened, holding an `InkMenuFrame` with items.
+//
+//     menu := PopupWindow {
+//         InkMenuFrame {
+//             InkMenuItem { icon: InkIcons.open; text: "Open project…"; shortcut: "Ctrl O"; }
+//             InkMenuSeparator { }
+//             InkMenuItem { text: "Quit"; }
+//         }
+//     }
+
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
+import { InkNewTag } from "marker.slint";
+
+/// The menu's card; its items go inside, one under the other.
+export component InkMenuFrame inherits Rectangle {
+    in property <length> menu-width: 240px;
+
+    width: root.menu-width;
+    background: Ink.panel;
+    border-radius: Ink.radius-lg;
+    border-width: 1px;
+    border-color: Ink.border;
+    drop-shadow-blur: 20px;
+    drop-shadow-offset-y: 6px;
+    drop-shadow-color: Ink.shadow;
+
+    VerticalLayout {
+        padding: 4px;
+        spacing: 0px;
+        @children
+    }
+}
+
+/// One entry: an icon, the text, the shortcut or a ▸ to a submenu.
+export component InkMenuItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    /// "Ctrl S".
+    in property <string> shortcut;
+    in property <bool> enabled: true;
+    /// A ✓ in place of the icon.
+    in property <bool> checked: false;
+    /// Red - deletes something.
+    in property <bool> danger: false;
+    /// Opens a submenu (a ▸ at the right).
+    in property <bool> submenu: false;
+    in property <bool> is-new: false;
+    out property <bool> has-hover: ta.has-hover;
+    callback clicked;
+
+    height: 28px;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: ta.has-hover && root.enabled ? (root.danger ? Ink.err-tint : Ink.hover) : transparent;
+        opacity: root.enabled ? 1.0 : 0.45;
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 10px;
+            Image {
+                source: root.checked ? InkIcons.check : root.icon;
+                width: 15px;
+                colorize: root.danger ? Ink.err : root.checked ? Ink.text : Ink.text-dim;
+            }
+            Text {
+                text: root.text;
+                font-size: Ink.fs-md;
+                color: root.danger ? Ink.err : Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+            Rectangle {
+                width: root.is-new ? tag.width : 0px;
+                tag := InkNewTag {
+                    visible: root.is-new;
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.shortcut;
+                font-size: Ink.fs-sm;
+                font-family: Ink.font-mono;
+                color: Ink.text-faint;
+                vertical-alignment: center;
+            }
+            Image {
+                visible: root.submenu;
+                width: root.submenu ? 10px : 0px;
+                source: InkIcons.caret-right;
+                colorize: Ink.text-mute;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// A group's caption inside a menu: "RECENT".
+export component InkMenuCaption inherits Text {
+    height: 24px;
+    font-size: Ink.fs-xs;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    color: Ink.text-mute;
+    vertical-alignment: center;
+    x: 8px;
+}
+
+/// A line between groups of items.
+export component InkMenuSeparator inherits Rectangle {
+    height: 9px;
+    Rectangle {
+        x: 4px;
+        width: parent.width - 8px;
+        height: 1px;
+        background: Ink.border-soft;
+    }
+}
