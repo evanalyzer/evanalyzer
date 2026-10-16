@@ -921,9 +921,6 @@ impl ProjectController {
         self.app_state
             .file_browser
             .set_backend(Arc::clone(&backend));
-        self.app_state
-            .results_file_browser
-            .set_backend(Arc::clone(&backend));
         self.app_state.reload_app_settings();
         Arc::clone(self).create_new_project();
         self.app_state.set_window_title(false);
@@ -937,7 +934,12 @@ impl ProjectController {
                 return;
             };
             crate::apply_appearance(&ui, &results_ui, &manager.app_state);
-            let _ = results_ui.hide();
+            // The results of the other backend's project are gone.
+            if results_ui.global::<crate::LayoutState>().get_mode() == crate::WorkspaceMode::Results {
+                results_ui
+                    .global::<crate::LayoutState>()
+                    .set_mode(crate::WorkspaceMode::Pipelines);
+            }
         })
         .ok();
         self.pipelines_controller.follow_server_analyses();
@@ -1398,7 +1400,6 @@ pub(crate) mod tests {
         ));
         let project_settings_controller = Arc::new(ProjectSettingsController::new(
             ui.clone(),
-            results_ui.clone(),
             ui_state.clone(),
         ));
         let classification_controller = Arc::new(ClassificationController::new(

@@ -1,0 +1,221 @@
+// ink/palette.slint — every color the UI uses, once per color scheme.
+//
+// The UI never writes a color literal: it reads `Ink.<token>`. A new
+// scheme is a new `Palette` value below - nothing else changes. Data
+// colors (channels, classes) are not here: they come with the data.
+
+// The fonts, bundled: the same type on every system.
+import "../fonts/IBMPlexSans-Regular.ttf";
+import "../fonts/IBMPlexSans-Medium.ttf";
+import "../fonts/IBMPlexSans-SemiBold.ttf";
+import "../fonts/IBMPlexSans-Bold.ttf";
+import "../fonts/IBMPlexMono-Regular.ttf";
+import "../fonts/IBMPlexMono-Medium.ttf";
+import "../fonts/IBMPlexMono-SemiBold.ttf";
+
+/// Which palette is in use - set from the app settings.
+export enum InkScheme { light, dark, dim }
+
+/// One complete set of colors.
+export struct InkPalette {
+    // -- Surfaces, back to front --
+    /// Around the panels, and the results views' ground.
+    ground: color,
+    /// Behind the image - black-ish in every scheme, so fluorescence reads.
+    viewport: color,
+    /// Panels, bars, popovers.
+    panel: color,
+    /// A floating panel over the image (`panel`, a little see-through).
+    glass: color,
+    /// Raised elements on a panel: the EVA button, segmented tracks.
+    raised: color,
+    /// Text fields, spinners, pickers.
+    field: color,
+    /// Hover over a row or a quiet button.
+    hover: color,
+    /// The selected row, the active tab or chip.
+    selection: color,
+
+    // -- Lines --
+    border: color,
+    border-soft: color,
+
+    // -- Text --
+    text: color,
+    text-dim: color,
+    text-mute: color,
+    text-faint: color,
+
+    // -- Actions --
+    /// The primary button's fill, and the text on it.
+    primary: color,
+    on-primary: color,
+    primary-hover: color,
+    /// Focus ring and the selected row's edge - the one accent.
+    focus: color,
+    focus-ring: color,
+
+    // -- State --
+    err: color,
+    err-tint: color,
+    warn: color,
+    warn-tint: color,
+    ok: color,
+    info: color,
+    info-tint: color,
+    /// "NEW" tags.
+    new: color,
+    on-new: color,
+
+    // -- Step categories (the stripe on a step) --
+    cat-preprocess: color,
+    cat-segment: color,
+    cat-object: color,
+    cat-measure: color,
+    cat-classify: color,
+    cat-dataset: color,
+    cat-component: color,
+
+    // -- Effects --
+    shadow: color,
+    scrim: color,
+}
+
+global InkPalettes {
+    out property <InkPalette> light: {
+        ground: #F4F4F5, viewport: #0E0F12, panel: #FFFFFF, glass: #FFFFFFF2,
+        raised: #F1F1F3, field: #FAFAFA, hover: #F4F4F5, selection: #F1F1F3,
+        border: #E4E4E7, border-soft: #F0F0F2,
+        text: #18181B, text-dim: #52525B, text-mute: #71717A, text-faint: #A1A1AA,
+        primary: #18181B, on-primary: #FFFFFF, primary-hover: #27272A,
+        focus: #5B5BD6, focus-ring: #5B5BD62E,
+        err: #DC2626, err-tint: #FDF2F2, warn: #D97706, warn-tint: #FFF6E5,
+        ok: #16A34A, info: #5B5BD6, info-tint: #EEF0FF,
+        new: #D97706, on-new: #FFFFFF,
+        cat-preprocess: #0EA5B7, cat-segment: #C04BD6, cat-object: #E0761F,
+        cat-measure: #C9A313, cat-classify: #2FA37C, cat-dataset: #6366F1,
+        cat-component: #E06C8B,
+        shadow: #0E0F1247, scrim: #0E0F1266,
+    };
+    out property <InkPalette> dark: {
+        ground: #0B0B0D, viewport: #000000, panel: #18181B, glass: #18181BF0,
+        raised: #27272A, field: #1F1F23, hover: #232327, selection: #26262B,
+        border: #2E2E33, border-soft: #232327,
+        text: #F4F4F5, text-dim: #A1A1AA, text-mute: #71717A, text-faint: #52525B,
+        primary: #FAFAFA, on-primary: #18181B, primary-hover: #E4E4E7,
+        focus: #8B8BF0, focus-ring: #8B8BF040,
+        err: #F87171, err-tint: #3A1D1F, warn: #FBBF24, warn-tint: #3A2E14,
+        ok: #4ADE80, info: #8B8BF0, info-tint: #26264A,
+        new: #FBBF24, on-new: #18181B,
+        cat-preprocess: #22C3D6, cat-segment: #D77AE6, cat-object: #F08C3C,
+        cat-measure: #E0BE3A, cat-classify: #3FBF92, cat-dataset: #8B8BF0,
+        cat-component: #E8849F,
+        shadow: #0000008C, scrim: #00000099,
+    };
+    // A softer dark: mid greys, less contrast - for long sessions.
+    out property <InkPalette> dim: {
+        ground: #1E1E22, viewport: #0A0A0C, panel: #2A2A30, glass: #2A2A30F0,
+        raised: #36363D, field: #303037, hover: #34343B, selection: #3A3A42,
+        border: #3E3E46, border-soft: #34343B,
+        text: #E8E8EA, text-dim: #A8A8B0, text-mute: #85858E, text-faint: #62626B,
+        primary: #E8E8EA, on-primary: #1E1E22, primary-hover: #D4D4D8,
+        focus: #9A9AF2, focus-ring: #9A9AF240,
+        err: #F28B8B, err-tint: #45282B, warn: #F2C14E, warn-tint: #453A1E,
+        ok: #6BD69A, info: #9A9AF2, info-tint: #34345A,
+        new: #F2C14E, on-new: #1E1E22,
+        cat-preprocess: #3CC4D4, cat-segment: #D489E2, cat-object: #EE9A57,
+        cat-measure: #DDBE52, cat-classify: #56C29C, cat-dataset: #9A9AF2,
+        cat-component: #E596AB,
+        shadow: #00000080, scrim: #0000008C,
+    };
+}
+
+/// The design system's tokens: colors of the scheme in use, sizes, type.
+export global Ink {
+    in-out property <InkScheme> scheme: InkScheme.light;
+    out property <InkPalette> palette: root.scheme == InkScheme.dark ? InkPalettes.dark
+        : root.scheme == InkScheme.dim ? InkPalettes.dim
+        : InkPalettes.light;
+
+    // -- The colors of the scheme in use, one property each: a view reads
+    // `Ink.text`, which is a plain property (reading a field of `palette`
+    // would copy the whole palette, at every use).
+    out property <color> ground: root.palette.ground;
+    out property <color> viewport: root.palette.viewport;
+    out property <color> panel: root.palette.panel;
+    out property <color> glass: root.palette.glass;
+    out property <color> raised: root.palette.raised;
+    out property <color> field: root.palette.field;
+    out property <color> hover: root.palette.hover;
+    out property <color> selection: root.palette.selection;
+    out property <color> border: root.palette.border;
+    out property <color> border-soft: root.palette.border-soft;
+    out property <color> text: root.palette.text;
+    out property <color> text-dim: root.palette.text-dim;
+    out property <color> text-mute: root.palette.text-mute;
+    out property <color> text-faint: root.palette.text-faint;
+    out property <color> primary: root.palette.primary;
+    out property <color> on-primary: root.palette.on-primary;
+    out property <color> primary-hover: root.palette.primary-hover;
+    out property <color> focus: root.palette.focus;
+    out property <color> focus-ring: root.palette.focus-ring;
+    out property <color> err: root.palette.err;
+    out property <color> err-tint: root.palette.err-tint;
+    out property <color> warn: root.palette.warn;
+    out property <color> warn-tint: root.palette.warn-tint;
+    out property <color> ok: root.palette.ok;
+    out property <color> info: root.palette.info;
+    out property <color> info-tint: root.palette.info-tint;
+    out property <color> new: root.palette.new;
+    out property <color> on-new: root.palette.on-new;
+    out property <color> cat-preprocess: root.palette.cat-preprocess;
+    out property <color> cat-segment: root.palette.cat-segment;
+    out property <color> cat-object: root.palette.cat-object;
+    out property <color> cat-measure: root.palette.cat-measure;
+    out property <color> cat-classify: root.palette.cat-classify;
+    out property <color> cat-dataset: root.palette.cat-dataset;
+    out property <color> cat-component: root.palette.cat-component;
+    out property <color> shadow: root.palette.shadow;
+    out property <color> scrim: root.palette.scrim;
+
+    out property <bool> dark: root.scheme != InkScheme.light;
+
+    // -- Radii --
+    out property <length> radius-xs: 3px;
+    out property <length> radius-sm: 4px;
+    out property <length> radius-md: 6px;
+    out property <length> radius-lg: 10px;
+
+    // -- Heights of controls --
+    /// Fields, spinners, pickers, list rows in panels.
+    out property <length> control-h: 26px;
+    /// Buttons in panels and dialogs.
+    out property <length> button-h: 28px;
+    /// Panel and dialog heads.
+    out property <length> head-h: 40px;
+    /// The top bar.
+    out property <length> bar-h: 40px;
+    /// The status bar.
+    out property <length> status-h: 30px;
+    /// A step line, a class row.
+    out property <length> row-h: 30px;
+
+    // -- Spacing --
+    out property <length> gap-xs: 4px;
+    out property <length> gap-sm: 6px;
+    out property <length> gap-md: 8px;
+    out property <length> gap-lg: 12px;
+    out property <length> pad-panel: 12px;
+    out property <length> pad-dialog: 14px;
+    /// Width of the label column of a form row.
+    out property <length> label-w: 104px;
+
+    // -- Type --
+    out property <string> font-sans: "IBM Plex Sans";
+    out property <string> font-mono: "IBM Plex Mono";
+    out property <length> fs-xs: 10px;
+    out property <length> fs-sm: 11px;
+    out property <length> fs-md: 12px;
+    out property <length> fs-lg: 12.5px;
+    out property <length> fs-title: 15px;
+}

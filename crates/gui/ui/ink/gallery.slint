@@ -1,0 +1,210 @@
+// ink/gallery.slint — every Ink component once, in each scheme: to look
+// at, and to compile the library on its own (not part of the app):
+//
+//     slint-viewer crates/gui/ui/ink/gallery.slint
+
+import {
+    Ink, InkScheme, InkIcons,
+    InkButton, InkButtonKind, InkIconButton, InkToolButton,
+    InkTextField, InkSearchField, InkNumberField, InkSelect,
+    InkCheckbox, InkSwitch, InkSegmented, InkModeTab,
+    InkTone, InkChip, InkBadge, InkNewTag, InkSwatch, InkKbd, InkDot,
+    InkPanel, InkPanelHead, InkDialog, InkDialogFooter, InkLabel, InkCaption, InkHint,
+    InkSectionHead, InkDivider, InkBarSeparator,
+    InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator,
+    InkProgressBar, InkBusy, InkBanner, InkTooltip, InkStatusItem,
+    InkListRow,
+} from "ink.slint";
+
+export component InkGallery inherits Window {
+    title: "Ink gallery";
+    preferred-width: 1100px;
+    preferred-height: 760px;
+    background: Ink.ground;
+
+    property <bool> dialog-open: false;
+    property <bool> section-open: true;
+
+    HorizontalLayout {
+        padding: 16px;
+        spacing: 16px;
+
+        // -- Controls --
+        InkPanel {
+            width: 340px;
+            InkPanelHead {
+                title: "Controls";
+                subtitle: "buttons, fields, toggles";
+                count: "12";
+                pinnable: true;
+                has-more: true;
+            }
+            VerticalLayout {
+                padding: Ink.pad-panel;
+                spacing: Ink.gap-md;
+
+                InkSegmented {
+                    label: "Scheme";
+                    model: ["Light", "Dark", "Dim"];
+                    picked(i) => {
+                        Ink.scheme = i == 0 ? InkScheme.light : i == 1 ? InkScheme.dark : InkScheme.dim;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Ink.gap-sm;
+                    InkButton { text: "Cancel"; kind: InkButtonKind.quiet; }
+                    InkButton { text: "Open"; icon: InkIcons.open; }
+                    InkButton { text: "Run"; kind: InkButtonKind.primary; icon: InkIcons.run; }
+                    InkButton { text: "Delete"; kind: InkButtonKind.danger; }
+                }
+                HorizontalLayout {
+                    spacing: 2px;
+                    InkIconButton { icon: InkIcons.undo; label: "Undo"; size: 30px; }
+                    InkIconButton { icon: InkIcons.redo; label: "Redo"; size: 30px; enabled: false; }
+                    InkIconButton { icon: InkIcons.debug; label: "Debug"; size: 30px; active: true; }
+                    InkBarSeparator { }
+                    InkToolButton { icon: InkIcons.select; label: "Select"; active: true; }
+                    InkToolButton { icon: InkIcons.brush; label: "Brush"; is-new: true; }
+                    InkToolButton { icon: InkIcons.eraser; label: "Eraser"; is-new: true; }
+                }
+                HorizontalLayout {
+                    spacing: Ink.gap-md;
+                    InkLabel { text: "Name"; }
+                    InkTextField { placeholder: "Class name"; }
+                }
+                HorizontalLayout {
+                    spacing: Ink.gap-md;
+                    InkLabel { text: "Min threshold"; }
+                    InkNumberField { value: 12; unit: "px"; }
+                }
+                HorizontalLayout {
+                    spacing: Ink.gap-md;
+                    InkLabel { text: "Channel"; }
+                    InkSelect { model: ["DAPI", "GFP", "Cy5"]; selected: 1; swatch: #22C3D6; }
+                }
+                InkSearchField { }
+                InkCheckbox { text: "Fill holes"; checked: true; }
+                InkSwitch { text: "Show overlay"; checked: true; }
+                InkSectionHead {
+                    text: "ADVANCED";
+                    count: "4";
+                    expanded: root.section-open;
+                    toggled => {
+                        root.section-open = !root.section-open;
+                    }
+                }
+                InkHint { text: "Set the class the objects are put in."; }
+                InkButton {
+                    text: "Open dialog";
+                    clicked => {
+                        root.dialog-open = true;
+                    }
+                }
+            }
+        }
+
+        // -- Lists, markers, feedback --
+        InkPanel {
+            width: 320px;
+            InkPanelHead { title: "Classes"; count: "3"; }
+            VerticalLayout {
+                padding: 4px;
+                InkListRow { title: "CL 1"; swatch: #E0761F; trailing: "1 204"; has-eye: true; selected: true; }
+                InkListRow { title: "Nucleus"; subtitle: "made by #3 Threshold"; swatch: #2FA37C; trailing: "88"; has-eye: true; shown: false; }
+                InkListRow { title: "image_001.tif"; icon: InkIcons.images; mono: true; mark: Ink.warn; }
+            }
+            InkDivider { }
+            VerticalLayout {
+                padding: Ink.pad-panel;
+                spacing: Ink.gap-md;
+                InkCaption { text: "MARKERS"; }
+                HorizontalLayout {
+                    spacing: Ink.gap-sm;
+                    InkChip { text: "CL 1"; swatch: #E0761F; removable: true; }
+                    InkChip { text: "Nucleus"; selected: true; }
+                    InkBadge { text: "3"; tone: InkTone.err; }
+                    InkBadge { text: "2"; tone: InkTone.warn; strong: true; }
+                    InkNewTag { }
+                }
+                HorizontalLayout {
+                    spacing: Ink.gap-sm;
+                    InkSwatch { value: #22C3D6; }
+                    InkSwatch { value: #C04BD6; selected: true; }
+                    InkKbd { text: "Ctrl"; }
+                    InkKbd { text: "K"; }
+                    InkDot { tone: InkTone.ok; }
+                    InkBusy { }
+                    InkTooltip { text: "Refresh preview"; }
+                }
+                InkCaption { text: "FEEDBACK"; }
+                InkProgressBar { value: 0.4; }
+                InkProgressBar { indeterminate: true; }
+                InkBanner { text: "Channel “Tetraspeck” is not in this image."; tone: InkTone.err; action: "Fix"; }
+                InkBanner { text: "2 classes are never made."; tone: InkTone.warn; dismissable: true; }
+                HorizontalLayout {
+                    InkStatusItem { icon: InkIcons.computer; text: "Local"; }
+                    InkStatusItem { text: "1 024 × 768"; mono: true; }
+                    InkStatusItem { icon: InkIcons.warning; text: "3 problems"; tone: InkTone.warn; clickable: true; }
+                }
+            }
+        }
+
+        // -- Bars and menus --
+        VerticalLayout {
+            spacing: 16px;
+            alignment: start;
+            Rectangle {
+                height: Ink.bar-h;
+                background: Ink.panel;
+                border-radius: Ink.radius-lg;
+                HorizontalLayout {
+                    padding-left: 6px;
+                    spacing: 4px;
+                    InkModeTab { text: "Steps"; active: true; count: 3; warn: true; }
+                    InkModeTab { text: "Images"; count: 12; }
+                    InkModeTab { text: "Results"; }
+                }
+            }
+            InkMenuFrame {
+                InkMenuCaption { text: "PROJECT"; }
+                InkMenuItem { icon: InkIcons.open; text: "Open project…"; shortcut: "Ctrl O"; }
+                InkMenuItem { icon: InkIcons.save; text: "Save"; shortcut: "Ctrl S"; }
+                InkMenuItem { icon: InkIcons.export; text: "Export"; submenu: true; }
+                InkMenuSeparator { }
+                InkMenuItem { icon: InkIcons.moon; text: "Dark"; checked: true; }
+                InkMenuItem { icon: InkIcons.brush; text: "Brush"; is-new: true; }
+                InkMenuItem { icon: InkIcons.delete; text: "Delete pipeline"; danger: true; }
+            }
+        }
+    }
+
+    if root.dialog-open: InkDialog {
+        title: "Delete class";
+        subtitle: "CL 1";
+        card-width: 360px;
+        close => {
+            root.dialog-open = false;
+        }
+        Text {
+            text: "The class and its 1 204 objects are deleted.";
+            font-size: Ink.fs-md;
+            color: Ink.text;
+            wrap: word-wrap;
+        }
+        InkDialogFooter {
+            InkButton {
+                text: "Cancel";
+                clicked => {
+                    root.dialog-open = false;
+                }
+            }
+            InkButton {
+                text: "Delete";
+                kind: InkButtonKind.danger;
+                clicked => {
+                    root.dialog-open = false;
+                }
+            }
+        }
+    }
+}

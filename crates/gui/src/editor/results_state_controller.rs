@@ -27,7 +27,7 @@ use evanalyzer_app::results::{Grouping, PlateSize};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::plate_settings::{GroupingMode, PlateSettings, WellLayout};
-use evanalyzer_gui_slint::ResultsWindow;
+use crate::ResultsWindow;
 use log::{error, info, warn};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use std::collections::{HashMap, HashSet};
@@ -1227,7 +1227,7 @@ impl ResultsStateController {
             });
 
             let ui_weak = self.ui.clone();
-            let browser = self._app_state.results_file_browser.clone();
+            let browser = self._app_state.file_browser.clone();
             ui.global::<ExportDialogState>()
                 .on_pick_output_dir(move || {
                     let Some(ui_ready) = ui_weak.upgrade() else {
@@ -1918,13 +1918,14 @@ impl ResultsStateController {
         }
     }
 
+    /// Shows the results: the main window's Results mode.
     pub fn show_results_window(&self) {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
-                if let Err(e) = ui_ready.show() {
-                    error!("Failed to show results window: {e}");
-                }
+                ui_ready
+                    .global::<crate::LayoutState>()
+                    .set_mode(crate::WorkspaceMode::Results);
             } else {
                 warn!("Failed to upgrade UI handle in open_database, cannot show results window!");
             }
@@ -5382,7 +5383,6 @@ mod tests {
         let project_settings = Arc::new(
             crate::editor::project_settings_controller::ProjectSettingsController::new(
                 ui.as_weak(),
-                results_ui.as_weak(),
                 ui_state,
             ),
         );

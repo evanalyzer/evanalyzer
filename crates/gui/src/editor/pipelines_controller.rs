@@ -8131,7 +8131,8 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         let (ui, ui_state, _controller) = selected(vec![step("Blur")]);
         ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         let commands = ui.global::<PipelinesPanelState>().get_active_commands();
         let mut card = commands.row_data(0).unwrap();
         card.expanded = true;
@@ -8163,7 +8164,8 @@ mod tests {
             selected(vec![step("LoadChannel"), step("ClassifyObjects")]);
         ui.window()
             .set_size(slint::LogicalSize::new(1280.0, 1400.0));
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         let commands = ui.global::<PipelinesPanelState>().get_active_commands();
         for index in 0..2 {
             let mut card = commands.row_data(index).unwrap();
@@ -8193,7 +8195,8 @@ mod tests {
         let (ui, _ui_state, _controller) = selected(vec![classify]);
         ui.window()
             .set_size(slint::LogicalSize::new(1280.0, 1400.0));
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         let commands = ui.global::<PipelinesPanelState>().get_active_commands();
         let mut card = commands.row_data(0).unwrap();
         card.expanded = true;
@@ -8213,7 +8216,8 @@ mod tests {
         let (ui, ui_state, controller) = with_a_component();
         ui.window()
             .set_size(slint::LogicalSize::new(1280.0, 1400.0));
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         {
             let mut project = ui_state.get_project_write();
             let definition = &mut project.components[0];
@@ -8866,7 +8870,8 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         let (ui, _ui_state, _controller) = with_a_component();
         ui.window().set_size(slint::LogicalSize::new(1280.0, 800.0));
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         ui.global::<PipelinesPanelState>().invoke_open_component(1);
         drain_ui_queue();
         let back = ElementHandle::find_by_accessible_label(&ui, "‹ Back")
@@ -9415,7 +9420,8 @@ mod tests {
         // Tall enough for the whole card - only the width matters here.
         ui.window()
             .set_size(slint::LogicalSize::new(1280.0, 1400.0));
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         let model = ui.global::<PipelinesPanelState>().get_active_commands();
         let mut card = model.row_data(1).unwrap();
         card.expanded = true;
@@ -10960,7 +10966,8 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         let (ui, _ui_state, _controller) = with_spots(2);
         ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         let commands = ui.global::<PipelinesPanelState>().get_active_commands();
         let mut card = commands.row_data(0).unwrap();
         card.expanded = true;
@@ -10986,7 +10993,8 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         let (ui, _ui_state, _controller) = with_spots(2);
         ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         let commands = ui.global::<PipelinesPanelState>().get_active_commands();
         let mut card = commands.row_data(0).unwrap();
         card.expanded = true;
@@ -11013,7 +11021,8 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         let (ui, _ui_state, _controller) = selected(vec![step("Blur")]);
         ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         let commands = ui.global::<PipelinesPanelState>().get_active_commands();
         let mut card = commands.row_data(0).unwrap();
         card.expanded = true;
@@ -11160,7 +11169,8 @@ mod tests {
     fn the_problem_strip_doesnt_stretch() {
         use i_slint_backend_testing::ElementHandle;
         let (ui, _ui_state, _controller) = with_spots(7);
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         let commands = ui.global::<PipelinesPanelState>().get_active_commands();
         let mut card = commands.row_data(0).unwrap();
         card.expanded = true;
@@ -11191,7 +11201,8 @@ mod tests {
         use i_slint_backend_testing::ElementHandle;
         let (ui, _ui_state, _controller) = with_spots(7);
         ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
-        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
         let count = |label: &str| ElementHandle::find_by_accessible_label(&ui, label).count();
         assert_eq!(count("Problems"), 1, "the strip");
         assert_eq!(count("1 problems"), 1, "the card's badge");

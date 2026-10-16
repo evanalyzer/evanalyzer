@@ -1,0 +1,146 @@
+// api/create_component.slint — the Rust interface of dialogs/create_component_dialog.slint: the state Rust
+// sets, the callbacks it answers.
+
+/// A project class the steps use, and what it becomes in the component.
+export struct ComponentClassRow {
+    /// The class in its text form ("3") - how the host knows which it is.
+    class-text: string,
+    name: string,
+    /// "Only used by these steps" / "Also used elsewhere".
+    detail: string,
+    /// 0 = internal (the component's own), 1 = component parameter, 2 = fixed.
+    role: int,
+}
+
+export global CreateComponentState {
+    in property <int> pipeline-id: 0;
+    /// "1 · Threshold", "2 · Extract Objects", ... - for the range pickers.
+    in property <[string]> step-names: [];
+    in-out property <int> from-step: 0;
+    in-out property <int> to-step: 0;
+    in-out property <string> name: "";
+    in property <[ComponentClassRow]> classes: [];
+    /// "Channel 1 becomes a component parameter", or empty.
+    in property <string> channels-text: "";
+    /// Why the component can't be made, or empty.
+    in property <string> error: "";
+    callback range-changed(int, int);
+    callback role-changed(int, int);
+    callback confirm();
+    callback cancel();
+}
+
+/// Asked when opening a component that other steps use too.
+export global ComponentEditChoiceState {
+    in property <int> pipeline-id: 0;
+    in property <int> step-idx: 0;
+    in property <string> component-name: "";
+    in property <int> uses: 0;
+    callback edit-all();
+    callback only-this();
+    callback cancel();
+}
+
+/// Asked when exposing a setting that existing component parameters could set
+/// too (same kind of setting).
+export global ExposeChoiceState {
+    in property <string> setting-name: "";
+    /// "New parameter", then "Add to “Cell class”", ...
+    in property <[string]> choices: [];
+    /// For each choice, what that parameter sets already ("sets #2 EV
+    /// Detection › Output class"), or empty.
+    in property <[string]> details: [];
+    callback chosen(int);
+    callback cancel();
+}
+
+export global ComponentUpdateState {
+    in property <string> component-name: "";
+    /// "v1 → v3"
+    in property <string> versions: "";
+    /// The project changed the component since it was inserted - the update
+    /// replaces those changes.
+    in property <bool> changed-here: false;
+    callback confirm();
+    callback cancel();
+}
+
+/// A setting a parameter sets.
+export struct ComponentBindingRow {
+    /// "#2 EV Detection › Output class"
+    text: string,
+    step-id: int,
+    path: string,
+}
+
+/// A parameter of the component, as it shows on the component card.
+export struct ComponentParamRow {
+    // The parameter's key ("min_size").
+    key: string,
+    label: string,
+    description: string,
+    /// The default value, as text.
+    default-value: string,
+    /// The help text of the setting it's bound to - shown while
+    /// `description` is empty.
+    default-description: string,
+    /// What it sets: "Blur › Kernel size, Blur › Kernel size".
+    sets: string,
+    /// The section it's shown in on the component card; empty: none.
+    section: string,
+    /// What it sets, one by one.
+    bindings: [ComponentBindingRow],
+    /// "Also set…", then the settings it could also set (same control, set
+    /// by no parameter yet) - empty if there are none.
+    addable: [string],
+}
+
+/// The opened component's name, descriptions and parameters (name, help text,
+/// order). Opened from "Settings…" in the bar of a component opened to edit, or
+/// from ✎ on an exposed setting (`focus-index` is then that parameter's
+/// row).
+export global ComponentSettingsState {
+    in property <string> name: "";
+    /// One line, shown in the command picker.
+    in property <string> description: "";
+    /// The full description, shown with the short one behind the component
+    /// card's "?".
+    in property <string> long-description: "";
+    /// The first author - shown in the command picker.
+    in property <string> author-name: "";
+    in property <string> author-organization: "";
+    in property <[ComponentParamRow]> parameters: [];
+    /// The row to scroll to and highlight, or -1.
+    in property <int> focus-index: -1;
+    callback name-edited(string);
+    callback description-edited(string);
+    callback long-description-edited(string);
+    /// name, organization
+    callback author-edited(string, string);
+    /// key, name - the help text stays (the rows aren't refreshed while
+    /// typing, so passing both would undo the other field's edit).
+    callback parameter-name-edited(string, string);
+    /// key, help text
+    callback parameter-help-edited(string, string);
+    /// key, section on the component card (empty: none)
+    callback parameter-section-edited(string, string);
+    /// key, -1 up / +1 down
+    callback parameter-moved(string, int);
+    /// key: back to the bound setting's own help text.
+    callback parameter-help-reset(string);
+    /// key: stop exposing it - its settings go back to the component's values.
+    callback parameter-removed(string);
+    /// key, step id, path: it no longer sets that setting.
+    callback binding-removed(string, int, string);
+    /// key, index into its `addable` (after "Also set…"): it sets that
+    /// setting too.
+    callback binding-added(string, int);
+    /// ✎: parameter `key` is opened to edit - what changes from now on can be
+    /// undone with Cancel.
+    callback parameter-edit-started(string);
+    /// Apply: keep the changes made since ✎.
+    callback parameter-edit-applied();
+    /// Cancel: undo the changes made since ✎.
+    callback parameter-edit-cancelled();
+    callback close();
+}

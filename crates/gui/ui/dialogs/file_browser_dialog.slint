@@ -6,6 +6,7 @@
 // e.g. the AI learning dialog can open it), driven entirely by
 // `FileBrowserState` from Rust: Rust lists folders on a background thread
 // and pushes rows; this file only renders and reports clicks/keys.
+import { FileBrowserEntry, FileBrowserMode, FileBrowserPlace, FileBrowserState } from "../api/file_browser.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
@@ -14,72 +15,6 @@ import { IconButton } from "../components/new_components/button.slint";
 import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { TextField } from "../components/new_components/text_field.slint";
 import { DropdownField } from "../components/new_components/dropdown.slint";
-
-export enum FileBrowserMode { open-file, open-folder, save-file }
-
-// kind: 0 home, 1 drive, 2 folder
-export struct FileBrowserPlace {
-    name: string,
-    path: string,
-    kind: int,
-}
-
-export struct FileBrowserCrumb {
-    name: string,
-    path: string,
-}
-
-// kind: 0 folder, 1 image, 2 project/template, 3 model, 4 results, 5 other
-export struct FileBrowserEntry {
-    name: string,
-    path: string,
-    is-dir: bool,
-    size: string,
-    modified: string,
-    kind: int,
-}
-
-export global FileBrowserState {
-    in-out property <bool> visible: false;
-    in-out property <FileBrowserMode> mode: FileBrowserMode.open-file;
-    in-out property <string> title: "Open";
-    in-out property <string> accept-label: "Open";
-    // Where the browsed files live, e.g. "This computer" / "Server ws://…".
-    in-out property <string> location;
-    in-out property <bool> remote: false;
-    in-out property <string> current-path;
-    in-out property <[FileBrowserCrumb]> crumbs;
-    in-out property <[FileBrowserPlace]> places;
-    in-out property <[FileBrowserEntry]> entries;
-    in-out property <int> selected: -1;
-    in-out property <string> file-name;
-    in-out property <[string]> filter-names;
-    in-out property <string> filter-name;
-    in-out property <string> search;
-    in-out property <bool> show-hidden: false;
-    in-out property <bool> loading: false;
-    in-out property <string> error;
-    in-out property <string> status;
-    // Non-empty: ask whether to replace this existing file.
-    in-out property <string> overwrite-name;
-    in-out property <bool> can-accept: false;
-
-    callback navigate(string);
-    callback go-up();
-    callback refresh();
-    callback select(int);
-    callback activate(int);
-    callback accept();
-    callback cancel();
-    callback search-edited(string);
-    callback filter-selected(string);
-    callback hidden-toggled(bool);
-    callback path-entered(string);
-    callback create-folder(string);
-    callback overwrite-answered(bool);
-    callback file-name-edited(string);
-}
-
 component PlaceRow inherits Rectangle {
     in property <FileBrowserPlace> place;
     in property <bool> current;

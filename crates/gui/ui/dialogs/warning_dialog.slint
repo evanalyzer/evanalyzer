@@ -1,12 +1,8 @@
+import { DialogType, GlobalAppState, WarningState } from "../api/state.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Theme } from "../style.slint";
-import {
-    GlobalAppState,
-    DialogType,
-    WarningState,
-} from "../state.slint";
 
 export component WarningDialog inherits Dialog {
     title: WarningState.title;

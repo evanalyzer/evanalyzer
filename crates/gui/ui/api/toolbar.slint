@@ -1,0 +1,21 @@
+// api/toolbar.slint — the Rust interface of toolbar.slint: the state Rust
+// sets, the callbacks it answers.
+
+export global ToolbarState {
+    callback new_file_clicked();
+    callback open_file_clicked();
+    callback cite_project_clicked();
+    callback publish_project_clicked();
+    callback new_from_project_template_clicked();
+    callback save_file_clicked();
+    callback save_as_file_clicked();
+    callback save_project_as_template_clicked();
+    callback connect_clicked();
+    callback disconnect_clicked();
+    callback open_website();
+    callback undo_clicked();
+    callback redo_clicked();
+    in-out property <bool> has_unsaved_changes: false;
+    in-out property <bool> can_undo: false;
+    in-out property <bool> can_redo: false;
+}

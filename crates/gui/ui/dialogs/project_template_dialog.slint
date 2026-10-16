@@ -28,66 +28,13 @@
 //   - templates : [ProjectTemplateDef]
 //   confirm(int)  -> apply this template to the current project
 //   cancel().
+import { ProjectTemplateDef, ProjectTemplateState, ProjectTemplateStyle } from "../api/project_template.slint";
 
 import { ScrollView, ComboBox } from "std-widgets.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 import { Theme } from "../style.slint";
-
-export struct ProjectAuthor { full_name: string, organization: string }
-
-export struct ProjectTemplateDef {
-    id: int,
-    name: string,
-    short-description: string,
-    description: string,
-    authors: [ProjectAuthor],
-    creation-time: string,
-    pipeline-count: int,
-    category: string,
-    tags: [string],
-}
-
-// One tag filter chip. The host precomputes `active` (whether this tag is
-// part of the current filter selection) so the panel stays branchless.
-export struct TagFilterChip {
-    name: string,
-    active: bool,
-}
-
-export global ProjectTemplateState {
-    in property <[ProjectTemplateDef]> templates;
-    in property <ProjectTemplateDef> detail;
-    in property <bool> has-detail;
-    in-out property <int> selected-id: -1;
-
-    // Filter facets. `categories` always has "All categories" as its first
-    // entry (host-computed) so the ComboBox has a sentinel to clear the filter.
-    // `tag-chips` covers every tag seen across all templates, not just the
-    // currently filtered ones, so options don't disappear as you narrow down.
-    in property <[string]> categories;
-    in property <[TagFilterChip]> tag-chips;
-    // True once the user has narrowed by category and/or tag - lets the empty
-    // state distinguish "no templates at all" from "no matches for this filter".
-    in property <bool> filters-active;
-
-    callback select(int);
-    callback confirm(int);
-    callback cancel();
-    callback select-category(string);
-    callback toggle-tag(string);
-}
-
 // ---------- Local visual constants ----------
-
-global ProjectTemplateStyle {
-    out property <length> modal-w: 880px;
-    out property <length> modal-h: 560px;
-    out property <length> list-col-w: 320px;
-    out property <length> row-h: 48px;
-    out property <length> radius: 10px;
-}
-
 // ---------- One row in the template list ----------
 
 component ProjectTemplateRow inherits Rectangle {

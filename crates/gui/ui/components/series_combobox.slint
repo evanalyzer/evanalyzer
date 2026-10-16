@@ -1,11 +1,8 @@
+import { ImageMetaData, SeriesInfo } from "../api/image_meta.slint";
+import { ChannelState } from "../api/state.slint";
 import { ScrollView } from "std-widgets.slint";
-import {
-    ImageMetaPanel,
-    ImageMetaData,
-    SeriesInfo,
-} from "../editor/image_meta_panel.slint";
+import { ImageMetaPanel } from "../editor/image_meta_panel.slint";
 import { Theme } from "../style.slint";
-import { ChannelState } from "../state.slint";
 
 global SeriesHelper {
     // "Series N  ·  WxH", or just "Series N" if no resolution is known for

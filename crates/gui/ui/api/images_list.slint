@@ -1,0 +1,36 @@
+// api/images_list.slint — the Rust interface of editor/images_list_panel.slint: the state Rust
+// sets, the callbacks it answers.
+
+// ----------------------------------------------------------
+export struct ImageItemData {
+    name: string,
+    path: string,
+    image_dimension: string,
+    image_size: string,
+    has_annotations: bool,
+}
+
+export global ImagesListState {
+    in property <bool> is_scanning: false;
+    in-out property <string> filter_text;
+    in-out property <string> act_image_root_dir;
+
+    callback new_image_root_folder_clicked();
+    callback open_images_folder_clicked();
+    callback refresh_images_clicked();
+    callback image_selected(string);
+    // Incremented (never read for its value) by the Ctrl+F global shortcut
+    // (see shortcuts.slint) to move keyboard focus into the search field
+    // below. A counter rather than a bool: `changed` below only fires on an
+    // actual value change, and a plain bool would miss every second request
+    // once it's already `true`. Handled directly in this file, not Rust -
+    // it's pure UI focus, nothing to persist.
+    in-out property <int> focus_search_requested: 0;
+    callback image_filter_text_changed(string);
+
+    in-out property <int> selected_image_index: -1;
+    // Index to scroll into view (e.g. when an image is opened from the results
+    // table or after a folder scan); -1 means "no scroll request".
+    in-out property <int> scroll_to_image_index: -1;
+    in property <[ImageItemData]> images_list: [];
+}

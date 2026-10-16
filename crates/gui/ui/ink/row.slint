@@ -1,0 +1,200 @@
+// ink/row.slint — a row of a list: classes, objects, images, pipelines.
+
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
+
+/// A list row: a color, a title and a dimmer second text, a mono value at
+/// the right (a count), an eye to show/hide. Selected: a filled row with
+/// the focus color's edge.
+export component InkListRow inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    /// A mono text at the right: a count, a size.
+    in property <string> trailing;
+    /// A color square before the title; transparent: none.
+    in property <color> swatch: transparent;
+    /// An icon before the title, when no swatch.
+    in property <image> icon;
+    in property <bool> selected: false;
+    /// An eye at the right that shows/hides.
+    in property <bool> has-eye: false;
+    in property <bool> shown: true;
+    /// A small mark (error, warning) after the title; transparent: none.
+    in property <color> mark: transparent;
+    /// Title in mono (file names, ids).
+    in property <bool> mono: false;
+    /// A short mono text before the title (an id: "01").
+    in property <string> tag;
+    /// A ⋯ at the right, shown on hover and when selected.
+    in property <bool> has-more: false;
+    out property <bool> has-hover: ta.has-hover;
+    callback clicked;
+    callback double-clicked;
+    callback eye-toggled;
+    /// Right-click, or ⋯, at this point (in the row's coordinates).
+    callback context-menu(length, length);
+
+    height: root.subtitle == "" ? Ink.row-h : 38px;
+    accessible-role: list-item;
+    accessible-label: root.title;
+    accessible-item-selected: root.selected;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+
+        edge := Rectangle {
+            visible: root.selected;
+            x: 0px;
+            width: 2px;
+            height: parent.height - 10px;
+            border-radius: 1px;
+            background: Ink.focus;
+        }
+
+        ta := TouchArea {
+            clicked => {
+                root.clicked();
+            }
+            double-clicked => {
+                root.double-clicked();
+            }
+            pointer-event(event) => {
+                if event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
+                    root.context-menu(self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 4px;
+            spacing: 8px;
+
+            Rectangle {
+                width: root.swatch != transparent || root.icon.width > 0 ? 14px : 0px;
+                Rectangle {
+                    visible: root.swatch != transparent;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 3px;
+                    background: root.swatch;
+                }
+                Image {
+                    visible: root.swatch == transparent;
+                    source: root.icon;
+                    width: 14px;
+                    colorize: Ink.text-dim;
+                }
+            }
+
+            Text {
+                visible: root.tag != "";
+                width: root.tag == "" ? 0px : self.preferred-width;
+                text: root.tag;
+                font-size: Ink.fs-sm;
+                font-family: Ink.font-mono;
+                color: Ink.text-faint;
+                vertical-alignment: center;
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 1px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: root.title;
+                        font-size: Ink.fs-md;
+                        font-weight: root.selected ? 600 : 400;
+                        font-family: root.mono ? Ink.font-mono : Ink.font-sans;
+                        color: root.shown ? Ink.text : Ink.text-mute;
+                        overflow: elide;
+                        accessible-role: none;
+                    }
+                    Rectangle {
+                        width: root.mark == transparent ? 0px : 6px;
+                        Rectangle {
+                            visible: root.mark != transparent;
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: root.mark;
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                }
+                Text {
+                    visible: root.subtitle != "";
+                    height: root.subtitle == "" ? 0px : self.preferred-height;
+                    text: root.subtitle;
+                    font-size: Ink.fs-sm;
+                    color: Ink.text-mute;
+                    overflow: elide;
+                }
+            }
+
+            Text {
+                text: root.trailing;
+                font-size: Ink.fs-sm;
+                font-family: Ink.font-mono;
+                color: Ink.text-mute;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                width: root.has-eye ? 22px : 0px;
+                eye := Rectangle {
+                    visible: root.has-eye;
+                    width: 22px;
+                    height: 22px;
+                    border-radius: Ink.radius-sm;
+                    background: eye-ta.has-hover ? Ink.border-soft : transparent;
+                    accessible-role: button;
+                    accessible-label: root.shown ? "Hide" : "Show";
+                    Image {
+                        source: root.shown ? InkIcons.visible : InkIcons.hidden;
+                        width: 13px;
+                        colorize: root.shown ? Ink.text-dim : Ink.text-faint;
+                    }
+                    eye-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.eye-toggled();
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: root.has-more ? 20px : 0px;
+                more := Rectangle {
+                    visible: root.has-more && (ta.has-hover || more-ta.has-hover || root.selected);
+                    width: 20px;
+                    height: 20px;
+                    border-radius: Ink.radius-sm;
+                    background: more-ta.has-hover ? Ink.border-soft : transparent;
+                    accessible-role: button;
+                    accessible-label: "Actions";
+                    Image {
+                        source: InkIcons.more;
+                        width: 13px;
+                        colorize: Ink.text-dim;
+                    }
+                    more-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.context-menu(root.width - 24px, root.height);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,12 +1,9 @@
+import { ConnectionState, GlobalAppState, HistogramState } from "api/state.slint";
+import { ViewportObjectState, ViewportState } from "api/viewport.slint";
+import { ImageMetaData } from "api/image_meta.slint";
 import { HorizontalBox } from "std-widgets.slint";
-import { GlobalAppState, HistogramState, ConnectionState } from "state.slint";
-import { Theme } from "style.slint";
-import {
-    ViewportState,
-    ViewportObjectState,
-} from "editor/viewport_state.slint";
-import { ImageMetaData } from "editor/image_meta_panel.slint";
 
+import { Theme } from "style.slint";
 
 // Where the work happens. Always visible; coloured when on a server so
 // local and remote windows can't be mixed up, and in the warning colour when

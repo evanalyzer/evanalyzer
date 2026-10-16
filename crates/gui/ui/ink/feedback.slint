@@ -1,0 +1,221 @@
+// ink/feedback.slint — what tells the user what's going on: progress,
+// busy, banners, tooltips, items of the status bar.
+
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
+import { InkTone } from "marker.slint";
+
+/// Progress, 0…1. `indeterminate`: a moving bar, for work without a known end.
+export component InkProgressBar inherits Rectangle {
+    in property <float> value;
+    in property <bool> indeterminate: false;
+    in property <InkTone> tone: InkTone.neutral;
+
+    height: 4px;
+    accessible-role: progress-indicator;
+    accessible-value: round(root.value * 100) + "%";
+
+    track := Rectangle {
+        border-radius: self.height / 2;
+        background: Ink.raised;
+        clip: true;
+        Rectangle {
+            x: root.indeterminate ? (parent.width + self.width) * mod(animation-tick() / 1.4s, 1) - self.width : 0px;
+            width: root.indeterminate ? parent.width * 0.3 : parent.width * clamp(root.value, 0, 1);
+            border-radius: self.height / 2;
+            background: root.tone == InkTone.err ? Ink.err
+                : root.tone == InkTone.ok ? Ink.ok
+                : root.tone == InkTone.warn ? Ink.warn
+                : Ink.primary;
+        }
+    }
+}
+
+/// A spinning ring: busy.
+export component InkBusy inherits Rectangle {
+    in property <length> size: 14px;
+    in property <color> tint: Ink.text-dim;
+
+    width: root.size;
+    height: root.size;
+    accessible-role: progress-indicator;
+    accessible-label: "Busy";
+
+    Image {
+        source: InkIcons.busy;
+        width: root.size;
+        height: root.size;
+        colorize: root.tint;
+        transform-rotation: 360deg * mod(animation-tick() / 0.9s, 1);
+    }
+}
+
+/// A message across a panel or a dialog: an icon, the text, an action, ✕.
+export component InkBanner inherits Rectangle {
+    in property <string> text;
+    in property <InkTone> tone: InkTone.info;
+    /// A button's text at the right; "" none.
+    in property <string> action;
+    in property <bool> dismissable: false;
+    callback action-clicked;
+    callback dismissed;
+
+    property <color> tone-color: root.tone == InkTone.err ? Ink.err
+        : root.tone == InkTone.warn ? Ink.warn
+        : root.tone == InkTone.ok ? Ink.ok
+        : Ink.info;
+
+    min-height: 32px;
+    preferred-height: max(32px, body.preferred-height + 14px);
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+
+    face := Rectangle {
+        border-radius: Ink.radius-md;
+        background: root.tone == InkTone.err ? Ink.err-tint
+            : root.tone == InkTone.warn ? Ink.warn-tint
+            : root.tone == InkTone.ok ? Ink.raised
+            : Ink.info-tint;
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 6px;
+            spacing: 8px;
+            Image {
+                source: root.tone == InkTone.err ? InkIcons.error : root.tone == InkTone.warn ? InkIcons.warning : root.tone == InkTone.ok ? InkIcons.check : InkIcons.info;
+                width: 14px;
+                colorize: root.tone-color;
+            }
+            body := Text {
+                horizontal-stretch: 1;
+                text: root.text;
+                font-size: Ink.fs-sm;
+                color: Ink.text;
+                wrap: word-wrap;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+            Rectangle {
+                width: root.action == "" ? 0px : act-text.preferred-width + 14px;
+                act := Rectangle {
+                    visible: root.action != "";
+                    height: 22px;
+                    border-radius: Ink.radius-sm;
+                    background: act-ta.has-hover ? root.tone-color.with-alpha(0.15) : transparent;
+                    accessible-role: button;
+                    accessible-label: root.action;
+                    act-text := Text {
+                        text: root.action;
+                        font-size: Ink.fs-sm;
+                        font-weight: 600;
+                        color: root.tone-color;
+                    }
+                    act-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.action-clicked();
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                width: root.dismissable ? 20px : 0px;
+                dismiss := Rectangle {
+                    visible: root.dismissable;
+                    width: 20px;
+                    height: 20px;
+                    border-radius: Ink.radius-sm;
+                    background: x-ta.has-hover ? root.tone-color.with-alpha(0.15) : transparent;
+                    accessible-role: button;
+                    accessible-label: "Dismiss";
+                    Image {
+                        source: InkIcons.close;
+                        width: 10px;
+                        colorize: Ink.text-mute;
+                    }
+                    x-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.dismissed();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A short dark label next to what it explains. Placed by the caller.
+export component InkTooltip inherits Rectangle {
+    in property <string> text;
+
+    height: 22px;
+    width: label.preferred-width + 14px;
+
+    face := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: Ink.dark ? Ink.raised : Ink.primary;
+        label := Text {
+            text: root.text;
+            font-size: Ink.fs-sm;
+            color: Ink.dark ? Ink.text : Ink.on-primary;
+        }
+    }
+}
+
+/// An entry of the status bar: an icon, a text, clickable when wanted.
+export component InkStatusItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> mono: false;
+    in property <InkTone> tone: InkTone.neutral;
+    in property <bool> clickable: false;
+    callback clicked;
+
+    property <color> fg: root.tone == InkTone.err ? Ink.err
+        : root.tone == InkTone.warn ? Ink.warn
+        : root.tone == InkTone.ok ? Ink.ok
+        : Ink.text-dim;
+
+    height: 22px;
+    horizontal-stretch: 0;
+    preferred-width: row.preferred-width + 12px;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => {
+        if root.clickable {
+            root.clicked();
+        }
+    }
+
+    face := Rectangle {
+        border-radius: Ink.radius-sm;
+        background: root.clickable && ta.has-hover ? Ink.hover : transparent;
+        row := HorizontalLayout {
+            padding-left: 6px;
+            padding-right: 6px;
+            spacing: 5px;
+            Image {
+                source: root.icon;
+                width: root.icon.width > 0 ? 12px : 0px;
+                colorize: root.fg;
+            }
+            Text {
+                text: root.text;
+                font-size: Ink.fs-sm;
+                font-family: root.mono ? Ink.font-mono : Ink.font-sans;
+                color: root.fg;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.clickable;
+        mouse-cursor: root.clickable ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

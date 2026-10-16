@@ -39,152 +39,17 @@
 //   - insert-after-idx   : int            - 0-based slot; -1 means "append"
 //   confirm(int)  →  insert this command id at (target-pipeline, insert-after-idx)
 //   toggle-favorite(int), cancel().
+import { StepCategory } from "../api/pipelines.slint";
+import { CommandDef, PickerStyle } from "../api/command_selection.slint";
 
 import { ScrollView, LineEdit } from "std-widgets.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Dialog, DialogFooter } from "../components/new_components/dialog.slint";
 import { Theme } from "../style.slint";
-import { StepCategory } from "../editor/pipelines_panel.slint";
 
 // ---------- Command library data ----------
-
-export struct DefaultParamPreview {
-    name: string,
-    value: string,    // pre-formatted ("2.0 px", "Otsu", "on")
-}
-
-export struct CommandAuthor { full_name: string, organization: string }
-
-export struct CommandDef {
-    id: int,
-    name: string,
-    summary: string,         // one-line ("Smooth with isotropic Gaussian")
-    description: string,     // 2–4 sentences for the detail pane
-    category: StepCategory,
-    icon-glyph: string,      // single unicode glyph; replace with `image` if you ship raster icons
-    keywords: string,        // space-separated, lowercased - host pre-computes this
-    source: string,          // "skimage · v0.22", "internal", …
-    favorite: bool,
-    recent: bool,
-    default-params: [DefaultParamPreview],
-    // Component entries (ids from 1 000 000).
-    is-component: bool,
-    authors: [CommandAuthor],
-    creation-time: string,
-}
-
 // ---------- Command picker global state ----------
-
-export global CommandPickerState {
-    in property <[CommandDef]> all-commands;
-    in property <string> target-pipeline;
-    in property <int> insert-after-idx: -1;
-    in property <int> pipeline-id: 0;
-    in property <int> total-steps;
-    in property <[CommandDef]> shown-preprocess;
-    in property <[CommandDef]> shown-segment;
-    in property <[CommandDef]> shown-object;
-    in property <[CommandDef]> shown-classify;
-    in property <[CommandDef]> shown-dataset;
-    in property <[CommandDef]> shown-measure;
-    in property <[CommandDef]> shown-components;
-    in property <[CommandDef]> shown-library-components;
-    in property <CommandDef> detail;
-    in property <bool> has-detail;
-    in property <int> total-shown;
-    in property <int> cat-count-pre;
-    in property <int> cat-count-seg;
-    in property <int> cat-count-obj;
-    in property <int> cat-count-cls;
-    in property <int> cat-count-dat;
-    in property <int> cat-count-mea;
-    in property <int> cat-count-grp;
-    /// The project's components no pipeline uses ("Remove N unused").
-    in property <int> unused-component-count;
-    /// The selected entry is a project component no pipeline uses.
-    in property <bool> detail-removable;
-    /// -1 = no context (empty pipeline); 0..4 = display_order of the last step's category.
-    /// Used to auto-pre-select the filter chip for "what comes next".
-    in property <int> context-category: -1;
-
-    in-out property <string> query: "";
-    // Per-category filter chips. Multiple can be active at once (multi-select);
-    // when none are active the picker shows every category ("All"). Driven by the
-    // host on open to pre-select the suggested next categories, and toggled freely
-    // by the user afterwards.
-    in-out property <bool> fcat-pre: false;
-    in-out property <bool> fcat-seg: false;
-    in-out property <bool> fcat-obj: false;
-    in-out property <bool> fcat-mea: false;
-    in-out property <bool> fcat-cls: false;
-    in-out property <bool> fcat-dat: false;
-    in-out property <bool> filter-components: false;
-    in-out property <int> selected-id: -1;
-
-    callback query-changed(string);
-    callback select(int);
-    callback confirm(int);
-    callback remove-component(int);
-    callback remove-unused-components();
-    callback cancel();
-    callback import-bioimageio();
-}
-
 // ---------- Local visual constants ----------
-
-global PickerStyle {
-    out property <length> modal-w: 1080px;
-    out property <length> modal-h: 680px;
-    out property <length> list-col-w: 440px;
-    out property <length> row-h: 44px;
-
-    public pure function cat-color(c: StepCategory) -> color {
-        if c == StepCategory.preprocess {
-            return Theme.cat-preprocess;
-        }
-        if c == StepCategory.segment {
-            return Theme.cat-segment;
-        }
-        if c == StepCategory.instance-segmentation {
-            return Theme.cat-object;
-        }
-        if c == StepCategory.measure {
-            return Theme.cat-measure;
-        }
-        if c == StepCategory.dataset {
-            return Theme.cat-dataset;
-        }
-        if c == StepCategory.component {
-            return Theme.cat-component;
-        }
-        return Theme.cat-classify;
-    }
-    public pure function cmd-color(cmd: CommandDef) -> color {
-        return cat-color(cmd.category);
-    }
-    public pure function cat-name(c: StepCategory) -> string {
-        if c == StepCategory.preprocess {
-            return "Preprocess";
-        }
-        if c == StepCategory.segment {
-            return "Segment";
-        }
-        if c == StepCategory.instance-segmentation {
-            return "Instance Seg.";
-        }
-        if c == StepCategory.measure {
-            return "Measure";
-        }
-        if c == StepCategory.dataset {
-            return "Dataset";
-        }
-        if c == StepCategory.component {
-            return "Component";
-        }
-        return "Object";
-    }
-}
-
 // ---------- Filter chip ----------
 
 component FilterChip inherits Rectangle {

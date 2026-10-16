@@ -1,0 +1,21 @@
+// api/results_list.slint — the Rust interface of editor/results_list_panel.slint: the state Rust
+// sets, the callbacks it answers.
+
+// ----------------------------------------------------------
+export struct ResultItemData {
+    name: string,
+    path: string,
+    file_size: string,
+    modified: string,
+}
+
+export global ResultsListState {
+    in property <bool> is_scanning: false;
+    in-out property <bool> is_loading: false;
+    in-out property <int> selected_result_index: -1;
+    in property <[ResultItemData]> results_list: [];
+
+    callback result_selected(string);
+    callback refresh_clicked();
+    callback open_folder_clicked();
+}

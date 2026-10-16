@@ -1,0 +1,42 @@
+// api/object_list.slint — the Rust interface of editor/object_list_panel.slint: the state Rust
+// sets, the callbacks it answers.
+
+export struct ObjectItemDataSlint {
+    id: int,
+    name: string,
+    display_color: color,
+    display_name: string,
+    class_names: [string],
+    class_colors: [color],
+    class_ids: [int],
+    label_name: string,
+    label_id: int,
+    // Metrics – only populated for selected_object (empty string = not available)
+    area: int,
+    area_nm2: string,           // area in nm², formatted; empty string = not available
+    intensities: [string],      // sum intensity per channel; empty string = not available
+    intensity_avgs: [string],   // mean intensity per channel; parallel to intensities
+    circularity: string,
+    // Count of ROIs sharing the same segmentation label – populated for all rows
+    label_count: int,
+}
+
+export global ObjectListState {
+    in-out property <bool> is_scanning: false;
+    in-out property <int> scroll_to_object_index: -1;
+    // Filled by Rust from the open image's objects.
+    in property <[ObjectItemDataSlint]> object_list: [];
+
+    in-out property <ObjectItemDataSlint> selected_object;
+
+    callback object_selected(int);
+    callback object_copy(int);
+    callback object_edit(int);
+    callback object_delete(int);
+    callback object_delete_all_manual_annotated();
+    // Params: Adds the given class to the selected object (params are: object id, class id)
+    callback object_add_class(int, int);
+     // Params: Replaces all classed of the selected object by the given class (params are: object id, class id)
+    callback object_replace_class(int, int);
+    callback object_remove_class(int, int);
+}

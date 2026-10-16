@@ -1,0 +1,36 @@
+// api/classification.slint — the Rust interface of editor/classification_panel.slint: the state Rust
+// sets, the callbacks it answers.
+
+export struct ClassItemData {
+    id: int,
+    name: string,
+    color: color,
+    visible: bool,
+    count: int,
+}
+
+export global ClassificationState {
+    in-out property <bool> is_scanning: false;
+    in property <[ClassItemData]> classes_list: [];
+    in-out property <int> selected_class_id: -1;
+    in-out property <string> selected_class_name;
+    // Sum of `count` across visible classes - compute in Rust whenever
+    // classes_list changes, then push into the global.
+    in property <int> total_visible_objects: 0;
+
+    // Whether ROIs with no object class assigned (shown in red as "Unclassified")
+    // are hidden from the list and viewport. Defaults to hidden - see Rust side
+    // (ProjectTmpSettings::hide_unclassified_objects) for the persisted source of truth.
+    in-out property <bool> hide_unclassified_objects: true;
+
+    callback hide_unclassified_toggled();
+    callback class_selected(int);
+    callback class_visibility_toggled(int);
+    callback class_auto_add_and_replace();
+    callback class_auto_add_and_merge();
+    callback class_copy(int);
+    callback class_edit(int);
+    callback class_delete(int);
+    callback class_move_up(int);
+    callback class_move_down(int);
+}

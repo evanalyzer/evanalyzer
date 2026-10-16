@@ -1,3 +1,4 @@
+import { ResultItemData, ResultsListState } from "../api/results_list.slint";
 import {
     VerticalBox,
     ListView,
@@ -6,26 +7,6 @@ import {
 import { Theme } from "../style.slint";
 import { ToolToggleButton } from "../components/toggle_button.slint";
 import { ToolToggleButtonLabeled } from "../components/tool_button.slint";
-
-// ----------------------------------------------------------
-export struct ResultItemData {
-    name: string,
-    path: string,
-    file_size: string,
-    modified: string,
-}
-
-export global ResultsListState {
-    in property <bool> is_scanning: false;
-    in-out property <bool> is_loading: false;
-    in-out property <int> selected_result_index: -1;
-    in property <[ResultItemData]> results_list: [];
-
-    callback result_selected(string);
-    callback refresh_clicked();
-    callback open_folder_clicked();
-}
-
 // ----------------------------------------------------------
 component ResultListRow inherits Rectangle {
     in property <ResultItemData> data;

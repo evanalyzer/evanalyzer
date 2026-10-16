@@ -1,0 +1,219 @@
+// ink/marker.slint — small things that mark: chips, badges, the NEW tag,
+// color swatches, a key of the keyboard, a state dot.
+
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
+
+export enum InkTone { neutral, info, ok, warn, err }
+
+/// A chip: a class, a channel, a filter. A colored dot before the text,
+/// optionally ✕ after it. Clickable, and marked when `selected`.
+export component InkChip inherits Rectangle {
+    in property <string> text;
+    /// The dot's color; transparent: no dot.
+    in property <color> swatch: transparent;
+    in property <bool> selected: false;
+    in property <bool> removable: false;
+    in property <bool> mono: false;
+    callback clicked;
+    callback remove;
+
+    height: 22px;
+    horizontal-stretch: 0;
+    preferred-width: (root.swatch == transparent ? 0px : 12px) + label.preferred-width + (root.removable ? 18px : 0px) + 16px;
+    min-width: 24px;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checked: root.selected;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    face := Rectangle {
+        border-radius: 11px;
+        background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : Ink.panel;
+        border-width: 1px;
+        border-color: root.selected ? Ink.text-faint : Ink.border;
+
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.clicked();
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: root.removable ? 3px : 8px;
+            spacing: 5px;
+            Rectangle {
+                width: root.swatch == transparent ? 0px : 7px;
+                Rectangle {
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 3.5px;
+                    background: root.swatch;
+                }
+            }
+            label := Text {
+                text: root.text;
+                font-size: Ink.fs-sm;
+                font-weight: 500;
+                font-family: root.mono ? Ink.font-mono : Ink.font-sans;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+            Rectangle {
+                width: root.removable ? 16px : 0px;
+                x-face := Rectangle {
+                    visible: root.removable;
+                    width: 16px;
+                    height: 16px;
+                    border-radius: 8px;
+                    background: x-ta.has-hover ? Ink.border : transparent;
+                    accessible-role: button;
+                    accessible-label: "Remove";
+                    Image {
+                        source: InkIcons.close;
+                        width: 8px;
+                        height: 8px;
+                        colorize: Ink.text-mute;
+                    }
+                    x-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.remove();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A count or a word in a pill (problems, images, "3 open").
+export component InkBadge inherits Rectangle {
+    in property <string> text;
+    in property <InkTone> tone: InkTone.neutral;
+    /// Filled with the tone's color (on the image), else tinted.
+    in property <bool> strong: false;
+
+    property <color> tone-color: root.tone == InkTone.err ? Ink.err
+        : root.tone == InkTone.warn ? Ink.warn
+        : root.tone == InkTone.ok ? Ink.ok
+        : root.tone == InkTone.info ? Ink.info
+        : Ink.text-mute;
+
+    height: 16px;
+    width: max(16px, label.preferred-width + 10px);
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+
+    face := Rectangle {
+        border-radius: 8px;
+        background: root.strong ? root.tone-color
+            : root.tone == InkTone.err ? Ink.err-tint
+            : root.tone == InkTone.warn ? Ink.warn-tint
+            : root.tone == InkTone.info ? Ink.info-tint
+            : Ink.raised;
+        label := Text {
+            text: root.text;
+            font-size: Ink.fs-xs;
+            font-weight: 600;
+            font-family: Ink.font-mono;
+            color: root.strong ? Ink.panel : root.tone == InkTone.neutral ? Ink.text-dim : root.tone-color;
+            accessible-role: none;
+        }
+    }
+}
+
+/// "NEW" - on a tool or a feature that just arrived.
+export component InkNewTag inherits Rectangle {
+    height: 13px;
+    width: label.preferred-width + 8px;
+    accessible-role: AccessibleRole.text;
+    accessible-label: "New";
+    face := Rectangle {
+        border-radius: 6px;
+        background: Ink.new;
+        label := Text {
+            text: "NEW";
+            font-size: 8px;
+            font-weight: 700;
+            color: Ink.on-new;
+            accessible-role: none;
+        }
+    }
+}
+
+/// A color: a channel's, a class's. Clickable (to change it) when wanted.
+export component InkSwatch inherits Rectangle {
+    in property <color> value;
+    in property <length> size: 12px;
+    /// A ring - the swatch is the chosen one in a choice of colors.
+    in property <bool> selected: false;
+    callback clicked;
+
+    width: root.size;
+    height: root.size;
+    accessible-role: button;
+    accessible-label: "Color";
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    face := Rectangle {
+        border-radius: root.size / 4;
+        background: root.value;
+        border-width: root.selected ? 2px : 1px;
+        border-color: root.selected ? Ink.text : Ink.shadow.with-alpha(0.25);
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// A key on the keyboard: "Ctrl", "K".
+export component InkKbd inherits Rectangle {
+    in property <string> text;
+
+    height: 16px;
+    width: max(16px, label.preferred-width + 8px);
+
+    face := Rectangle {
+        border-radius: Ink.radius-xs;
+        background: Ink.raised;
+        border-width: 1px;
+        border-color: Ink.border;
+        label := Text {
+            text: root.text;
+            font-size: Ink.fs-xs;
+            font-family: Ink.font-mono;
+            color: Ink.text-dim;
+        }
+    }
+}
+
+/// A state dot: idle, running, done, failed.
+export component InkDot inherits Rectangle {
+    in property <InkTone> tone: InkTone.neutral;
+    in property <length> size: 6px;
+
+    width: root.size;
+    height: root.size;
+
+    face := Rectangle {
+        border-radius: root.size / 2;
+        background: root.tone == InkTone.err ? Ink.err
+            : root.tone == InkTone.warn ? Ink.warn
+            : root.tone == InkTone.ok ? Ink.ok
+            : root.tone == InkTone.info ? Ink.info
+            : Ink.text-faint;
+    }
+}

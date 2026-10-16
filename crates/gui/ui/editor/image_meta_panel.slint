@@ -1,3 +1,5 @@
+import { ChannelState } from "../api/state.slint";
+import { ImageMetaData, WavelengthOption } from "../api/image_meta.slint";
 import {
     LineEdit,
     Button,
@@ -6,65 +8,6 @@ import {
 } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { FocusBanner } from "pipeline_focus.slint";
-import { ChannelState } from "../state.slint";
-
-// One entry per series: its index plus the dimensions of its first
-// (full/native) resolution level, so pickers can show "Series 2 · 2048x2048"
-// instead of a bare index - the only way to tell series apart at a glance
-// when a file has several (e.g. a whole-slide overview + detail scenes).
-export struct SeriesInfo {
-    idx: int,
-    width: int,
-    height: int,
-}
-
-// One tile of the channel colour chooser: an emission wavelength and the
-// colour the viewer draws it in (computed in Rust, so the tile shows exactly
-// what the channel will look like).
-export struct WavelengthOption {
-    nm: float,
-    color: color,
-}
-
-// ----------------------------------------------------------
-export global ImageMetaData {
-    in property <string> image_name: "No image opened";
-    in property <string> dimensions_str: "";
-    in property <bool> is-rgb: false;
-    in property <int> nr_c_stacks: 0;
-    in property <int> nr_z_stacks: 0;
-    in property <int> nr_t_stacks: 0;
-
-    in property <string> storage_size: "";
-    in property <string> magnification: "";
-    in property <string> size: "";
-    in property <string> pixel_size_str: "200, 200, 200 nm";
-
-    in property <float> pixel_size_x: 0.0;
-    in property <float> pixel_size_y: 0.0;
-    in property <float> pixel_size_z: 0.0;
-
-    in property <string> pixel_type: "";
-    in property <int> nr_series: 0;
-    in property <[SeriesInfo]> series_list: [];
-
-    callback reset_pixel_sizes();
-    callback pixel_size_changed(float, float, float);
-
-    // Time between two frames [s], like a channel's colour: the image's
-    // own (empty if its metadata has none), or the project's once edited.
-    // Editing sets it for the whole project; reset goes back to the image's.
-    in property <string> frame_interval_text: "";
-    in property <bool> frame_interval_overridden: false;
-    callback frame_interval_changed(float);
-    callback reset_frame_interval();
-
-    // Channel colour chooser (per channel index): the wavelengths offered,
-    // set one for the project, or go back to the image's own.
-    in property <[WavelengthOption]> wavelength_options: [];
-    callback emission_wave_length_changed(int, float);
-    callback reset_emission_wave_length(int);
-}
 
 // A colour tile of the channel colour chooser.
 component WavelengthTile inherits Rectangle {

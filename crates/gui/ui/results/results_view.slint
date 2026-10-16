@@ -1,0 +1,47 @@
+// results/results_view.slint — the results of an analysis, in the main
+// window's Results mode: the views (List, Plate, Charts) on the left rail,
+// the breadcrumb (with the Z/T stepper), and the view shown.
+
+import { ResultsRailMode, ResultsState } from "../api/results.slint";
+import { Ink, InkBanner, InkTone } from "../ink/ink.slint";
+import { ResultsRail, ResultsBreadcrumb } from "results_common.slint";
+import { ResultsListView } from "results_list.slint";
+import { ResultsMatrixView } from "results_matrix.slint";
+import { ResultsChartsView } from "results_charts.slint";
+
+export component ResultsView inherits Rectangle {
+    background: Ink.panel;
+
+    HorizontalLayout {
+        spacing: 0px;
+
+        ResultsRail { }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 0px;
+
+            ResultsBreadcrumb { }
+
+            // The analysis that wrote this database didn't finish: say so
+            // before anyone draws conclusions from the numbers.
+            if ResultsState.run-warning != "": VerticalLayout {
+                padding: 8px;
+                InkBanner {
+                    tone: InkTone.warn;
+                    text: ResultsState.run-warning;
+                }
+            }
+
+            if ResultsState.rail-mode == ResultsRailMode.list: ResultsListView {
+                vertical-stretch: 1;
+            }
+            if ResultsState.rail-mode == ResultsRailMode.matrix: ResultsMatrixView {
+                vertical-stretch: 1;
+            }
+            if ResultsState.rail-mode == ResultsRailMode.charts: ResultsChartsView {
+                vertical-stretch: 1;
+            }
+        }
+    }
+}

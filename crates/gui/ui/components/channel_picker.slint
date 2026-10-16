@@ -1,11 +1,12 @@
 // channel_picker.slint
 // Channel picker (popup list with each channel's color + name) and the
 // image-address picker built on it (channel / memory slot / scratchpad).
+import { ChannelState } from "../api/state.slint";
+import { ImageMetaData } from "../api/image_meta.slint";
 
 import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
-import { ChannelState } from "../state.slint";
-import { ImageMetaData } from "../editor/image_meta_panel.slint";
+
 import { PickerField, PickerRow, SwatchName } from "picker_field.slint";
 
 // Color swatch + name of channel `idx`; collapses to nothing for a channel

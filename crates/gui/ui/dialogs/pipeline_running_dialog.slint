@@ -1,27 +1,12 @@
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { PipelineRunningState } from "../api/pipeline_running.slint";
 import { Theme } from "../style.slint";
 import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
-import { GlobalAppState, DialogType } from "../state.slint";
+
 import { BioRunner } from "../components/bio_runner.slint";
 import { AppButton } from "../components/app_button.slint";
 
 // -- Global progress state -----------------------------------------------------
-
-export global PipelineRunningState {
-    in-out property <int> processed: 0;
-    in-out property <int> total: 0;
-    // True once every tile is done and the pipeline has moved on to
-    // whole-image-scoped work (tile-merge, Voronoi, DB export, ...). The
-    // remaining `processed`/`total` units no longer correspond 1:1 to
-    // images, so the label switches to a phase description instead of a
-    // counter that would otherwise look "stuck".
-    in-out property <bool> whole-image-phase: false;
-    in-out property <bool> done: false;
-    in-out property <bool> has-error: false;
-    in-out property <string> status-message: "";
-    callback cancel();
-    callback close();
-}
-
 // -- Dialog --------------------------------------------------------------------
 
 export component PipelineRunningDialog inherits Dialog {

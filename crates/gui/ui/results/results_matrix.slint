@@ -2,15 +2,11 @@
 // (single image + detected-object markers), all three drill levels driven
 // by ResultsState.matrix-level so the breadcrumb + this one view swap in
 // place rather than opening new windows.
+import { MatrixCell, MatrixLevel, ObjectMarker, ResultsState } from "../api/results.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
-import {
-    ResultsState,
-    MatrixLevel,
-    MatrixCell,
-    ObjectMarker,
-} from "results_state.slint";
+
 import { FilterPill, LegendBar } from "results_common.slint";
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
 import { AppButton } from "../components/app_button.slint";

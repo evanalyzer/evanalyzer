@@ -1,4 +1,4 @@
-import { ViewportState } from "viewport_state.slint";
+import { ViewportState } from "../api/viewport.slint";
 
 export component Navigator inherits Rectangle {
     in property <float> view_x;
@@ -34,7 +34,6 @@ export component Navigator inherits Rectangle {
 
         let x1_fixed = current_lean;
         let y1_fixed = 1;
-
 
         // y = k*x+d
         let pos_correct = x1_fixed - (nh * current_lean) - ny * current_lean - nx * current_lean;

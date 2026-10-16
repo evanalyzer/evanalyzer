@@ -182,7 +182,6 @@ mod tests {
         ));
         let project_settings_controller = Arc::new(ProjectSettingsController::new(
             ui.clone(),
-            slint::Weak::default(),
             ui_state.clone(),
         ));
         let classification_controller = Arc::new(ClassificationController::new(

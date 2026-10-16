@@ -1,24 +1,14 @@
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { ImageMetaData } from "../api/image_meta.slint";
+import { PipelineDeleteConfirmState, PipelineEditState } from "../api/pipeline_edit.slint";
 import { LineEdit, ComboBox } from "std-widgets.slint";
 import { AppButton } from "../components/app_button.slint";
 import { Dialog, DialogFooter, DialogTone } from "../components/new_components/dialog.slint";
 import { Theme } from "../style.slint";
-import { GlobalAppState, DialogType } from "../state.slint";
-import { ImageMetaData } from "../editor/image_meta_panel.slint";
+
 import { ChannelPicker } from "../components/channel_picker.slint";
 
 // -- Global state --------------------------------------------
-
-export global PipelineEditState {
-    in property <int> pipeline-id: 0;
-    in-out property <string> pipeline-name: "";
-    // 0 = Scratchpad · 1 = Shared memory slot (ProjectCache) · 2 = Channel · 3 = None
-    in-out property <int> source-type: 0;
-    in-out property <int> source-slot: 1;
-    in-out property <int> source-channel: 0;
-    callback confirm();
-    callback cancel();
-}
-
 // -- Inline radio-option row ----------------------------------
 
 component SourceOption inherits Rectangle {
@@ -254,14 +244,6 @@ export component PipelineEditDialog inherits Dialog {
 }
 
 // -- Delete-pipeline confirm dialog ---------------------------
-
-export global PipelineDeleteConfirmState {
-    in property <int> pipeline-id: 0;
-    in property <string> pipeline-name: "";
-    callback confirm();
-    callback cancel();
-}
-
 export component PipelineDeleteConfirmDialog inherits Dialog {
     title: "Delete pipeline?";
     tone: DialogTone.danger;

@@ -1,0 +1,277 @@
+// api/state.slint — the Rust interface of state.slint: the state Rust
+// sets, the callbacks it answers.
+
+//
+// Global app state
+//
+export enum DialogType {
+    none,
+    about,
+    missing_images,
+    project_settings,
+    classification_confirm_delete,
+    classification_confirm_auto_add_dialog,
+    classification_edit_class_dialog,
+    classification_selection_dialog,
+    object_confirm_delete,
+    object_confirm_delete_manual_annotated,
+    command_selection_dialog,
+    pipeline_edit,
+    pipeline_delete_confirm,
+    pipeline_running,
+    preview_rendering,
+    warning,
+    template_meta,
+    project_template,
+    unsaved_changes_confirm,
+    analysis_running_close,
+    connect_server,
+    run_analysis_confirm,
+    ai_learning,
+    shortcuts_help,
+    script_editor,
+    create_component,
+    component_edit_choice,
+    expose_choice,
+    component_update,
+    component_settings,
+    step_settings }
+
+/// Where the work happens - this computer or a server. Shown in the status
+/// bar at all times, plus a banner once a server connection is lost.
+export global ConnectionState {
+    /// Working on a server (`--remote`) instead of this computer.
+    in property <bool> remote: false;
+    /// Turns `false` for good when the server connection drops.
+    in property <bool> connected: true;
+    /// "alice @ workstation:7400", or "This computer".
+    in property <string> label: "This computer";
+    /// The connection to the server is encrypted (`wss://`).
+    in property <bool> encrypted: true;
+    /// The server's certificate was checked - `false` with
+    /// `--no-tls-verification`.
+    in property <bool> verified: true;
+    /// While disconnected: what the reconnecting is up to.
+    in property <string> lost-message: "";
+    /// Reconnecting is still possible (the user's worker may still run).
+    in property <bool> can-reconnect: true;
+        callback reconnect-now();
+    }
+
+export global GlobalAppState {
+    // Global internal state
+
+        in-out property <DialogType> active_dialog: DialogType.none;
+
+        // Incremented by the viewport's TouchArea on pointer-up (see
+        // viewport.slint) - a mouse-drag gesture (panning, drawing) can
+        // leave Slint's own internal focus tracking stuck on that
+        // TouchArea instead of bubbling back to the main `GlobalShortcuts`
+        // FocusScope (see shortcuts.slint), silently swallowing every
+        // keyboard shortcut afterwards even though nothing looks wrong.
+        // `GlobalShortcuts` mirrors this counter and calls `self.focus()`
+        // whenever it changes, forcing focus back to a known-good place.
+        in-out property <int> reclaim_focus_requested: 0;
+    }
+
+// One distinct license text used by one or more third-party crates (grouped
+// by exact text, not just SPDX id - copyright lines differ crate to crate,
+// so e.g. "MIT" covers many distinct `text_paragraphs` components).
+export struct ThirdPartyLicense {
+        id: string,
+        name: string,
+        crates: string,          // pre-joined, sorted "name version, name version, ..."
+    text_paragraphs: [string],
+    }
+
+//
+// Static/host info shown in the About dialog. Set once from Rust at
+// startup (version from CARGO_PKG_VERSION, the rest from
+// evanalyzer_core::system_diagnostics()) - never mutated by the UI.
+//
+export global AppInfoState {
+        in-out property <string> version: "0.0.0-dev";
+        in-out property <int> cpu_cores: 1;
+        in-out property <string> ram_total: "-";
+        in-out property <bool> cuda_available: false;
+    // The machine the numbers above describe - where the work runs: "This
+    // computer", or the worker in remote mode. Filled by
+    // `refresh_system_info`, which the About dialog calls whenever it opens.
+    in-out property <string> system_source: "This computer";
+        in-out property <string> system_os: "-";
+        in-out property <bool> system_loading: false;
+        in-out property <string> system_error: "";
+        callback refresh_system_info();
+    // Split into paragraphs (rather than one giant string) so each Text
+    // element stays small - a single Text with the ~34KB full license blew
+    // past a size limit in the software-rendering fallback and rendered
+    // garbled/mis-scrolled content instead of an error.
+    in-out property <[string]> license_paragraphs: [];
+        in-out property <[ThirdPartyLicense]> third_party_licenses: [];
+        in-out property <int> third_party_package_count: 0;
+    }
+
+//
+// Generic warning dialog state. Set `message` (and optionally `title`) then
+// switch GlobalAppState.active_dialog to DialogType.warning to show it.
+//
+export global WarningState {
+        in-out property <string> title: "Cannot start analysis";
+        in-out property <string> message: "";
+    // When true the dialog shows an info icon instead of the warning sign
+    // (e.g. for a successful import rather than an error).
+    in-out property <bool> info: false;
+    }
+
+//
+// Unsaved-changes confirmation, shown before an action that would discard
+// the current project (opening another project/image, or closing the
+// window) while there are unsaved edits. Rust decides when to show it
+// (switch GlobalAppState.active_dialog to DialogType.unsaved_changes_confirm)
+// and reacts to whichever button the dialog invokes.
+//
+export global UnsavedChangesState {
+        callback save();
+        callback discard();
+        callback cancel();
+    }
+
+//
+// "File > Connect to server" - see connect_dialog.slint.
+//
+export struct RecentServerRow {
+        url: string,
+        user: string,
+    }
+
+export global ConnectState {
+        in-out property <string> url;
+        in-out property <string> user;
+        in-out property <string> password;
+        in property <[RecentServerRow]> recent;
+        in property <bool> busy: false;
+        in property <string> error;
+        /// 0: address/user/password; 1: confirm a new server's certificate;
+        /// 2: the certificate differs from the one confirmed before.
+        in property <int> step: 0;
+        in property <string> fingerprint;
+        in property <string> known-fingerprint;
+        /// The dialog is about to show: fill in the recent servers.
+        callback opened();
+        callback connect();
+        callback trust();
+        callback back();
+        callback cancel();
+        callback pick-recent(int);
+    }
+
+//
+// Closing the window while an analysis runs. Rust shows it (switch
+// GlobalAppState.active_dialog to DialogType.analysis_running_close) and
+// reacts to the answer. On a server the analysis can keep running without
+// the window; locally it ends with the process.
+//
+export global AnalysisRunningCloseState {
+        in property <bool> remote: false;
+        /// Asked for "Disconnect" instead of closing the window.
+        in property <bool> disconnecting: false;
+        callback keep_running();
+        callback cancel_analysis();
+        callback back();
+    }
+
+//
+// Histogram
+//
+export struct HistogramData {
+        path: string,
+        color: color,
+    }
+
+export global HistogramState {
+    // Histogram
+    callback histogram_adjusted(float, float, float, float);
+        callback auto_adjust_clicked();
+
+        // These are the histogram values how to use in the application
+    in-out property <float> histogram_min_val_abs: 0.0;
+        in-out property <float> histogram_max_val_abs: 1.0;
+
+        // These are the histogram settings on the slider in range from 0-1
+    in-out property <float> histogram_min_val: 0.0;
+        in-out property <float> histogram_max_val: 1.0;
+
+        // These are the histogram limits
+    in-out property <float> histogram_min_lim: 0.0;
+        in-out property <float> histogram_max_lim: 1.0;
+
+        in-out property <string> histogram_min_lim_txt: "0.0";
+        in-out property <string> histogram_max_lim_txt: "1.0";
+
+        // Histogram data
+    in-out property <[HistogramData]> histogram_svg_path: [
+      //  { path: "M 0 100 L 10 50 100 100 Z", color: #007acc },
+      //  { path: "M 0 100 L 20 20 100 100 Z", color: #ff4444 },
+    ];
+    }
+
+//
+// Channel settings
+//
+export enum IntensityProjection { single_stack, all_stacks, max, min, avg, sum, middle }
+
+// `wavelength_overridden`: the project sets this channel's emission
+// wavelength itself (instead of taking the image's own) - shown as "edited".
+export struct ChannelInfo {
+        name: string,
+        color: color,
+        active: bool,
+        idx: int,
+        emission_wave_length: float,
+        wavelength_overridden: bool
+    }
+
+export global ChannelState {
+
+        // Filled by Rust once an image is open - empty until then.
+        in-out property <[ChannelInfo]> channels: [];
+
+        in-out property <int> selected_series: 0;
+        in-out property <int> selected_z_stack: 0;
+        in-out property <int> selected_t_stack: 0;
+        in-out property <bool> is_play_active: false;
+        in-out property <int> play_back_speed_hz: 1;
+        in-out property <IntensityProjection> intensity_projection: IntensityProjection.single-stack;
+        in-out property <int> selected_channel_index: 0;
+        // How many channels are visible - kept by Rust (Slint can't count).
+        in-out property <int> active_count: 0;
+        // All channels in gray, one visible at a time.
+        in-out property <bool> grayscale: false;
+        callback grayscale_toggled(bool);
+
+        // Callback sends the updated array to Rust
+    callback channel_state_changed([ChannelInfo], int, int, int, IntensityProjection, int, int);
+        callback active_channel_changed(int);
+        callback active_series_changed(int);
+        callback toggle_play(bool);
+
+        public function trigger_channel_state_changed() {
+            channel_state_changed(root.channels, root.selected_series, root.selected_z_stack, root.selected_t_stack, root.intensity_projection, root.selected_channel_index, root.play_back_speed_hz);
+        }
+
+        public function trigger_active_channel_selection_changed() {
+            active_channel_changed(root.selected_channel_index);
+        }
+
+        public function trigger_active_series_changed() {
+            active_series_changed(root.selected_series);
+        }
+    }
+
+//
+// Image pixel info
+//
+export global ImagePixelInfo {
+        in-out property <string> mouse_pos;
+        in-out property <string> pixel_value;
+    }

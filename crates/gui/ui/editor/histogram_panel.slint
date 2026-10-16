@@ -11,10 +11,11 @@
 //     the histogram self-explanatory.
 //   - Adds a "Reset" button next to "Auto-scale" so users can revert quickly.
 //   - All colors via Theme tokens, no scattered `Palette.foreground.with-alpha`.
+import { HistogramState } from "../api/state.slint";
 
 import { Button, Palette, LineEdit } from "std-widgets.slint";
 import { Theme } from "../style.slint";
-import { HistogramState } from "../state.slint";
+
 import { CustomLineEdit } from "../components/custom_line_edit.slint";
 
 export component HistogramPanel inherits Rectangle {

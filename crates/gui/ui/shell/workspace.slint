@@ -1,0 +1,192 @@
+// shell/workspace.slint — everything between the bars: the image, and
+// floating over it the panels of the mode - steps on the left in
+// Pipelines, images on the left in Images; classes, objects and the image
+// controls on the right; the annotate tools on top. Results fill it.
+
+import { Ink, InkIcons, InkPanel, InkPanelHead, InkIconButton } from "../ink/ink.slint";
+import { LayoutState, WorkspaceMode } from "../api/layout.slint";
+import { GlobalAppState, DialogType } from "../api/state.slint";
+import { Viewport } from "../editor/viewport.slint";
+import { PreviewRendering } from "../dialogs/preview_rendering_dialog.slint";
+import { PipelinesPanel } from "../editor/pipelines_panel.slint";
+import { ImagesListPanel } from "../editor/images_list_panel.slint";
+import { ImageMetaPanel } from "../editor/image_meta_panel.slint";
+import { ResultsListPanel } from "../editor/results_list_panel.slint";
+import { ClassificationPanel } from "../editor/classification_panel.slint";
+import { ObjectListPanel } from "../editor/object_list_panel.slint";
+import { ImageControlPanel } from "../editor/image_control_panel.slint";
+import { AnnotateBar } from "annotate_bar.slint";
+import { ResultsView } from "../results/results_view.slint";
+
+// Gap between the panels and the edges.
+global Float {
+    out property <length> gap: 12px;
+    out property <length> left-w: 360px;
+    out property <length> right-w: 300px;
+}
+
+// The three switches for the right-hand panels.
+component PanelSwitches inherits Rectangle {
+    width: row.preferred-width + 8px;
+    height: 36px;
+
+    glass := Rectangle {
+        background: Ink.glass;
+        border-radius: Ink.radius-lg;
+        border-width: 1px;
+        border-color: Ink.border;
+        drop-shadow-blur: 16px;
+        drop-shadow-offset-y: 4px;
+        drop-shadow-color: Ink.shadow;
+
+        row := HorizontalLayout {
+            padding: 4px;
+            spacing: 2px;
+            InkIconButton {
+                icon: InkIcons.classes;
+                label: "Classes";
+                active: LayoutState.classes-open;
+                clicked => {
+                    LayoutState.classes-open = !LayoutState.classes-open;
+                }
+            }
+            InkIconButton {
+                icon: InkIcons.objects;
+                label: "Objects";
+                active: LayoutState.objects-open;
+                clicked => {
+                    LayoutState.objects-open = !LayoutState.objects-open;
+                }
+            }
+            InkIconButton {
+                icon: InkIcons.image-controls;
+                label: "Image";
+                active: LayoutState.image-open;
+                clicked => {
+                    LayoutState.image-open = !LayoutState.image-open;
+                }
+            }
+        }
+    }
+}
+
+export component Workspace inherits Rectangle {
+    in property <image> display_image;
+    in property <image> ghost_image;
+    in property <image> object_image;
+
+    property <bool> on-image: LayoutState.mode != WorkspaceMode.results;
+
+    background: Ink.viewport;
+    clip: true;
+
+    // Always there - switching modes keeps zoom and position.
+    Viewport {
+        display_image: root.display_image;
+        ghost_image: root.ghost_image;
+        object_image: root.object_image;
+        width: 100%;
+        height: 100%;
+        enabled: GlobalAppState.active_dialog == DialogType.none && root.on-image;
+        inset-left: LayoutState.mode == WorkspaceMode.results ? 0px : Float.left-w + 2 * Float.gap;
+        inset-right: Float.right-w + 2 * Float.gap;
+    }
+
+    // Covers only the image, never the bars.
+    if GlobalAppState.active_dialog == DialogType.preview-rendering: PreviewRendering {
+        width: 100%;
+        height: 100%;
+    }
+
+    // -- Left --
+    if LayoutState.mode == WorkspaceMode.pipelines: InkPanel {
+        x: Float.gap;
+        y: Float.gap;
+        width: Float.left-w;
+        height: parent.height - 2 * Float.gap;
+        PipelinesPanel {
+            vertical-stretch: 1;
+        }
+    }
+
+    if LayoutState.mode == WorkspaceMode.images: InkPanel {
+        x: Float.gap;
+        y: Float.gap;
+        width: Float.left-w + 20px;
+        height: parent.height - 2 * Float.gap;
+        ImagesListPanel {
+            vertical-stretch: 3;
+        }
+        Rectangle {
+            height: 1px;
+            background: Ink.border-soft;
+        }
+        ImageMetaPanel {
+            vertical-stretch: 2;
+        }
+    }
+
+    if LayoutState.mode == WorkspaceMode.results: Rectangle {
+        background: Ink.ground;
+        InkPanel {
+            x: Float.gap;
+            y: Float.gap;
+            width: Float.left-w - 60px;
+            height: parent.height - 2 * Float.gap;
+            ResultsListPanel {
+                vertical-stretch: 1;
+            }
+        }
+        Rectangle {
+            x: Float.left-w - 60px + 2 * Float.gap;
+            y: Float.gap;
+            width: parent.width - self.x - Float.gap;
+            height: parent.height - 2 * Float.gap;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+            clip: true;
+            ResultsView { }
+        }
+    }
+
+    // -- Right --
+    if root.on-image: VerticalLayout {
+        x: parent.width - Float.right-w - Float.gap;
+        y: Float.gap;
+        width: Float.right-w;
+        height: parent.height - 2 * Float.gap;
+        spacing: 8px;
+        alignment: start;
+
+        HorizontalLayout {
+            alignment: end;
+            PanelSwitches { }
+        }
+
+        if LayoutState.classes-open: InkPanel {
+            max-height: 340px;
+            ClassificationPanel { }
+        }
+
+        if LayoutState.image-open: InkPanel {
+            vertical-stretch: 1;
+            ImageControlPanel {
+                vertical-stretch: 1;
+            }
+        }
+
+        if LayoutState.objects-open: InkPanel {
+            vertical-stretch: 1;
+            ObjectListPanel {
+                vertical-stretch: 1;
+            }
+        }
+    }
+
+    // -- Top --
+    if LayoutState.annotate && root.on-image: AnnotateBar {
+        x: (parent.width - self.width) / 2;
+        y: Float.gap;
+    }
+}

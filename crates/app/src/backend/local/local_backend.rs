@@ -211,20 +211,24 @@ mod home_tests {
     fn a_worker_keeps_the_user_s_app_settings_in_their_home() {
         let home = tempfile::tempdir().unwrap();
         let backend = LocalBackend::default().with_home(home.path()).unwrap();
-        assert!(
-            !backend.load_app_settings().unwrap().dark_mode,
+        assert_eq!(
+            backend.load_app_settings().unwrap().color_scheme,
+            settings::ColorScheme::Light,
             "defaults first"
         );
 
         let settings = AppSettings {
-            dark_mode: true,
+            color_scheme: settings::ColorScheme::Dark,
             ..Default::default()
         };
         backend.save_app_settings(&settings).unwrap();
 
         let file = settings::settings_file_in(&settings::user_folder_in(home.path()));
         assert!(file.is_file(), "{}", file.display());
-        assert!(backend.load_app_settings().unwrap().dark_mode);
+        assert_eq!(
+            backend.load_app_settings().unwrap().color_scheme,
+            settings::ColorScheme::Dark
+        );
     }
 
     #[test]

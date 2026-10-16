@@ -1,0 +1,85 @@
+// api/script_editor.slint — the Rust interface of editor/script_editor_panel.slint: the state Rust
+// sets, the callbacks it answers.
+
+import { DialogType, GlobalAppState } from "state.slint";
+
+export struct ScriptHighlight {
+    keywords: string,
+    functions: string,
+    strings: string,
+    numbers: string,
+    comments: string,
+    line-numbers: string,
+}
+
+// Text plus the cursor (UTF-8 byte offset) after an editing helper ran.
+export struct ScriptEdit {
+    text: string,
+    cursor: int,
+}
+
+// A command a script can `run`, for the command list.
+export struct ScriptCommandDoc {
+    key: string,
+    name: string,
+    // Summary plus one line per parameter.
+    doc: string,
+}
+
+export struct ScriptDiagnostic {
+    ok: bool,
+    // 1-based; 0 when the error has no position.
+    line: int,
+    message: string,
+}
+
+// Font of the code editor and the step's script preview (see the import above).
+export global ScriptFont {
+    out property <string> family: "DejaVu Sans Mono";
+}
+
+export global ScriptEditorState {
+    in-out property <string> title: "Script";
+    // The script the dialog opens with.
+    in-out property <string> source;
+
+    // A row opens the editor with a fresh token (`token-counter + 1`); on
+    // Apply the text goes to `result-text` and `result-token` is set to that
+    // token, so only the row that asked applies it (like `browse-file`).
+    in-out property <int> token-counter: 0;
+    in-out property <int> request-token: -1;
+    in-out property <int> result-token: -1;
+    in-out property <string> result-text;
+
+    pure callback highlight(string) -> ScriptHighlight;
+    pure callback check(string) -> ScriptDiagnostic;
+    pure callback format(string) -> string;
+    // Tab: indent to the next multiple of four columns.
+    pure callback indent(string, int) -> ScriptEdit;
+    // Enter: new line keeping the indentation, one level deeper after an
+    // opening bracket.
+    pure callback newline(string, int) -> ScriptEdit;
+    // "}" / ")" / "]" typed on a blank line: dedent one level first.
+    pure callback close-bracket(string, int, string) -> ScriptEdit;
+    // Commands matching the search text (name or key).
+    pure callback filter-commands(string) -> [ScriptCommandDoc];
+    // Inserts `run("key", #{ defaults })` at the cursor.
+    pure callback insert-command(string, int, string) -> ScriptEdit;
+
+    public function open(title: string, text: string, token: int) {
+        self.title = title;
+        self.source = text;
+        self.request-token = token;
+        GlobalAppState.active_dialog = DialogType.script-editor;
+    }
+
+    public function apply(text: string) {
+        self.result-text = text;
+        self.result-token = self.request-token;
+        GlobalAppState.active_dialog = DialogType.none;
+    }
+
+    public function cancel() {
+        GlobalAppState.active_dialog = DialogType.none;
+    }
+}

@@ -1,0 +1,33 @@
+// api/template_meta.slint — the Rust interface of dialogs/template_meta_dialog.slint: the state Rust
+// sets, the callbacks it answers.
+
+export struct TemplateMetaSlint {
+    name: string,
+    short_description: string,
+    description: string,
+    author_name: string,
+    author_organization: string,
+    category: string,
+    tags: string,
+    // Optional: a whole number from 1, or empty for no version.
+    version: string,
+}
+
+export global TemplateMetaState {
+    in-out property <string> dialog_title: "Save as Template";
+    in-out property <TemplateMetaSlint> meta: {
+        name: "",
+        short_description: "",
+        description: "",
+        author_name: "",
+        author_organization: "",
+        category: "",
+        tags: "",
+        version: "",
+    };
+    // Suggested categories from templates already on disk, shown as quick-pick chips.
+    in property <[string]> known-categories;
+
+    callback confirm();
+    callback cancel();
+}

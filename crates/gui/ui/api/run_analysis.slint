@@ -1,0 +1,17 @@
+// api/run_analysis.slint — the Rust interface of dialogs/run_analysis_dialog.slint: the state Rust
+// sets, the callbacks it answers.
+
+export global RunAnalysisState {
+    in-out property <string> job_name: "";
+    /// Run only the dataset steps, on a copy of an earlier analysis.
+    in-out property <bool> dataset_only: false;
+    /// Whether the project has enabled dataset steps to run.
+    in property <bool> has_dataset_steps: false;
+    /// The earlier analyses to choose from (names, and their databases).
+    in property <[string]> base_names: [];
+    in property <[string]> base_paths: [];
+    in-out property <int> base_index: 0;
+
+    callback confirm();
+    callback cancel();
+}
