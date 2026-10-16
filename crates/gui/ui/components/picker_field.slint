@@ -1,26 +1,26 @@
 // picker_field.slint
 // The look every "pick one" dropdown of the step settings shares (channel,
-// class, ...): the closed field and the rows of its popup list. What each
-// entry is called comes in `label` (in the mono font, e.g. "Channel 2",
-// "Obj. class 03"); what's known about it - a color swatch and a name, see
-// `SwatchName` - comes as children.
+// class, ...): the closed field and the rows of its popup list - drawn like
+// the Ink fields (`InkSelect`). What each entry is called comes in `label`
+// (in the mono font, e.g. "Channel 2", "Obj. class 03"); what's known about
+// it - a color swatch and a name, see `SwatchName` - comes as children.
 
-import { Ink } from "../ink/palette.slint";
+import { Ink, InkIcons } from "../ink/ink.slint";
 
 // A color swatch and a name, after a picker's label.
 export component SwatchName inherits HorizontalLayout {
     in property <color> color;
     in property <string> name;
-    in property <length> font-size: 11px;
+    in property <length> font-size: Ink.fs-md;
 
-    spacing: 5px;
+    spacing: 6px;
     padding-left: 8px;
 
     VerticalLayout {
         alignment: center;
         Rectangle {
-            width: 10px;
-            height: 10px;
+            width: 9px;
+            height: 9px;
             border-radius: 2px;
             background: root.color;
         }
@@ -29,25 +29,26 @@ export component SwatchName inherits HorizontalLayout {
     Text {
         text: root.name;
         font-size: root.font-size;
-        color: Ink.text-dim;
+        color: Ink.text;
         vertical-alignment: center;
         overflow: elide;
         horizontal-stretch: 1;
     }
 }
 
-// The closed field: `label`, the children (a `SwatchName`), the arrow.
+// The closed field: `label`, the children (a `SwatchName`), the caret.
 export component PickerField inherits Rectangle {
     in property <string> label;
-    in property <length> font-size: 11px;
+    in property <length> font-size: Ink.fs-md;
     // A label that isn't a numbered entry ("Unset", "Background"): not mono.
     in property <bool> mono: true;
     callback clicked;
 
-    border-radius: 4px;
+    height: Ink.control-h;
+    border-radius: Ink.radius-sm;
     border-width: 1px;
-    border-color: Ink.border-soft;
-    background: ta.has-hover ? Ink.raised : Ink.ground;
+    border-color: ta.has-hover ? Ink.text-faint : Ink.border;
+    background: ta.has-hover ? Ink.hover : Ink.field;
 
     ta := TouchArea {
         mouse-cursor: pointer;
@@ -63,8 +64,8 @@ export component PickerField inherits Rectangle {
         Text {
             text: root.label;
             font-size: root.font-size;
-            font-family: root.mono ? Ink.font-mono : "";
-            color: Ink.text;
+            font-family: root.mono ? Ink.font-mono : Ink.font-sans;
+            color: Ink.text-dim;
             vertical-alignment: center;
         }
 
@@ -73,30 +74,29 @@ export component PickerField inherits Rectangle {
             @children
         }
 
-        Text {
-            text: "↓";
-            font-size: 9px;
-            color: Ink.text-mute;
-            vertical-alignment: center;
+        Image {
+            source: InkIcons.caret-down;
+            width: 10px;
+            colorize: Ink.text-mute;
         }
     }
 }
 
 // One entry of the popup list: `label`, the children (a `SwatchName`); the
-// chosen one highlighted.
+// chosen one marked.
 export component PickerRow inherits TouchArea {
     in property <string> label;
     in property <bool> selected;
-    in property <length> font-size: 11px;
+    in property <length> font-size: Ink.fs-md;
     in property <bool> mono: true;
     in property <color> label-color: Ink.text;
 
-    height: 28px;
+    height: 26px;
     mouse-cursor: pointer;
 
     Rectangle {
-        border-radius: 3px;
-        background: root.selected ? Ink.focus.with-alpha(0.12) : (root.has-hover ? Ink.raised : transparent);
+        border-radius: Ink.radius-sm;
+        background: root.has-hover ? Ink.hover : root.selected ? Ink.selection : transparent;
         HorizontalLayout {
             padding-left: 8px;
             padding-right: 8px;
@@ -104,7 +104,8 @@ export component PickerRow inherits TouchArea {
             Text {
                 text: root.label;
                 font-size: root.font-size;
-                font-family: root.mono ? Ink.font-mono : "";
+                font-family: root.mono ? Ink.font-mono : Ink.font-sans;
+                font-weight: root.selected ? 600 : 400;
                 color: root.label-color;
                 vertical-alignment: center;
             }

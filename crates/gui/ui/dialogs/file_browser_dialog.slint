@@ -6,13 +6,11 @@
 // e.g. the AI learning dialog can open it), driven entirely by
 // `FileBrowserState` from Rust: Rust lists folders on a background thread
 // and pushes rows; this file only renders and reports clicks/keys.
-import { InkButton, InkButtonKind, InkIconButton, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkIconButton, InkDialog, InkDialogFooter, InkIcons, InkTextField, InkSearchField, InkSelect } from "../ink/ink.slint";
 import { FileBrowserEntry, FileBrowserMode, FileBrowserPlace, FileBrowserState } from "../api/file_browser.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
-import { TextField } from "../components/new_components/text_field.slint";
-import { DropdownField } from "../components/new_components/dropdown.slint";
 component PlaceRow inherits Rectangle {
     in property <FileBrowserPlace> place;
     in property <bool> current;
@@ -31,9 +29,9 @@ component PlaceRow inherits Rectangle {
             width: 16px;
             height: 16px;
             y: (parent.height - self.height) / 2;
-            source: root.place.kind == 0 ? @image-url("../icons/regular-gray/house.svg")
-                  : root.place.kind == 1 ? @image-url("../icons/regular-gray/hard-drives.svg")
-                  : @image-url("../icons/regular-gray/folder-simple.svg");
+            source: root.place.kind == 0 ? @image-url("../icons/regular-white/house.svg")
+                  : root.place.kind == 1 ? @image-url("../icons/regular-white/hard-drives.svg")
+                  : @image-url("../icons/regular-white/folder-simple.svg");
             colorize: root.current ? Ink.focus : Ink.text-dim;
         }
         Text {
@@ -70,15 +68,16 @@ component EntryRow inherits Rectangle {
         spacing: 12px;
 
         Image {
+            colorize: Ink.text-dim;
             width: 18px;
             height: 18px;
             y: (parent.height - self.height) / 2;
             source: root.entry.kind == 0 ? @image-url("../icons/duotone-blue/folder-duotone.svg")
                   : root.entry.kind == 1 ? @image-url("../icons/duotone-blue/file-image-duotone.svg")
-                  : root.entry.kind == 2 ? @image-url("../icons/regular-gray/file-text.svg")
-                  : root.entry.kind == 3 ? @image-url("../icons/regular-gray/cube.svg")
-                  : root.entry.kind == 4 ? @image-url("../icons/regular-gray/database.svg")
-                  : @image-url("../icons/regular-gray/file.svg");
+                  : root.entry.kind == 2 ? @image-url("../icons/regular-white/file-text.svg")
+                  : root.entry.kind == 3 ? @image-url("../icons/regular-white/cube.svg")
+                  : root.entry.kind == 4 ? @image-url("../icons/regular-white/database.svg")
+                  : @image-url("../icons/regular-white/file.svg");
         }
         Text {
             horizontal-stretch: 1;
@@ -207,14 +206,14 @@ export component FileBrowserDialog inherits InkDialog {
                         InkIconButton {
                             size: 30px;
                             label: "Up";
-                            icon: @image-url("../icons/regular-gray/arrow-up.svg");
+                            icon: @image-url("../icons/regular-white/arrow-up.svg");
                             enabled: FileBrowserState.crumbs.length > 1;
                             clicked => { FileBrowserState.go-up(); }
                         }
                         InkIconButton {
                             size: 30px;
                             label: "Refresh";
-                            icon: @image-url("../icons/regular-gray/arrow-clockwise.svg");
+                            icon: @image-url("../icons/regular-white/arrow-clockwise.svg");
                             clicked => { FileBrowserState.refresh(); }
                         }
 
@@ -244,7 +243,7 @@ export component FileBrowserDialog inherits InkDialog {
                                             width: 12px;
                                             height: 12px;
                                             y: (parent.height - self.height) / 2;
-                                            source: @image-url("../icons/regular-gray/caret-right.svg");
+                                            source: @image-url("../icons/regular-white/caret-right.svg");
                                             colorize: Ink.text-faint;
                                         }
                                         Rectangle {
@@ -269,11 +268,13 @@ export component FileBrowserDialog inherits InkDialog {
                                     }
                                 }
                             }
-                            if crumb-box.editing: TextField {
+                            if crumb-box.editing: InkTextField {
                                 width: parent.width - 34px;
+                                height: parent.height;
                                 x: 0px;
                                 mono: true;
                                 autofocus: true;
+                                label: "Folder path";
                                 value: FileBrowserState.current-path;
                                 accepted(text) => {
                                     crumb-box.editing = false;
@@ -286,9 +287,7 @@ export component FileBrowserDialog inherits InkDialog {
                                 y: 1px;
                                 size: 30px;
                                 label: crumb-box.editing ? "Stop editing path" : "Edit path";
-                                icon: crumb-box.editing
-                                    ? @image-url("../icons/regular-gray/x.svg")
-                                    : @image-url("../icons/regular-gray/pencil-simple.svg");
+                                icon: crumb-box.editing ? InkIcons.close : InkIcons.edit;
                                 clicked => {
                                     crumb-box.editing = !crumb-box.editing;
                                     if (!crumb-box.editing) { keys.focus(); }
@@ -296,19 +295,16 @@ export component FileBrowserDialog inherits InkDialog {
                             }
                         }
 
-                        TextField {
+                        InkSearchField {
                             width: 190px;
-                            height: 32px;
-                            has-icon: true;
-                            icon: @image-url("../icons/regular-gray/magnifying-glass.svg");
                             placeholder: "Filter this folder";
-                            value: FileBrowserState.search;
+                            text: FileBrowserState.search;
                             edited(text) => { FileBrowserState.search-edited(text); }
                         }
                         InkIconButton {
                             icon: FileBrowserState.show-hidden
-                                ? @image-url("../icons/regular-gray/eye.svg")
-                                : @image-url("../icons/regular-gray/eye-slash.svg");
+                                ? @image-url("../icons/regular-white/eye.svg")
+                                : @image-url("../icons/regular-white/eye-slash.svg");
                             size: 30px;
                             label: "Show hidden files";
                             active: FileBrowserState.show-hidden;
@@ -377,8 +373,8 @@ export component FileBrowserDialog inherits InkDialog {
                             Image {
                                 height: 34px;
                                 source: FileBrowserState.error != ""
-                                    ? @image-url("../icons/regular-gray/warning-circle.svg")
-                                    : @image-url("../icons/regular-gray/folder-open.svg");
+                                    ? @image-url("../icons/regular-white/warning-circle.svg")
+                                    : @image-url("../icons/regular-white/folder-open.svg");
                                 colorize: FileBrowserState.error != "" ? Ink.err : Ink.text-faint;
                             }
                             Text {
@@ -414,7 +410,7 @@ export component FileBrowserDialog inherits InkDialog {
                 // The file name (saving) and the file type: a row of their own.
                 if FileBrowserState.mode == FileBrowserMode.save-file || FileBrowserState.filter-names.length > 1: HorizontalLayout {
                     spacing: 8px;
-                    if FileBrowserState.mode == FileBrowserMode.save-file: name-field := TextField {
+                    if FileBrowserState.mode == FileBrowserMode.save-file: name-field := InkTextField {
                         horizontal-stretch: 1;
                         placeholder: "File name";
                         value: FileBrowserState.file-name;
@@ -427,11 +423,13 @@ export component FileBrowserDialog inherits InkDialog {
                     if FileBrowserState.mode != FileBrowserMode.save-file: Rectangle {
                         horizontal-stretch: 1;
                     }
-                    if FileBrowserState.filter-names.length > 1: DropdownField {
-                        field-width: 230px;
+                    if FileBrowserState.filter-names.length > 1: InkSelect {
+                        width: 230px;
+                        horizontal-stretch: 0;
+                        label: "File type";
+                        model: FileBrowserState.filter-names;
                         value: FileBrowserState.filter-name;
-                        options: FileBrowserState.filter-names;
-                        option-selected(name) => { FileBrowserState.filter-selected(name); }
+                        picked(i, name) => { FileBrowserState.filter-selected(name); }
                     }
                 }
 
@@ -456,10 +454,10 @@ export component FileBrowserDialog inherits InkDialog {
                             text: "New folder";
                             clicked => { new-folder.naming = true; }
                         }
-                        if new-folder.naming: TextField {
+                        if new-folder.naming: InkTextField {
                             width: 200px;
-                            height: 36px;
                             placeholder: "Folder name";
+                            label: "Folder name";
                             autofocus: true;
                             accepted(text) => {
                                 new-folder.naming = false;
@@ -471,7 +469,7 @@ export component FileBrowserDialog inherits InkDialog {
                             y: 3px;
                             size: 30px;
                             label: "Cancel new folder";
-                            icon: @image-url("../icons/regular-gray/x.svg");
+                            icon: @image-url("../icons/regular-white/x.svg");
                             clicked => { new-folder.naming = false; keys.focus(); }
                         }
                     }

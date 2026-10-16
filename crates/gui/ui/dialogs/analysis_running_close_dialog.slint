@@ -3,7 +3,8 @@ import { AnalysisRunningCloseState, DialogType, GlobalAppState } from "../api/st
 
 import { Ink } from "../ink/palette.slint";
 
-// Asked when the window is closed while an analysis runs.
+// Asked when the window is closed, the server disconnected or another
+// project opened while an analysis runs.
 export component AnalysisRunningCloseDialog inherits InkDialog {
     title: "Analysis running";
     card-width: 480px;
@@ -15,14 +16,16 @@ export component AnalysisRunningCloseDialog inherits InkDialog {
     VerticalLayout {
         spacing: 12px;
         Text {
-            text: AnalysisRunningCloseState.remote
+            text: AnalysisRunningCloseState.switching-project
+                ? "An analysis is running" + (AnalysisRunningCloseState.remote ? " on the server" : "") + ". It can keep running with the settings it started with and write its results to its project's folder - or stop."
+                : AnalysisRunningCloseState.remote
                 ? (AnalysisRunningCloseState.disconnecting
                     ? "An analysis is running on the server. It can keep running after you disconnect - EVAnalyzer shows it again the next time you connect."
                     : "An analysis is running on the server. It can keep running without this window - EVAnalyzer shows it again the next time you connect.")
                 : "An analysis is running on this computer. Closing EVAnalyzer stops it.";
             wrap: word-wrap;
             color: Ink.text;
-            font-size: 13px;
+            font-size: Ink.fs-md;
         }
 
         InkDialogFooter {
@@ -37,15 +40,16 @@ export component AnalysisRunningCloseDialog inherits InkDialog {
 
             InkButton {
                 kind: InkButtonKind.danger;
-                text: AnalysisRunningCloseState.remote ? "Cancel analysis" : "Stop analysis and close";
+                text: AnalysisRunningCloseState.switching-project ? "Stop analysis" : AnalysisRunningCloseState.remote ? "Cancel analysis" : "Stop analysis and close";
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
                     AnalysisRunningCloseState.cancel_analysis();
                 }
             }
 
-            if AnalysisRunningCloseState.remote: InkButton {
-                text: AnalysisRunningCloseState.disconnecting ? "Keep running and disconnect" : "Keep running on server";
+            if AnalysisRunningCloseState.remote || AnalysisRunningCloseState.switching-project: InkButton {
+                kind: AnalysisRunningCloseState.switching-project ? InkButtonKind.primary : InkButtonKind.secondary;
+                text: AnalysisRunningCloseState.switching-project ? "Keep running" : AnalysisRunningCloseState.disconnecting ? "Keep running and disconnect" : "Keep running on server";
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
                     AnalysisRunningCloseState.keep_running();

@@ -543,7 +543,7 @@ export component ComponentSettingsDialog inherits InkDialog {
 
                         NavItem {
                             text: "General";
-                            icon: @image-url("../icons/regular-black/info.svg");
+                            icon: @image-url("../icons/regular-white/info.svg");
                             active: root.current-section == 0;
                             clicked => {
                                 root.current-section = 0;
@@ -552,7 +552,7 @@ export component ComponentSettingsDialog inherits InkDialog {
 
                         NavItem {
                             text: "Parameters (\{ComponentSettingsState.parameters.length})";
-                            icon: @image-url("../icons/regular-black/faders-horizontal.svg");
+                            icon: @image-url("../icons/regular-white/faders-horizontal.svg");
                             active: root.current-section == 1;
                             clicked => {
                                 root.current-section = 1;

@@ -1,3 +1,4 @@
+import { InkBarSeparator } from "../ink/ink.slint";
 // results_list.slint — flat object table with an image/class filter bar and
 // a grouped column-visibility dropdown, both built on the shared
 // MultiSelectDropdown (components/multi_select_dropdown.slint).
@@ -8,7 +9,6 @@ import { ScrollView } from "std-widgets.slint";
 import { Ink } from "../ink/palette.slint";
 
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
-import { VerticalDivider } from "../components/divider.slint";
 
 export component ResultsListView inherits Rectangle {
     background: Ink.ground;
@@ -64,7 +64,7 @@ export component ResultsListView inherits Rectangle {
                     select-none => { ResultsState.list-columns-select-none(); }
                 }
 
-                VerticalDivider { }
+                InkBarSeparator { }
 
                 if ResultsState.list-group-by-summary == "Objects": MultiSelectDropdown {
                     label: "COLOC DETAILS";

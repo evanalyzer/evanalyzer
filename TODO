@@ -9,6 +9,8 @@
 - [x] fix: Undo after opening another project restored the *previous* project's content into the new one (saving overwrote the new file) — undo history is cleared on open/new/legacy import/server switch
 - [x] fix: Results window and object list started with fake preview data ("Nucleus", "AAAAA", "adlsdkö", …) that could look like real results — all start empty
 
+- [ ] feat: Save the Tuning panel's pins with the project - today they last for the session (`PipelinesController::pins`). Needs a project-file field (schema version + migration step).
+
 ## Results
 
 - [x] Export Well formed in matrix view

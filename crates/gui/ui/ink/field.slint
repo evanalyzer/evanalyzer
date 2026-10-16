@@ -20,6 +20,8 @@ export component InkTextField inherits Rectangle {
     in property <bool> mono: false;
     /// What the field is for, for screen readers.
     in property <string> label;
+    /// Takes the keyboard focus when it appears.
+    in property <bool> autofocus: false;
     out property <bool> has-focus: input.has-focus;
     callback edited(string);
     callback accepted(string);
@@ -35,6 +37,9 @@ export component InkTextField inherits Rectangle {
     init => {
         if root.value != "" {
             root.text = root.value;
+        }
+        if root.autofocus {
+            input.focus();
         }
     }
     changed value => {
