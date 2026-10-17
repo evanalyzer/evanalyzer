@@ -32,6 +32,7 @@ component PaletteRow inherits Rectangle {
                     : root.entry.kind == PaletteKind.command ? InkIcons.add
                     : root.entry.kind == PaletteKind.image ? InkIcons.images
                     : root.entry.kind == PaletteKind.class ? InkIcons.classes
+                    : root.entry.kind == PaletteKind.setting ? InkIcons.settings
                     : InkIcons.run;
                 width: 14px;
                 colorize: root.selected ? Ink.text : Ink.text-mute;
@@ -149,7 +150,7 @@ export component CommandPalette inherits Rectangle {
                 spacing: 6px;
 
                 search := InkSearchField {
-                    placeholder: "Find an action, a step, a command, an image, a class…";
+                    placeholder: "Find an action, a step, a setting, a command, an image…";
                     text <=> CommandPaletteState.query;
                     edited(text) => {
                         CommandPaletteState.query-changed(text);

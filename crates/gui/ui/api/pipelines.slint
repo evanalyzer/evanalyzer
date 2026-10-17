@@ -348,6 +348,8 @@ export global PipelinesPanelState {
         callback toggle-pipeline(int);
         callback move-pipeline-up(int);
         callback move-pipeline-down(int);
+        // Moves pipeline (id) by this many places (- up) - dragged by its ⋮⋮.
+        callback move-pipeline-by(int, int);
         callback new-pipeline();
         callback duplicate-pipeline(int);
         callback delete-pipeline(int);

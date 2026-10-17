@@ -112,6 +112,32 @@ fn entries_for(ui: &AppWindow, query: &str) -> Vec<PaletteEntry> {
             }),
     );
 
+    // The settings of the shown pipeline's steps - once something is typed.
+    if !query.trim().is_empty() {
+        for (idx, step) in steps.iter().enumerate() {
+            let settings = step
+                .parameters
+                .iter()
+                .chain(step.advanced_parameters.iter())
+                .filter(|p| !matches!(p.param_type, crate::ParamType::Group))
+                .filter(|p| {
+                    matches(
+                        &format!("{} {} {}", p.display_name, p.name, step.name),
+                        query,
+                    )
+                })
+                .map(|p| PaletteEntry {
+                    id: format!("setting:{idx}").into(),
+                    title: p.display_name.clone(),
+                    detail: format!("#{} {} · {}", step.step_id, step.name, p.value).into(),
+                    shortcut: "".into(),
+                    kind: PaletteKind::Setting,
+                })
+                .collect::<Vec<_>>();
+            entries.extend(settings);
+        }
+    }
+
     if !query.trim().is_empty() {
         let commands = ui.global::<CommandPickerState>().get_all_commands();
         entries.extend(
@@ -206,11 +232,14 @@ fn run(ui: &AppWindow, id: &str) {
             other => log::warn!("Unknown palette action {other}"),
         },
         // Opens the step on its card.
-        "step" => {
+        // A step, or a setting of it: the step opened on its card (and
+        // selected).
+        "step" | "setting" => {
             let Ok(idx) = what.parse::<usize>() else {
                 return;
             };
             layout.set_mode(WorkspaceMode::Pipelines);
+            panel.set_selected_step_id(idx as i32);
             let steps = panel.get_active_commands();
             if let Some(mut step) = steps.row_data(idx)
                 && !step.expanded
@@ -403,6 +432,39 @@ mod tests {
             3
         );
         assert_eq!(picked.get(), 3);
+    }
+
+    #[test]
+    fn typing_finds_a_setting_of_a_step_and_running_it_opens_the_step() {
+        let ui = test_ui_window();
+        let _palette = palette(&ui);
+        let steps = vec![PipelineCommand {
+            id: 0,
+            step_id: "3".into(),
+            name: "Threshold".into(),
+            category: StepCategory::Segment,
+            parameters: ModelRc::new(VecModel::from(vec![crate::CommandParameter {
+                name: "min".into(),
+                display_name: "Min threshold".into(),
+                value: "240".into(),
+                ..Default::default()
+            }])),
+            ..Default::default()
+        }];
+        ui.global::<PipelinesPanelState>()
+            .set_active_commands(ModelRc::new(VecModel::from(steps)));
+        let state = ui.global::<CommandPaletteState>();
+
+        state.invoke_query_changed("min thr".into());
+        let entry = state.get_entries().row_data(0).unwrap();
+        assert_eq!(entry.title, "Min threshold");
+        assert_eq!(entry.detail, "#3 Threshold · 240");
+        assert_eq!(entry.id, "setting:0");
+
+        state.invoke_run(entry.id);
+        let panel = ui.global::<PipelinesPanelState>();
+        assert_eq!(panel.get_selected_step_id(), 0);
+        assert!(panel.get_active_commands().row_data(0).unwrap().expanded);
     }
 
     #[test]

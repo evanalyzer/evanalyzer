@@ -431,6 +431,24 @@ impl PipelinesController {
                     manager.sync_pipelines_to_slint();
                 });
 
+            // Move a pipeline by several places (dragged)
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_move_pipeline_by(move |pipeline_id, places| {
+                    {
+                        let mut project = manager.app_state.get_project_write();
+                        for _ in 0..places.unsigned_abs() {
+                            if places < 0 {
+                                project.move_pipeline_up(PipelineId(pipeline_id as u32));
+                            } else {
+                                project.move_pipeline_down(PipelineId(pipeline_id as u32));
+                            }
+                        }
+                    }
+                    manager.pipeline_settings_changed();
+                    manager.sync_pipelines_to_slint();
+                });
+
             // New pipeline
             let manager = self.clone();
             ui.global::<PipelinesPanelState>().on_new_pipeline(move || {
@@ -11576,6 +11594,31 @@ mod tests {
         // Undo takes the pin back.
         assert!(ui_state.undo());
         assert!(ui_state.get_project().editor.pins.is_empty());
+    }
+
+    #[test]
+    fn a_dragged_pipeline_moves_by_the_rows_and_stops_at_the_ends() {
+        let (ui, ui_state, _controller) = selected(vec![step("Blur")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        for _ in 0..2 {
+            panel.invoke_new_pipeline();
+            drain_ui_queue();
+        }
+        let order = || {
+            ui_state
+                .get_project()
+                .pipelines
+                .iter()
+                .map(|p| p.id.0)
+                .collect::<Vec<_>>()
+        };
+        let before = order();
+        assert_eq!(before.len(), 3);
+
+        panel.invoke_move_pipeline_by(before[0] as i32, 2);
+        assert_eq!(order(), [before[1], before[2], before[0]]);
+        panel.invoke_move_pipeline_by(before[0] as i32, -5);
+        assert_eq!(order(), before, "back to the top, not beyond");
     }
 
     #[test]
