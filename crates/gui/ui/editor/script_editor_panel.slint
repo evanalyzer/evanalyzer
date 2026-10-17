@@ -1,3 +1,4 @@
+import { Places } from "../api/layout.slint";
 // Script editor for `ParamType.script` step settings (Rhai scripts).
 //
 // Syntax highlighting: Slint's `TextInput` draws its text in one color, so
@@ -27,6 +28,8 @@ component HighlightLayer inherits Text {
 }
 
 export component ScriptEditorPanel inherits InkDialog {
+    // Next to the steps panel.
+    anchor-x: Places.beside-left;
     // Docked on the right; the image stays usable.
     placement: InkDialogPlacement.sheet;
     // Syntax colors, readable on both themes.
@@ -62,7 +65,7 @@ export component ScriptEditorPanel inherits InkDialog {
     }
 
     title: ScriptEditorState.title;
-    card-width: 1100px;
+    card-width: 900px;
     card-height: 800px;
     // Deliberately no cancel on a click outside or Esc: neither may throw
     // away an edited script. ✕ is Cancel.

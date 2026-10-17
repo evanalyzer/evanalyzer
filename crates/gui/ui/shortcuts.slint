@@ -40,6 +40,7 @@ import { ClassificationSettingsState } from "api/classification_class_edit.slint
 import { CommandPickerState } from "api/command_selection.slint";
 import { ProjectTemplateState } from "api/project_template.slint";
 import { ShortcutsDoc } from "api/shortcuts.slint";
+import { ExportDialogState } from "api/export.slint";
 
 export component GlobalShortcuts inherits FocusScope {
     // A step line is selected (and still there).
@@ -92,6 +93,16 @@ export component GlobalShortcuts inherits FocusScope {
         // preview's objects --
         if (e.text == " " && !e.modifiers.control && ViewportMemoryState.before_after) {
             ViewportObjectState.show-before = true;
+            return accept;
+        }
+
+        // Esc: an open dialog first (dialogs don't block the window).
+        if (e.text == Key.Escape && GlobalAppState.active_dialog != DialogType.none && DialogEscape.close()) {
+            return accept;
+        }
+        if (e.text == Key.Escape && ExportDialogState.active && !ExportDialogState.is-exporting) {
+            ExportDialogState.close-clicked();
+            ExportDialogState.active = false;
             return accept;
         }
 
@@ -285,7 +296,15 @@ export component DialogShortcuts inherits FocusScope {
         if (e.text != Key.Escape) {
             return reject;
         }
+        return DialogEscape.close() ? accept : reject;
+    }
+}
 
+// What Esc closes: the open dialog, with what its own Cancel does. Used by
+// the dialogs' FocusScope and by `GlobalShortcuts` (after a click into the
+// window, which dialogs don't block, the window has the keyboard).
+export global DialogEscape {
+    public function close() -> bool {
         // These represent an in-progress background job (analysis running /
         // preview rendering) - deliberately NOT wired to Escape. Their
         // `cancel()` callback only requests cancellation, it doesn't close
@@ -295,7 +314,7 @@ export component DialogShortcuts inherits FocusScope {
         // own Cancel button, which makes that distinction visible.
         if (GlobalAppState.active_dialog == DialogType.pipeline_running
             || GlobalAppState.active_dialog == DialogType.preview_rendering) {
-            return reject;
+            return false;
         }
         if (GlobalAppState.active_dialog == DialogType.command_selection_dialog) {
             CommandPickerState.cancel();
@@ -322,7 +341,7 @@ export component DialogShortcuts inherits FocusScope {
         } else if (GlobalAppState.active_dialog == DialogType.ai_learning) {
             AiLearningState.cancel_clicked();
         } else if (GlobalAppState.active_dialog == DialogType.none) {
-            return reject;
+            return false;
         }
         // Every remaining dialog type (about, missing_images,
         // classification_confirm_delete, classification_confirm_auto_add_dialog,
@@ -334,7 +353,7 @@ export component DialogShortcuts inherits FocusScope {
         // but harmless, and it means this one line is correct regardless of
         // what a given callback does or doesn't do on its own.
         GlobalAppState.active_dialog = DialogType.none;
-        return accept;
+        return true;
     }
 }
 

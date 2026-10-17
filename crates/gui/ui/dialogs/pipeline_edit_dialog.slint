@@ -1,3 +1,4 @@
+import { Places } from "../api/layout.slint";
 import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
@@ -106,6 +107,8 @@ component LabeledInput inherits VerticalLayout {
 // -- Dialog component -----------------------------------------
 
 export component PipelineEditDialog inherits InkDialog {
+    // Next to the steps panel.
+    anchor-x: Places.beside-left;
     title: "Edit pipeline";
     card-width: 420px;
     close-on-backdrop: true;
@@ -244,6 +247,8 @@ export component PipelineEditDialog inherits InkDialog {
 
 // -- Delete-pipeline confirm dialog ---------------------------
 export component PipelineDeleteConfirmDialog inherits InkDialog {
+    // Next to the steps panel.
+    anchor-x: Places.beside-left;
     title: "Delete pipeline?";
     card-width: 380px;
     close-on-backdrop: true;

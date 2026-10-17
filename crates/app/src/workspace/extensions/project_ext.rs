@@ -133,6 +133,13 @@ pub trait ProjectExt {
     fn get_channel_display_colors(&self) -> BTreeMap<i32, [f32; 3]>;
     fn channel_display_colors(&self, channels: &[(i32, f32)]) -> BTreeMap<i32, [f32; 3]>;
     fn set_grayscale(&mut self, grayscale: bool);
+    /// Off: a newly opened image is not auto-scaled (see
+    /// `GlobalImageSettings::histogram_auto_scale_off`).
+    fn histogram_auto_scale_off(&self) -> bool;
+    fn set_histogram_auto_scale_off(&mut self, off: bool);
+    /// The open image's scaling becomes the project's, for every image: the
+    /// images' own scalings are removed.
+    fn apply_histograms_to_all_images(&mut self);
     fn with_one_visible_channel(&self, requested: &BTreeMap<i32, bool>) -> BTreeMap<i32, bool>;
     fn set_image_z_stack(&mut self, z_stack: &ZStackSettings);
     fn set_global_z_stack(&mut self, z_stack: &ZStackSettings);
@@ -681,6 +688,30 @@ impl ProjectExt for ProjectWithRuntime {
     /// Switches grayscale mode. Switching it on leaves one channel visible
     /// (gray channels can't be told apart when overlaid): the selected one
     /// if it is visible, else the first visible one.
+    fn histogram_auto_scale_off(&self) -> bool {
+        self.images.settings.histogram_auto_scale_off
+    }
+
+    fn set_histogram_auto_scale_off(&mut self, off: bool) {
+        self.images.settings.histogram_auto_scale_off = off;
+    }
+
+    fn apply_histograms_to_all_images(&mut self) {
+        let current = self.get_image_channel_histograms();
+        for (idx, histogram) in current {
+            if let Some(histogram) = histogram {
+                self.images.settings.channels.entry(idx).or_default().histogram = Some(histogram);
+            }
+        }
+        for image in self.images.list.values_mut() {
+            for series in image.series.values_mut() {
+                for channel in series.channels.values_mut() {
+                    channel.histogram = None;
+                }
+            }
+        }
+    }
+
     fn set_grayscale(&mut self, grayscale: bool) {
         self.images.settings.grayscale = grayscale;
         if !grayscale {
@@ -2970,6 +3001,33 @@ mod tests {
             0.2
         );
         assert!(project.get_image_channel_histograms()[&0].is_none());
+    }
+
+    #[test]
+    fn the_open_images_scaling_becomes_every_images_scaling() {
+        let mut project = project_with_one_image();
+        project.set_image_histogram_settings_for_channel(0, 0.1, 0.9, 0.0, 1.0);
+
+        project.apply_histograms_to_all_images();
+
+        // The project's scaling now; no image keeps its own.
+        let global = project.images.settings.channels[&0].histogram.as_ref().unwrap();
+        assert_eq!((global.min, global.max), (0.1, 0.9));
+        assert!(project.images.list.values().all(|image| image
+            .series
+            .values()
+            .all(|series| series.channels.values().all(|c| c.histogram.is_none()))));
+        // ... which the open image shows.
+        assert_eq!(project.get_image_channel_histograms()[&0].as_ref().unwrap().min, 0.1);
+        assert!(project.images.settings.channels.get(&1).is_none_or(|c| c.histogram.is_none()));
+    }
+
+    #[test]
+    fn auto_scale_of_new_images_is_a_project_setting_on_by_default() {
+        let mut project = project_with_one_image();
+        assert!(!project.histogram_auto_scale_off());
+        project.set_histogram_auto_scale_off(true);
+        assert!(project.histogram_auto_scale_off());
     }
 
     #[test]

@@ -17,7 +17,7 @@ component Divider inherits Rectangle {
 
 component FormLabel inherits Text {
     vertical-alignment: center;
-    width: 150px;
+    width: 120px;
     color: Ink.text-dim;
     font-size: Ink.fs-sm;
 }
@@ -276,8 +276,8 @@ export component AiLearningDialog inherits InkDialog {
     // Docked on the right; the image stays usable.
     placement: InkDialogPlacement.sheet;
     title: "Train a classifier";
-    property <length> field-w: 280px;
-    card-width: 760px;
+    property <length> field-w: 190px;
+    card-width: 440px;
     card-height: 840px;
     content-padding: 0px;
     close => {
@@ -295,8 +295,11 @@ export component AiLearningDialog inherits InkDialog {
             vertical-stretch: 1;
 
             ScrollView {
+                // Only up and down: the content is as wide as the sheet.
+                content-width: self.visible-width;
                 VerticalLayout {
-                    padding: 20px;
+                    width: parent.width;
+                    padding: 16px;
                     spacing: 20px;
 
                     // -- Model identity --
@@ -423,7 +426,7 @@ export component AiLearningDialog inherits InkDialog {
                                 }
 
                                 Text {
-                                    text: "0 = unlimited";
+                                    text: "0 = no limit";
                                     color: Ink.text-mute;
                                     font-size: Ink.fs-sm;
                                     vertical-alignment: center;
@@ -489,7 +492,7 @@ export component AiLearningDialog inherits InkDialog {
                                 }
 
                                 Text {
-                                    text: "0 = auto (√features)";
+                                    text: "0 = auto";
                                     color: Ink.text-mute;
                                     font-size: Ink.fs-sm;
                                     vertical-alignment: center;
@@ -519,7 +522,7 @@ export component AiLearningDialog inherits InkDialog {
                                 }
 
                                 CheckBox {
-                                    text: "Estimate accuracy from out-of-bag samples";
+                                    text: "Accuracy from out-of-bag samples";
                                     checked <=> AiLearningState.settings.rf_out_of_bag_eval;
                                 }
                             }
@@ -857,7 +860,7 @@ export component AiLearningDialog inherits InkDialog {
                             }
 
                             CheckBox {
-                                text: "Normalize features (recommended for KNN / MLP)";
+                                text: "Normalize features (KNN, MLP)";
                                 checked <=> AiLearningState.settings.normalize_features;
                             }
                         }
@@ -870,7 +873,7 @@ export component AiLearningDialog inherits InkDialog {
                             }
 
                             CheckBox {
-                                text: "Balance classes (helps with imbalanced annotations)";
+                                text: "Balance uneven classes";
                                 checked <=> AiLearningState.settings.balance_classes;
                             }
                         }
@@ -914,7 +917,7 @@ export component AiLearningDialog inherits InkDialog {
                             }
 
                             CheckBox {
-                                text: "Include annotations from other images";
+                                text: "Annotations of other images too";
                                 checked <=> AiLearningState.settings.use_other_images;
                             }
                         }

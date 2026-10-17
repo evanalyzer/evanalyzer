@@ -300,9 +300,9 @@ export global ClassHelper {
 // Main panel
 export global PipelinesPanelState {
         in property <[Pipeline]> pipelines: [];
-        in property <[PipelineCommand]> active-commands:[];
-        in property <string> active-pipeline-name;
-        in property <string> active-pipeline-image-source;
+        in-out property <[PipelineCommand]> active-commands:[];
+        in-out property <string> active-pipeline-name;
+        in-out property <string> active-pipeline-image-source;
         in property <int> enabled-pipeline-count;
         in property <int> total-enabled-steps;
         in property <string> eta-seconds-per-image: "0.00";
@@ -406,7 +406,7 @@ export global PipelinesPanelState {
         callback insert-step(int, int);          // pipeline-id, after-idx
     callback param-changed(int, string, string);
     // The pinned settings of the shown pipeline, in step order.
-    in property <[TunedSetting]> tuned-settings: [];
+    in-out property <[TunedSetting]> tuned-settings: [];
     // Pins / unpins a setting (step position, setting name).
     callback toggle-pin(int, string);
     // Pins / unpins the settings of a section of the step (a row of its
@@ -477,5 +477,16 @@ export global PipelinesPanelState {
             self.has-breakpoint-image = false;
             self.set-breakpoint(self.active-pipeline-id, step-id, 1);
         }
+    }
+
+    // Shows no pipeline (`active-pipeline-id` -1): the steps panel lists
+    // the pipelines to pick one.
+    public function deselect-pipeline() {
+        self.active-pipeline-id = -1;
+        self.active-pipeline-name = "";
+        self.active-pipeline-image-source = "";
+        self.active-commands = [];
+        self.tuned-settings = [];
+        self.selected-step-id = -1;
     }
 }

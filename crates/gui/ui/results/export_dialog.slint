@@ -2,7 +2,7 @@
 // `ResultExport::start_export` in evanalyzer_app's results_exporter.rs):
 // grouped like the Plate settings - File, Images & objects, Plate & wells,
 // Filter - one labelled line per setting.
-import { InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkHint, InkLabel, InkProgressBar, InkTone, InkDialogPlacement } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkProgressBar, InkTone } from "../ink/ink.slint";
 import { ExportDialogState } from "../api/export.slint";
 
 import { ScrollView } from "std-widgets.slint";
@@ -50,11 +50,12 @@ component RangeFields inherits HorizontalLayout {
 }
 
 export component ExportDialog inherits InkDialog {
-    // Docked on the right; the image stays usable.
-    placement: InkDialogPlacement.sheet;
+    // Below the Export button.
+    from-right: true;
+    anchor-x: 24px;
+    anchor-y: 96px;
     title: "Export results";
-    card-width: 620px;
-    card-height: 820px;
+    card-width: 380px;
     // No closing while the export runs (Cancel stops it first).
     closable: !ExportDialogState.is-exporting;
     close => {
@@ -64,23 +65,88 @@ export component ExportDialog inherits InkDialog {
 
     property <bool> xlsx: ExportDialogState.format-summary == "XLSX";
     property <length> field-w: 220px;
+    // The options most exports don't need.
+    property <bool> more: false;
 
     ScrollView {
         vertical-stretch: 1;
-        VerticalLayout {
+        // As high as its content (the card follows; it scrolls when the
+        // window is shorter). Only up and down: as wide as the card.
+        preferred-height: export-body.preferred-height;
+        content-width: self.visible-width;
+        export-body := VerticalLayout {
+            width: parent.width;
             // Room for the scroll bar.
             padding-right: 12px;
-            spacing: 16px;
+            spacing: 14px;
             alignment: start;
 
+            // -- What (design R) --
             Group {
-                title: "FILE";
+                title: "EXPORT";
+                CheckBox {
+                    text: "Objects - one row per object";
+                    checked <=> ExportDialogState.with-list-view;
+                }
+                CheckBox {
+                    text: "Per image";
+                    checked <=> ExportDialogState.with-grouped-by-image-list;
+                }
+                CheckBox {
+                    text: "Per well - plate layout (XLSX)";
+                    checked <=> ExportDialogState.with-plate-heatmap-view;
+                    enabled: root.xlsx;
+                }
+            }
+
+            Group {
+                title: "SAVE";
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    InkLabel {
+                        text: "Format";
+                    }
+                    InkMultiSelect {
+                        summary-text: ExportDialogState.format-summary;
+                        items <=> ExportDialogState.format-items;
+                        multi-select: false;
+                        pill-width: root.field-w;
+                        item-selected(key, value, selected) => {
+                            if selected {
+                                ExportDialogState.format-summary = value;
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    InkLabel {
+                        text: "Classes";
+                    }
+                    InkMultiSelect {
+                        summary-text: ExportDialogState.class-summary;
+                        items <=> ExportDialogState.class-items;
+                        multi-select: true;
+                        show-select-all: true;
+                        pill-width: root.field-w;
+                        item-selected(key, value, selected) => {
+                            ExportDialogState.class-item-selected(key, selected);
+                        }
+                        select-all => {
+                            ExportDialogState.class-select-all();
+                        }
+                        select-none => {
+                            ExportDialogState.class-select-none();
+                        }
+                    }
+                }
                 HorizontalLayout {
                     spacing: 8px;
                     InkLabel {
-                        text: "Folder";
+                        text: "To";
                     }
-
                     Rectangle {
                         horizontal-stretch: 1;
                         height: Ink.control-h;
@@ -98,67 +164,42 @@ export component ExportDialog inherits InkDialog {
                             overflow: elide;
                         }
                     }
-
-                    InkButton {
-                        small: true;
-                        text: "Browse…";
+                    InkIconButton {
+                        size: Ink.control-h;
+                        icon: InkIcons.open;
+                        label: "Choose the folder";
                         enabled: !ExportDialogState.is-exporting;
                         clicked => {
                             ExportDialogState.pick-output-dir();
                         }
                     }
                 }
+            }
 
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: start;
-                    InkLabel {
-                        text: "Name prefix";
-                    }
-
-                    LineEdit {
-                        width: root.field-w;
-                        placeholder-text: "e.g. experiment1_";
-                        text <=> ExportDialogState.output-file-prefix;
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: start;
-                    InkLabel {
-                        text: "Format";
-                    }
-
-                    InkMultiSelect {
-                        summary-text: ExportDialogState.format-summary;
-                        items <=> ExportDialogState.format-items;
-                        multi-select: false;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => {
-                            if selected {
-                                ExportDialogState.format-summary = value;
-                            }
+            // -- More options --
+            HorizontalLayout {
+                alignment: start;
+                Text {
+                    text: root.more ? "Fewer options ‹" : "More options ›";
+                    font-size: Ink.fs-sm;
+                    color: more-ta.has-hover ? Ink.text : Ink.focus;
+                    more-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.more = !root.more;
                         }
                     }
                 }
             }
 
-            Group {
-                title: "IMAGES & OBJECTS";
-                CheckBox {
-                    text: "Image list - one line per image";
-                    checked <=> ExportDialogState.with-grouped-by-image-list;
-                }
-
+            if root.more: Group {
+                title: "OBJECTS";
                 HorizontalLayout {
                     spacing: 8px;
-                    CheckBox {
-                        horizontal-stretch: 1;
-                        text: "Object list - one line per object";
-                        checked <=> ExportDialogState.with-list-view;
+                    alignment: start;
+                    InkLabel {
+                        text: "Images";
                     }
-
                     InkMultiSelect {
                         summary-text: ExportDialogState.image-summary;
                         items <=> ExportDialogState.image-items;
@@ -182,38 +223,30 @@ export component ExportDialog inherits InkDialog {
                         enabled: ExportDialogState.with-list-view;
                     }
                 }
-
-                VerticalLayout {
-                    padding-left: 22px;
-                    spacing: 8px;
-                    CheckBox {
-                        text: "With coloc details";
-                        checked <=> ExportDialogState.with-list-coloc-details;
-                        enabled: ExportDialogState.with-list-view;
-                    }
-
-                    CheckBox {
-                        text: "Each image in its own file";
-                        checked <=> ExportDialogState.with-list-one-file-per-image;
-                        enabled: ExportDialogState.with-list-view;
-                    }
+                CheckBox {
+                    text: "With coloc details";
+                    checked <=> ExportDialogState.with-list-coloc-details;
+                    enabled: ExportDialogState.with-list-view;
                 }
-
+                CheckBox {
+                    text: "Each image in its own file";
+                    checked <=> ExportDialogState.with-list-one-file-per-image;
+                    enabled: ExportDialogState.with-list-view;
+                }
                 HorizontalLayout {
                     spacing: 8px;
                     CheckBox {
                         horizontal-stretch: 1;
-                        text: "Image heatmap (XLSX)";
+                        text: "Image heatmap";
                         checked <=> ExportDialogState.with-heatmap;
                         enabled: root.xlsx;
                     }
-
                     InkMultiSelect {
                         enabled: ExportDialogState.with-heatmap && root.xlsx;
                         summary-text: ExportDialogState.square-size-summary;
                         items <=> ExportDialogState.square-size-items;
                         multi-select: false;
-                        pill-width: root.field-w;
+                        pill-width: 120px;
                         item-selected(key, value, selected) => {
                             if selected {
                                 ExportDialogState.square-size-summary = value;
@@ -221,61 +254,38 @@ export component ExportDialog inherits InkDialog {
                         }
                     }
                 }
-
                 CheckBox {
                     text: "Transpose the tables";
                     checked <=> ExportDialogState.transpond-output-table;
                 }
             }
 
-            Group {
+            if root.more: Group {
                 title: "PLATE & WELLS";
                 InkHint {
-                    text: "Grouping, plate size and well layout as in the project's plate settings." + (root.xlsx ? "" : " Only for XLSX.");
+                    text: "As in the project's plate settings." + (root.xlsx ? "" : " Only for XLSX.");
                 }
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 8px;
-                        CheckBox {
-                            text: "Plate as heatmap";
-                            checked <=> ExportDialogState.with-plate-heatmap-view;
-                            enabled: root.xlsx;
-                        }
-
-                        CheckBox {
-                            text: "Plate as list";
-                            checked <=> ExportDialogState.with-plate-list;
-                            enabled: root.xlsx;
-                        }
-                    }
-
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 8px;
-                        CheckBox {
-                            text: "Wells as heatmap";
-                            checked <=> ExportDialogState.with-well-heatmap-view;
-                            enabled: root.xlsx;
-                        }
-
-                        CheckBox {
-                            text: "Wells as list";
-                            checked <=> ExportDialogState.with-well-list;
-                            enabled: root.xlsx;
-                        }
-                    }
+                CheckBox {
+                    text: "Plate as list";
+                    checked <=> ExportDialogState.with-plate-list;
+                    enabled: root.xlsx;
                 }
-
+                CheckBox {
+                    text: "Wells as heatmap";
+                    checked <=> ExportDialogState.with-well-heatmap-view;
+                    enabled: root.xlsx;
+                }
+                CheckBox {
+                    text: "Wells as list";
+                    checked <=> ExportDialogState.with-well-list;
+                    enabled: root.xlsx;
+                }
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
                     InkLabel {
                         text: "Colors";
                     }
-
                     InkMultiSelect {
                         summary-text: ExportDialogState.color-schema-summary;
                         items <=> ExportDialogState.color-schema-items;
@@ -291,40 +301,26 @@ export component ExportDialog inherits InkDialog {
                 }
             }
 
-            Group {
-                title: "FILTER";
+            if root.more: Group {
+                title: "FILE AND VALUES";
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
                     InkLabel {
-                        text: "Classes";
+                        text: "Name prefix";
                     }
-
-                    InkMultiSelect {
-                        summary-text: ExportDialogState.class-summary;
-                        items <=> ExportDialogState.class-items;
-                        multi-select: true;
-                        show-select-all: true;
-                        pill-width: root.field-w;
-                        item-selected(key, value, selected) => {
-                            ExportDialogState.class-item-selected(key, selected);
-                        }
-                        select-all => {
-                            ExportDialogState.class-select-all();
-                        }
-                        select-none => {
-                            ExportDialogState.class-select-none();
-                        }
+                    LineEdit {
+                        width: root.field-w;
+                        placeholder-text: "e.g. experiment1_";
+                        text <=> ExportDialogState.output-file-prefix;
                     }
                 }
-
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
                     InkLabel {
                         text: "Measurements";
                     }
-
                     InkMultiSelect {
                         summary-text: ExportDialogState.column-summary;
                         items <=> ExportDialogState.column-items;
@@ -343,14 +339,12 @@ export component ExportDialog inherits InkDialog {
                         }
                     }
                 }
-
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
                     InkLabel {
                         text: "Aggregations";
                     }
-
                     InkMultiSelect {
                         summary-text: ExportDialogState.aggregation-summary;
                         items <=> ExportDialogState.aggregation-items;
@@ -362,27 +356,23 @@ export component ExportDialog inherits InkDialog {
                         }
                     }
                 }
-
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
                     InkLabel {
                         text: "Z planes";
                     }
-
                     RangeFields {
                         first <=> ExportDialogState.z-start;
                         last <=> ExportDialogState.z-end;
                     }
                 }
-
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
                     InkLabel {
                         text: "Time points";
                     }
-
                     RangeFields {
                         first <=> ExportDialogState.t-start;
                         last <=> ExportDialogState.t-end;

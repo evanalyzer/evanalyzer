@@ -4,7 +4,7 @@
 // controls on the right; the annotate tools on top. Results fill it.
 
 import { Ink, InkIcons, InkPanel, InkPanelHead, InkIconButton } from "../ink/ink.slint";
-import { LayoutState, WorkspaceMode } from "../api/layout.slint";
+import { Places, LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { GlobalAppState, DialogType } from "../api/state.slint";
 import { Viewport } from "../editor/viewport.slint";
 import { PreviewRendering } from "../dialogs/preview_rendering_dialog.slint";
@@ -25,9 +25,9 @@ import { PipelineRunningState } from "../api/pipeline_running.slint";
 
 // Gap between the panels and the edges.
 global Float {
-    out property <length> gap: 12px;
-    out property <length> left-w: 360px;
-    out property <length> right-w: 300px;
+    out property <length> gap: Places.gap;
+    out property <length> left-w: Places.left-w;
+    out property <length> right-w: Places.right-w;
 }
 
 // The three switches for the right-hand panels.
@@ -129,6 +129,7 @@ export component Workspace inherits Rectangle {
         height: 100%;
         inset-left: LayoutState.mode == WorkspaceMode.results ? 0px : Float.left-w + 2 * Float.gap;
         inset-right: Float.right-w + 2 * Float.gap;
+        inset-bottom: root.table-room;
     }
 
     // -- Left --

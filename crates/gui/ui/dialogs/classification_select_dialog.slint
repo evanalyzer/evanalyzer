@@ -1,3 +1,4 @@
+import { Places } from "../api/layout.slint";
 // dialogs/classification_select_dialog.slint — picks a class for the
 // selected object: set it (replacing its classes) or add it.
 
@@ -8,6 +9,10 @@ import { ClassSelectDialogState } from "../api/classification_select.slint";
 import { Ink, InkDialog, InkDialogFooter, InkButton, InkButtonKind, InkListRow, InkBusy } from "../ink/ink.slint";
 
 export component ClassSelectDialog inherits InkDialog {
+    // Left of the right-hand panels.
+    from-right: true;
+    anchor-x: Places.beside-right;
+    anchor-y: 220px;
     title: "Select class";
     subtitle: "for object " + ObjectListState.selected_object.id;
     card-width: 380px;

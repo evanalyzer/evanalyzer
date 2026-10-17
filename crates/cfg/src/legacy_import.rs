@@ -87,6 +87,7 @@ fn convert_project(old: &LegacyAnalyzeSettings, warnings: &mut Vec<String>) -> P
         pipelines: convert_pipelines(old, warnings),
         tile_merge: crate::settings::project_settings::TileMergeSettings::default(),
         components: vec![],
+        editor: Default::default(),
     }
 }
 

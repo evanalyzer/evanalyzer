@@ -70,12 +70,21 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   (Settings › Viewport › Before / after); costs nothing while off.
 - **Tuning (E):** tabs "All pinned · N" and one per step; the ⌖ in a step's
   line pins all its settings (again: unpins).
-- **No modal dialogs:** dialogs have no backdrop - the image, the panels
-  and the shortcuts stay usable. Large ones are sheets on the right
-  (settings, AI training, export, step / component settings, Add step,
-  templates, script editor), small ones float under the top bar; all can be
-  moved by their head. Only the analysis' waiting dialog ("Edit while an
-  analysis runs" off) still blocks.
+- **Dialogs where the boards put them (N, O, P, Q, R), none modal:** no
+  backdrop - the image, panels and shortcuts stay usable; all movable by
+  their head; Esc closes the open one also after a click into the window
+  (`DialogEscape`). Settings: a 440 px sheet on the right, one column,
+  sections opened and closed by their head, search on top (O). AI training:
+  440 px sheet (R). Export: a 380 px card below its button - what, format,
+  classes, folder; "More options ›" for the rest (R). Step settings, Add
+  step, component settings (tabs General / Parameters), create / update
+  component, pipeline edit: next to the steps panel (P, Q). Class settings
+  (narrow, 7 colors a row), delete / auto-add classes, set class, delete
+  objects: left of the right-hand panels (N, P). Run analysis below Run
+  with "N pipelines · M images", connect at the bottom left, unsaved
+  changes centred a third down (N). Places from `Places` (api/layout.slint).
+  Only the analysis' waiting dialog ("Edit while an analysis runs" off)
+  still blocks.
 - **Build:** generated code 34.9 MB → 32.78 MB → 34.0 MB (this round:
   dialogs movable/non-modal ~0.33 MB - `InkDialog` is copied into each of
   its 31 uses -, object card ~0.2 MB, images panel ~0.15 MB, the rest
@@ -93,10 +102,9 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 - [ ] **Object card (F):** "Coloc with" (not in the object data yet).
 - [ ] **Images (G):** "+ Add images" (images are the folder's content
       today; there is no action for single images).
-- [ ] **Settings sheet (O):** one column with collapsible sections - today
-      the settings sheet keeps its two-column layout (920 px wide).
-- [ ] **Class / component settings in place (P):** next to the class or
-      step they belong to - today they float under the top bar.
+- [ ] **Dialogs, not yet:** more than one open at a time (`active_dialog`
+      is one value); class settings exactly at the clicked class row (they
+      open at the top of the classes panel).
 - [ ] **Pipelines (J):** reorder by dragging ⋮⋮.
 - [ ] **Charts (M):** group by well row / column; a click on a box or
       point shows its objects in the List.
