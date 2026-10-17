@@ -12,6 +12,7 @@ import { ImageMetaData } from "../api/image_meta.slint";
 import { ImagesListState } from "../api/images_list.slint";
 import { AiLearningState } from "../api/ai_learning.slint";
 import { ResultsBarNav, ResultsBarActions } from "../results/results_bar.slint";
+import { StartState } from "../api/start.slint";
 
 // "EVA ▾": opens the app's one menu.
 component EvaButton inherits Rectangle {
@@ -218,7 +219,10 @@ export component TopBar inherits Rectangle {
     in property <string> title;
     // Results: the view and the analysis here, Export on the right (boards
     // H, L, M) - no image, preview or Run.
-    property <bool> results: LayoutState.mode == WorkspaceMode.results;
+    property <bool> results: !StartState.active && LayoutState.mode == WorkspaceMode.results;
+    // Images and Pipelines: the image, preview and Run (not on the start
+    // page - nothing is open there).
+    property <bool> editing: !StartState.active && !root.results;
 
     height: Ink.bar-h;
     background: Ink.panel;
@@ -285,7 +289,7 @@ export component TopBar inherits Rectangle {
                         background: Ink.warn;
                     }
                 }
-                if !root.results: InkIconButton {
+                if root.editing: InkIconButton {
                     size: 30px;
                     icon: InkIcons.refresh;
                     label: "Refresh preview";
@@ -293,7 +297,7 @@ export component TopBar inherits Rectangle {
                         PipelinesPanelState.dry-run();
                     }
                 }
-                if !root.results: InkIconButton {
+                if root.editing: InkIconButton {
                     size: 30px;
                     icon: InkIcons.annotate;
                     label: "Annotate";
@@ -309,7 +313,7 @@ export component TopBar inherits Rectangle {
             y: (Ink.bar-h - self.height) / 2;
         }
 
-        if !root.results: VerticalLayout {
+        if root.editing: VerticalLayout {
             alignment: center;
             ImageChip { }
         }
@@ -318,11 +322,11 @@ export component TopBar inherits Rectangle {
             padding-left: 6px;
         }
 
-        if root.results: Rectangle {
+        if !root.editing: Rectangle {
             horizontal-stretch: 1;
         }
 
-        if !root.results: Text {
+        if root.editing: Text {
             horizontal-stretch: 1;
             text: root.title;
             font-size: Ink.fs-md;
@@ -334,7 +338,7 @@ export component TopBar inherits Rectangle {
 
         if root.results: ResultsBarActions { }
 
-        if !root.results: VerticalLayout {
+        if root.editing: VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
             HorizontalLayout {
@@ -413,6 +417,7 @@ export component TopBar inherits Rectangle {
             InkMenuItem {
                 icon: InkIcons.folder;
                 text: "Open images folder…";
+                shortcut: "Ctrl Shift O";
                 clicked => {
                     ImagesListState.open_images_folder_clicked();
                 }

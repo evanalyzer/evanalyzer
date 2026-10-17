@@ -635,8 +635,9 @@ fn run(
     editor.attach_callbacks();
     // `--project`: opened like "File > Open" - a file that can't be read
     // shows the usual warning in the window.
-    if let Some(path) = project {
-        editor.open_project(&path);
+    match project {
+        Some(path) => editor.open_project(&path),
+        None => editor.show_start(),
     }
     // Kept alive until the window closes.
     let app = ui_state.app.clone();

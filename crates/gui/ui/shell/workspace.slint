@@ -25,6 +25,8 @@ import { ResultsPeek } from "results_peek.slint";
 import { SeriesChooser } from "series_chooser.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { ResultsRailMode, ResultsState } from "../api/results.slint";
+import { StartState } from "../api/start.slint";
+import { StartPage } from "start_page.slint";
 import { AnalysisCard } from "../dialogs/pipeline_running_dialog.slint";
 import { PipelineRunningState, PreviewRunState } from "../api/pipeline_running.slint";
 
@@ -331,5 +333,11 @@ export component Workspace inherits Rectangle {
     if LayoutState.annotate && root.on-image: AnnotateBar {
         x: (parent.width - self.width) / 2;
         y: Float.gap;
+    }
+
+    // Nothing open yet (startup, File › New): the start page over it all.
+    if StartState.active: StartPage {
+        width: 100%;
+        height: 100%;
     }
 }

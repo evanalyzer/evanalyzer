@@ -122,8 +122,12 @@ export component GlobalShortcuts inherits FocusScope {
             }
             return accept;
         }
-        if (e.modifiers.control && e.text == "o") {
-            ToolbarState.open_file_clicked();
+        if (e.modifiers.control && (e.text == "o" || e.text == "O")) {
+            if (e.modifiers.shift) {
+                ImagesListState.open_images_folder_clicked();
+            } else {
+                ToolbarState.open_file_clicked();
+            }
             return accept;
         }
 

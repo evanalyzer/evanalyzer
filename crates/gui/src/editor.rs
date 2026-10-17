@@ -34,6 +34,7 @@ pub mod results_list_controller;
 pub mod results_overlay;
 pub mod results_state_controller;
 pub mod script_editor_controller;
+pub mod start_page_controller;
 pub(crate) mod step_model_patch;
 pub mod template_controller;
 #[cfg(test)]
@@ -69,6 +70,7 @@ pub struct Editor {
     connection_controller: Arc<connection_controller::ConnectionController>,
     script_editor_controller: script_editor_controller::ScriptEditorController,
     command_palette_controller: command_palette_controller::CommandPaletteController,
+    start_page_controller: Arc<start_page_controller::StartPageController>,
 }
 
 impl Editor {
@@ -227,7 +229,14 @@ impl Editor {
         let command_palette_controller =
             command_palette_controller::CommandPaletteController::new(ui.clone());
 
+        let start_page_controller = Arc::new(start_page_controller::StartPageController::new(
+            ui.clone(),
+            app_state.clone(),
+            project_controller.clone(),
+        ));
+
         Self {
+            start_page_controller,
             connection_controller,
             script_editor_controller,
             command_palette_controller,
@@ -255,6 +264,7 @@ impl Editor {
     pub fn attach_callbacks(self: &Arc<Self>) {
         self.image_list_controller.attach_callbacks();
         self.project_controller.attach_callbacks();
+        self.start_page_controller.attach_callbacks();
         self.histogram_controller.attach_callbacks();
         self.viewport_image_controller.attach_callbacks();
         self.image_meta_controller.attach_callbacks();
@@ -276,6 +286,11 @@ impl Editor {
         self.viewport_worker.start_worker();
         self.pipeline_worker.start_worker();
         self.pipelines_controller.follow_server_analyses();
+    }
+
+    /// Startup without a project to open: the last one, or the start page.
+    pub fn show_start(&self) {
+        self.start_page_controller.show_start();
     }
 
     /// Opens the project file at `path`, as "File > Open" does.
