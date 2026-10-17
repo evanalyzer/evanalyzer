@@ -285,6 +285,10 @@ pub struct ViewportController {
     /// Which of `breakpoint_channel`'s buffers to render (image/segmentation/
     /// instances). Stored as the raw `BreakpointViewMode` discriminant.
     pub(crate) breakpoint_view_mode: Arc<AtomicU8>,
+    /// Compare (top bar, only with a breakpoint image): the original is
+    /// rendered as the image and the breakpoint image as a second one over
+    /// it, cut at the divider in the UI. Off: no second render.
+    pub(crate) compare: Arc<AtomicBool>,
     pub(crate) high_res_posted_count: Arc<AtomicU64>,
     pub(crate) high_res_last_count_at_false: Arc<AtomicU64>,
     pub(crate) high_res_is_ready: AtomicBool,
@@ -363,6 +367,7 @@ impl ViewportController {
             breakpoint_channel: Arc::new(RwLock::new(None)),
             show_breakpoint: Arc::new(AtomicBool::new(false)),
             breakpoint_view_mode: Arc::new(AtomicU8::new(BreakpointViewMode::default() as u8)),
+            compare: Arc::new(AtomicBool::new(false)),
             high_res_posted_count: Arc::new(AtomicU64::new(0)),
             high_res_last_count_at_false: Arc::new(AtomicU64::new(0)),
             high_res_is_ready: AtomicBool::new(false),
@@ -727,9 +732,10 @@ impl ViewportController {
         })
         .ok();
 
-        // If the breakpoint view is already active, re-render immediately so
-        // the updated image is visible without requiring a manual pan/zoom.
-        if self.show_breakpoint.load(Ordering::Relaxed) {
+        // If the breakpoint view is already active (or compared), re-render
+        // immediately so the updated image is visible without requiring a
+        // manual pan/zoom.
+        if self.show_breakpoint.load(Ordering::Relaxed) || self.comparing() {
             self.trigger_image_redraw();
         }
     }
@@ -739,6 +745,56 @@ impl ViewportController {
     pub fn set_show_breakpoint(&self, show: bool) {
         self.show_breakpoint.store(show, Ordering::Relaxed);
         self.trigger_image_redraw();
+    }
+
+    /// Whether the breakpoint image is compared with the original.
+    pub fn comparing(&self) -> bool {
+        self.compare.load(Ordering::Relaxed)
+    }
+
+    /// Compare on or off. Off frees the second image at once.
+    pub fn set_compare(&self, on: bool) {
+        if self.compare.swap(on, Ordering::Relaxed) == on {
+            return;
+        }
+        if !on {
+            let ui_weak = self.ui.clone();
+            crate::helper::ui_thread::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let view = ui.global::<ViewportSlintState>();
+                    view.set_compare_ready(false);
+                    view.set_compare_image(slint::Image::default());
+                }
+            })
+            .ok();
+        }
+        self.trigger_image_redraw();
+    }
+
+    /// The breakpoint image of a compare, where it lies in the image.
+    pub fn sync_compare_to_slint(
+        &self,
+        pixel_buffer: slint::SharedPixelBuffer<slint::Rgb8Pixel>,
+        rect: ImageRect,
+    ) {
+        let compare = self.compare.clone();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            // Switched off meanwhile: not shown (and not kept).
+            if !compare.load(Ordering::Relaxed) {
+                return;
+            }
+            if let Some(ui) = ui_weak.upgrade() {
+                let view = ui.global::<ViewportSlintState>();
+                view.set_cmp_img_x(rect.x);
+                view.set_cmp_img_y(rect.y);
+                view.set_cmp_img_w(rect.w);
+                view.set_cmp_img_h(rect.h);
+                view.set_compare_image(slint::Image::from_rgb8(pixel_buffer));
+                view.set_compare_ready(true);
+            }
+        })
+        .ok();
     }
 
     /// Reads the currently selected breakpoint view mode (image/segmentation/
@@ -752,7 +808,7 @@ impl ViewportController {
     pub fn set_breakpoint_view_mode(&self, mode: i32) {
         self.breakpoint_view_mode
             .store(BreakpointViewMode::from_i32(mode) as u8, Ordering::Relaxed);
-        if self.show_breakpoint.load(Ordering::Relaxed) {
+        if self.show_breakpoint.load(Ordering::Relaxed) || self.comparing() {
             self.trigger_image_redraw();
         }
     }

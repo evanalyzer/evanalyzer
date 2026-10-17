@@ -80,9 +80,29 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
   analysis open in Results are tracked (`UiState::image_states`).
 - **Object card (F):** the selected object next to it on the image -
   classes, area, circularity, mean per channel, change class, delete.
-- **Before / after (C):** a divider to drag (top bar button), hold Space
-  for the image without the preview's objects. Can be switched off
-  (Settings › Viewport › Before / after); costs nothing while off.
+- **Compare (C, changed):** the breakpoint image and the original side
+  by side - a divider to drag (top bar button, only with a breakpoint
+  image), a click on its handle swaps the sides, hold Space for the whole
+  original. The original is the image, the breakpoint image a second
+  render over it (own buffers, only while comparing); dragging the
+  divider only moves the cut. Can be switched off (Settings › Viewport ›
+  Compare with the breakpoint).
+- **Add step stays open:** each added step goes in after the one added
+  before, the footer says "✓ Added Threshold as step 3", Cancel turns
+  Done. Adding from the command palette closes it.
+- **User settings (Viewport):** "Objects as a table" (what an image opens
+  with, default list - ⋯ still switches) and "Object card" (default off).
+- **Objects table:** the class chip and the search in its head (K).
+- **Component settings (P):** General / Parameters in the head; the
+  parameters as a list by section with the chosen one's form beside it
+  (name, section, help, default, "Sets" as chips, "Also set…", ↑ ↓,
+  remove); Cancel (✕, Esc) undoes everything changed while it was open,
+  Apply keeps it - "Changes apply to every use of the component".
+- **Step settings (Q):** the step in the head ("Threshold · step 3 ·
+  settings"), 430 px, as high as its settings.
+- **Fields keep the focus:** the steps' models are updated in place after
+  a change or a preview (`step_model_patch`), not rebuilt - a field being
+  typed into or scrubbed isn't recreated.
 - **Tuning (E):** tabs "All pinned · N" and one per step; the ⌖ in a step's
   line pins all its settings (again: unpins).
 - **Dialog heads:** title and ✕ centred; one line under the head (no
@@ -116,15 +136,15 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 
 - [ ] **Own title bar:** no system frame - window move, minimise, maximise,
       close and resize at the edges via winit (differs per platform).
-- [ ] **Before / after (C), the full version:** compare two previews (a
-      setting before and after a change, "Before · 200 / After · 240") -
-      today it compares the image without and with the objects.
+- [ ] **Compare two previews (C):** a setting before and after a change
+      ("Before · 200 / After · 240") - would reuse the compare's second
+      render. Today: breakpoint image against the original.
 - [ ] **Object card (F):** "Coloc with" (not in the object data yet).
 - [ ] **Images (G):** "+ Add images" (images are the folder's content
       today; there is no action for single images).
-- [ ] **Dialogs, not yet:** more than one open at a time (`active_dialog`
-      is one value); class settings exactly at the clicked class row (they
-      open at the top of the classes panel).
+- [ ] **Dialogs:** class settings exactly at the clicked class row (they
+      open at the top of the classes panel). More than one open at a time:
+      decided against (TODO, IDEA).
 - [ ] **Charts (M):** a click on a scatter point (points carry no object
       yet) - boxes do.
 - [ ] **List (L):** "Rows 1–200 of N" (the total isn't known; it shows the
@@ -143,7 +163,13 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 ### Findings
 
 - **One dialog at a time:** dialogs are non-modal now, but there is still
-  one `active_dialog` - opening another replaces the open one.
+  one `active_dialog` - opening another replaces the open one. Kept on
+  purpose (no use case for more).
+- **Slint 1.18, FocusScope:** one without focus takes a mouse press to get
+  focus - a FocusScope over the window (`DialogShortcuts`) ate the press
+  that should pan the image. `focus-on-click: false` on such layers.
+- **Hover-shown buttons** go inside the row's TouchArea: as its siblings,
+  hovering a button un-hovers the row, the button hides, and it flickers.
 - **Slint 1.18:** a `let` string local used twice in a callback generates
   Rust that doesn't compile (use a property); a PopupWindow sizes itself
   from its child's min/max constraints, not from a fixed width/height on

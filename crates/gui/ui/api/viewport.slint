@@ -71,6 +71,15 @@ export global ViewportState {
     in-out property <float> hr_zoom: 0;
     in-out property <int> hr_generation: 0;
 
+    // Compare: the breakpoint image, over the original, cut at the
+    // divider (`ViewportObjectState.compare-at`). Empty while off.
+    in-out property <image> compare_image;
+    in-out property <bool> compare_ready: false;
+    in-out property <float> cmp_img_x: 0;
+    in-out property <float> cmp_img_y: 0;
+    in-out property <float> cmp_img_w: 0;
+    in-out property <float> cmp_img_h: 0;
+
     in-out property <float> obj_img_x: 0;
     in-out property <float> obj_img_y: 0;
     in-out property <float> obj_img_w: 0;
@@ -125,12 +134,17 @@ export global ViewportObjectState {
 
     in-out property <[MarkerData]> markers: [];
     in-out property <ObjectHighlightBox> object_highlight: { active: false };
-    // Before / after: the image without the preview's objects (left of
-    // `compare-at`, a fraction of the width) and with them (right).
+    // Compare (only with a breakpoint image): the breakpoint image left of
+    // `compare-at` (a fraction of the width), the original right of it -
+    // swapped: the other way round.
     in-out property <bool> compare: false;
     in-out property <float> compare-at: 0.5;
-    // Space held: the whole image without them.
+    in-out property <bool> compare-swapped: false;
+    // Space held: the whole original.
     in-out property <bool> show-before: false;
+    // Whether the compare is shown (on, allowed in the settings, a
+    // breakpoint image there): the second render runs only then.
+    callback compare-changed(bool);
     in-out property <ToolState> act_tool_state:  ToolState.Move;
     in-out property <bool> is_drawing: false;
     in-out property <int> poly_idx:0;

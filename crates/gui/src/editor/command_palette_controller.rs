@@ -260,6 +260,10 @@ fn run(ui: &AppWindow, id: &str) {
                 panel.get_active_commands().row_count() as i32,
             );
             ui.global::<CommandPickerState>().invoke_confirm(command);
+            // Added at once: the picker, which stays open for the next step
+            // otherwise, isn't wanted here.
+            ui.global::<GlobalAppState>()
+                .set_active_dialog(DialogType::None);
         }
         // Opened, as from the images list.
         "image" => ui

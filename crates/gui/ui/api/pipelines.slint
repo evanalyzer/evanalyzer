@@ -431,6 +431,8 @@ export global PipelinesPanelState {
     callback show-model-info(int); // step-id
         // The step (step-id) whose settings the settings dialog shows.
         in-out property <string> settings-step-id;
+        // Its name, for the settings dialog's head.
+        in-out property <string> settings-step-name;
         // Opens the settings dialog for a step (step-id).
         callback open-step-settings(string);
 

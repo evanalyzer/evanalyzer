@@ -38,6 +38,8 @@ export global CommandPickerState {
     in property <int> insert-after-idx: -1;
     in property <int> pipeline-id: 0;
     in property <int> total-steps;
+    // The step just added ("Threshold as step 3"), "" before the first.
+    in property <string> last-added;
     in property <[CommandDef]> shown-preprocess;
     in property <[CommandDef]> shown-segment;
     in property <[CommandDef]> shown-object;

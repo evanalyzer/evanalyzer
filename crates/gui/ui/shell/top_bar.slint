@@ -260,11 +260,13 @@ export component TopBar inherits Rectangle {
             horizontal-stretch: 0;
             HorizontalLayout {
                 spacing: 6px;
-                // Before / after (Space: hold for before) - can be switched off.
-                if ViewportMemoryState.before_after: InkIconButton {
+                // Compare the breakpoint image with the original (hold
+                // Space: the original) - with a breakpoint image; can be
+                // switched off in the settings.
+                if ViewportMemoryState.before_after && PipelinesPanelState.has-breakpoint-image: InkIconButton {
                     size: 28px;
                     icon: InkIcons.compare;
-                    label: "Before / after (hold Space)";
+                    label: "Compare with the original (hold Space: original)";
                     active: ViewportObjectState.compare;
                     clicked => {
                         ViewportObjectState.compare = !ViewportObjectState.compare;

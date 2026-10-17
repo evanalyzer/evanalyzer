@@ -1,3 +1,4 @@
+import { ViewportObjectState } from "../api/viewport.slint";
 import { Places } from "../api/layout.slint";
 // pipelines_panel.slint
 // EVAnalyzer - Pipelines panel.
@@ -111,8 +112,9 @@ component PipelineTab inherits Rectangle {
                     root.alt-clicked();
                 }
             }
-        }
 
+        // The buttons inside: over one the line stays hovered (as
+        // siblings they flickered).
         HorizontalLayout {
             padding-left: 2px;
             padding-right: 4px;
@@ -237,6 +239,7 @@ component PipelineTab inherits Rectangle {
                     }
                 }
             }
+        }
         }
     }
 }
@@ -2018,12 +2021,14 @@ component StepRow inherits Rectangle {
             Rectangle {
                 height: 34px;
                 opacity: step.enabled ? 1.0 : 0.5;
+                // The line's buttons inside it: over a button the line
+                // stays hovered (as siblings they flickered - hiding the
+                // button hovered the line, which showed it again).
                 head-ta := TouchArea {
                     clicked => {
                         PipelinesPanelState.selected-step-id = root.idx;
                         root.toggle-expanded();
                     }
-                }
 
                 HorizontalLayout {
                     spacing: 0px;
@@ -2218,6 +2223,7 @@ component StepRow inherits Rectangle {
                             }
                         }
                     }
+                }
                 }
             }
 
@@ -3121,7 +3127,8 @@ export component PipelinesPanel inherits Rectangle {
                 Rectangle {
                     horizontal-stretch: 1;
                 }
-                if PipelinesPanelState.show-breakpoint-image: InkSelect {
+                // Also for the compare (its breakpoint side).
+                if PipelinesPanelState.show-breakpoint-image || ViewportObjectState.compare: InkSelect {
                     width: 140px;
                     label: "Breakpoint shows";
                     model: ["Processed image", "Segmentation", "Instances"];
@@ -3304,13 +3311,11 @@ export component PipelinesPanel inherits Rectangle {
 // setting. Shows the step `PipelinesPanelState.settings-step-id`, live:
 // edits go through the same callbacks as on the card.
 export component StepSettingsDialog inherits InkDialog {
-    // Next to the steps panel.
+    // Next to the steps panel, as high as its settings (design Q).
     anchor-x: Places.beside-left;
-    // Docked on the right; the image stays usable.
-    placement: InkDialogPlacement.sheet;
-    title: "Step settings";
-    card-width: 600px;
-    card-height: 660px;
+    title: PipelinesPanelState.settings-step-name;
+    subtitle: "step \{PipelinesPanelState.settings-step-id} · settings";
+    card-width: 430px;
     content-padding: 0px;
     close-on-backdrop: true;
 
@@ -3336,59 +3341,19 @@ export component StepSettingsDialog inherits InkDialog {
     }
 
     // The chosen step's settings - one list for all steps, so the step is
-    // found in it (the list is rebuilt after each change).
-    Rectangle {
-        vertical-stretch: 1;
-        for cmd in PipelinesPanelState.active-commands: Rectangle {
-            width: 100%;
-            height: 100%;
+    // found in it (the list is rebuilt after each change). Layouts, so the
+    // card is as high as the shown settings.
+    VerticalLayout {
+        for cmd in PipelinesPanelState.active-commands: VerticalLayout {
             if cmd.step-id == PipelinesPanelState.settings-step-id: VerticalLayout {
                 property <bool> on-advanced: !root.searching && root.current >= cmd.sections.length;
 
-                // -- The step, its tabs, the search --
+                // -- Its tabs, the search (the step is in the head) --
                 VerticalLayout {
                     vertical-stretch: 0;
                     padding-left: Ink.pad-dialog;
                     padding-right: Ink.pad-dialog;
-                    padding-top: 12px;
-                    spacing: 8px;
-
-                    HorizontalLayout {
-                        height: 24px;
-                        spacing: 8px;
-                        Rectangle {
-                            width: 3px;
-                            border-radius: 1.5px;
-                            background: Cat.color(cmd.category);
-                        }
-
-                        Text {
-                            text: cmd.step-id;
-                            font-size: Ink.fs-md;
-                            font-family: Ink.font-mono;
-                            color: Ink.text-mute;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: cmd.name;
-                            font-size: Ink.fs-title;
-                            font-weight: 600;
-                            color: Ink.text;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            horizontal-stretch: 1;
-                            text: cmd.summary;
-                            font-size: Ink.fs-sm;
-                            font-family: Ink.font-mono;
-                            color: Ink.text-mute;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-                    }
+                    padding-top: 6px;
 
                     HorizontalLayout {
                         height: 30px;
@@ -3417,8 +3382,8 @@ export component StepSettingsDialog inherits InkDialog {
                         }
 
                         InkSearchField {
-                            width: 170px;
-                            placeholder: "Search settings";
+                            width: 130px;
+                            placeholder: "Search";
                             text: root.query;
                             edited(t) => {
                                 root.query = t;
@@ -3429,10 +3394,12 @@ export component StepSettingsDialog inherits InkDialog {
 
                 InkDivider { }
 
-                // -- The chosen tab's settings --
+                // -- The chosen tab's settings: as high as they are, up to
+                // the room there is (then it scrolls) --
                 ScrollView {
                     vertical-stretch: 1;
-                    VerticalLayout {
+                    preferred-height: max(200px, step-body.preferred-height);
+                    step-body := VerticalLayout {
                         padding-left: Ink.pad-dialog;
                         padding-right: Ink.pad-dialog;
                         padding-top: 12px;

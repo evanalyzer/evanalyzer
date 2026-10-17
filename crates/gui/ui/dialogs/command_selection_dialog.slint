@@ -460,6 +460,7 @@ export component CommandSelectionDialog inherits InkDialog {
     in property <string> target-pipeline;        // pipeline name, for breadcrumb
     in property <int> insert-after-idx;          // -1 = append
     in property <int> total-steps;               // for breadcrumb "after step N of M"
+    in property <string> last-added;             // "Threshold as step 3" - stays open for the next
 
     // ---- Selection / filter state (in-out so host can drive too) ----
     in-out property <string> query: "";
@@ -1108,8 +1109,18 @@ export component CommandSelectionDialog inherits InkDialog {
                 padding-top: 10px;
                 padding-bottom: 10px;
 
+                // Stays open for the next step: what was just added.
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.last-added == "" ? "" : "✓ Added " + root.last-added;
+                    font-size: Ink.fs-sm;
+                    color: Ink.ok;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
                 InkButton {
-                    text: "Cancel";
+                    text: root.last-added == "" ? "Cancel" : "Done";
                     clicked => {
                         root.cancel();
                     }

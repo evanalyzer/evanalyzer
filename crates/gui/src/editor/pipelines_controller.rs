@@ -250,6 +250,13 @@ impl PipelinesController {
                     manager.viewport_controller.set_show_breakpoint(show);
                 });
 
+            // Compare the breakpoint image with the original (shown or not).
+            let manager = self.clone();
+            ui.global::<crate::ViewportObjectState>()
+                .on_compare_changed(move |on| {
+                    manager.viewport_controller.set_compare(on);
+                });
+
             // Breakpoint buffer picker: 0 = processed image, 1 = segmentation,
             // 2 = instances.
             let manager = self.clone();
@@ -317,6 +324,9 @@ impl PipelinesController {
                     let mut opened_advanced = false;
                     for i in 0..commands.row_count() {
                         if let Some(mut cmd) = commands.row_data(i) {
+                            if cmd.step_id == step_id {
+                                state.set_settings_step_name(cmd.name.clone());
+                            }
                             if cmd.step_id == step_id && !cmd.show_advanced {
                                 cmd.show_advanced = true;
                                 commands.set_row_data(i, cmd);
@@ -995,6 +1005,7 @@ impl PipelinesController {
                         picker.set_fcat_cls(suggested_filter[4]);
                         picker.set_fcat_dat(suggested_filter[5]);
                         picker.set_selected_id(-1);
+                        picker.set_last_added("".into());
                         // Apply the filter immediately so the list matches the chips.
                         manager.apply_picker_filter(&ui, "");
                         ui.global::<GlobalAppState>()
@@ -1066,7 +1077,8 @@ impl PipelinesController {
                     }
                 });
 
-            // Picker: confirm - insert command and close
+            // Picker: confirm - insert the command. The picker stays open for
+            // the next step, which goes in after this one.
             let manager = self.clone();
             ui.global::<CommandPickerState>()
                 .on_confirm(move |command_id| {
@@ -1188,20 +1200,39 @@ impl PipelinesController {
                             return;
                         }
                     }
-                    {
+                    let added = {
+                        let project = manager.app_state.get_project();
+                        new_steps
+                            .first()
+                            .map(|s| step_label(&project, s))
+                            .unwrap_or_default()
+                    };
+                    let count = new_steps.len();
+                    // Each insert is an undo step of its own.
+                    manager.app_state.begin_undo_step();
+                    let placed = {
                         let mut project = manager.app_state.get_project_write();
-                        if let Some(steps) = manager.shown_steps_mut(&mut project, pipeline_id) {
-                            let insert_at = if after_idx < 0 {
-                                0
-                            } else {
-                                ((after_idx as usize) + 1).min(steps.len())
-                            };
-                            steps.splice(insert_at..insert_at, new_steps);
-                            evanalyzer_app::utils::assign_step_ids(steps);
-                        }
+                        manager
+                            .shown_steps_mut(&mut project, pipeline_id)
+                            .map(|steps| {
+                                let insert_at = if after_idx < 0 {
+                                    0
+                                } else {
+                                    ((after_idx as usize) + 1).min(steps.len())
+                                };
+                                steps.splice(insert_at..insert_at, new_steps);
+                                evanalyzer_app::utils::assign_step_ids(steps);
+                                (insert_at, steps.len())
+                            })
+                    };
+                    if let Some((insert_at, total)) = placed {
+                        let last = insert_at + count - 1;
+                        picker.set_insert_after_idx(last as i32);
+                        picker.set_total_steps(total as i32);
+                        picker.set_last_added(format!("{added} as step {}", last + 1).into());
+                        ui.global::<PipelinesPanelState>()
+                            .set_selected_step_id(last as i32);
                     }
-                    ui.global::<GlobalAppState>()
-                        .set_active_dialog(DialogType::None);
                     manager.pipeline_settings_changed();
                     manager
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
@@ -5478,8 +5509,16 @@ impl PipelinesController {
                 )));
                 state.set_open_component_read_only(read_only);
                 state.set_active_pipeline_image_source(pipeline_image_source.into());
-                state.set_active_commands(ModelRc::new(VecModel::from(commands)));
-                state.set_tuned_settings(ModelRc::new(VecModel::from(tuned)));
+                // In place where the steps are the same: a field being
+                // edited keeps the focus (see `step_model_patch`).
+                state.set_active_commands(crate::editor::step_model_patch::commands(
+                    &state.get_active_commands(),
+                    commands,
+                ));
+                state.set_tuned_settings(crate::editor::step_model_patch::tuned(
+                    &state.get_tuned_settings(),
+                    tuned,
+                ));
 
                 // Keep the pipeline tab's step counts in sync
                 let pipelines = state.get_pipelines();
@@ -10601,7 +10640,10 @@ mod tests {
             step_names(&ui_state, 1),
             ["Threshold", "Colocalization", "Threshold"]
         );
-        assert_eq!(active_dialog(&ui), DialogType::None);
+        // Open for the next one, which goes in after it.
+        assert_eq!(active_dialog(&ui), DialogType::CommandSelectionDialog);
+        assert_eq!(picker.get_insert_after_idx(), 1);
+        assert_eq!(picker.get_last_added(), "Colocalization as step 2");
 
         // Before everything, and past the end.
         picker.set_insert_after_idx(-1);
