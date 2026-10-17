@@ -117,10 +117,16 @@ impl HistogramController {
                         .trigger_image_redraw_with_auto_adjust();
                 });
 
-            // Log or linear counts.
+            // Log or linear counts - the user's choice, kept.
+            let log = !self.app_state.load_app_settings().histogram_linear;
+            self.viewport_controller.set_histogram_log(log);
+            ui.global::<HistogramState>().set_log_scale(log);
             let manager = Arc::clone(self);
             ui.global::<HistogramState>().on_log_scale_changed(move |log| {
                 manager.viewport_controller.set_histogram_log(log);
+                manager
+                    .app_state
+                    .update_app_settings(|settings| settings.histogram_linear = !log);
             });
 
             // Comparing: the original's or the breakpoint's histogram.

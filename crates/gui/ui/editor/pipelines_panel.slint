@@ -2021,6 +2021,27 @@ component StepRow inherits Rectangle {
             Rectangle {
                 height: 34px;
                 opacity: step.enabled ? 1.0 : 0.5;
+                // The keyboard's ring (a click doesn't focus it).
+                border-radius: Ink.radius-md;
+                border-width: line-keys.has-focus ? 2px : 0px;
+                border-color: Ink.focus;
+                // Tab reaches it: focused, it's the selected step (the step
+                // shortcuts act on it); Space / Enter opens or closes it.
+                line-keys := FocusScope {
+                    focus-on-click: false;
+                    changed has-focus => {
+                        if self.has-focus {
+                            PipelinesPanelState.selected-step-id = root.idx;
+                        }
+                    }
+                    key-pressed(e) => {
+                        if e.text == " " || e.text == Key.Return {
+                            root.toggle-expanded();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
                 // The line's buttons inside it: over a button the line
                 // stays hovered (as siblings they flickered - hiding the
                 // button hovered the line, which showed it again).

@@ -97,6 +97,10 @@ export component ExportDialog inherits InkDialog {
                     checked <=> ExportDialogState.with-plate-heatmap-view;
                     enabled: root.xlsx;
                 }
+                CheckBox {
+                    text: "Images with objects drawn (PNG)";
+                    checked <=> ExportDialogState.with-drawn-images;
+                }
             }
 
             Group {

@@ -1,5 +1,5 @@
 {
-  "protocol_version": 16,
+  "protocol_version": 17,
   "postcard_types": {
     "Aggregation": {
       "ENUM": {
@@ -390,6 +390,32 @@
                   }
                 }
               ]
+            }
+          }
+        }
+      ]
+    },
+    "DrawnImages": {
+      "STRUCT": [
+        {
+          "image_root": "STR"
+        },
+        {
+          "series": "I32"
+        },
+        {
+          "max_side": "U32"
+        },
+        {
+          "colors": {
+            "MAP": {
+              "KEY": "I32",
+              "VALUE": {
+                "TUPLEARRAY": {
+                  "CONTENT": "F32",
+                  "SIZE": 3
+                }
+              }
             }
           }
         }
@@ -875,6 +901,13 @@
         },
         {
           "transpond_table": "BOOL"
+        },
+        {
+          "drawn_images": {
+            "OPTION": {
+              "TYPENAME": "DrawnImages"
+            }
+          }
         }
       ]
     },

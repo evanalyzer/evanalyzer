@@ -616,8 +616,10 @@ export component AboutDialog inherits Rectangle {
 
                     HorizontalLayout {
                         spacing: 20px;
-                        Orbit {
-                            size: 200px;
+                        // The orbit's place (it's drawn once, over the tabs).
+                        Rectangle {
+                            width: 200px;
+                            height: 200px;
                         }
 
                         VerticalLayout {
@@ -778,11 +780,9 @@ export component AboutDialog inherits Rectangle {
                     vertical-stretch: 1;
                     padding: 22px;
                     spacing: 22px;
-                    VerticalLayout {
-                        alignment: center;
-                        Orbit {
-                            size: 220px;
-                        }
+                    // The orbit's place (drawn once, over the tabs).
+                    Rectangle {
+                        width: 220px;
                     }
 
                     VerticalLayout {
@@ -1074,6 +1074,14 @@ export component AboutDialog inherits Rectangle {
                     }
                 }
             }
+        }
+
+        // The people's orbit - one for About and the contributors (it's
+        // big), on the place their layouts keep free.
+        if root.tab <= 1: Orbit {
+            size: root.tab == 0 ? 200px : 220px;
+            x: 280px + 22px;
+            y: root.tab == 0 ? 52px + 22px : 52px + (card.height - 52px - 56px - 220px) / 2;
         }
     }
 }

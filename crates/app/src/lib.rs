@@ -76,6 +76,7 @@ pub mod results {
     pub use crate::api::BoxplotBox;
     pub use crate::api::BoxplotFilter;
     pub use crate::api::BoxplotGroup;
+    pub use crate::api::DrawnImages;
     pub use crate::api::COLOR_SCALE_GRADIENT_STOPS;
     pub use crate::api::Cell;
     pub use crate::api::CellValue;

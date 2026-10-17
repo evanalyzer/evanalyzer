@@ -478,6 +478,24 @@ fn format_area_nm2(area_px: usize, pixel_sizes: &PixelSizeSettings) -> SharedStr
     }
 }
 
+/// "CY5 · 2, FITC · 1": the classes `object` colocalizes with and how many
+/// of their objects - "" for none.
+fn coloc_text(object: &ObjectMetricSettings, project: &ProjectWithRuntime) -> String {
+    object
+        .colocalized_with
+        .iter()
+        .filter(|(_, partners)| !partners.is_empty())
+        .map(|(class, partners)| {
+            let name = project
+                .get_class_from_id(class)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| format!("Class {}", class.to_i32()));
+            format!("{name} · {}", partners.len())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn object_rust_to_object_slint(
     object: &ObjectMetricSettings,
     project: &ProjectWithRuntime,
@@ -546,6 +564,11 @@ fn object_rust_to_object_slint(
         .into(),
         intensity_avgs: ModelRc::new(slint::VecModel::from(avgs)).into(),
         circularity: format_circularity(object),
+        coloc_with: if full_metrics {
+            coloc_text(object, project).into()
+        } else {
+            "".into()
+        },
         bbox_x: object.bbox[0] as f32,
         bbox_y: object.bbox[1] as f32,
         bbox_w: (object.bbox[2].saturating_sub(object.bbox[0]) + 1) as f32,
@@ -889,6 +912,28 @@ mod tests {
             name: name.to_string(),
             notes: String::new(),
         }
+    }
+
+    /// The object card's "Coloc with": each class and how many of its
+    /// objects - for the selected object only.
+    #[test]
+    fn the_selected_object_says_what_it_colocalizes_with() {
+        let mut project = ProjectWithRuntime::default();
+        project
+            .classification
+            .classes_mut()
+            .push(class(2, "CY5", 0x112233));
+        let mut object = ObjectMetricSettings::default();
+        object.colocalized_with.insert(
+            ObjectClass::Global(2),
+            vec![Default::default(), Default::default()],
+        );
+        object.colocalized_with.insert(ObjectClass::Global(3), vec![]);
+
+        let selected = object_rust_to_object_slint(&object, &project, 1, true, 0, Some(16));
+        assert_eq!(selected.coloc_with.as_str(), "CY5 · 2");
+        let row = object_rust_to_object_slint(&object, &project, 1, false, 0, Some(16));
+        assert_eq!(row.coloc_with.as_str(), "", "rows don't need it");
     }
 
     #[test]

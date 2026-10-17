@@ -60,7 +60,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

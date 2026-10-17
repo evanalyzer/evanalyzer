@@ -105,6 +105,10 @@ export component ObjectCard inherits Rectangle {
                 label: "Circularity";
                 value: ObjectListState.selected_object.circularity;
             }
+            if ObjectListState.selected_object.coloc-with != "": Fact {
+                label: "Coloc with";
+                value: ObjectListState.selected_object.coloc-with;
+            }
             for channel in ChannelState.channels: Fact {
                 label: "Mean " + channel.name;
                 value: ObjectListState.selected_object.intensity_avgs.length > channel.idx ? ObjectListState.selected_object.intensity_avgs[channel.idx] : "";

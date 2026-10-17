@@ -3766,6 +3766,20 @@ impl ResultsStateController {
     // (blank output folder, unrecognized dropdown key, non-numeric range
     // field) — shown in the dialog's error area rather than silently
     // falling back to a default the user didn't ask for.
+    /// "Images with objects drawn": where the project's images are, the
+    /// series and the channels' colors (the database knows only the
+    /// objects).
+    fn drawn_images(&self) -> evanalyzer_app::results::DrawnImages {
+        use evanalyzer_app::project::ProjectExt;
+        let project = self._app_state.get_project();
+        evanalyzer_app::results::DrawnImages {
+            image_root: project.images.root.clone().unwrap_or_default(),
+            series: project.images.settings.selected_series.unwrap_or(0),
+            max_side: 4096,
+            colors: project.get_channel_display_colors().into_iter().collect(),
+        }
+    }
+
     fn read_export_settings(&self, ui_ready: &AppWindow) -> Result<ResultExport, String> {
         let state = ui_ready.global::<ExportDialogState>();
         let classes = self.classes.lock().expect("Poisened");
@@ -3911,6 +3925,7 @@ impl ResultsStateController {
             with_well_view_list: state.get_with_well_list(),
             with_heatmap: state.get_with_heatmap(),
             transpond_table,
+            drawn_images: state.get_with_drawn_images().then(|| self.drawn_images()),
         })
     }
 

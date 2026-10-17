@@ -251,14 +251,21 @@ export component InkNumberField inherits Rectangle {
     callback changed(string);
 
     // Digits after the point a stepped number gets: as many as `step` has.
-    property <int> decimals: root.step == round(root.step) ? 0
-        : root.step * 10 == round(root.step * 10) ? 1
-        : root.step * 100 == round(root.step * 100) ? 2 : 3;
+    property <int> decimals: root.by == round(root.by) ? 0
+        : root.by * 10 == round(root.by * 10) ? 1
+        : root.by * 100 == round(root.by * 100) ? 2 : 3;
+    // What stepping uses: a setting without a step steps by 1; only a
+    // lower bound (min > max: no max given, e.g. Min Size >= 1) keeps that
+    // bound; no bounds at all (min = max) clamp nothing - else − / + did
+    // nothing (clamped into an empty range).
+    property <float> by: root.step > 0 ? root.step : 1;
+    property <float> lo: root.min != root.max ? root.min : -1000000000;
+    property <float> hi: root.max > root.min ? root.max : 1000000000;
     property <float> shown: input.text.to-float();
     property <length> buttons-w: root.compact ? 0px : 45px;
 
     function step-by(n: float) {
-        input.text = clamp(root.shown + n * root.step, root.min, root.max).to-fixed(root.decimals);
+        input.text = clamp(root.shown + n * root.by, root.lo, root.hi).to-fixed(root.decimals);
         root.changed(input.text);
     }
 
@@ -347,7 +354,7 @@ export component InkNumberField inherits Rectangle {
                     self.scrubbed = true;
                     // A property, not a `let`: Slint 1.18 generates broken
                     // Rust for a string local used twice.
-                    self.next = clamp(self.base + round((self.mouse-x - self.start-x) / 4px) * root.step, root.min, root.max).to-fixed(root.decimals);
+                    self.next = clamp(self.base + round((self.mouse-x - self.start-x) / 4px) * root.by, root.lo, root.hi).to-fixed(root.decimals);
                     if self.next != input.text {
                         input.text = self.next;
                         root.changed(self.next);
@@ -438,11 +445,25 @@ export component InkSelect inherits Rectangle {
         popup.show();
     }
 
+    // Tab reaches it; Space, Enter or ↓ opens the list.
+    sel-keys := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if e.text == " " || e.text == Key.Return || e.text == Key.DownArrow {
+                popup.show();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     frame := Rectangle {
         border-radius: Ink.radius-sm;
         background: ta.has-hover && root.enabled ? Ink.hover : Ink.field;
-        border-width: 1px;
-        border-color: ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
+        // The keyboard's ring (a click doesn't focus it).
+        border-width: sel-keys.has-focus ? 2px : 1px;
+        border-color: sel-keys.has-focus ? Ink.focus : ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
         opacity: root.enabled ? 1.0 : 0.5;
 
         HorizontalLayout {

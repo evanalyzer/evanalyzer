@@ -3,17 +3,11 @@
 // and white point), the Z projection or slice, the time frame.
 
 import { ChannelState, HistogramState, IntensityProjection } from "../api/state.slint";
-import { ImageMetaData, SeriesInfo } from "../api/image_meta.slint";
+import { ImageMetaData } from "../api/image_meta.slint";
 import { ViewportObjectState } from "../api/viewport.slint";
 import { LayoutState } from "../api/layout.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { Ink, InkIcons, InkPanelHead, InkSwitch, InkNumberField, InkTextField, InkSegmented, InkSelect, InkCaption, InkIconButton, InkButton, InkButtonKind, InkDivider, InkMenuFrame, InkMenuItem } from "../ink/ink.slint";
-
-global ImagePanelText {
-    pure public function series(s: SeriesInfo) -> string {
-        s.width > 0 && s.height > 0 ? "Series \{s.idx + 1} · \{s.width} × \{s.height}" : "Series \{s.idx + 1}"
-    }
-}
 
 // One channel: its color (a click switches it on/off), name, index. The
 // selected one is the histogram's.
@@ -137,6 +131,10 @@ component Histogram inherits VerticalLayout {
             fill: hist.color.with-alpha(0.18);
             viewbox-width: 100;
             viewbox-height: 100;
+            // Stretched to the box (the default `contain` squeezed the
+            // curve into a square in the middle - off the black / white
+            // lines, which use the full width).
+            fit: fill;
         }
 
         // Clipped to black / white.
@@ -324,12 +322,9 @@ export component ImageControlPanel inherits Rectangle {
             subtitle: ImageMetaData.nr_series > 1 ? "Series \{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series}" : "";
             pinnable: true;
             pinned: LayoutState.image-pinned;
-            has-more: ImageMetaData.nr_series > 1;
+            // The series: in the top bar's image chip (always in view).
             pin-toggled => {
                 LayoutState.image-pinned = !LayoutState.image-pinned;
-            }
-            more(x, y) => {
-                series-menu.show();
             }
             close => {
                 LayoutState.image-open = false;
@@ -627,20 +622,4 @@ export component ImageControlPanel inherits Rectangle {
         }
     }
 
-    series-menu := PopupWindow {
-        x: root.width - 240px;
-        y: Ink.head-h;
-        InkMenuFrame {
-            open-y: root.absolute-position.y + Ink.head-h;
-            menu-width: 240px;
-            for s[i] in ImageMetaData.series_list: InkMenuItem {
-                text: ImagePanelText.series(s);
-                checked: ChannelState.selected_series == s.idx;
-                clicked => {
-                    ChannelState.selected_series = s.idx;
-                    ChannelState.trigger_active_series_changed();
-                }
-            }
-        }
-    }
 }

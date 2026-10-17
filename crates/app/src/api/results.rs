@@ -507,6 +507,23 @@ pub struct ResultExport {
     pub with_heatmap: bool,
     /// If true each object class is shown in a separate table instead of in rows
     pub transpond_table: bool,
+    /// "Images with objects drawn": a PNG per image (see `DrawnImages`).
+    #[serde(default)]
+    pub drawn_images: Option<DrawnImages>,
+}
+
+/// Where the images are and how they're drawn for "Images with objects
+/// drawn" - the results database knows the objects, not the images.
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct DrawnImages {
+    /// The folder the images' relative paths are below.
+    pub image_root: PathBuf,
+    /// The series drawn.
+    pub series: i32,
+    /// The longer side at most (the pyramid level that fits is read).
+    pub max_side: u32,
+    /// Each channel's color (channel -> RGB 0..1); white when missing.
+    pub colors: std::collections::BTreeMap<i32, [f32; 3]>,
 }
 
 /// serde for `std::range::Range` (no upstream support yet): `(start, end)`.
