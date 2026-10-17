@@ -382,7 +382,11 @@ export component AppWindow inherits Window {
     // The "Overlay Manager". Wrapped in `DialogShortcuts` (see
     // shortcuts.slint) so Escape closes whichever dialog below is open,
     // without every dialog file needing its own copy of that logic.
-    if (GlobalAppState.active_dialog != DialogType.none): DialogShortcuts {
+    // Not for the preview banner: it is no dialog (drawn above, in the
+    // viewport), and the auto preview runs while the user edits a setting -
+    // grabbing the focus here would take it from the field being typed in.
+    if (GlobalAppState.active_dialog != DialogType.none
+        && GlobalAppState.active_dialog != DialogType.preview-rendering): DialogShortcuts {
         width: 100%;
         height: 100%;
         Rectangle {

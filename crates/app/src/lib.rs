@@ -111,6 +111,7 @@ pub mod fs {
 }
 
 pub mod utils {
+    pub use crate::workspace::extensions::utils::WHITE_WAVE_LENGTH;
     pub use crate::workspace::extensions::utils::channel_display_name;
     pub use crate::workspace::extensions::utils::wavelength_to_rgb_float;
     pub use crate::workspace::extensions::utils::{assign_step_ids, unassigned};

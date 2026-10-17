@@ -27,12 +27,20 @@ pub struct ImageEntry {
     pub series: BTreeMap<i32, SeriesSettings>, // Image settings for each series
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalImageSettings {
     pub selected_series: Option<i32>,
     #[serde(default)]
     pub grayscale: bool,
+    /// Give channels without an emission wavelength distinct default colours
+    /// (red, green, blue, ...). Off: they are shown white.
+    #[serde(default)]
+    pub auto_channel_colors: bool,
+    /// Auto-scale the histogram of a channel shown for the first time.
+    /// Off: it starts with the full intensity range.
+    #[serde(default = "default_true")]
+    pub auto_adjust_histogram: bool,
     pub selected_channel: Option<i32>,
     pub channels: BTreeMap<i32, ChannelSettings>, // Key is the channel
     pub pixel_sizes: Option<PixelSizeSettings>,
@@ -51,6 +59,26 @@ pub struct SeriesSettings {
     pub z_stack: Option<ZStackSettings>,
     pub t_stack: Option<TStackSettings>,
     pub objects: Vec<ObjectMetricSettings>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for GlobalImageSettings {
+    fn default() -> Self {
+        Self {
+            selected_series: None,
+            grayscale: false,
+            auto_channel_colors: false,
+            auto_adjust_histogram: true,
+            selected_channel: None,
+            channels: BTreeMap::new(),
+            pixel_sizes: None,
+            z_stack: None,
+            t_stack: None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Default, JsonSchema, Debug, Clone, PartialEq, Eq, Hash)]

@@ -531,6 +531,15 @@ export component ImageControlPanel inherits Rectangle {
                 HorizontalLayout {
                     spacing: 4px;
                     Button {
+                        text: "Auto colors";
+                        height: 22px;
+                        primary: ChannelState.auto_colors;
+                        clicked => {
+                            ChannelState.auto_colors = !ChannelState.auto_colors;
+                            ChannelState.auto_colors_toggled(ChannelState.auto_colors);
+                        }
+                    }
+                    Button {
                         text: "Grayscale";
                         height: 22px;
                         primary: ChannelState.grayscale ? true : false;

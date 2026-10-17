@@ -8,7 +8,7 @@ use crate::{
 };
 use evanalyzer_app::prelude::utils::channel_colors;
 use evanalyzer_app::project::ProjectExt;
-use evanalyzer_app::utils::{channel_display_name, wavelength_to_rgb_float};
+use evanalyzer_app::utils::{WHITE_WAVE_LENGTH, channel_display_name, wavelength_to_rgb_float};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use log::warn;
@@ -16,11 +16,22 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// Emission wavelengths (nm) offered as colour tiles for a channel - spread
-/// over the visible range the viewer can draw (see `wavelength_to_rgb_float`:
-/// 420-700 nm, with exact pure blue/green/red at 450/532/635 nm).
+/// Emission wavelengths (nm) offered as colour tiles for a channel - white
+/// (`WHITE_WAVE_LENGTH`), then spread over the visible range the viewer can
+/// draw (see `wavelength_to_rgb_float`: 420-700 nm, with exact pure
+/// blue/green/red at 450/532/635 nm).
 const WAVELENGTH_OPTIONS: [f32; 11] = [
-    420.0, 450.0, 470.0, 490.0, 532.0, 550.0, 570.0, 580.0, 600.0, 620.0, 635.0,
+    WHITE_WAVE_LENGTH,
+    420.0,
+    450.0,
+    470.0,
+    490.0,
+    532.0,
+    570.0,
+    580.0,
+    600.0,
+    620.0,
+    635.0,
 ];
 
 pub struct ImageMetaController {
@@ -92,6 +103,8 @@ impl ImageMetaController {
                 .collect();
             ui.global::<ImageMetaData>()
                 .set_wavelength_options(ModelRc::new(VecModel::from(options)));
+            ui.global::<ImageMetaData>()
+                .set_white_wave_length(WHITE_WAVE_LENGTH);
 
             let manager = Arc::clone(self);
             ui.global::<ImageMetaData>()
@@ -108,6 +121,10 @@ impl ImageMetaController {
             let manager = Arc::clone(self);
             ui.global::<ChannelState>()
                 .on_grayscale_toggled(move |grayscale| manager.set_grayscale(grayscale));
+
+            let manager = Arc::clone(self);
+            ui.global::<ChannelState>()
+                .on_auto_colors_toggled(move |enabled| manager.set_auto_channel_colors(enabled));
 
             // Frame interval: set for the project, or back to the image's own.
             let manager = Arc::clone(self);
@@ -186,6 +203,21 @@ impl ImageMetaController {
         self.viewport_controller.trigger_image_redraw();
     }
 
+    /// Switches the automatic default colours for channels without an
+    /// emission wavelength on or off, then redraws.
+    pub(crate) fn set_auto_channel_colors(&self, enabled: bool) {
+        self.app_state
+            .get_project_write()
+            .images
+            .settings
+            .auto_channel_colors = enabled;
+        self.app_state.mark_dirty();
+        if let Err(e) = self.sync_image_meta_to_slint() {
+            warn!("Could not refresh the channel list: {e}");
+        }
+        self.viewport_controller.trigger_image_redraw();
+    }
+
     /// Synchronizes image metadata and channel settings from the Rust backend to the Slint UI.
     ///
     /// This method extracts image-specific data (such as dimensions, color space,
@@ -209,9 +241,11 @@ impl ImageMetaController {
             hz,
             pixel_sizes,
             grayscale,
+            auto_colors,
         ) = {
             let project = self.app_state.get_project();
             let grayscale = project.images.settings.grayscale;
+            let auto_colors = project.images.settings.auto_channel_colors;
 
             let image_path = project.get_current_image_path_cloned();
             let selected_series = project.get_selected_series_idx();
@@ -239,6 +273,7 @@ impl ImageMetaController {
                 hz,
                 pixel_sizes,
                 grayscale,
+                auto_colors,
             )
         }; // ← lock dropped here
 
@@ -301,7 +336,7 @@ impl ImageMetaController {
                         .collect()
                 })
                 .unwrap_or_default();
-            channel_colors(&channels)
+            channel_colors(&channels, auto_colors)
         };
         let ui_weak = self.ui.clone();
 
@@ -399,6 +434,7 @@ impl ImageMetaController {
             ch_state.set_active_count(channels.iter().filter(|c| c.active).count() as i32);
             ch_state.set_channels(std::rc::Rc::new(slint::VecModel::from(channels)).into());
             ch_state.set_grayscale(grayscale);
+            ch_state.set_auto_colors(auto_colors);
 
             // --- Image meta ---
             let image_meta_ui = ui.global::<ImageMetaData>();

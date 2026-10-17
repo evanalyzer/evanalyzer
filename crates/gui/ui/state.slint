@@ -194,6 +194,9 @@ export global HistogramState {
     // Histogram
     callback histogram_adjusted(float, float, float, float);
         callback auto_adjust_clicked();
+        // Auto-scale channels shown for the first time - a project setting.
+        in-out property <bool> auto_adjust_on_open: true;
+        callback auto_adjust_on_open_toggled(bool);
 
         // These are the histogram values how to use in the application
     in-out property <float> histogram_min_val_abs: 0.0;
@@ -250,6 +253,10 @@ export global ChannelState {
         // All channels in gray, one visible at a time.
         in-out property <bool> grayscale: false;
         callback grayscale_toggled(bool);
+        // Channels without an emission wavelength get distinct default
+        // colours - off: they are white.
+        in-out property <bool> auto_colors: false;
+        callback auto_colors_toggled(bool);
 
         // Callback sends the updated array to Rust
     callback channel_state_changed([ChannelInfo], int, int, int, IntensityProjection, int, int);

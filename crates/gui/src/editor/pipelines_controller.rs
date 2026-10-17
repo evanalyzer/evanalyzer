@@ -8189,6 +8189,67 @@ mod tests {
         drain_ui_queue();
         assert!(step_names(&ui_state, 1).is_empty());
     }
+
+    /// Typing into a spinner keeps the focus in it - also when the auto
+    /// preview of a change runs in between: every digit reaches the
+    /// setting, not just the first one.
+    #[test]
+    fn typing_into_a_spinner_keeps_its_focus_while_the_preview_runs() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::LogicalPosition;
+        use slint::platform::{PointerEventButton, WindowEvent};
+
+        let (ui, ui_state, _controller) = selected(vec![step("GaussianBlur")]);
+        ui.window()
+            .set_size(slint::LogicalSize::new(1600.0, 1000.0));
+        ui.global::<GlobalAppState>().set_sidebar_left_active_tab(2);
+        let panel = ui.global::<PipelinesPanelState>();
+        let commands = panel.get_active_commands();
+        let mut cmd = commands.row_data(0).unwrap();
+        cmd.expanded = true;
+        commands.set_row_data(0, cmd);
+
+        let spinner_input = || {
+            ElementHandle::find_by_element_type_name(&ui, "LineEdit")
+                .find(|e| e.accessible_value().is_some_and(|v| v == "3"))
+        };
+        let input = spinner_input().expect("the kernel size spinner");
+        let (pos, size) = (input.absolute_position(), input.size());
+        let at = LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
+        // Focus it, then replace "3" by typing "15".
+        for _ in 0..2 {
+            ui.window().dispatch_event(WindowEvent::PointerPressed {
+                position: at,
+                button: PointerEventButton::Left,
+            });
+            ui.window().dispatch_event(WindowEvent::PointerReleased {
+                position: at,
+                button: PointerEventButton::Left,
+            });
+        }
+        let key = |text: &str| {
+            ui.window()
+                .dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+            ui.window()
+                .dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+            drain_ui_queue();
+            // The auto preview of the change shows its banner and is done.
+            let app = ui.global::<GlobalAppState>();
+            app.set_active_dialog(DialogType::PreviewRendering);
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+            app.set_active_dialog(DialogType::None);
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+        };
+        key("\u{8}"); // Backspace
+        key("1");
+        key("5");
+
+        let kernel_size = match ui_state.get_project().pipelines[0].steps[0].command() {
+            Some(PipelineCommand::GaussianBlur(s)) => s.kernel_size,
+            other => panic!("not a Gaussian blur: {other:?}"),
+        };
+        assert_eq!(kernel_size, 15);
+    }
 }
 
 /// How an analysis ended, for the "ended while away" notice.

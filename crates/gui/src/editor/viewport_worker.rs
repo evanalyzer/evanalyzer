@@ -320,14 +320,26 @@ impl ViewportWorker {
                 // STEP 1. Skipped in breakpoint mode to preserve the
                 // original histogram.
                 if !show_bp && (task.auto_adjust_if_not_set || task.auto_adjust_selected) {
+                    let auto_adjust_on_open = self
+                        .app_state
+                        .get_project()
+                        .images
+                        .settings
+                        .auto_adjust_histogram;
                     for channel in render_src.iter() {
                         let idx = channel.c_stack;
                         if let Some(ch) = hist_settings.get(&idx) {
                             if (!ch.is_some() && task.auto_adjust_if_not_set)
                                 || (task.auto_adjust_selected && idx == selected_channel)
                             {
+                                // A first-time channel without auto-scale
+                                // on open: the full range.
                                 let (min, max, min_range, max_range) =
-                                    auto_adjust_range(channel.slice(), channel.is_rgb);
+                                    if task.auto_adjust_selected || auto_adjust_on_open {
+                                        auto_adjust_range(channel.slice(), channel.is_rgb)
+                                    } else {
+                                        (0.0, 1.0, 0.0, 1.0)
+                                    };
                                 debug!(
                                     "Auto-adjusting channel {} min={} max={} range=({},{})",
                                     idx, min, max, min_range, max_range

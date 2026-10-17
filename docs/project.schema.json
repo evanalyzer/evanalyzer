@@ -1063,6 +1063,16 @@
     "GlobalImageSettings": {
       "type": "object",
       "properties": {
+        "autoAdjustHistogram": {
+          "description": "Auto-scale the histogram of a channel shown for the first time.\nOff: it starts with the full intensity range.",
+          "type": "boolean",
+          "default": true
+        },
+        "autoChannelColors": {
+          "description": "Give channels without an emission wavelength distinct default colours\n(red, green, blue, ...). Off: they are shown white.",
+          "type": "boolean",
+          "default": false
+        },
         "channels": {
           "type": "object",
           "additionalProperties": false,

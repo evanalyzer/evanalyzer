@@ -675,7 +675,7 @@ impl ProjectExt for ProjectWithRuntime {
                 .map(|(id, _)| (*id, [1.0, 1.0, 1.0]))
                 .collect();
         }
-        channel_colors(channels)
+        channel_colors(channels, self.images.settings.auto_channel_colors)
     }
 
     /// Switches grayscale mode. Switching it on leaves one channel visible
@@ -956,7 +956,8 @@ impl ProjectExt for ProjectWithRuntime {
                 .map(|series_data| {
                     // A global wavelength set by the user wins over the image's own,
                     // so the class gets the colour the viewer shows for the channel -
-                    // and channels without one get distinct default colours.
+                    // and channels without one get distinct default colours (if
+                    // enabled).
                     let wave_lengths: Vec<(i32, f32)> = series_data
                         .channels
                         .iter()
@@ -972,7 +973,8 @@ impl ProjectExt for ProjectWithRuntime {
                             (*channel_id, wave_length)
                         })
                         .collect();
-                    let colors = channel_colors(&wave_lengths);
+                    let colors =
+                        channel_colors(&wave_lengths, self.images.settings.auto_channel_colors);
                     series_data
                         .channels
                         .iter()
@@ -2267,8 +2269,20 @@ mod tests {
     }
 
     #[test]
+    fn channels_without_wavelengths_are_white_by_default() {
+        let project = project_with_three_unnamed_channels();
+        assert!(
+            project
+                .get_channel_display_colors()
+                .values()
+                .all(|c| *c == [1.0, 1.0, 1.0])
+        );
+    }
+
+    #[test]
     fn channels_without_wavelengths_get_distinct_colours_and_grayscale_makes_them_white() {
         let mut project = project_with_three_unnamed_channels();
+        project.images.settings.auto_channel_colors = true;
         let colors = project.get_channel_display_colors();
         assert_eq!(colors[&0], [1.0, 0.0, 0.0]);
         assert_eq!(colors[&1], [0.0, 1.0, 0.0]);
@@ -2326,6 +2340,7 @@ mod tests {
     #[test]
     fn auto_added_classes_of_unnamed_channels_get_names_and_distinct_colours() {
         let mut project = project_with_three_unnamed_channels();
+        project.images.settings.auto_channel_colors = true;
         project.auto_add_classes_based_on_image_meta();
         // Besides the "Background" class every project has.
         let classes: Vec<_> = project

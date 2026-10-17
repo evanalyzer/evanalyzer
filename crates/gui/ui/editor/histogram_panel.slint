@@ -41,6 +41,15 @@ export component HistogramPanel inherits Rectangle {
             HorizontalLayout {
                 spacing: 4px;
                 Button {
+                    text: "Auto on open";
+                    height: 22px;
+                    primary: HistogramState.auto_adjust_on_open;
+                    clicked => {
+                        HistogramState.auto_adjust_on_open = !HistogramState.auto_adjust_on_open;
+                        HistogramState.auto_adjust_on_open_toggled(HistogramState.auto_adjust_on_open);
+                    }
+                }
+                Button {
                     text: "Auto-scale";
                     height: 22px;
                     primary: false;

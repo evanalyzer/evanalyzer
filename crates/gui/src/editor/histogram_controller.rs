@@ -77,6 +77,19 @@ impl HistogramController {
                         .viewport_controller
                         .trigger_image_redraw_with_auto_adjust();
                 });
+
+            // Auto-scale on open switched on/off - a project setting.
+            let manager = Arc::clone(self);
+            ui.global::<HistogramState>()
+                .on_auto_adjust_on_open_toggled(move |enabled| {
+                    manager
+                        .app_state
+                        .get_project_write()
+                        .images
+                        .settings
+                        .auto_adjust_histogram = enabled;
+                    manager.app_state.mark_dirty();
+                });
         }
     }
 
@@ -115,14 +128,19 @@ impl HistogramController {
     pub fn sync_histogram_settings_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
 
-        let histogram_settings = self
-            .app_state
-            .get_project()
-            .get_histograms_from_selected_channel()
-            .cloned();
+        let (histogram_settings, auto_adjust_on_open) = {
+            let project = self.app_state.get_project();
+            (
+                project.get_histograms_from_selected_channel().cloned(),
+                project.images.settings.auto_adjust_histogram,
+            )
+        };
 
         if let Err(e) = crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
+                ui_ready
+                    .global::<HistogramState>()
+                    .set_auto_adjust_on_open(auto_adjust_on_open);
                 let Some(task) = histogram_settings else {
                     warn!(
                         "No histogram settings found for the selected channel. Cannot sync to Slint."

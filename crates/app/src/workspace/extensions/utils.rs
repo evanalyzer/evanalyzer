@@ -188,6 +188,11 @@ pub fn rgb_to_u32(color: [f32; 3]) -> u32 {
     ((color[0] * 255.0) as u32) << 16 | ((color[1] * 255.0) as u32) << 8 | (color[2] * 255.0) as u32
 }
 
+/// The emission wavelength stored for a channel the user chose to show white:
+/// above `1.0` (so it counts as set, not unknown) but far outside the visible
+/// spectrum, so no real wavelength collides with it.
+pub const WHITE_WAVE_LENGTH: f32 = 2.0;
+
 /// Colours for channels without an emission wavelength, by position - the
 /// order Fiji/ImageJ uses for composite images, so it looks familiar:
 /// red, green, blue, gray, cyan, magenta, yellow.
@@ -203,10 +208,13 @@ pub const DEFAULT_CHANNEL_COLORS: [[f32; 3]; 7] = [
 
 /// The display colour of each channel of a series, from `(channel,
 /// emission wavelength in nm)` (`<= 1.0`: unknown): a known wavelength's
-/// colour; otherwise - for an image with several channels - the next
-/// [`DEFAULT_CHANNEL_COLORS`] entry no channel shows yet, so no two
-/// channels look alike; a single channel without one stays white.
-pub fn channel_colors(channels: &[(i32, f32)]) -> std::collections::BTreeMap<i32, [f32; 3]> {
+/// colour; otherwise - with `auto_colors` and an image with several
+/// channels - the next [`DEFAULT_CHANNEL_COLORS`] entry no channel shows
+/// yet, so no two channels look alike; else white.
+pub fn channel_colors(
+    channels: &[(i32, f32)],
+    auto_colors: bool,
+) -> std::collections::BTreeMap<i32, [f32; 3]> {
     let mut colors: std::collections::BTreeMap<i32, [f32; 3]> = channels
         .iter()
         .filter(|(_, nm)| *nm > 1.0)
@@ -216,7 +224,7 @@ pub fn channel_colors(channels: &[(i32, f32)]) -> std::collections::BTreeMap<i32
         .iter()
         .filter(|(_, nm)| *nm <= 1.0)
         .map(|(id, _)| *id);
-    if channels.len() == 1 {
+    if !auto_colors || channels.len() == 1 {
         colors.extend(unknown.map(|id| (id, [1.0, 1.0, 1.0])));
         return colors;
     }
@@ -258,7 +266,8 @@ pub fn wavelength_to_rgb_float(wavelength: f32) -> [f32; 3] {
 
     // Images without given emission wave length have default value 0.
     // In this case we show a grayscale value. Because of float we assume < 1
-    if wavelength <= 1.0 {
+    // The same for a channel the user chose to show white.
+    if wavelength <= 1.0 || wavelength == WHITE_WAVE_LENGTH {
         return [1.0, 1.0, 1.0];
     }
 
@@ -318,7 +327,7 @@ mod tests {
 
     #[test]
     fn channels_without_a_wavelength_get_the_fiji_colours_in_order() {
-        let colors = channel_colors(&[(0, 0.0), (1, 0.0), (2, 0.0), (3, 0.0)]);
+        let colors = channel_colors(&[(0, 0.0), (1, 0.0), (2, 0.0), (3, 0.0)], true);
         assert_eq!(
             colors.values().copied().collect::<Vec<_>>(),
             [RED, GREEN, BLUE, WHITE]
@@ -327,13 +336,13 @@ mod tests {
 
     #[test]
     fn a_single_channel_without_a_wavelength_is_white() {
-        assert_eq!(channel_colors(&[(0, 0.0)])[&0], WHITE);
+        assert_eq!(channel_colors(&[(0, 0.0)], true)[&0], WHITE);
     }
 
     #[test]
     fn known_wavelengths_keep_their_colour_and_the_others_skip_it() {
         // 635 nm is pure red: the unknown channels start with green.
-        let colors = channel_colors(&[(0, 0.0), (1, 635.0), (2, 0.0)]);
+        let colors = channel_colors(&[(0, 0.0), (1, 635.0), (2, 0.0)], true);
         assert_eq!(colors[&1], RED);
         assert_eq!(colors[&0], GREEN);
         assert_eq!(colors[&2], BLUE);
@@ -342,9 +351,25 @@ mod tests {
     #[test]
     fn more_channels_than_colours_repeat_the_palette() {
         let channels: Vec<(i32, f32)> = (0..9).map(|c| (c, 0.0)).collect();
-        let colors = channel_colors(&channels);
+        let colors = channel_colors(&channels, true);
         assert_eq!(colors[&7], RED);
         assert_eq!(colors[&8], GREEN);
+    }
+
+    #[test]
+    fn a_channel_set_to_white_stays_white_and_others_skip_it() {
+        let colors = channel_colors(&[(0, 0.0), (1, WHITE_WAVE_LENGTH), (2, 0.0)], true);
+        assert_eq!(colors[&1], WHITE);
+        assert_eq!(colors[&0], RED);
+        assert_eq!(colors[&2], GREEN);
+    }
+
+    #[test]
+    fn without_auto_colours_channels_without_a_wavelength_are_white() {
+        let colors = channel_colors(&[(0, 0.0), (1, 635.0), (2, 0.0)], false);
+        assert_eq!(colors[&0], WHITE);
+        assert_eq!(colors[&1], RED);
+        assert_eq!(colors[&2], WHITE);
     }
 
     #[test]
