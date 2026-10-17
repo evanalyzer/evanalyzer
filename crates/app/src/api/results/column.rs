@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Column {
+    // The order the List shows them in (`Ord`): the image first.
+    ImageName,
     ObjectId,
     TrackId,
-    ImageName,
     ObjectClass,
     Count,
     #[default]

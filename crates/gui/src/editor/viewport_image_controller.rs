@@ -1082,8 +1082,14 @@ mod tests {
 
         let project = ui_state.get_project();
         assert_eq!(project.images.settings.selected_series, Some(2));
+        // An image with that series shows it, one without its first.
         for entry in project.images.list.values() {
-            assert_eq!(entry.active_series(&project.images.settings), 2);
+            let expected = if entry.series.is_empty() || entry.series.contains_key(&2) {
+                2
+            } else {
+                *entry.series.keys().next().unwrap()
+            };
+            assert_eq!(entry.active_series(&project.images.settings), expected);
         }
     }
 

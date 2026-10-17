@@ -4,7 +4,7 @@
 // `ResultsGenerator::get_histogram`/`get_scatter`/`get_boxplot` and pushes
 // into `ResultsState.chart-*`) in the stretch area below.
 import { ResultsChartKind2, ResultsState } from "../api/results.slint";
-import { InkSegmented, InkHint } from "../ink/ink.slint";
+import { InkSegmented, InkHint, InkNumberField, InkSwitch } from "../ink/ink.slint";
 import { SettingsGroup } from "results_common.slint";
 import { ComboBox } from "../ink/std_compat.slint";
 
@@ -104,6 +104,18 @@ component ScatterChart inherits Rectangle {
                 background: Ink.focus.with-alpha(0.65);
                 x: pt.x * (plot-area.width - self.width);
                 y: (1.0 - pt.y) * (plot-area.height - self.height);
+            }
+
+            // A click on a point: its object on its image.
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    ResultsState.chart-scatter-clicked(
+                        (self.mouse-x - 2.5px) / max(1px, plot-area.width - 5px),
+                        1.0 - (self.mouse-y - 2.5px) / max(1px, plot-area.height - 5px),
+                        (plot-area.width - 5px) / 1px,
+                        (plot-area.height - 5px) / 1px);
+                }
             }
 
             if ResultsState.chart-scatter-points.length == 0: Text {
@@ -245,6 +257,49 @@ component BoxplotChart inherits Rectangle {
     }
 }
 
+// A chart kind to pick: its picture above its name.
+component ChartTile inherits Rectangle {
+    in property <string> glyph;
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+
+    height: 54px;
+    horizontal-stretch: 1;
+    border-radius: Ink.radius-md;
+    border-width: 1px;
+    border-color: root.selected ? Ink.focus : Ink.border;
+    background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : Ink.panel;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checked: root.selected;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        Text {
+            text: root.glyph;
+            font-size: 15px;
+            color: root.selected ? Ink.focus : Ink.text-dim;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.text;
+            font-size: Ink.fs-sm;
+            font-weight: root.selected ? 600 : 400;
+            color: Ink.text;
+            horizontal-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 export component ResultsChartsView inherits Rectangle {
     property <length> side-w: 280px;
     property <length> field-w: root.side-w - 2 * Ink.pad-panel;
@@ -274,13 +329,35 @@ export component ResultsChartsView inherits Rectangle {
 
                 SettingsGroup {
                     title: "CHART";
-                    InkSegmented {
-                        label: "Chart";
-                        model: ["Histogram", "Scatter", "Boxplot"];
-                        selected: ResultsState.chart-kind == ResultsChartKind2.scatter ? 1 : ResultsState.chart-kind == ResultsChartKind2.boxplot ? 2 : 0;
-                        picked(i) => {
-                            ResultsState.chart-kind = i == 1 ? ResultsChartKind2.scatter : i == 2 ? ResultsChartKind2.boxplot : ResultsChartKind2.histogram;
-                            ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                    // The kinds as tiles, each with a picture of it (board M).
+                    HorizontalLayout {
+                        spacing: 6px;
+                        ChartTile {
+                            glyph: "▁▃▇▃▁";
+                            text: "Histogram";
+                            selected: ResultsState.chart-kind == ResultsChartKind2.histogram;
+                            clicked => {
+                                ResultsState.chart-kind = ResultsChartKind2.histogram;
+                                ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                            }
+                        }
+                        ChartTile {
+                            glyph: "┤▭├";
+                            text: "Boxplot";
+                            selected: ResultsState.chart-kind == ResultsChartKind2.boxplot;
+                            clicked => {
+                                ResultsState.chart-kind = ResultsChartKind2.boxplot;
+                                ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                            }
+                        }
+                        ChartTile {
+                            glyph: "∴ ∵";
+                            text: "Scatter";
+                            selected: ResultsState.chart-kind == ResultsChartKind2.scatter;
+                            clicked => {
+                                ResultsState.chart-kind = ResultsChartKind2.scatter;
+                                ResultsState.chart-kind-selected(ResultsState.chart-kind);
+                            }
                         }
                     }
                 }
@@ -335,6 +412,53 @@ export component ResultsChartsView inherits Rectangle {
                             ResultsState.chart-class-summary = value;
                             ResultsState.chart-class-selected(key, selected);
                         }
+                    }
+                }
+
+                // How it's drawn.
+                if ResultsState.chart-kind != ResultsChartKind2.boxplot: SettingsGroup {
+                    title: "DISPLAY";
+                    if ResultsState.chart-kind == ResultsChartKind2.histogram: HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            horizontal-stretch: 1;
+                            text: "Bins";
+                            font-size: Ink.fs-sm;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                        }
+                        InkNumberField {
+                            width: 110px;
+                            label: "Bins";
+                            value: ResultsState.chart-bins;
+                            min: 5;
+                            max: 200;
+                            step: 1;
+                            changed(v) => {
+                                ResultsState.chart-bins = clamp(round(v.to-float()), 5, 200);
+                                ResultsState.chart-display-changed();
+                            }
+                        }
+                    }
+                    if ResultsState.chart-kind == ResultsChartKind2.histogram: InkSwitch {
+                        text: "Counts on a log scale";
+                        checked: ResultsState.chart-log-counts;
+                        toggled(on) => {
+                            ResultsState.chart-log-counts = on;
+                            ResultsState.chart-display-changed();
+                        }
+                    }
+                    if ResultsState.chart-kind == ResultsChartKind2.scatter: InkSegmented {
+                        label: "Points drawn";
+                        model: ["500", "2 000", "10 000", "All"];
+                        selected: ResultsState.chart-points-index;
+                        picked(i) => {
+                            ResultsState.chart-points-index = i;
+                            ResultsState.chart-display-changed();
+                        }
+                    }
+                    if ResultsState.chart-kind == ResultsChartKind2.scatter: InkHint {
+                        text: "Click a point to see its object on its image.";
                     }
                 }
 

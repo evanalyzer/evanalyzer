@@ -46,6 +46,7 @@ export component InkGallery inherits Window {
                 InkSegmented {
                     label: "Scheme";
                     model: ["Light", "Dark", "Dim"];
+                    selected: Ink.scheme == InkScheme.dark ? 1 : Ink.scheme == InkScheme.dim ? 2 : 0;
                     picked(i) => {
                         Ink.scheme = i == 0 ? InkScheme.light : i == 1 ? InkScheme.dark : InkScheme.dim;
                     }

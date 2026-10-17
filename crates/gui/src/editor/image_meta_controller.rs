@@ -314,6 +314,15 @@ impl ImageMetaController {
         };
 
         let image_meta = self.app_state.get_image_meta(&path)?;
+        // Whether the project has chosen its series - else an image with
+        // several asks once which (see `ImageMetaData.series-chosen`).
+        let series_chosen = self
+            .app_state
+            .get_project()
+            .images
+            .settings
+            .selected_series
+            .is_some();
         let (frame_interval_text, frame_interval_overridden) = frame_interval_shown(
             self.app_state.get_project().get_frame_interval(),
             image_meta
@@ -481,6 +490,7 @@ impl ImageMetaController {
             image_meta_ui.set_nr_t_stacks(series_info.nr_t_stacks);
             image_meta_ui.set_nr_z_stacks(series_info.nr_z_stacks);
             image_meta_ui.set_nr_series(image_meta.series.len() as i32);
+            image_meta_ui.set_series_chosen(series_chosen);
             image_meta_ui
                 .set_series_list(std::rc::Rc::new(slint::VecModel::from(series_list)).into());
 
@@ -813,6 +823,22 @@ mod tests {
         (ui, ui_state, controller)
     }
 
+    /// Whether the project has chosen its series - an image with several
+    /// asks once while not.
+    #[test]
+    fn the_ui_knows_whether_the_series_was_chosen() {
+        let (ui, ui_state, controller) = with_window(project_with_fixture_image());
+        ui_state.get_project_write().images.settings.selected_series = None;
+        controller.sync_image_meta_to_slint().unwrap();
+        drain_ui_queue();
+        assert!(!ui.global::<ImageMetaData>().get_series_chosen());
+
+        ui_state.get_project_write().set_active_series(&0);
+        controller.sync_image_meta_to_slint().unwrap();
+        drain_ui_queue();
+        assert!(ui.global::<ImageMetaData>().get_series_chosen());
+    }
+
     #[test]
     fn sync_image_meta_shows_the_real_images_dimensions_and_channels() {
         let (ui, ui_state, controller) = with_window(project_with_fixture_image());
@@ -930,15 +956,17 @@ mod tests {
     }
 
     #[test]
-    fn a_selected_series_the_image_lacks_leaves_the_ui_alone() {
+    fn a_selected_series_the_image_lacks_shows_its_first_series() {
         let mut project = project_with_fixture_image();
         project.images.settings.selected_series = Some(99);
         let (ui, _ui_state, controller) = with_window(project);
         ui.global::<ImageMetaData>()
-            .set_image_name("untouched".into());
+            .set_image_name("the last image".into());
         controller.sync_image_meta_to_slint().unwrap();
         drain_ui_queue();
-        assert_eq!(ui.global::<ImageMetaData>().get_image_name(), "untouched");
+        // This image, not the last one's info.
+        assert_ne!(ui.global::<ImageMetaData>().get_image_name(), "the last image");
+        assert!(ui.global::<ChannelState>().get_channels().row_count() > 0);
     }
 
     /// A pixel size field shows the reset value also after the user typed

@@ -102,11 +102,13 @@ impl DbWorker {
 const CHART_HISTOGRAM_BINS: usize = 24;
 const CHART_SCATTER_MAX_POINTS: usize = 2000;
 
-const DEFAULT_LIST_COLUMNS: [Column; 4] = [
-    Column::ObjectId,
+const DEFAULT_LIST_COLUMNS: [Column; 6] = [
     Column::ImageName,
+    Column::ObjectId,
     Column::ObjectClass,
+    Column::AreaSizePx,
     Column::AreaSizeNm,
+    Column::Circularity,
 ];
 
 #[derive(Default)]
@@ -143,7 +145,7 @@ enum ChartKind {
     Boxplot,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct ChartFilter {
     pub kind: ChartKind,
     /// Histogram/Boxplot's single measurement, Scatter's X axis.
@@ -155,6 +157,36 @@ struct ChartFilter {
     pub object_class: Option<ObjectClass>,
     /// Boxplot: a box per class, image, well, plate row or column.
     pub group_by: BoxplotGroup,
+    /// Histogram: its bins, its counts on a log scale.
+    pub bins: usize,
+    pub log_counts: bool,
+    /// Scatter: at most this many points drawn (`None`: all).
+    pub max_points: Option<usize>,
+}
+
+impl Default for ChartFilter {
+    fn default() -> Self {
+        Self {
+            kind: ChartKind::default(),
+            column: Column::default(),
+            y_column: Column::default(),
+            object_class: None,
+            group_by: BoxplotGroup::default(),
+            bins: CHART_HISTOGRAM_BINS,
+            log_counts: false,
+            max_points: Some(CHART_SCATTER_MAX_POINTS),
+        }
+    }
+}
+
+/// "Points drawn" (500 / 2 000 / 10 000 / all) as the scatter's limit.
+fn scatter_points_limit(index: i32) -> Option<usize> {
+    match index {
+        0 => Some(500),
+        2 => Some(10_000),
+        3 => None,
+        _ => Some(CHART_SCATTER_MAX_POINTS),
+    }
 }
 
 #[derive(Default)]
@@ -211,6 +243,9 @@ pub struct ResultsStateController {
     // navigate to a clicked object's own image without re-querying the
     // database.
     list_row_locations: Mutex<Vec<(String, [u32; 4])>>,
+    /// The scatter's points (0..1, as drawn) and their objects' image and
+    /// box - for a click on a point.
+    scatter_points: Mutex<Vec<(f32, f32, String, [u32; 4])>>,
     image_list_controller: Arc<ImagesListController>,
     // Whether the export dialog's defaults have already been seeded for the
     // currently-open database (see `populate_export_defaults`) — reset to
@@ -275,6 +310,7 @@ impl ResultsStateController {
             current_well: Mutex::new(None),
             current_image: Mutex::new(None),
             list_row_locations: Mutex::new(Vec::new()),
+            scatter_points: Mutex::new(Vec::new()),
             image_list_controller,
             export_populated: Mutex::new(false),
             export_image_selection: Mutex::new(HashSet::new()),
@@ -590,6 +626,32 @@ impl ResultsStateController {
                 manager.change_list_page(-1);
             });
 
+            // A click in the scatter: the nearest point within 8 px - its
+            // object on its image.
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_chart_scatter_clicked(move |fx, fy, width, height| {
+                    let hit = nearest_point(
+                        &manager.scatter_points.lock().expect("Poisned"),
+                        fx,
+                        fy,
+                        width,
+                        height,
+                        8.0,
+                    );
+                    let Some((rel_path, bbox_px)) = hit else {
+                        return;
+                    };
+                    manager
+                        .image_list_controller
+                        .open_image_and_highlight_object(&PathBuf::from(&rel_path), bbox_px, false);
+                    let name = std::path::Path::new(&rel_path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or(rel_path);
+                    manager.peek(-1, format!("Point in {name}"), false);
+                });
+
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_list_row_clicked(move |index| {
@@ -606,6 +668,8 @@ impl ResultsStateController {
                     manager
                         .image_list_controller
                         .open_image_and_highlight_object(&PathBuf::from(rel_path), bbox_px, false);
+                    let rows = manager.list_row_locations.lock().expect("Poisned").len();
+                    manager.peek(index, format!("Row {} of {rows}", index + 1), true);
                 });
 
             // -- Matrix / plate / well / object --
@@ -933,6 +997,16 @@ impl ResultsStateController {
                         warn!("Unknown image to toggle: {image_name}");
                         return;
                     };
+                    // The status bar's "1 disabled".
+                    {
+                        let mut images = manager.images.lock().expect("Poisened");
+                        if let Some(image) =
+                            images.iter_mut().find(|image| image.name == image_name.as_str())
+                        {
+                            image.disabled = disable;
+                        }
+                        state.set_analysis_summary(analysis_summary(&images).into());
+                    }
                     // Shown right away.
                     let rows = state.get_active_well_images();
                     for i in 0..rows.row_count() {
@@ -1195,8 +1269,12 @@ impl ResultsStateController {
                     state.set_active_well_has_value(cell.exists);
                     state.set_active_well_value(cell.label.clone());
                     state.set_active_well_disabled(cell.disabled);
-                    drop(cells);
+                });
 
+            // "Show on image" (or a double click): the tile on its image.
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_image_heatmap_cell_open(move |key| {
                     // Paint the clicked tile's own bounds as a rectangle
                     // over the image it belongs to — unlike a list row's
                     // crosshair (`on_list_row_clicked`), the tile itself
@@ -1225,6 +1303,7 @@ impl ResultsStateController {
                     manager
                         .image_list_controller
                         .open_image_and_highlight_object(&PathBuf::from(rel_path), bbox_px, true);
+                    manager.peek(-1, format!("Tile {key}"), false);
                 });
             ui.global::<ResultsState>()
                 .on_object_marker_clicked(move |_id| {});
@@ -1243,6 +1322,22 @@ impl ResultsStateController {
                         ResultsChartKind2::Boxplot => ChartKind::Boxplot,
                     };
                     manager.chart_filter.lock().expect("Poisened").kind = kind;
+                    manager.refresh_charts();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_chart_display_changed(move || {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let state = ui.global::<ResultsState>();
+                    {
+                        let mut filter = manager.chart_filter.lock().expect("Poisened");
+                        filter.bins = state.get_chart_bins().clamp(5, 200) as usize;
+                        filter.log_counts = state.get_chart_log_counts();
+                        filter.max_points = scatter_points_limit(state.get_chart_points_index());
+                    }
                     manager.refresh_charts();
                 });
 
@@ -1758,6 +1853,25 @@ impl ResultsStateController {
         }));
     }
 
+    /// A result's object shown on its image (`row`: the List row, -1 none):
+    /// the window goes to the image, a bar on it says which (`label`) and
+    /// leads back - `can_step`: ‹ › to the next row's (see `ResultsPeek`).
+    fn peek(&self, row: i32, label: String, can_step: bool) {
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<ResultsState>();
+                state.set_list_selected_row(row);
+                state.set_peek_label(label.into());
+                state.set_peek_can_step(can_step);
+                state.set_peek(true);
+                ui.global::<crate::LayoutState>()
+                    .set_mode(crate::WorkspaceMode::Images);
+            }
+        })
+        .ok();
+    }
+
     fn set_database_name_in_slint(&self, name: String) {
         let ui_weak = self.ui.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
@@ -1920,13 +2034,19 @@ impl ResultsStateController {
                     .map(|entry| entry.key.clone())
                     .find(is_chartable_column)
                     .unwrap_or_default();
-                *self.chart_filter.lock().expect("Poisened") = ChartFilter {
-                    kind: ChartKind::Histogram,
-                    column: default_chart_column.clone(),
-                    y_column: default_chart_column.clone(),
-                    object_class: None,
-                    group_by: BoxplotGroup::Class,
-                };
+                {
+                    // Another analysis: what it shows anew, how it's drawn
+                    // (bins, log, points) stays.
+                    let mut filter = self.chart_filter.lock().expect("Poisened");
+                    *filter = ChartFilter {
+                        kind: ChartKind::Histogram,
+                        column: default_chart_column.clone(),
+                        y_column: default_chart_column.clone(),
+                        object_class: None,
+                        group_by: BoxplotGroup::Class,
+                        ..filter.clone()
+                    };
+                }
                 let chart_column_items_vec = chart_column_items(
                     &available_columns,
                     &classes_for_charts,
@@ -2081,9 +2201,9 @@ impl ResultsStateController {
                     images: None,
                     object_classes,
                     column: chart_filter.column,
-                    bins: CHART_HISTOGRAM_BINS,
+                    bins: chart_filter.bins.max(1),
                 }) {
-                    Ok(histogram) => self.push_histogram_in_slint(&histogram),
+                    Ok(histogram) => self.push_histogram_in_slint(&histogram, chart_filter.log_counts),
                     Err(err) => self.push_chart_error(err.to_string()),
                 }
             }
@@ -2094,7 +2214,7 @@ impl ResultsStateController {
                     object_classes,
                     x_column: chart_filter.column,
                     y_column: chart_filter.y_column,
-                    max_points: Some(CHART_SCATTER_MAX_POINTS),
+                    max_points: chart_filter.max_points,
                 }) {
                     Ok(scatter) => self.push_scatter_in_slint(&scatter),
                     Err(err) => self.push_chart_error(err.to_string()),
@@ -2252,12 +2372,12 @@ impl ResultsStateController {
         .ok();
     }
 
-    fn push_histogram_in_slint(&self, result: &HistogramResult) {
+    fn push_histogram_in_slint(&self, result: &HistogramResult, log_counts: bool) {
         let max_count = result.counts.iter().copied().max().unwrap_or(0).max(1);
         let bins: Vec<f32> = result
             .counts
             .iter()
-            .map(|count| *count as f32 / max_count as f32)
+            .map(|count| histogram_bar(*count, max_count, log_counts))
             .collect();
         let object_count = result.counts.iter().sum::<u64>() as i32;
         let min_label = format_chart_value(result.min);
@@ -2288,6 +2408,22 @@ impl ResultsStateController {
             .map(|point| ChartScatterPoint {
                 x: ((point.x - result.x_min) / x_range) as f32,
                 y: ((point.y - result.y_min) / y_range) as f32,
+            })
+            .collect();
+        *self.scatter_points.lock().expect("Poisned") = points
+            .iter()
+            .zip(&result.points)
+            .map(|(drawn, point)| {
+                (
+                    drawn.x,
+                    drawn.y,
+                    result
+                        .images
+                        .get(point.image as usize)
+                        .cloned()
+                        .unwrap_or_default(),
+                    point.bbox_px,
+                )
             })
             .collect();
         let shown_count = points.len() as i32;
@@ -2550,36 +2686,57 @@ impl ResultsStateController {
         // `cell_for_column`/`get_grouped_by_image`), so the first cell's
         // flags speak for the whole row; an empty row (no columns selected)
         // just isn't alternated/disabled/failed.
-        let row_cells: Vec<(Vec<slint::SharedString>, bool, bool, bool)> = result
+        let row_cells: Vec<(Vec<slint::SharedString>, bool, bool, bool, i32, u32)> = result
             .rows
             .iter()
             .map(|row| {
                 let alternating = row.first().is_some_and(|cell| cell.alternating_color);
                 let disabled = row.first().is_some_and(|cell| cell.disabled);
                 let failed = row.first().is_some_and(|cell| cell.failed);
+                // The class column: a dot in its color before the name.
+                let (class_column, class_color) = row
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, cell)| match &cell.value {
+                        CellValue::Class((_, color)) => Some((i as i32, *color)),
+                        _ => None,
+                    })
+                    .unwrap_or((-1, 0));
                 (
                     row.iter().map(cell_to_string).collect(),
                     alternating,
                     disabled,
                     failed,
+                    class_column,
+                    class_color,
                 )
             })
             .collect();
-        let column_widths = list_column_widths(
+        let mut column_widths = list_column_widths(
             &headers,
             row_cells.iter().map(|(cells, ..)| cells.as_slice()),
         );
+        // Room for the class column's color dot.
+        if let Some(column) = row_cells.iter().map(|row| row.4).find(|c| *c >= 0)
+            && let Some(width) = column_widths.get_mut(column as usize)
+        {
+            *width += 14.0;
+        }
         *self.list_row_locations.lock().expect("Poisned") = result.row_locations.clone();
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 let rows: Vec<ResultRow> = row_cells
                     .into_iter()
-                    .map(|(cells, alternating, disabled, failed)| ResultRow {
-                        cells: ModelRc::new(VecModel::from(cells)),
-                        alternating,
-                        disabled,
-                        failed,
+                    .map(|(cells, alternating, disabled, failed, class_column, class_color)| {
+                        ResultRow {
+                            cells: ModelRc::new(VecModel::from(cells)),
+                            alternating,
+                            disabled,
+                            failed,
+                            class_column,
+                            class_color: bg_color_to_slint(class_color),
+                        }
                     })
                     .collect();
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
@@ -3138,11 +3295,13 @@ impl ResultsStateController {
             items.iter().filter(|item| item.selected).count(),
             items.len(),
         );
+        let analysis = analysis_summary(images);
         crate::helper::ui_thread::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
                 state.set_list_image_summary(summary);
+                state.set_analysis_summary(analysis.into());
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_columns_in_slint, cannot update column filter options!"
@@ -4353,11 +4512,33 @@ fn color_scale_gradient_slint(schema: &ColorSchema) -> Vec<Color> {
 fn cell_to_string(cell: &Cell) -> slint::SharedString {
     match &cell.value {
         CellValue::Empty => "NaN".into(),
-        CellValue::String(value) => value.as_str().into(),
+        CellValue::String(value) => short_object_id(value).into(),
         CellValue::Float(value) => format!("{value:.3}").into(),
         CellValue::Integer(value) => value.to_string().into(),
         CellValue::Class((name, _color)) => name.as_str().into(),
     }
+}
+
+/// A histogram bar's height (0..1) for `count` of the fullest `max`:
+/// linear, or on a log scale (`ln(1 + n) / ln(1 + max)`).
+fn histogram_bar(count: u64, max: u64, log: bool) -> f32 {
+    if log {
+        ((1 + count) as f32).ln() / ((1 + max.max(1)) as f32).ln()
+    } else {
+        count as f32 / max.max(1) as f32
+    }
+}
+
+/// An object id (a UUID, `01a1497c-887f-7d95-93c3-bfc847366b32`) as its
+/// last block (`…bfc847366b32`): the leading blocks are a timestamp, the
+/// same for the objects of one run - only the last tells them apart. Other
+/// text as it is. (Exports keep the full id.)
+fn short_object_id(value: &str) -> &str {
+    let b = value.as_bytes();
+    let is_uuid = b.len() == 36
+        && [8, 13, 18, 23].iter().all(|&i| b[i] == b'-')
+        && b.iter().enumerate().all(|(i, c)| [8, 13, 18, 23].contains(&i) || c.is_ascii_hexdigit());
+    if is_uuid { &value[24..] } else { value }
 }
 
 /// One pixel width per `results_list.slint` column, each just wide enough
@@ -4399,6 +4580,43 @@ fn list_column_widths<'a>(
                 .clamp(MIN_LIST_COLUMN_WIDTH_PX, MAX_LIST_COLUMN_WIDTH_PX)
         })
         .collect()
+}
+
+
+
+/// "81 images · 1 disabled" (the status bar's) - without the disabled
+/// part when none is.
+fn analysis_summary(images: &[ImageEntry]) -> String {
+    let disabled = images.iter().filter(|image| image.disabled).count();
+    let n = images.len();
+    let images_text = if n == 1 { "1 image".to_string() } else { format!("{n} images") };
+    if disabled == 0 {
+        images_text
+    } else {
+        format!("{images_text} · {disabled} disabled")
+    }
+}
+/// The point of `points` (x, y in 0..1 of an area `width` x `height` px,
+/// y up) nearest to (`fx`, `fy`), if within `radius` px: its object's
+/// image and box.
+fn nearest_point(
+    points: &[(f32, f32, String, [u32; 4])],
+    fx: f32,
+    fy: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+) -> Option<(String, [u32; 4])> {
+    points
+        .iter()
+        .map(|(x, y, path, bbox)| {
+            let dx = (x - fx) * width;
+            let dy = (y - fy) * height;
+            (dx * dx + dy * dy, path, bbox)
+        })
+        .filter(|(d2, _, _)| *d2 <= radius * radius)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, path, bbox)| (path.clone(), *bbox))
 }
 
 #[cfg(test)]
@@ -5208,6 +5426,74 @@ mod tests {
 
         // No real image file on disk to open, but this must not panic.
         state.invoke_list_row_clicked(0);
+    }
+
+    #[test]
+    fn the_status_says_how_many_images_and_how_many_are_left_out() {
+        let image = |name: &str, disabled| ImageEntry {
+            name: name.into(),
+            rel_path: name.into(),
+            disabled,
+        };
+        assert_eq!(analysis_summary(&[image("a", false)]), "1 image");
+        assert_eq!(
+            analysis_summary(&[image("a", false), image("b", true), image("c", false)]),
+            "3 images · 1 disabled"
+        );
+    }
+
+    #[test]
+    fn object_ids_are_shown_by_their_last_block_and_bars_can_be_log() {
+        assert_eq!(
+            short_object_id("01a1497c-887f-7d95-93c3-bfc847366b32"),
+            "bfc847366b32"
+        );
+        assert_eq!(short_object_id("D15_03.vsi"), "D15_03.vsi");
+        assert_eq!(histogram_bar(10, 100, false), 0.1);
+        assert_eq!(histogram_bar(100, 100, true), 1.0);
+        assert!(histogram_bar(1, 1000, true) > 0.09, "small counts still show");
+        assert_eq!(scatter_points_limit(3), None);
+    }
+
+    /// A click in the scatter opens the nearest point's object - only
+    /// within 8 px of it.
+    #[test]
+    fn a_click_in_the_scatter_finds_the_nearest_point_close_by() {
+        let points = vec![
+            (0.1, 0.1, "a.tif".to_string(), [1, 1, 2, 2]),
+            (0.5, 0.5, "b.tif".to_string(), [5, 5, 6, 6]),
+        ];
+        // 400 x 200 px: (0.51, 0.5) is 4 px from b.
+        assert_eq!(
+            nearest_point(&points, 0.51, 0.5, 400.0, 200.0, 8.0),
+            Some(("b.tif".to_string(), [5, 5, 6, 6]))
+        );
+        // 0.1 of 400 px = 40 px away from both: nothing.
+        assert_eq!(nearest_point(&points, 0.3, 0.1, 400.0, 200.0, 8.0), None);
+    }
+
+    /// A List row's object on its image: the window goes to the image, the
+    /// row stays selected, the bar on the image says which (and steps).
+    #[test]
+    fn a_clicked_row_peeks_at_its_object_on_the_image() {
+        let (ui, controller) = controller_with_open_database();
+        let state = ui.global::<ResultsState>();
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Results);
+        let rows = controller.list_row_locations.lock().unwrap().len();
+        assert!(rows > 1, "{rows} rows");
+
+        state.invoke_list_row_clicked(1);
+        drain_ui_queue();
+
+        assert!(state.get_peek());
+        assert!(state.get_peek_can_step());
+        assert_eq!(state.get_list_selected_row(), 1);
+        assert_eq!(state.get_peek_label(), format!("Row 2 of {rows}"));
+        assert_eq!(
+            ui.global::<crate::LayoutState>().get_mode(),
+            crate::WorkspaceMode::Images
+        );
     }
 
     #[test]

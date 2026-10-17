@@ -164,10 +164,13 @@ export component InkSwitch inherits Rectangle {
 }
 
 /// One of a few, side by side in a track ("Max · Min · Avg", "Plate · List
-/// · Charts"). `selected` is set on a click; `picked` reports it.
+/// · Charts"). `selected` shows the caller's state - bind it; `picked`
+/// reports a click, the caller sets its state. (Not set here: that would
+/// break the binding, and a change from elsewhere - e.g. Rust switching
+/// the view - wouldn't show any more.)
 export component InkSegmented inherits Rectangle {
     in property <[string]> model;
-    in-out property <int> selected: 0;
+    in property <int> selected: 0;
     in property <bool> enabled: true;
     in property <string> label;
     callback picked(int);
@@ -205,7 +208,6 @@ export component InkSegmented inherits Rectangle {
                     enabled: root.enabled;
                     mouse-cursor: pointer;
                     clicked => {
-                        root.selected = i;
                         root.picked(i);
                     }
                 }

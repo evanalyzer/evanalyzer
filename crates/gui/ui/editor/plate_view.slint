@@ -92,16 +92,63 @@ component Legend inherits HorizontalLayout {
     }
 }
 
+// A section of a big plate to show: "A13–H24".
+component SectionTile inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+
+    height: 22px;
+    horizontal-stretch: 1;
+    border-radius: Ink.radius-sm;
+    border-width: 1px;
+    border-color: root.selected ? Ink.focus : Ink.border;
+    background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : Ink.field;
+    accessible-role: button;
+    accessible-label: "Wells " + root.text;
+    accessible-checked: root.selected;
+
+    Text {
+        text: root.text;
+        font-size: Ink.fs-xs;
+        font-family: Ink.font-mono;
+        color: root.selected ? Ink.focus : Ink.text-dim;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
 export component PlateView inherits Rectangle {
-    property <length> label-w: 18px;
+    property <length> label-w: 22px;
     property <length> gap: 6px;
     property <int> rows: ImagesListState.plate-rows;
     property <int> cols: ImagesListState.plate-cols;
+    // A big plate (more than 8 x 12 wells) in sections of 8 x 12, one
+    // shown at a time - its wells stay big enough to read and click.
+    property <int> sec-h: 8;
+    property <int> sec-w: 12;
+    property <int> sec-rows: max(1, ceil(root.rows / root.sec-h));
+    property <int> sec-cols: max(1, ceil(root.cols / root.sec-w));
+    property <bool> sectioned: root.sec-rows * root.sec-cols > 1;
+    in-out property <int> section-r: 0;
+    in-out property <int> section-c: 0;
+    property <int> r0: root.sectioned ? min(root.section-r, root.sec-rows - 1) * root.sec-h : 0;
+    property <int> c0: root.sectioned ? min(root.section-c, root.sec-cols - 1) * root.sec-w : 0;
+    property <int> shown-rows: root.sectioned ? min(root.sec-h, root.rows - root.r0) : root.rows;
+    property <int> shown-cols: root.sectioned ? min(root.sec-w, root.cols - root.c0) : root.cols;
     // The wells share the width; at most 46px high (few columns), about
     // square when there are many.
-    property <length> cell: root.cols > 0 ? max(8px, (root.width - root.label-w) / root.cols - root.gap) : 0px;
+    property <length> cell: root.shown-cols > 0 ? max(8px, (root.width - root.label-w) / root.shown-cols - root.gap) : 0px;
     property <length> cell-h: min(46px, max(root.cell * 0.58, min(root.cell, 24px)));
-    property <length> grid-h: root.label-w + root.rows * (root.cell-h + root.gap);
+    property <length> grid-h: root.label-w + root.shown-rows * (root.cell-h + root.gap);
+
+    pure function row-name(r: int) -> string {
+        r < PlateText.rows.length ? PlateText.rows[r] : r + 1
+    }
 
     preferred-height: layout.preferred-height;
 
@@ -112,28 +159,46 @@ export component PlateView inherits Rectangle {
             text: "No plate yet. The images are put into wells by the plate settings of the project (Project settings › Plate & grouping).";
         }
 
+        // Which section of a big plate (laid out like the plate).
+        if ImagesListState.plate-wells.length > 0 && root.sectioned: VerticalLayout {
+            spacing: 4px;
+            for sr in root.sec-rows: HorizontalLayout {
+                spacing: 4px;
+                for sc in root.sec-cols: SectionTile {
+                    text: root.row-name(sr * root.sec-h) + (sc * root.sec-w + 1) + "–"
+                        + root.row-name(min(root.rows, (sr + 1) * root.sec-h) - 1)
+                        + min(root.cols, (sc + 1) * root.sec-w);
+                    selected: sr == root.section-r && sc == root.section-c;
+                    clicked => {
+                        root.section-r = sr;
+                        root.section-c = sc;
+                    }
+                }
+            }
+        }
+
         if ImagesListState.plate-wells.length > 0: Rectangle {
             height: root.grid-h;
 
-            // Column numbers, row letters.
-            for c in root.cols: Text {
+            // Column numbers, row letters - of the section shown.
+            for c in root.shown-cols: Text {
                 x: root.label-w + c * (root.cell + root.gap);
                 y: 0px;
                 width: root.cell;
                 height: root.label-w;
-                text: c + 1;
+                text: root.c0 + c + 1;
                 font-size: Ink.fs-xs;
                 font-family: Ink.font-mono;
                 color: Ink.text-mute;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
-            for r in root.rows: Text {
+            for r in root.shown-rows: Text {
                 x: 0px;
                 y: root.label-w + r * (root.cell-h + root.gap);
                 width: root.label-w;
                 height: root.cell-h;
-                text: r < PlateText.rows.length ? PlateText.rows[r] : r + 1;
+                text: root.row-name(root.r0 + r);
                 font-size: Ink.fs-xs;
                 font-family: Ink.font-mono;
                 color: Ink.text-mute;
@@ -141,8 +206,10 @@ export component PlateView inherits Rectangle {
             }
 
             for well[i] in ImagesListState.plate-wells: Well {
-                x: root.label-w + well.col * (root.cell + root.gap);
-                y: root.label-w + well.row * (root.cell-h + root.gap);
+                visible: well.row >= root.r0 && well.row < root.r0 + root.shown-rows
+                    && well.col >= root.c0 && well.col < root.c0 + root.shown-cols;
+                x: root.label-w + (well.col - root.c0) * (root.cell + root.gap);
+                y: root.label-w + (well.row - root.r0) * (root.cell-h + root.gap);
                 width: root.cell;
                 height: root.cell-h;
                 well: well;

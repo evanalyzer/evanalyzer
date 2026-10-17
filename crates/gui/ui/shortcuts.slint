@@ -329,6 +329,7 @@ export global DialogEscape {
             ProjectSettingsState.project_settings_canceled();
         } else if (GlobalAppState.active_dialog == DialogType.classification_edit_class_dialog) {
             ClassificationSettingsState.reset_to_zero();
+            ClassificationSettingsState.anchor-y = 96px;
         } else if (GlobalAppState.active_dialog == DialogType.pipeline_edit) {
             PipelineEditState.cancel();
         } else if (GlobalAppState.active_dialog == DialogType.pipeline_delete_confirm) {

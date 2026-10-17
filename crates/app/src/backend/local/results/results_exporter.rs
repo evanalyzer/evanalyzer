@@ -2409,9 +2409,10 @@ mod tests {
         let mut workbook: Xlsx<_> =
             open_workbook(out_dir.join("list.xlsx")).expect("open exported xlsx");
         let range = workbook.worksheet_range("List").expect("List sheet");
+        // The image first, as in the List.
         assert_eq!(
             range.get_value((0, 0)),
-            Some(&Data::String("Object ID".to_string()))
+            Some(&Data::String("Image".to_string()))
         );
     }
 

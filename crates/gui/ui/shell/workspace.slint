@@ -20,6 +20,10 @@ import { ObjectListState } from "../api/object_list.slint";
 import { ImageControlPanel } from "../editor/image_control_panel.slint";
 import { AnnotateBar } from "annotate_bar.slint";
 import { ResultsView } from "../results/results_view.slint";
+import { ResultsPeek } from "results_peek.slint";
+import { SeriesChooser } from "series_chooser.slint";
+import { ImageMetaData } from "../api/image_meta.slint";
+import { ResultsState } from "../api/results.slint";
 import { AnalysisCard } from "../dialogs/pipeline_running_dialog.slint";
 import { PipelineRunningState, PreviewRunState } from "../api/pipeline_running.slint";
 
@@ -115,6 +119,23 @@ export component Workspace inherits Rectangle {
         enabled: root.on-image && GlobalAppState.active_dialog != DialogType.pipeline-running;
         inset-left: LayoutState.mode == WorkspaceMode.results ? 0px : Float.left-w + 2 * Float.gap;
         inset-right: Float.right-w + 2 * Float.gap;
+    }
+
+    // Several series and none chosen for the project: asked once (until
+    // "Decide later" for this session).
+    property <bool> series-later: false;
+    if root.on-image && ImageMetaData.nr_series > 1 && !ImageMetaData.series-chosen && !root.series-later: SeriesChooser {
+        x: (parent.width - self.width) / 2;
+        y: 64px;
+        later => {
+            root.series-later = true;
+        }
+    }
+
+    // A result's object on its image: the way back (top of the image).
+    if ResultsState.peek && root.on-image: ResultsPeek {
+        x: (parent.width - self.width) / 2;
+        y: 12px;
     }
 
     // Covers only the image, never the bars.

@@ -15,6 +15,8 @@
 
 ## Results
 
+- [ ] Results › List: "Rows 1–200 of N" - the total needs a COUNT over the whole filter on every change (a second query per page/filter). Not now: the list must stay fast, and the page's rows say enough (2026-10-17).
+
 - [x] Export Well formed in matrix view
 
 ## Algorithms

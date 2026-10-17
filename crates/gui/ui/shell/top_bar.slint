@@ -6,7 +6,7 @@ import { Ink, InkScheme, InkIcons, InkSegmented, InkButton, InkButtonKind, InkIc
 import { Appearance } from "../api/appearance.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { ToolbarState } from "../api/toolbar.slint";
-import { GlobalAppState, DialogType, ConnectionState } from "../api/state.slint";
+import { GlobalAppState, DialogType, ConnectionState, ChannelState } from "../api/state.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
 import { AiLearningState } from "../api/ai_learning.slint";
@@ -54,8 +54,12 @@ component EvaButton inherits Rectangle {
 }
 
 // The image shown: its name; a click goes to the images.
+// The image shown: its name (a click goes to the images) and, with several
+// series, which one - always in view, a click lists them with their sizes.
 component ImageChip inherits Rectangle {
-    width: min(row.preferred-width + 20px, 320px);
+    property <bool> has-series: ImageMetaData.nr_series > 1;
+
+    width: min(row.preferred-width, 420px);
     height: 26px;
     accessible-role: button;
     accessible-label: "Image: " + ImageMetaData.image_name;
@@ -65,33 +69,94 @@ component ImageChip inherits Rectangle {
 
     face := Rectangle {
         border-radius: Ink.radius-md;
-        background: ta.has-hover ? Ink.hover : transparent;
         border-width: 1px;
         border-color: Ink.border;
+        clip: true;
         row := HorizontalLayout {
-            padding-left: 10px;
-            padding-right: 10px;
-            spacing: 6px;
-            Image {
-                source: InkIcons.images;
-                width: 13px;
-                colorize: Ink.text-mute;
+            spacing: 0px;
+            name-part := Rectangle {
+                width: name-row.preferred-width;
+                background: name-ta.has-hover ? Ink.hover : transparent;
+                name-row := HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 6px;
+                    Image {
+                        y: (parent.height - self.height) / 2;
+                        source: InkIcons.images;
+                        width: 13px;
+                        colorize: Ink.text-mute;
+                    }
+                    Text {
+                        max-width: 240px;
+                        text: ImageMetaData.image_name;
+                        font-size: Ink.fs-md;
+                        font-family: Ink.font-mono;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                name-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        LayoutState.mode = WorkspaceMode.images;
+                    }
+                }
             }
-            Text {
-                text: ImageMetaData.image_name;
-                font-size: Ink.fs-md;
-                font-family: Ink.font-mono;
-                color: Ink.text;
-                vertical-alignment: center;
-                overflow: elide;
+            if root.has-series: Rectangle {
+                width: 1px;
+                background: Ink.border;
+            }
+            if root.has-series: Rectangle {
+                width: series-row.preferred-width;
+                background: series-ta.has-hover ? Ink.hover : transparent;
+                accessible-role: button;
+                accessible-label: "Series";
+                series-row := HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 5px;
+                    Text {
+                        text: "Series " + (ChannelState.selected_series + 1) + " of " + ImageMetaData.nr_series;
+                        font-size: Ink.fs-md;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                    }
+                    Image {
+                        y: (parent.height - self.height) / 2;
+                        source: InkIcons.caret-down;
+                        width: 9px;
+                        colorize: Ink.text-dim;
+                    }
+                }
+                series-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        series-menu.show();
+                    }
+                }
             }
         }
     }
 
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            LayoutState.mode = WorkspaceMode.images;
+    series-menu := PopupWindow {
+        x: name-part.width;
+        y: root.height + 4px;
+        InkMenuFrame {
+            open-y: root.absolute-position.y + root.height + 4px;
+            menu-width: 240px;
+            InkMenuCaption {
+                text: "SERIES · FOR EVERY IMAGE";
+            }
+            for s[i] in ImageMetaData.series_list: InkMenuItem {
+                text: s.width > 0 && s.height > 0 ? "Series \{s.idx + 1} · \{s.width} × \{s.height}" : "Series \{s.idx + 1}";
+                checked: ChannelState.selected_series == s.idx;
+                clicked => {
+                    ChannelState.selected_series = s.idx;
+                    ChannelState.trigger_active_series_changed();
+                }
+            }
         }
     }
 }

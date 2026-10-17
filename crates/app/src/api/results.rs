@@ -396,6 +396,11 @@ pub struct HistogramResult {
 pub struct ScatterPoint {
     pub x: f64,
     pub y: f64,
+    /// Its object: the image (an index into `ScatterResult::images`) and
+    /// its bounding box `[xmin, ymin, xmax, ymax]` in pixels - a click on
+    /// the point opens it there.
+    pub image: u32,
+    pub bbox_px: [u32; 4],
 }
 
 /// `points` may be a random sample of `total_object_count` rather than
@@ -403,6 +408,8 @@ pub struct ScatterPoint {
 #[derive(Serialize, Deserialize)]
 pub struct ScatterResult {
     pub points: Vec<ScatterPoint>,
+    /// The points' images (relative paths), each once.
+    pub images: Vec<String>,
     pub x_min: f64,
     pub x_max: f64,
     pub y_min: f64,

@@ -377,6 +377,11 @@ component ImageHeatmapGrid inherits Rectangle {
             range-max: ResultsState.image-heatmap-max;
             selected: self.cell.exists && self.cell.key == ResultsState.active-well;
             clicked => { ResultsState.image-heatmap-cell-clicked(self.cell.key); }
+            // A double click: the tile on its image.
+            double-clicked => {
+                ResultsState.image-heatmap-cell-clicked(self.cell.key);
+                ResultsState.image-heatmap-cell-open(self.cell.key);
+            }
         }
     }
 }
@@ -666,7 +671,16 @@ export component ResultsMatrixView inherits Rectangle {
                 InkHint {
                     text: ResultsState.active-well-caption;
                 }
-                // Nothing below the image heatmap to open.
+                // A tile of the image heatmap: shown on its image.
+                if ResultsState.matrix-level == MatrixLevel.object: InkButton {
+                    small: true;
+                    kind: InkButtonKind.primary;
+                    text: "Show on image ↗";
+                    enabled: ResultsState.active-well-has-value;
+                    clicked => {
+                        ResultsState.image-heatmap-cell-open(ResultsState.active-well);
+                    }
+                }
                 if ResultsState.matrix-level != MatrixLevel.object: InkButton {
                     small: true;
                     kind: InkButtonKind.primary;

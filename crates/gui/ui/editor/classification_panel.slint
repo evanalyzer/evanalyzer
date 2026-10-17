@@ -54,6 +54,8 @@ export component ClassificationPanel inherits Rectangle {
             has-more: true;
             add => {
                 ClassificationSettingsState.reset_to_zero();
+                // Below the head, where the new class appears.
+                ClassificationSettingsState.anchor-y = root.absolute-position.y + Ink.head-h;
                 GlobalAppState.active_dialog = DialogType.classification-edit-class-dialog;
             }
             more(x, y) => {
@@ -98,6 +100,8 @@ export component ClassificationPanel inherits Rectangle {
                                     root.menu-class-name = data.name;
                                     root.menu-x = max(0px, self.x + x - 190px);
                                     root.menu-y = self.y + y + head.height + 4px;
+                                    // Its settings open at this row.
+                                    ClassificationSettingsState.anchor-y = self.absolute-position.y - 8px;
                                     row-menu.show();
                                 }
                             }

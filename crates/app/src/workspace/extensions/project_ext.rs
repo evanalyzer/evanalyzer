@@ -3522,13 +3522,16 @@ mod tests {
     }
 
     #[test]
-    fn with_current_series_mut_returns_none_when_the_selected_series_is_missing() {
+    fn with_current_series_mut_uses_the_shown_series_when_the_selected_one_is_missing() {
         let mut project = project_with_one_image();
+        let first = project
+            .with_current_series_mut(|series| series.image_width)
+            .expect("the image's series");
+        // Series 99 the image lacks: its first one is shown - and changed.
         project.set_active_series(&99);
-        assert!(
-            project
-                .with_current_series_mut(|series| series.image_width)
-                .is_none()
+        assert_eq!(
+            project.with_current_series_mut(|series| series.image_width),
+            Some(first)
         );
     }
 

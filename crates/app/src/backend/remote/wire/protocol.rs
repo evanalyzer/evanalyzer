@@ -60,7 +60,7 @@ use std::sync::Arc;
 /// keep requests between versions working too. Something one side doesn't
 /// know (a new pipeline command, say) fails that one request with a clear
 /// error, not the connection.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 16;
 
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -731,7 +731,10 @@ mod tests {
             points: vec![crate::api::ScatterPoint {
                 x: f64::NAN,
                 y: 1.5,
+                image: 0,
+                bbox_px: [1, 2, 3, 4],
             }],
+            images: vec!["a.tif".into()],
             x_min: f64::INFINITY,
             x_max: f64::NEG_INFINITY,
             y_min: -0.0,

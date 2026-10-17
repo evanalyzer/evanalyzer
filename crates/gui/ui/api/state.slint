@@ -90,6 +90,9 @@ export struct ThirdPartyLicense {
 //
 export global AppInfoState {
         in-out property <string> version: "0.0.0-dev";
+        // "Linux x86_64" - and whether the version is a pre-release ("-rc").
+        in-out property <string> platform: "";
+        in-out property <bool> prerelease: false;
         in-out property <int> cpu_cores: 1;
         in-out property <string> ram_total: "-";
         in-out property <bool> cuda_available: false;

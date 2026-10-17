@@ -1,0 +1,88 @@
+// shell/results_peek.slint — a result's object on its image ("peek"): the
+// bar at the top of the image says which, steps to the next row's object
+// (‹ ›), leads back to the results or goes.
+
+import { ResultsState } from "../api/results.slint";
+import { LayoutState, WorkspaceMode } from "../api/layout.slint";
+import { Ink, InkIcons, InkIconButton, InkButton, InkButtonKind } from "../ink/ink.slint";
+
+export component ResultsPeek inherits Rectangle {
+    height: 36px;
+    width: row.preferred-width;
+    border-radius: 18px;
+    background: Ink.glass;
+    border-width: 1px;
+    border-color: Ink.border;
+    drop-shadow-blur: 12px;
+    drop-shadow-offset-y: 4px;
+    drop-shadow-color: Ink.shadow;
+    accessible-role: groupbox;
+    accessible-label: "Result on the image";
+
+    // Clicks stay on the bar.
+    TouchArea { }
+
+    row := HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 6px;
+        spacing: 6px;
+        alignment: center;
+
+        Text {
+            text: "RESULTS";
+            font-size: Ink.fs-xs;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            color: Ink.text-mute;
+            vertical-alignment: center;
+        }
+        Text {
+            text: ResultsState.peek-label;
+            font-size: Ink.fs-md;
+            font-family: Ink.font-mono;
+            color: Ink.text;
+            vertical-alignment: center;
+        }
+        if ResultsState.peek-can-step: InkIconButton {
+            y: (parent.height - self.height) / 2;
+            size: 26px;
+            icon: InkIcons.caret-left;
+            label: "The previous row's object";
+            enabled: ResultsState.list-selected-row > 0;
+            clicked => {
+                ResultsState.list-row-clicked(ResultsState.list-selected-row - 1);
+            }
+        }
+        if ResultsState.peek-can-step: InkIconButton {
+            y: (parent.height - self.height) / 2;
+            size: 26px;
+            icon: InkIcons.caret-right;
+            label: "The next row's object";
+            enabled: ResultsState.list-selected-row >= 0 && ResultsState.list-selected-row < ResultsState.list-rows.length - 1;
+            clicked => {
+                ResultsState.list-row-clicked(ResultsState.list-selected-row + 1);
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            InkButton {
+                small: true;
+                kind: InkButtonKind.primary;
+                text: "Back to results";
+                clicked => {
+                    ResultsState.peek = false;
+                    LayoutState.mode = WorkspaceMode.results;
+                }
+            }
+        }
+        InkIconButton {
+            y: (parent.height - self.height) / 2;
+            size: 26px;
+            icon: InkIcons.close;
+            label: "Hide";
+            clicked => {
+                ResultsState.peek = false;
+            }
+        }
+    }
+}
