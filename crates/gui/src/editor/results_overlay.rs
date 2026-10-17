@@ -71,33 +71,70 @@ pub fn draw_results_overlay(
             continue;
         }
         // Pixels whose centre lies within ~`half` px of the ellipse are its
-        // outline (soft at the edges), inside it the tint.
+        // outline (soft at the edges), inside it the tint. Row by row: the
+        // inside, well away from the outline, is one run (no square root
+        // per pixel); only near the outline is each pixel's distance taken.
         let xs = (x0.floor() as i64).max(0)..(x1.ceil() as i64).min(w);
         let ys = (y0.floor() as i64).max(0)..(y1.ceil() as i64).min(h);
         let r = rx.min(ry);
+        let band = 2.0 * half;
         for y in ys {
             let dy = (y as f32 + 0.5 - cy) / ry;
-            for x in xs.clone() {
+            let row = &mut buffer[(y * w) as usize..((y + 1) * w) as usize];
+            // Where this row is well inside (`dist < -band`, i.e. d below
+            // `a`): |x - cx| below `inner`, a pixel short to be safe.
+            let a = 1.0 - band / r;
+            let inner = if a > 0.0 && dy.abs() < a {
+                (rx * (a * a - dy * dy).sqrt() - 1.0).max(0.0)
+            } else {
+                0.0
+            };
+            let (in0, in1) = if inner > 0.0 {
+                (((cx - inner).ceil() as i64).max(xs.start), ((cx + inner).floor() as i64).min(xs.end))
+            } else {
+                (xs.start, xs.start)
+            };
+            let edge = |x: i64, row: &mut [slint::Rgba8Pixel]| {
                 let dx = (x as f32 + 0.5 - cx) / rx;
                 let d = (dx * dx + dy * dy).sqrt();
                 // Distance to the ellipse in screen pixels (close enough).
                 let dist = (d - 1.0) * r;
-                let alpha = if dist.abs() < 2.0 * half {
+                let alpha = if dist.abs() < band {
                     OUTLINE_ALPHA * (1.0 - (dist.abs() - half).max(0.0) / half)
                 } else if dist < 0.0 {
                     FILL_ALPHA
                 } else {
-                    continue;
+                    return;
                 };
-                blend(&mut buffer[(y * w + x) as usize], *rgb, alpha * dim);
+                blend(&mut row[x as usize], *rgb, alpha * dim);
+            };
+            for x in xs.start..in0.max(xs.start) {
+                edge(x, row);
+            }
+            for px in &mut row[in0.max(xs.start) as usize..in1.max(in0).max(xs.start) as usize] {
+                blend(px, *rgb, FILL_ALPHA * dim);
+            }
+            for x in in1.max(in0).max(xs.start)..xs.end {
+                edge(x, row);
             }
         }
     }
 }
 
 /// `rgb` at `alpha` over `dst` (Porter-Duff over, straight alpha).
+#[inline]
 fn blend(dst: &mut slint::Rgba8Pixel, rgb: [u8; 3], alpha: f32) {
     let sa = alpha.clamp(0.0, 1.0);
+    // Nothing there yet (most pixels): the colour itself.
+    if dst.a == 0 {
+        *dst = slint::Rgba8Pixel {
+            r: rgb[0],
+            g: rgb[1],
+            b: rgb[2],
+            a: (sa * 255.0).round() as u8,
+        };
+        return;
+    }
     let da = dst.a as f32 / 255.0;
     let out_a = sa + da * (1.0 - sa);
     if out_a <= 0.0 {
@@ -184,6 +221,39 @@ mod tests {
         assert!(at(20, 20).a < 40 && at(20, 20).a > 0, "the faint inside");
         assert_eq!(at(10, 10).a, 0, "the box's corner is outside the ellipse");
         assert_eq!(at(20, 20).r, 255);
+    }
+
+    /// The row runs give the pixels the per-pixel rule gives.
+    #[test]
+    fn the_fast_fill_matches_the_pixel_by_pixel_ellipse() {
+        let overlay = ResultsOverlay {
+            objects: vec![([3, 7, 61, 40], [255, 0, 0]), ([10, 10, 13, 90], [0, 255, 0])],
+            selected: None,
+        };
+        let mut buf = buffer(80, 100);
+        draw_results_overlay(&mut buf, &overlay, 80, 100, 1.0, 0.0, 0.0);
+        // The reference: each pixel's own distance (as before).
+        let mut want = buffer(80, 100);
+        for (bbox, rgb) in &overlay.objects {
+            let (x0, y0, x1, y1) = (bbox[0] as f32, bbox[1] as f32, (bbox[2] + 1) as f32, (bbox[3] + 1) as f32);
+            let (cx, cy, rx, ry) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0) / 2.0, (y1 - y0) / 2.0);
+            let r = rx.min(ry);
+            for y in y0.floor() as usize..(y1.ceil() as usize).min(100) {
+                for x in x0.floor() as usize..(x1.ceil() as usize).min(80) {
+                    let (dx, dy) = ((x as f32 + 0.5 - cx) / rx, (y as f32 + 0.5 - cy) / ry);
+                    let dist = ((dx * dx + dy * dy).sqrt() - 1.0) * r;
+                    let alpha = if dist.abs() < 1.5 {
+                        OUTLINE_ALPHA * (1.0 - (dist.abs() - 0.75).max(0.0) / 0.75)
+                    } else if dist < 0.0 {
+                        FILL_ALPHA
+                    } else {
+                        continue;
+                    };
+                    blend(&mut want[y * 80 + x], *rgb, alpha);
+                }
+            }
+        }
+        assert!(buf == want, "same pixels");
     }
 
     #[test]

@@ -1,6 +1,5 @@
 use crate::{
-    DialogType, GlobalAppState, PipelineRunningState, PipelinesPanelState, PreviewRunState,
-    UiState,
+    PipelineRunningState, PipelinesPanelState, PreviewRunState, UiState,
     editor::{
         classification_controller::ClassificationController,
         object_list_controller::ObjectListController, pipeline_task::PipelineTask,
@@ -509,6 +508,7 @@ fn wait_for_task(task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>) -> P
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{DialogType, GlobalAppState};
 
     #[test]
     fn secs_per_image_treats_index_zero_as_one_instead_of_displaying_inf() {

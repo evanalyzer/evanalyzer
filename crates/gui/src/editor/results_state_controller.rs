@@ -5769,6 +5769,94 @@ mod tests {
         }
     }
 
+    /// Times the results views on a real results file and the process's
+    /// RAM (now / peak) after each: opening, List, Plate, Charts, and the
+    /// split view (a row's objects read and drawn at 1920 x 1080).
+    /// `EVADB=<file.evadb> cargo test --release -p evanalyzer_gui --lib
+    /// bench_results_views -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_results_views() {
+        use std::time::Instant;
+        let Ok(path) = std::env::var("EVADB") else {
+            return;
+        };
+        let rss = || {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            let kb = |key: &str| {
+                status
+                    .lines()
+                    .find(|l| l.starts_with(key))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0)
+                    / 1024.0
+            };
+            (kb("VmRSS:"), kb("VmHWM:"))
+        };
+        let report = |name: &str, took: std::time::Duration| {
+            let (now, peak) = rss();
+            println!("{name:<34} {:>9.1} ms {:>8.0} MB {:>8.0} MB", took.as_secs_f64() * 1000.0, now, peak);
+        };
+        println!("{:<34} {:>12} {:>11} {:>11}", "step", "time", "RSS", "peak");
+        report("start", std::time::Duration::ZERO);
+
+        let ui = test_ui_window();
+        let ui_state = ui_state_with_window(&ui, Default::default());
+        let controller = make_controller_with_state(ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+        let state = ui.global::<ResultsState>();
+
+        let start = Instant::now();
+        controller.open_database(PathBuf::from(&path));
+        drain_ui_queue();
+        report("open (List, first page)", start.elapsed());
+        println!("  {} rows on the page, {} images", state.get_list_rows().row_count(), controller.images.lock().unwrap().len());
+
+        for (name, mode) in [
+            ("Plate", ResultsRailMode::Matrix),
+            ("Charts (histogram)", ResultsRailMode::Charts),
+            ("List again", ResultsRailMode::List),
+        ] {
+            let start = Instant::now();
+            state.set_rail_mode(mode);
+            state.invoke_rail_mode_selected(mode);
+            drain_ui_queue();
+            report(name, start.elapsed());
+        }
+
+        // Split: the first row's object on its image - its objects read
+        // (the project doesn't hold the images: read straight from the db).
+        let (rel_path, _) = controller.list_row_locations.lock().unwrap()[0].clone();
+        let start = Instant::now();
+        let objects = controller
+            .result_generator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .image_objects(&evanalyzer_app::results::ImageObjectsFilter {
+                image_rel_path: rel_path.clone(),
+                plane: evanalyzer_app::results::PlaneFilter { z_stack: 0, t_stack: 0 },
+                value_column: None,
+            })
+            .unwrap();
+        report(&format!("split: objects of one image ({})", objects.len()), start.elapsed());
+        let overlay = crate::editor::results_overlay::ResultsOverlay {
+            objects: objects.iter().map(|o| (o.bbox_px, [255, 0, 255])).collect(),
+            selected: Some(0),
+        };
+        let (w, h) = (1920 + 512, 1080 + 512);
+        let max_x = objects.iter().map(|o| o.bbox_px[2]).max().unwrap_or(1) as f32;
+        let max_y = objects.iter().map(|o| o.bbox_px[3]).max().unwrap_or(1) as f32;
+        for (name, zoom) in [("fitted", (1920.0 / max_x).min(1080.0 / max_y)), ("zoom 1", 1.0f32)] {
+            let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
+            let start = Instant::now();
+            crate::editor::results_overlay::draw_results_overlay(buffer.make_mut_slice(), &overlay, w, h, zoom, 256.0, 256.0);
+            report(&format!("split: draw the ellipses, {name}"), start.elapsed());
+        }
+    }
+
     #[test]
     fn toggle_active_well_disabled_flips_the_database_and_refreshes_the_well_grid() {
         let (ui, controller) = controller_with_open_database();

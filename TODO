@@ -16,6 +16,11 @@
 - [ ] Later (2026-10-17): Images › Plate - a custom grouping regex is compiled by the Rust `regex` crate (plate in the images panel) and by DuckDB/RE2 (results); the usual patterns agree, unusual ones may not - one engine for both.
 - [ ] Later (2026-10-17): Images - "+ Add images" (single images; today the images are the folder's content).
 - [ ] Later (2026-10-17): Compare two previews (board C) - a setting before and after a change ("Before · 200 / After · 240"), reusing the breakpoint compare's second render.
+- [ ] Later (2026-10-17): Own title bar (design boards: the window controls in our top bar, ~30 px more for the image). Options, decided later:
+  A. keep the system bar, coloured to Light/Dark/Dim (winit theme; Windows/macOS) - low risk, ~½ day;
+  B. per platform - macOS: native traffic lights over a transparent bar; Windows: own bar and buttons with the system shadow, snap by dragging; Linux: system bar - 2-4 days plus testing on real machines;
+  C. own bar everywhere - most consistent, most risk (Wayland: no shadow/rounded corners, Windows 11 Snap Layouts on the maximise button lost).
+  Needs Slint's unstable winit API (`with_winit_window` → `drag_window` / `drag_resize_window`); can't be tested here (no display). Decide by the users' OS mix.
 
 ## Results
 
