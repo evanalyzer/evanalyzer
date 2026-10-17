@@ -352,6 +352,9 @@ export component ResultsListView inherits Rectangle {
                         if index == ResultsState.list-selected-row && ResultsState.list-group-by-summary == "Objects": InkButton {
                             x: -body-list.content-x + body-list.visible-width - self.width - 10px;
                             y: (parent.height - self.height) / 2;
+                            // Its own size (in a plain Rectangle it'd fill the row).
+                            width: self.preferred-width;
+                            height: self.preferred-height;
                             small: true;
                             kind: InkButtonKind.primary;
                             text: "Show on image ↗";

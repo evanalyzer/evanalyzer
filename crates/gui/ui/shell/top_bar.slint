@@ -9,6 +9,7 @@ import { ToolbarState } from "../api/toolbar.slint";
 import { GlobalAppState, DialogType, ConnectionState, ChannelState } from "../api/state.slint";
 import { PipelinesPanelState } from "../api/pipelines.slint";
 import { ImageMetaData } from "../api/image_meta.slint";
+import { ImagesListState } from "../api/images_list.slint";
 import { AiLearningState } from "../api/ai_learning.slint";
 import { ResultsBarNav, ResultsBarActions } from "../results/results_bar.slint";
 
@@ -406,6 +407,14 @@ export component TopBar inherits Rectangle {
                 text: "New from template…";
                 clicked => {
                     ToolbarState.new_from_project_template_clicked();
+                }
+            }
+            // The images: their folder (as in the images panel).
+            InkMenuItem {
+                icon: InkIcons.folder;
+                text: "Open images folder…";
+                clicked => {
+                    ImagesListState.open_images_folder_clicked();
                 }
             }
             InkMenuItem {

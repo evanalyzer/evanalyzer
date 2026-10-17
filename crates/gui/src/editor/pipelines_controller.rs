@@ -8617,6 +8617,42 @@ mod tests {
         assert_eq!(size(), before);
     }
 
+    /// A setting with only a lower bound (Min Size >= 1, no max): + still
+    /// steps it up, − not below the bound.
+    #[test]
+    fn a_setting_with_only_a_lower_bound_still_steps() {
+        use i_slint_backend_testing::ElementHandle;
+        let (ui, ui_state, _controller) = selected(vec![step("ConnectedComponents")]);
+        ui.window().set_size(slint::LogicalSize::new(1280.0, 900.0));
+        ui.global::<crate::LayoutState>()
+            .set_mode(crate::WorkspaceMode::Pipelines);
+        let commands = ui.global::<PipelinesPanelState>().get_active_commands();
+        let mut card = commands.row_data(0).unwrap();
+        card.expanded = true;
+        commands.set_row_data(0, card);
+        let size = || match ui_state.get_project().pipelines[0].steps[0].command() {
+            Some(PipelineCommand::ConnectedComponents(c)) => c.min_size,
+            other => panic!("{other:?}"),
+        };
+        let before = size();
+        let button = |label: &str| {
+            ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+        };
+        button("Increase").invoke_accessible_default_action();
+        drain_ui_queue();
+        assert_eq!(size(), (before + 1).max(1), "from {before}");
+        button("Increase").invoke_accessible_default_action();
+        drain_ui_queue();
+        assert_eq!(size(), (before + 1).max(1) + 1);
+        for _ in 0..5 {
+            button("Decrease").invoke_accessible_default_action();
+        }
+        drain_ui_queue();
+        assert_eq!(size(), 1, "not below its min");
+    }
+
     /// A channel and a single class are picked with the same field (label, swatch
     /// and name, a caret) - only a class list has its own (chips).
     #[test]

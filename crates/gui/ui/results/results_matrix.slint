@@ -83,6 +83,8 @@ component MatrixCellView inherits Rectangle {
         height: 100%;
         viewbox-width: 100;
         viewbox-height: 100;
+        // Corner to corner also on a tile that isn't square.
+        fit: fill;
         commands: "M 0 0 L 100 100";
         stroke: #0B0C0F;
         stroke-width: 1.4px;

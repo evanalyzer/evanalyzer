@@ -124,6 +124,22 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 - **Images › Plate:** a plate bigger than 8 x 12 in sections of 8 x 12
   (a picker above it: "A1–H12 · A13–H24 / …").
 - **Class settings** open at the clicked class row.
+- **Histogram curve aligned:** the curve's Path was fitted with Slint's
+  default `contain` - squeezed into a square in the middle of the box,
+  off the black / white lines. `fit: fill` (also the disabled tile's
+  cross). The cause of the "lines don't match the histogram" report.
+- **Keyboard:** Tab reaches segmented controls (← →), selects (Space /
+  Enter / ↓ open), list rows (Space / Enter, menu key) and step lines
+  (focus selects, Space / Enter opens); the ring only for the keyboard.
+- **Object card:** "Coloc with" - each class and how many of its objects.
+- **Export:** "Images with objects drawn (PNG)" - each image at the
+  pyramid level up to 4096 px, the channels in their colors (auto-scaled),
+  every object's box in its class color (the database keeps boxes, not
+  outlines). Protocol 17.
+- **EVA menu:** "Open images folder…".
+- **Number fields:** a setting with only a lower bound (Min Size >= 1) or
+  no range stepped nothing (clamped into an empty range) - fixed in the
+  field.
 - **About (board Y):** dark hero (version, platform, stable / pre-
   release), tabs About (the people turning around the mark, the
   creators, AGPL-3.0), the contributors, System (where the work runs:
@@ -198,26 +214,16 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 
 - [ ] **Own title bar:** no system frame - window move, minimise, maximise,
       close and resize at the edges via winit (differs per platform).
-- [ ] **Compare two previews (C):** a setting before and after a change
-      ("Before · 200 / After · 240") - would reuse the compare's second
-      render. Today: breakpoint image against the original.
-- [ ] **Object card (F):** "Coloc with" (not in the object data yet).
-- [ ] **Images (G):** "+ Add images" (images are the folder's content
-      today; there is no action for single images).
 - [ ] **Charts (M):** the small "same values" previews (histogram,
       scatter) under the chart - left out on purpose: two more queries on
       every change.
 - [ ] **List (L):** "Rows 1–200 of N" - not now (TODO: a COUNT per
       change costs speed for little).
-- [ ] **Export (R):** "Images with objects drawn".
 
 ### Follow-ups of this round
 
-- [ ] **Images › Plate:** a custom grouping regex is compiled by the Rust
-      `regex` crate here and by DuckDB (RE2) in the results - the same for
-      the usual patterns, but not for every one.
-- [ ] **Keyboard:** list rows, segmented controls, selects and the step
-      lines don't take Tab focus yet.
+- Later (TODO): one regex engine for the plate grouping, "+ Add images",
+  compare two previews.
 
 ### Findings
 

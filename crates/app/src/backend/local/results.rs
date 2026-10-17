@@ -1,6 +1,7 @@
 //! Results databases in this process: DuckDB queries, charts and exports,
 //! served through [`LocalResults`] as the `ResultsSource` for front ends.
 
+mod drawn_images;
 mod results_charts;
 mod results_exporter;
 mod results_generator;

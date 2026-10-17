@@ -33,6 +33,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub debug_mode: bool,
 
+    /// The image histogram's counts on a linear scale (default: log).
+    #[serde(default)]
+    pub histogram_linear: bool,
+
     /// Servers connected to from the GUI, most recent first - see
     /// [`AppSettings::remember_server`]. Kept on this computer only.
     #[serde(default)]

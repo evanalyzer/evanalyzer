@@ -13,6 +13,10 @@
 
 - IDEA (decided against, 2026-10-17): more than one dialog open at a time. No use case - the dialogs don't block the window, and one `active_dialog` keeps it simple. Not to be built.
 
+- [ ] Later (2026-10-17): Images › Plate - a custom grouping regex is compiled by the Rust `regex` crate (plate in the images panel) and by DuckDB/RE2 (results); the usual patterns agree, unusual ones may not - one engine for both.
+- [ ] Later (2026-10-17): Images - "+ Add images" (single images; today the images are the folder's content).
+- [ ] Later (2026-10-17): Compare two previews (board C) - a setting before and after a change ("Before · 200 / After · 240"), reusing the breakpoint compare's second render.
+
 ## Results
 
 - [ ] Results › List: "Rows 1–200 of N" - the total needs a COUNT over the whole filter on every change (a second query per page/filter). Not now: the list must stay fast, and the page's rows say enough (2026-10-17).

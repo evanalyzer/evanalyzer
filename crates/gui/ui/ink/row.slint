@@ -42,9 +42,28 @@ export component InkListRow inherits Rectangle {
         root.clicked();
     }
 
+    // Tab reaches it: Space / Enter is a click, the menu key its menu.
+    row-keys := FocusScope {
+        focus-on-click: false;
+        key-pressed(e) => {
+            if e.text == " " || e.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            if e.text == Key.Menu && root.has-more {
+                root.context-menu(root.width - 24px, root.height);
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     face := Rectangle {
         border-radius: Ink.radius-sm;
         background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+        // The keyboard's ring (a click doesn't focus it).
+        border-width: row-keys.has-focus ? 2px : 0px;
+        border-color: Ink.focus;
 
         edge := Rectangle {
             visible: root.selected;

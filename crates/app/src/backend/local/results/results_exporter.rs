@@ -116,6 +116,18 @@ impl ResultExport {
         if self.with_heatmap {
             self.export_heatmap(database, cancel, &mut *on_progress)?;
         }
+        if let Some(drawn) = &self.drawn_images {
+            let images = resolve_images(database, self)?;
+            super::drawn_images::export_drawn_images(
+                database,
+                drawn,
+                &images,
+                &self.output_dir,
+                (self.z_stacks.start, self.t_stacks.start),
+                cancel,
+                &mut *on_progress,
+            )?;
+        }
         Ok(())
     }
 
@@ -2380,6 +2392,33 @@ mod tests {
     }
 
     // -- calamine smoke test: confirms the reader API used below -------------
+
+    /// "Images with objects drawn": a PNG per image, of the real file.
+    #[test]
+    fn images_with_objects_drawn_are_written_as_png() {
+        let name = "multi-channel-4D-series.ome.tif";
+        let (database, out_dir) = open(&[ObjectSpec::new(name, "ClassA", 1, 100)]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            drawn_images: Some(crate::api::DrawnImages {
+                image_root: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/tests"),
+                series: 0,
+                max_side: 4096,
+                colors: [(0, [1.0, 0.0, 0.0])].into(),
+            }),
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &no_cancel(), &mut no_progress())
+            .expect("export");
+        let png = out_dir.join("images").join("multi-channel-4D-series.ome.png");
+        let picture = image::open(&png).expect("a png").to_rgb8();
+        assert!(picture.width() > 0 && picture.height() > 0);
+    }
 
     #[test]
     fn calamine_can_read_back_a_real_exported_xlsx() {

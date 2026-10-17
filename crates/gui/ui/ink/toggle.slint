@@ -184,6 +184,9 @@ export component InkSegmented inherits Rectangle {
         border-radius: Ink.radius-md;
         background: Ink.raised;
         opacity: root.enabled ? 1.0 : 0.45;
+        // The keyboard's ring (a click doesn't focus it).
+        border-width: seg-keys.has-focus ? 2px : 0px;
+        border-color: Ink.focus;
 
         row := HorizontalLayout {
             padding: 2px;
@@ -212,6 +215,23 @@ export component InkSegmented inherits Rectangle {
                     }
                 }
             }
+        }
+    }
+
+    // Tab reaches it; ← / → pick the neighbour.
+    seg-keys := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if e.text == Key.LeftArrow && root.selected > 0 {
+                root.picked(root.selected - 1);
+                return accept;
+            }
+            if e.text == Key.RightArrow && root.selected < root.model.length - 1 {
+                root.picked(root.selected + 1);
+                return accept;
+            }
+            return reject;
         }
     }
 }
