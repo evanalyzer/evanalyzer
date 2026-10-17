@@ -15,6 +15,8 @@ import { ImageMetaPanel } from "../editor/image_meta_panel.slint";
 import { ResultsListPanel } from "../editor/results_list_panel.slint";
 import { ClassificationPanel } from "../editor/classification_panel.slint";
 import { ObjectListPanel } from "../editor/object_list_panel.slint";
+import { ObjectCard } from "../editor/object_card.slint";
+import { ObjectListState } from "../api/object_list.slint";
 import { ImageControlPanel } from "../editor/image_control_panel.slint";
 import { AnnotateBar } from "annotate_bar.slint";
 import { ResultsView } from "../results/results_view.slint";
@@ -79,6 +81,11 @@ export component Workspace inherits Rectangle {
     in property <image> object_image;
 
     property <bool> on-image: LayoutState.mode != WorkspaceMode.results;
+    // The objects table at the bottom, and the room it takes there.
+    property <bool> objects-table-shown: root.on-image && LayoutState.objects-open && LayoutState.objects-as-table;
+    property <length> table-h: min(320px, root.height * 0.4);
+    property <length> table-room: root.objects-table-shown ? root.table-h + Float.gap : 0px;
+    property <length> table-x: LayoutState.mode == WorkspaceMode.pipelines ? Float.left-w + 2 * Float.gap : LayoutState.mode == WorkspaceMode.images ? Float.left-w + 20px + 2 * Float.gap : Float.gap;
 
     // A newly pinned setting shows the Tuning panel again.
     property <int> tuned-count: PipelinesPanelState.tuned-settings.length;
@@ -104,7 +111,8 @@ export component Workspace inherits Rectangle {
         object_image: root.object_image;
         width: 100%;
         height: 100%;
-        enabled: GlobalAppState.active_dialog == DialogType.none && root.on-image;
+        // Also with a dialog open - only the analysis' waiting one blocks it.
+        enabled: root.on-image && GlobalAppState.active_dialog != DialogType.pipeline-running;
         inset-left: LayoutState.mode == WorkspaceMode.results ? 0px : Float.left-w + 2 * Float.gap;
         inset-right: Float.right-w + 2 * Float.gap;
     }
@@ -113,6 +121,14 @@ export component Workspace inherits Rectangle {
     if GlobalAppState.active_dialog == DialogType.preview-rendering: PreviewRendering {
         width: 100%;
         height: 100%;
+    }
+
+    // The selected object, next to it on the image (under the panels).
+    if root.on-image && ObjectListState.selected_object.id != 0 && ObjectListState.selected_object.bbox-w > 0: ObjectCard {
+        width: 100%;
+        height: 100%;
+        inset-left: LayoutState.mode == WorkspaceMode.results ? 0px : Float.left-w + 2 * Float.gap;
+        inset-right: Float.right-w + 2 * Float.gap;
     }
 
     // -- Left --
@@ -132,14 +148,14 @@ export component Workspace inherits Rectangle {
         width: Float.left-w + 20px;
         height: parent.height - 2 * Float.gap;
         ImagesListPanel {
-            vertical-stretch: 3;
+            vertical-stretch: 1;
         }
         Rectangle {
             height: 1px;
             background: Ink.border-soft;
         }
         ImageMetaPanel {
-            vertical-stretch: 2;
+            vertical-stretch: 0;
         }
     }
 
@@ -193,11 +209,24 @@ export component Workspace inherits Rectangle {
             }
         }
 
-        if LayoutState.objects-open: InkPanel {
+        if LayoutState.objects-open && !LayoutState.objects-as-table: InkPanel {
             vertical-stretch: 1;
             ObjectListPanel {
                 vertical-stretch: 1;
             }
+        }
+    }
+
+    // -- The objects as a table: at the bottom, between the left and the
+    // right panels (design K) --
+    if root.objects-table-shown: InkPanel {
+        x: root.table-x;
+        width: parent.width - root.table-x - Float.right-w - 2 * Float.gap;
+        height: root.table-h;
+        y: parent.height - self.height - Float.gap;
+        ObjectListPanel {
+            vertical-stretch: 1;
+            table: true;
         }
     }
 
@@ -206,8 +235,8 @@ export component Workspace inherits Rectangle {
         x: Float.left-w + 2 * Float.gap;
         width: min(420px, parent.width - Float.left-w - Float.right-w - 4 * Float.gap);
         // As high as its settings (at most what the image leaves).
-        height: min(self.preferred-height, parent.height - 2 * Float.gap);
-        y: parent.height - self.height - Float.gap;
+        height: min(self.preferred-height, parent.height - 2 * Float.gap - root.table-room);
+        y: parent.height - self.height - Float.gap - root.table-room;
         TuningPanel {
             close => {
                 LayoutState.tuning-hidden = true;
@@ -220,7 +249,7 @@ export component Workspace inherits Rectangle {
     // steps keep their place on the left.
     if PipelineRunningState.active && !LayoutState.analysis-card-hidden && GlobalAppState.active_dialog != DialogType.pipeline-running: AnalysisCard {
         x: parent.width - self.width - (root.on-image ? Float.right-w + 2 * Float.gap : Float.gap);
-        y: parent.height - self.height - Float.gap;
+        y: parent.height - self.height - Float.gap - root.table-room;
     }
 
     // -- Top --

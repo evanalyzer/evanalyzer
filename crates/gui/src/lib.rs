@@ -86,7 +86,13 @@ pub struct UiState {
     /// This computer - where "Disconnect" returns to, and where the list of
     /// recent servers is kept whatever the window is connected to.
     local_backend: Arc<dyn Backend>,
+    /// Which images were previewed (this session) or are in the analysis
+    /// open in Results - the images plate's well states.
+    image_states: Mutex<crate::editor::images_list_controller::ImageStates>,
+    /// Told when `image_states` changes (the images panel's plate).
+    image_states_listener: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
+
 
 impl UiState {
     pub fn new(app: AppHandle, handle: slint::Weak<AppWindow>) -> Self {
@@ -111,7 +117,55 @@ impl UiState {
             force_next_checkpoint: AtomicBool::new(false),
             app_settings: Mutex::new(app_settings),
             local_backend,
+            image_states: Mutex::new(Default::default()),
+            image_states_listener: Mutex::new(None),
         }
+    }
+
+    /// See `image_states`.
+    pub fn image_states(&self) -> crate::editor::images_list_controller::ImageStates {
+        self.image_states.lock().expect("Poisoned").clone()
+    }
+
+    /// A preview ran on the image at `path` (full path).
+    pub fn mark_previewed(&self, path: PathBuf) {
+        let added = self
+            .image_states
+            .lock()
+            .expect("Poisoned")
+            .previewed
+            .insert(path);
+        if added {
+            self.image_states_changed();
+        }
+    }
+
+    /// The images (relative paths) of the analysis open in Results.
+    pub fn set_analysed(&self, paths: impl IntoIterator<Item = PathBuf>) {
+        self.image_states.lock().expect("Poisoned").analysed = paths.into_iter().collect();
+        self.image_states_changed();
+    }
+
+    /// Calls `f` when `image_states` changes.
+    pub fn on_image_states_changed(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.image_states_listener.lock().expect("Poisoned") = Some(Box::new(f));
+    }
+
+    fn image_states_changed(&self) {
+        if let Some(listener) = self
+            .image_states_listener
+            .lock()
+            .expect("Poisoned")
+            .as_ref()
+        {
+            listener();
+        }
+    }
+
+    /// Another project: what was previewed or analysed belonged to the old one.
+    fn clear_image_states(&self) {
+        *self.image_states.lock().expect("Poisoned") = Default::default();
+        self.image_states_changed();
     }
 
     /// This computer's backend - see `local_backend`.
@@ -258,6 +312,12 @@ impl UiState {
         self.push_undo_redo_state_to_ui();
     }
 
+    /// The next change starts an undo step of its own, however soon it
+    /// follows the last (a drawn shape, a brush stroke).
+    pub fn begin_undo_step(&self) {
+        self.force_next_checkpoint.store(true, Ordering::Relaxed);
+    }
+
     /// Forgets every undo/redo step - when another project replaces the
     /// current one, the steps belong to the old project: undoing one would
     /// put the old project's content into the new one (and saving it, over
@@ -366,6 +426,7 @@ impl UiState {
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
         self.app.load_project(path)?;
         self.clear_undo_history();
+        self.clear_image_states();
         Ok(())
     }
 
@@ -374,6 +435,7 @@ impl UiState {
     pub fn new_project(&self) {
         self.app.new_project();
         self.clear_undo_history();
+        self.clear_image_states();
     }
 
     /// Imports an old (`.icproj`) project, replacing the current project.
@@ -384,6 +446,7 @@ impl UiState {
     ) -> Result<(Vec<String>, Option<String>), InternalErrors> {
         let imported = self.app.import_legacy_project(path)?;
         self.clear_undo_history();
+        self.clear_image_states();
         Ok(imported)
     }
 

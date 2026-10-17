@@ -1,4 +1,4 @@
-// channel_picker.slint
+// editor/channel_picker.slint
 // Channel picker (popup list with each channel's color + name) and the
 // image-address picker built on it (channel / memory slot / scratchpad).
 import { ChannelState } from "../api/state.slint";
@@ -8,7 +8,7 @@ import { ScrollView } from "std-widgets.slint";
 import { ComboBox } from "../ink/std_compat.slint";
 import { Ink } from "../ink/palette.slint";
 
-import { PickerField, PickerRow, SwatchName } from "picker_field.slint";
+import { InkPickerField, InkPickerRow, InkSwatchName } from "../ink/ink.slint";
 
 // Color swatch + name of channel `idx`; collapses to nothing for a channel
 // the open image doesn't define.
@@ -16,7 +16,7 @@ component ChannelLabel inherits Rectangle {
     in property <int> idx;
     in property <length> font-size: Ink.fs-md;
 
-    for ch in ChannelState.channels: SwatchName {
+    for ch in ChannelState.channels: InkSwatchName {
         visible: ch.idx == root.idx;
         color: ch.color;
         name: ch.name;
@@ -43,7 +43,7 @@ export component ChannelPicker inherits Rectangle {
 
     height: Ink.control-h;
 
-    PickerField {
+    InkPickerField {
         label: root.compact ? "\{root.value}" : "Channel " + root.value;
         font-size: root.font-size;
         clicked => {
@@ -78,7 +78,7 @@ export component ChannelPicker inherits Rectangle {
 
                 VerticalLayout {
                     spacing: 0px;
-                    for index in root.channel-count: PickerRow {
+                    for index in root.channel-count: InkPickerRow {
                         height: root.row-height;
                         label: "Channel " + index;
                         selected: index == root.value;

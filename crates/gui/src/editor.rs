@@ -208,7 +208,11 @@ impl Editor {
             viewport_controller.clone(),
         ));
 
-        link_plate_settings(&project_settings_controller, &results_state_controller);
+        link_plate_settings(
+            &project_settings_controller,
+            &results_state_controller,
+            Some(&image_list_controller),
+        );
 
         let connection_controller = Arc::new(connection_controller::ConnectionController::new(
             ui.clone(),
@@ -291,9 +295,15 @@ impl Editor {
 pub(crate) fn link_plate_settings(
     project_settings: &Arc<ProjectSettingsController>,
     results: &Arc<ResultsStateController>,
+    images: Option<&Arc<ImagesListController>>,
 ) {
     let results_weak = Arc::downgrade(results);
+    // The images panel's plate view groups by the same settings.
+    let images_weak = images.map(Arc::downgrade);
     project_settings.on_plate_settings_changed(move || {
+        if let Some(images) = images_weak.as_ref().and_then(|weak| weak.upgrade()) {
+            images.sync_image_list_to_slint();
+        }
         let results_weak = results_weak.clone();
         // The results view refreshes its grids on the UI thread.
         crate::helper::ui_thread::invoke_from_event_loop(move || {

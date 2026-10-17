@@ -2,12 +2,18 @@ import { GlobalAppState, HistogramState } from "../api/state.slint";
 import { MarkerData, ToolState, ViewportObjectState, ViewportState } from "../api/viewport.slint";
 import { ClassificationState } from "../api/classification.slint";
 import { Ink } from "../ink/palette.slint";
+import { InkIcons } from "../ink/icons.slint";
+import { LayoutState } from "../api/layout.slint";
+import { ViewportMemoryState } from "../api/project_settings.slint";
 
 import { ScaleBar } from "viewport_scalebar.slint";
 import { Navigator } from "viewport_navigator.slint";
 
 export component Viewport inherits Rectangle {
     property <length> last_mouse_x: 0;
+    // Before / after is on (and not switched off in the settings).
+    property <bool> comparing: ViewportObjectState.compare && ViewportMemoryState.before_after;
+    property <bool> brush-tool: ViewportObjectState.act_tool_state == ToolState.Brush || ViewportObjectState.act_tool_state == ToolState.Eraser;
     property <length> last_mouse_y: 0;
     in-out property <image> display_image;
     in-out property <image> ghost_image;
@@ -126,14 +132,22 @@ export component Viewport inherits Rectangle {
         // Rendered in screen space (viewport plus a margin) at the zoom/offset
         // of its render; placed like the image layers, so it stays on the
         // image while a pan/zoom moves it, until the re-render settles.
-        Image {
-            source: root.object_image;
-            image-fit: fill;
-            visible: ViewportObjectState.show_objects && ViewportState.object_ready && root.fits(self.x, self.y, self.width, self.height);
-            x: root.screen_x(ViewportState.obj_img_x);
-            y: root.screen_y(ViewportState.obj_img_y);
-            width: root.screen_len(ViewportState.obj_img_w);
-            height: root.screen_len(ViewportState.obj_img_h);
+        // Comparing: only right of the line ("after").
+        obj-clip := Rectangle {
+            x: root.comparing ? root.width * ViewportObjectState.compare-at : 0px;
+            y: 0px;
+            width: parent.width - self.x;
+            height: parent.height;
+            clip: root.comparing;
+            Image {
+                source: root.object_image;
+                image-fit: fill;
+                visible: ViewportObjectState.show_objects && !(ViewportObjectState.show-before && ViewportMemoryState.before_after) && ViewportState.object_ready && root.fits(self.x + obj-clip.x, self.y, self.width, self.height);
+                x: root.screen_x(ViewportState.obj_img_x) - obj-clip.x;
+                y: root.screen_y(ViewportState.obj_img_y);
+                width: root.screen_len(ViewportState.obj_img_w);
+                height: root.screen_len(ViewportState.obj_img_h);
+            }
         }
 
         // Layer 4: Markers
@@ -283,6 +297,31 @@ export component Viewport inherits Rectangle {
             }
         }
 
+        // The brush or eraser stroke while dragging, as wide as the brush.
+        if ViewportObjectState.brush-path != "": Path {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            viewbox-width: self.width / 1px;
+            viewbox-height: self.height / 1px;
+            stroke: ViewportObjectState.act_tool_state == ToolState.Eraser ? Ink.err.with-alpha(0.45) : Ink.focus.with-alpha(0.45);
+            stroke-width: LayoutState.brush-size * 1px;
+            stroke-line-cap: round;
+            commands: ViewportObjectState.brush-path;
+        }
+
+        // The brush: a circle of its size at the mouse.
+        if root.brush-tool && paint-area.has-hover: Rectangle {
+            x: paint-area.mouse-x - self.width / 2;
+            y: paint-area.mouse-y - self.height / 2;
+            width: LayoutState.brush-size * 1px;
+            height: self.width;
+            border-radius: self.width / 2;
+            border-width: 1px;
+            border-color: ViewportObjectState.act_tool_state == ToolState.Eraser ? Ink.err : #FFFFFF;
+        }
+
         ScaleBar {
             x: root.inset-left;
             y: parent.height - self.height;
@@ -298,14 +337,22 @@ export component Viewport inherits Rectangle {
         ViewportState.report_viewport_size(root.width / 1px, root.height / 1px);
     }
 
-    TouchArea {
+    paint-area := TouchArea {
         enabled: root.enabled;
         width: 100%;
         height: 100%;
+        mouse-cursor: root.brush-tool ? MouseCursor.crosshair : MouseCursor.default;
         pointer-event(evt) => {
             if (evt.kind == PointerEventKind.down) {
                 root.last_mouse_x = self.mouse-x;
                 root.last_mouse_y = self.mouse-y;
+
+                // Brush (needs a class to paint into) and eraser: a stroke.
+                if root.brush-tool && evt.button == PointerEventButton.left && (ViewportObjectState.act_tool_state == ToolState.Eraser || ClassificationState.selected_class_id >= 0) {
+                    ViewportObjectState.is_drawing = true;
+                    ViewportObjectState.brush-path = "M \{self.mouse-x / 1px} \{self.mouse-y / 1px} L \{self.mouse-x / 1px} \{self.mouse-y / 1px}";
+                    ViewportObjectState.brush-stroke(self.mouse-x, self.mouse-y, 0);
+                }
                 
                 // Object selection
                  if (ViewportObjectState.act_tool_state == ToolState.Select) {
@@ -359,13 +406,21 @@ export component Viewport inherits Rectangle {
                 }
             }
             if (evt.kind == PointerEventKind.move) {
-                if (ViewportObjectState.act_tool_state != ToolState.Move && ViewportObjectState.is_drawing) {
+                if root.brush-tool && ViewportObjectState.is_drawing {
+                    ViewportObjectState.brush-path += " L \{self.mouse-x / 1px} \{self.mouse-y / 1px}";
+                    ViewportObjectState.brush-stroke(self.mouse-x, self.mouse-y, 1);
+                } else if (ViewportObjectState.act_tool_state != ToolState.Move && ViewportObjectState.is_drawing) {
                     ViewportObjectState.polygon_points[ViewportObjectState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
                 } else {
                     ViewportState.report_mouse_moved(self.mouse-x, self.mouse-y);
                 }
             }
             if (evt.kind == PointerEventKind.up) {
+                if root.brush-tool && ViewportObjectState.is_drawing {
+                    ViewportObjectState.brush-stroke(self.mouse-x, self.mouse-y, 2);
+                    ViewportObjectState.is_drawing = false;
+                    ViewportObjectState.brush-path = "";
+                }
                 // See the doc comment on `GlobalAppState.reclaim_focus_requested`:
                 // a drag gesture (panning with the Move tool, drawing a
                 // shape) can leave keyboard focus stuck on this TouchArea
@@ -420,5 +475,51 @@ export component Viewport inherits Rectangle {
         y: parent.height - self.height - 12px;
         viewport-width: root.width;
         viewport-height: root.height;
+    }
+
+    // Before / after: the line between them, dragged sideways.
+    if root.comparing: Rectangle {
+        x: root.width * ViewportObjectState.compare-at - self.width / 2;
+        width: 24px;
+        height: root.height;
+
+        Rectangle {
+            width: 2px;
+            background: #FFFFFF;
+        }
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 24px;
+            height: 24px;
+            border-radius: 12px;
+            background: #FFFFFF;
+            Image {
+                source: InkIcons.compare;
+                width: 12px;
+                colorize: #1A1A1E;
+            }
+        }
+        Text {
+            x: -self.width - 6px;
+            y: root.height / 2 + 18px;
+            text: "Before";
+            font-size: Ink.fs-sm;
+            color: #FFFFFF;
+        }
+        Text {
+            x: parent.width + 6px;
+            y: root.height / 2 + 18px;
+            text: "After";
+            font-size: Ink.fs-sm;
+            color: #FFFFFF;
+        }
+        TouchArea {
+            mouse-cursor: MouseCursor.ew-resize;
+            moved => {
+                if self.pressed {
+                    ViewportObjectState.compare-at = clamp((self.absolute-position.x - root.absolute-position.x + self.mouse-x) / root.width, 0.02, 0.98);
+                }
+            }
+        }
     }
 }

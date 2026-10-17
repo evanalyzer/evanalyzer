@@ -154,40 +154,57 @@ export component InkPanelHead inherits Rectangle {
 ///             InkButton { text: "Delete"; kind: InkButtonKind.danger; … }
 ///         }
 ///     }
+export enum InkDialogPlacement {
+    /// A card under the top bar (small dialogs, questions).
+    float,
+    /// Docked on the right, from the top bar to the bottom bar (settings,
+    /// large forms).
+    sheet,
+}
+
 export component InkDialog inherits Rectangle {
     in property <string> title;
     in property <string> subtitle;
     in property <length> card-width: 420px;
-    /// 0px: as high as the content (at most the window's height).
+    /// 0px: as high as the content (at most the room there is). A sheet is
+    /// always as high as the room.
     in property <length> card-height: 0px;
+    in property <InkDialogPlacement> placement: InkDialogPlacement.float;
     /// Where it was opened from, in the dialog's (the window's) coordinates;
-    /// -1px: centered.
+    /// -1px: its placement's default.
     in property <length> anchor-x: -1px;
     in property <length> anchor-y: -1px;
     in property <bool> closable: true;
     /// Esc calls `close` too (off while Esc must not throw work away).
     in property <bool> close-on-escape: true;
-    /// A click on the scrim calls `close`.
+    /// Unused: nothing around a dialog catches clicks (dialogs don't block
+    /// the window). Kept so the dialogs that set it still compile.
     in property <bool> close-on-backdrop: false;
+    /// Blocks the window behind a dimmed backdrop - only for work the
+    /// window must wait for (an analysis with "Edit while an analysis runs"
+    /// off).
+    in property <bool> modal: false;
     /// Padding around the content; 0px for content that fills the card.
     in property <length> content-padding: Ink.pad-dialog;
     callback close;
 
-    background: Ink.scrim;
+    // Moved by its head.
+    property <length> drag-x;
+    property <length> drag-y;
+    // The room between the top bar and the bottom bar.
+    property <length> top: Ink.bar-h + 12px;
+    property <length> room-h: root.height - Ink.bar-h - Ink.status-h - 24px;
+    property <bool> sheet: root.placement == InkDialogPlacement.sheet;
 
-    TouchArea {
-        clicked => {
-            if root.close-on-backdrop {
-                root.close();
-            }
-        }
-    }
+    background: root.modal ? Ink.scrim : transparent;
+
+    if root.modal: TouchArea { }
 
     card := Rectangle {
         width: min(root.card-width, root.width - 32px);
-        height: root.card-height > 0 ? min(root.card-height, root.height - 32px) : min(layout.preferred-height, root.height - 32px);
-        x: root.anchor-x < 0 ? (parent.width - self.width) / 2 : clamp(root.anchor-x, 16px, parent.width - self.width - 16px);
-        y: root.anchor-y < 0 ? (parent.height - self.height) / 2 : clamp(root.anchor-y, 16px, parent.height - self.height - 16px);
+        height: root.sheet ? root.room-h : root.card-height > 0 ? min(root.card-height, root.room-h) : min(layout.preferred-height, root.room-h);
+        x: clamp((root.anchor-x >= 0 ? root.anchor-x : root.sheet ? parent.width - self.width - 12px : (parent.width - self.width) / 2) + root.drag-x, 0px, max(0px, parent.width - self.width));
+        y: clamp((root.anchor-y >= 0 ? root.anchor-y : root.modal ? (parent.height - self.height) / 2 : root.top) + root.drag-y, 0px, max(0px, parent.height - self.height));
         background: Ink.panel;
         border-radius: Ink.radius-lg;
         border-width: 1px;
@@ -212,12 +229,33 @@ export component InkDialog inherits Rectangle {
 
             layout := VerticalLayout {
                 spacing: 0px;
-                InkPanelHead {
-                    title: root.title;
-                    subtitle: root.subtitle;
-                    closable: root.closable;
-                    close => {
-                        root.close();
+                Rectangle {
+                    height: head.preferred-height;
+                    // Drag the head to move the dialog.
+                    TouchArea {
+                        mouse-cursor: MouseCursor.move;
+                        property <length> start-x;
+                        property <length> start-y;
+                        pointer-event(e) => {
+                            if e.kind == PointerEventKind.down {
+                                self.start-x = self.mouse-x;
+                                self.start-y = self.mouse-y;
+                            }
+                        }
+                        moved => {
+                            if self.pressed {
+                                root.drag-x += self.mouse-x - self.start-x;
+                                root.drag-y += self.mouse-y - self.start-y;
+                            }
+                        }
+                    }
+                    head := InkPanelHead {
+                        title: root.title;
+                        subtitle: root.subtitle;
+                        closable: root.closable;
+                        close => {
+                            root.close();
+                        }
                     }
                 }
 

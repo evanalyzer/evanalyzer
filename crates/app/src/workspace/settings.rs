@@ -112,6 +112,10 @@ pub struct ViewportMemorySettings {
     /// dialog blocks the window until the analysis is done (for a computer
     /// whose RAM the analysis needs all of).
     pub edit_during_analysis: bool,
+
+    /// The before / after compare over the image (the top bar's button and
+    /// holding Space). Off: neither is there. Costs nothing while unused.
+    pub before_after: bool,
 }
 
 impl ViewportMemorySettings {
@@ -164,6 +168,7 @@ impl Default for ViewportMemorySettings {
             overview_cache_mb: Self::DEFAULT_OVERVIEW_CACHE_MB,
             free_caches_on_analysis: true,
             edit_during_analysis: true,
+            before_after: true,
         }
     }
 }
@@ -396,7 +401,10 @@ mod tests {
         assert!(saved.contains(r#""colorScheme": "dark""#), "{saved}");
 
         std::fs::write(&path, r#"{ "darkMode": false }"#).unwrap();
-        assert_eq!(load_app_settings_from(&path).color_scheme, ColorScheme::Light);
+        assert_eq!(
+            load_app_settings_from(&path).color_scheme,
+            ColorScheme::Light
+        );
     }
 
     #[test]

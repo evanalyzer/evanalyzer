@@ -1567,12 +1567,16 @@ mod tests {
         ));
         let problems = check_project(&project);
         assert!(
-            !problems.iter().any(|p| p.message.contains("creates no objects")),
+            !problems
+                .iter()
+                .any(|p| p.message.contains("creates no objects")),
             "{:?}",
             messages(&problems)
         );
         assert!(
-            !problems.iter().any(|p| p.message.contains("nothing to work on")),
+            !problems
+                .iter()
+                .any(|p| p.message.contains("nothing to work on")),
             "{:?}",
             messages(&problems)
         );

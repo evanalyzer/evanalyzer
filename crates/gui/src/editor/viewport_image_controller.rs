@@ -93,6 +93,7 @@ impl ViewportImageController {
             state.set_overview_cache_mb(overview_mb as i32);
             state.set_free_caches_on_analysis(settings.free_caches_on_analysis);
             state.set_edit_during_analysis(settings.edit_during_analysis);
+            state.set_before_after(settings.before_after);
         }
     }
 
@@ -113,6 +114,7 @@ impl ViewportImageController {
                 .max(ViewportMemorySettings::MIN_CACHE_MB),
             free_caches_on_analysis: state.get_free_caches_on_analysis(),
             edit_during_analysis: state.get_edit_during_analysis(),
+            before_after: state.get_before_after(),
             cache_sizes_auto: state.get_cache_sizes_auto(),
         };
         if settings != self.viewport_controller.memory_settings() {
@@ -1228,6 +1230,7 @@ mod tests {
         state.set_overview_cache_mb(300);
         state.set_free_caches_on_analysis(false);
         state.set_edit_during_analysis(false);
+        state.set_before_after(false);
 
         state.invoke_apply();
         drain_ui_queue();
@@ -1241,6 +1244,7 @@ mod tests {
             overview_cache_mb: 300.max(ViewportMemorySettings::MIN_CACHE_MB),
             free_caches_on_analysis: false,
             edit_during_analysis: false,
+            before_after: false,
         };
         assert_eq!(controller.viewport_controller.memory_settings(), expected);
         assert_eq!(

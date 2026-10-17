@@ -1,4 +1,4 @@
-import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkIcons, InkDialogPlacement } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { AiLearningState, ClassSelectionRowSlint, FeatureRowSlint, ObjectMetricRowSlint, TrainingImageRowSlint, TrainingObjectRowSlint } from "../api/ai_learning.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
@@ -8,11 +8,7 @@ import { Ink } from "../ink/palette.slint";
 
 // -- Wire structs ---------------------------------------------------------
 // ----------------------------------------------------------
-component SectionHeader inherits Text {
-    color: Ink.text;
-    font-size: 12px;
-    font-weight: 600;
-}
+component SectionHeader inherits InkCaption { }
 
 component Divider inherits Rectangle {
     height: 1px;
@@ -21,9 +17,9 @@ component Divider inherits Rectangle {
 
 component FormLabel inherits Text {
     vertical-alignment: center;
-    width: 130px;
+    width: 150px;
     color: Ink.text-dim;
-    font-size: 11px;
+    font-size: Ink.fs-sm;
 }
 
 // ----------------------------------------------------------
@@ -227,7 +223,7 @@ component TrainingImageRow inherits Rectangle {
         Text {
             text: root.data.annotated_object_count + " objects";
             color: Ink.text-mute;
-            font-size: 10.5px;
+            font-size: Ink.fs-sm;
             font-family: Ink.font-mono;
             vertical-alignment: center;
         }
@@ -277,7 +273,10 @@ component TrainingObjectRow inherits Rectangle {
 
 // ----------------------------------------------------------
 export component AiLearningDialog inherits InkDialog {
-    title: "Train Classifier";
+    // Docked on the right; the image stays usable.
+    placement: InkDialogPlacement.sheet;
+    title: "Train a classifier";
+    property <length> field-w: 280px;
     card-width: 760px;
     card-height: 840px;
     content-padding: 0px;
@@ -294,7 +293,6 @@ export component AiLearningDialog inherits InkDialog {
         // ----- BODY -----
         Rectangle {
             vertical-stretch: 1;
-            background: Ink.ground;
 
             ScrollView {
                 VerticalLayout {
@@ -305,16 +303,18 @@ export component AiLearningDialog inherits InkDialog {
                     VerticalLayout {
                         spacing: 12px;
                         SectionHeader {
-                            text: "Model";
+                            text: "MODEL";
                         }
 
                         HorizontalLayout {
                             spacing: 12px;
+                            alignment: start;
                             FormLabel {
-                                text: "Classifier Type";
+                                text: "Classifier type";
                             }
 
                             mode-combo := ComboBox {
+                                width: root.field-w;
                                 model: ["Pixel Classifier", "Object Classifier"];
                                 current-index <=> AiLearningState.settings.mode;
                             }
@@ -322,11 +322,13 @@ export component AiLearningDialog inherits InkDialog {
 
                         HorizontalLayout {
                             spacing: 12px;
+                            alignment: start;
                             FormLabel {
-                                text: "Model Name";
+                                text: "Model name";
                             }
 
                             LineEdit {
+                                width: root.field-w;
                                 placeholder-text: "e.g. nuclei-pixel-classifier";
                                 text <=> AiLearningState.settings.model_name;
                             }
@@ -334,12 +336,15 @@ export component AiLearningDialog inherits InkDialog {
 
                         HorizontalLayout {
                             spacing: 12px;
+                            alignment: start;
                             FormLabel {
                                 text: "";
                             }
 
                             InkButton {
-                                text: "Load Existing Model...";
+                                small: true;
+                                icon: InkIcons.open;
+                                text: "Load a trained model…";
                                 clicked => {
                                     AiLearningState.browse_existing_model_clicked();
                                 }
@@ -348,6 +353,7 @@ export component AiLearningDialog inherits InkDialog {
 
                         if AiLearningState.settings.loaded_model_path != "": HorizontalLayout {
                             spacing: 12px;
+                            alignment: start;
                             FormLabel {
                                 text: "";
                             }
@@ -355,29 +361,29 @@ export component AiLearningDialog inherits InkDialog {
                             Text {
                                 text: "Loaded: " + AiLearningState.settings.loaded_model_path;
                                 color: Ink.text-mute;
-                                font-size: 10.5px;
+                                font-size: Ink.fs-sm;
                                 font-family: Ink.font-mono;
                                 overflow: elide;
                             }
                         }
                     }
 
-                    Divider { }
-
                     // -- Algorithm + hyperparameters --
                     VerticalLayout {
                         spacing: 12px;
                         SectionHeader {
-                            text: "Algorithm";
+                            text: "ALGORITHM";
                         }
 
                         HorizontalLayout {
                             spacing: 12px;
+                            alignment: start;
                             FormLabel {
                                 text: "Algorithm";
                             }
 
                             algorithm-combo := ComboBox {
+                                width: root.field-w;
                                 model: ["Random Forest", "K-Nearest Neighbors", "Neural Network (MLP)"];
                                 current-index <=> AiLearningState.settings.algorithm;
                             }
@@ -389,11 +395,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Number of Trees";
+                                    text: "Number of trees";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 1;
                                     maximum: 2000;
                                     value <=> AiLearningState.settings.rf_n_trees;
@@ -402,11 +410,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Max Tree Depth";
+                                    text: "Max tree depth";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 0;
                                     maximum: 200;
                                     value <=> AiLearningState.settings.rf_max_depth;
@@ -415,18 +425,20 @@ export component AiLearningDialog inherits InkDialog {
                                 Text {
                                     text: "0 = unlimited";
                                     color: Ink.text-mute;
-                                    font-size: 10px;
+                                    font-size: Ink.fs-sm;
                                     vertical-alignment: center;
                                 }
                             }
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Min Samples Split";
+                                    text: "Min samples split";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 2;
                                     maximum: 1000;
                                     value <=> AiLearningState.settings.rf_min_samples_split;
@@ -435,11 +447,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Min Samples Leaf";
+                                    text: "Min samples leaf";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 1;
                                     maximum: 1000;
                                     value <=> AiLearningState.settings.rf_min_samples_leaf;
@@ -448,11 +462,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Split Criterion";
+                                    text: "Split criterion";
                                 }
 
                                 ComboBox {
+                                    width: root.field-w;
                                     model: ["Gini", "Entropy"];
                                     current-index <=> AiLearningState.settings.rf_criterion;
                                 }
@@ -460,11 +476,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Features per Split";
+                                    text: "Features per split";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 0;
                                     maximum: 1000;
                                     value <=> AiLearningState.settings.rf_max_features;
@@ -473,18 +491,20 @@ export component AiLearningDialog inherits InkDialog {
                                 Text {
                                     text: "0 = auto (√features)";
                                     color: Ink.text-mute;
-                                    font-size: 10px;
+                                    font-size: Ink.fs-sm;
                                     vertical-alignment: center;
                                 }
                             }
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Random Seed";
+                                    text: "Random seed";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 0;
                                     maximum: 999999;
                                     value <=> AiLearningState.settings.rf_seed;
@@ -493,6 +513,7 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
                                     text: "";
                                 }
@@ -510,11 +531,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "K (Neighbors)";
+                                    text: "K (neighbors)";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 1;
                                     maximum: 200;
                                     value <=> AiLearningState.settings.knn_k;
@@ -523,11 +546,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Distance Metric";
+                                    text: "Distance metric";
                                 }
 
                                 distance-combo := ComboBox {
+                                    width: root.field-w;
                                     model: ["Euclidean", "Manhattan", "Minkowski", "Cosine", "Hamming"];
                                     current-index <=> AiLearningState.settings.knn_distance;
                                 }
@@ -537,11 +562,13 @@ export component AiLearningDialog inherits InkDialog {
                             // four metrics are parameterless.
                             if distance-combo.current-index == 2: HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Minkowski Order (p)";
+                                    text: "Minkowski order (p)";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 1;
                                     maximum: 100;
                                     value <=> AiLearningState.settings.knn_minkowski_p;
@@ -550,11 +577,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Search Algorithm";
+                                    text: "Search algorithm";
                                 }
 
                                 ComboBox {
+                                    width: root.field-w;
                                     model: ["Linear Search", "Cover Tree"];
                                     current-index <=> AiLearningState.settings.knn_search_algorithm;
                                 }
@@ -562,11 +591,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Vote Weighting";
+                                    text: "Vote weighting";
                                 }
 
                                 ComboBox {
+                                    width: root.field-w;
                                     model: ["Uniform", "Distance-weighted"];
                                     current-index <=> AiLearningState.settings.knn_weight;
                                 }
@@ -579,11 +610,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Hidden Layers";
+                                    text: "Hidden layers";
                                 }
 
                                 LineEdit {
+                                    width: root.field-w;
                                     placeholder-text: "e.g. 64, 32";
                                     text <=> AiLearningState.settings.mlp_hidden_layers;
                                 }
@@ -591,11 +624,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
                                     text: "Activation";
                                 }
 
                                 ComboBox {
+                                    width: root.field-w;
                                     model: ["ReLU", "Sigmoid", "Tanh"];
                                     current-index <=> AiLearningState.settings.mlp_activation;
                                 }
@@ -603,11 +638,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Max Iterations";
+                                    text: "Max iterations";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 1;
                                     maximum: 100000;
                                     value <=> AiLearningState.settings.mlp_max_iterations;
@@ -616,11 +653,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
                                     text: "Epsilon";
                                 }
 
                                 LineEdit {
+                                    width: root.field-w;
                                     text: AiLearningState.settings.mlp_epsilon;
                                     edited(v) => {
                                         AiLearningState.settings.mlp_epsilon = v.to-float();
@@ -630,11 +669,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Learning Rate";
+                                    text: "Learning rate";
                                 }
 
                                 LineEdit {
+                                    width: root.field-w;
                                     text: AiLearningState.settings.mlp_learning_rate;
                                     edited(v) => {
                                         AiLearningState.settings.mlp_learning_rate = v.to-float();
@@ -644,11 +685,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Batch Size";
+                                    text: "Batch size";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 1;
                                     maximum: 10000;
                                     value <=> AiLearningState.settings.mlp_batch_size;
@@ -657,11 +700,13 @@ export component AiLearningDialog inherits InkDialog {
 
                             HorizontalLayout {
                                 spacing: 12px;
+                                alignment: start;
                                 FormLabel {
-                                    text: "Random Seed";
+                                    text: "Random seed";
                                 }
 
                                 SpinBox {
+                                    width: root.field-w;
                                     minimum: 0;
                                     maximum: 999999;
                                     value <=> AiLearningState.settings.mlp_seed;
@@ -670,8 +715,6 @@ export component AiLearningDialog inherits InkDialog {
                         }
                     }
 
-                    Divider { }
-
                     // -- Pixel classifier: feature channels --
                     if mode-combo.current-index == 0: VerticalLayout {
                         spacing: 10px;
@@ -679,11 +722,13 @@ export component AiLearningDialog inherits InkDialog {
                         HorizontalLayout {
                             alignment: space-between;
                             SectionHeader {
-                                text: "Feature Channels";
+                                text: "FEATURE CHANNELS";
                             }
 
                             InkButton {
-                                text: "+ Add Feature";
+                                small: true;
+                                icon: InkIcons.add;
+                                text: "Add feature";
                                 clicked => {
                                     AiLearningState.add_feature_row_clicked();
                                 }
@@ -692,11 +737,13 @@ export component AiLearningDialog inherits InkDialog {
 
                         HorizontalLayout {
                             spacing: 12px;
+                            alignment: start;
                             FormLabel {
-                                text: "Image Channel";
+                                text: "Image channel";
                             }
 
                             ComboBox {
+                                width: root.field-w;
                                 model: AiLearningState.channel_names;
                                 current-index <=> AiLearningState.settings.pixel_channel;
                             }
@@ -718,11 +765,13 @@ export component AiLearningDialog inherits InkDialog {
 
                         HorizontalLayout {
                             spacing: 8px;
+                            alignment: start;
                             FormLabel {
                                 text: "Quick add blur scales";
                             }
 
                             gaussian-scales-input := LineEdit {
+                                width: root.field-w;
                                 placeholder-text: "e.g. 1, 3, 5, 6";
                             }
 
@@ -739,13 +788,13 @@ export component AiLearningDialog inherits InkDialog {
                     if mode-combo.current-index == 1: VerticalLayout {
                         spacing: 10px;
                         SectionHeader {
-                            text: "Object Metrics";
+                            text: "OBJECT METRICS";
                         }
 
                         Text {
                             text: "Assigned class and position are intentionally excluded to avoid label leakage and location-based overfitting.";
                             color: Ink.text-mute;
-                            font-size: 10px;
+                            font-size: Ink.fs-sm;
                             wrap: word-wrap;
                         }
 
@@ -768,13 +817,13 @@ export component AiLearningDialog inherits InkDialog {
                     VerticalLayout {
                         spacing: 10px;
                         SectionHeader {
-                            text: "Classes to Train";
+                            text: "CLASSES TO TRAIN";
                         }
 
                         Text {
                             text: "Only the checked classes become prediction targets. Pre-checked classes already have at least one labeled object.";
                             color: Ink.text-mute;
-                            font-size: 10px;
+                            font-size: Ink.fs-sm;
                             wrap: word-wrap;
                         }
 
@@ -793,17 +842,16 @@ export component AiLearningDialog inherits InkDialog {
                         }
                     }
 
-                    Divider { }
-
                     // -- Shared training options --
                     VerticalLayout {
                         spacing: 12px;
                         SectionHeader {
-                            text: "Training Options";
+                            text: "TRAINING OPTIONS";
                         }
 
                         HorizontalLayout {
                             spacing: 12px;
+                            alignment: start;
                             FormLabel {
                                 text: "";
                             }
@@ -816,6 +864,7 @@ export component AiLearningDialog inherits InkDialog {
 
                         HorizontalLayout {
                             spacing: 12px;
+                            alignment: start;
                             FormLabel {
                                 text: "";
                             }
@@ -828,11 +877,13 @@ export component AiLearningDialog inherits InkDialog {
 
                         HorizontalLayout {
                             spacing: 12px;
+                            alignment: start;
                             FormLabel {
-                                text: "Validation Split";
+                                text: "Validation split";
                             }
 
                             LineEdit {
+                                width: root.field-w;
                                 text: AiLearningState.settings.validation_split;
                                 edited(v) => {
                                     AiLearningState.settings.validation_split = v.to-float();
@@ -842,23 +893,22 @@ export component AiLearningDialog inherits InkDialog {
                             Text {
                                 text: "fraction held out to report accuracy";
                                 color: Ink.text-mute;
-                                font-size: 10px;
+                                font-size: Ink.fs-sm;
                                 vertical-alignment: center;
                             }
                         }
                     }
 
-                    Divider { }
-
                     // -- Training data source --
                     VerticalLayout {
                         spacing: 10px;
                         SectionHeader {
-                            text: "Training Data Source";
+                            text: "TRAINING DATA SOURCE";
                         }
 
                         HorizontalLayout {
                             spacing: 12px;
+                            alignment: start;
                             FormLabel {
                                 text: "";
                             }
@@ -884,19 +934,17 @@ export component AiLearningDialog inherits InkDialog {
                         }
                     }
 
-                    Divider { }
-
                     // -- Labeled training objects --
                     VerticalLayout {
                         spacing: 10px;
                         SectionHeader {
-                            text: "Training Objects";
+                            text: "TRAINING OBJECTS";
                         }
 
                         Text {
                             text: "Only manually-painted objects with a class assigned below are used for training.";
                             color: Ink.text-mute;
-                            font-size: 10px;
+                            font-size: Ink.fs-sm;
                             wrap: word-wrap;
                         }
 

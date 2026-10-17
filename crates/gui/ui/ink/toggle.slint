@@ -23,6 +23,7 @@ export component InkCheckbox inherits Rectangle {
     accessible-label: root.text;
     accessible-checked: root.checked;
     accessible-enabled: root.enabled;
+    forward-focus: keys;
     accessible-action-default => {
         if root.enabled {
             root.flip();
@@ -36,8 +37,8 @@ export component InkCheckbox inherits Rectangle {
             width: 14px;
             height: 14px;
             border-radius: Ink.radius-xs;
-            border-width: root.checked ? 0px : 1px;
-            border-color: ta.has-hover ? Ink.text-mute : Ink.text-faint;
+            border-width: keys.has-focus ? 2px : root.checked ? 0px : 1px;
+            border-color: keys.has-focus ? Ink.focus : ta.has-hover ? Ink.text-mute : Ink.text-faint;
             background: root.checked ? Ink.primary : Ink.field;
             Image {
                 visible: root.checked;
@@ -65,6 +66,19 @@ export component InkCheckbox inherits Rectangle {
             root.flip();
         }
     }
+
+    // Tab reaches it; Space toggles it. The ring shows only for the keyboard.
+    keys := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if e.text == " " {
+                root.flip();
+                return accept;
+            }
+            return reject;
+        }
+    }
 }
 
 /// A switch, with its text to the left (optional) - for settings that act
@@ -87,6 +101,7 @@ export component InkSwitch inherits Rectangle {
     accessible-label: root.text;
     accessible-checked: root.checked;
     accessible-enabled: root.enabled;
+    forward-focus: keys;
     accessible-action-default => {
         if root.enabled {
             root.flip();
@@ -107,6 +122,8 @@ export component InkSwitch inherits Rectangle {
             accessible-role: none;
         }
         track := Rectangle {
+            border-width: keys.has-focus ? 2px : 0px;
+            border-color: Ink.focus;
             x: parent.width - self.width;
             width: 26px;
             height: 14px;
@@ -129,6 +146,19 @@ export component InkSwitch inherits Rectangle {
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
             root.flip();
+        }
+    }
+
+    // Tab reaches it; Space toggles it. The ring shows only for the keyboard.
+    keys := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if e.text == " " {
+                root.flip();
+                return accept;
+            }
+            return reject;
         }
     }
 }

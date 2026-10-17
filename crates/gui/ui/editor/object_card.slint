@@ -1,0 +1,137 @@
+// editor/object_card.slint — the selected object, on the image next to it
+// (design F): its classes, area, the mean of each channel; change its class,
+// delete it. Follows the object while the image moves; stays inside the
+// view.
+
+import { ChannelState, DialogType, GlobalAppState } from "../api/state.slint";
+import { ObjectListState } from "../api/object_list.slint";
+import { ViewportState } from "../api/viewport.slint";
+import { Ink, InkButton, InkButtonKind, InkCaption, InkChip, InkIconButton, InkIcons } from "../ink/ink.slint";
+
+// "Area   1 204 px²".
+component Fact inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    height: 20px;
+    spacing: 8px;
+    Text {
+        width: 76px;
+        text: root.label;
+        font-size: Ink.fs-sm;
+        color: Ink.text-dim;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Text {
+        horizontal-stretch: 1;
+        text: root.value == "" ? "–" : root.value;
+        font-size: Ink.fs-sm;
+        font-family: Ink.font-mono;
+        color: Ink.text;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+export component ObjectCard inherits Rectangle {
+    // The room the panels leave on the image (the viewport's insets).
+    in property <length> inset-left;
+    in property <length> inset-right;
+
+    property <length> card-w: 232px;
+    // The object on the screen.
+    property <length> obj-x: ObjectListState.selected_object.bbox-x * ViewportState.zoom_factor * 1px + ViewportState.offset_x;
+    property <length> obj-y: ObjectListState.selected_object.bbox-y * ViewportState.zoom_factor * 1px + ViewportState.offset_y;
+    property <length> obj-w: ObjectListState.selected_object.bbox-w * ViewportState.zoom_factor * 1px;
+    // Right of it, or left when there's no room; inside the view.
+    property <length> want-x: root.obj-x + root.obj-w + 14px + root.card-w > root.width - root.inset-right ? root.obj-x - root.card-w - 14px : root.obj-x + root.obj-w + 14px;
+
+    card := Rectangle {
+        x: clamp(root.want-x, root.inset-left + 8px, max(root.inset-left + 8px, root.width - root.inset-right - root.card-w - 8px));
+        y: clamp(root.obj-y, 8px, max(8px, root.height - self.height - 8px));
+        width: root.card-w;
+        height: body.preferred-height;
+
+        glass := Rectangle {
+            background: Ink.glass;
+            border-radius: Ink.radius-lg;
+            border-width: 1px;
+            border-color: Ink.border;
+            drop-shadow-blur: 20px;
+            drop-shadow-offset-y: 6px;
+            drop-shadow-color: Ink.shadow;
+        }
+        // Clicks stay on the card, not the image under it.
+        TouchArea { }
+
+        body := VerticalLayout {
+            padding: 12px;
+            padding-top: 8px;
+            spacing: 6px;
+
+            HorizontalLayout {
+                spacing: 6px;
+                InkCaption {
+                    horizontal-stretch: 1;
+                    text: "OBJECT " + ObjectListState.selected_object.label_name;
+                }
+                InkIconButton {
+                    size: 22px;
+                    icon: InkIcons.close;
+                    label: "Unselect";
+                    clicked => {
+                        ObjectListState.selected_object = { id: 0 };
+                        ObjectListState.object_selected(-1);
+                    }
+                }
+            }
+
+            if ObjectListState.selected_object.class_names.length > 0: HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+                for name[i] in ObjectListState.selected_object.class_names: InkChip {
+                    text: name;
+                    swatch: ObjectListState.selected_object.class_colors[i];
+                }
+            }
+
+            Fact {
+                label: "Area";
+                value: ObjectListState.selected_object.area > 0 ? ObjectListState.selected_object.area + " px²" : "";
+            }
+            Fact {
+                label: "Circularity";
+                value: ObjectListState.selected_object.circularity;
+            }
+            for channel in ChannelState.channels: Fact {
+                label: "Mean " + channel.name;
+                value: ObjectListState.selected_object.intensity_avgs.length > channel.idx ? ObjectListState.selected_object.intensity_avgs[channel.idx] : "";
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                padding-top: 4px;
+                InkButton {
+                    small: true;
+                    kind: InkButtonKind.primary;
+                    text: "Change class…";
+                    clicked => {
+                        GlobalAppState.active-dialog = DialogType.classification_selection_dialog;
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                InkButton {
+                    small: true;
+                    kind: InkButtonKind.quiet;
+                    icon: InkIcons.delete;
+                    text: "Delete";
+                    clicked => {
+                        GlobalAppState.active_dialog = DialogType.object_confirm_delete;
+                    }
+                }
+            }
+        }
+    }
+}

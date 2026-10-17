@@ -73,13 +73,13 @@ impl TemplateController {
     /// component library, named after the pipeline.
     pub fn start_pipeline_component_save(self: &Arc<Self>, pipeline_id: PipelineId, name: String) {
         *self.target.lock().expect("Poisoned") = Some(TemplateTarget::Pipeline(pipeline_id));
-        self.open_dialog("Save Pipeline as Component", name);
+        self.open_dialog("Save pipeline as component", name);
     }
 
     /// Opens the metadata dialog to save the current project as a project template.
     pub fn start_project_template_save(self: &Arc<Self>, name: String) {
         *self.target.lock().expect("Poisoned") = Some(TemplateTarget::Project);
-        self.open_dialog("Save Project as Template", name);
+        self.open_dialog("Save project as template", name);
     }
 
     /// Opens the metadata dialog to save component `key` to the component
@@ -443,7 +443,7 @@ mod tests {
         controller.start_pipeline_component_save(PipelineId(1), "Nuclei".into());
         drain_ui_queue();
         let state = ui.global::<TemplateMetaState>();
-        assert_eq!(state.get_dialog_title(), "Save Pipeline as Component");
+        assert_eq!(state.get_dialog_title(), "Save pipeline as component");
         assert_eq!(state.get_meta().name, "Nuclei");
 
         state.invoke_confirm();
@@ -470,7 +470,7 @@ mod tests {
         controller.start_project_template_save("Nuclei".into());
         drain_ui_queue();
         let state = ui.global::<TemplateMetaState>();
-        assert_eq!(state.get_dialog_title(), "Save Project as Template");
+        assert_eq!(state.get_dialog_title(), "Save project as template");
         assert_eq!(state.get_meta().name, "Nuclei");
         assert_eq!(
             ui.global::<GlobalAppState>().get_active_dialog(),
@@ -503,7 +503,7 @@ mod tests {
         controller.start_project_template_save("".into());
         assert_eq!(
             ui.global::<TemplateMetaState>().get_dialog_title(),
-            "Save Project as Template"
+            "Save project as template"
         );
         ui.global::<TemplateMetaState>().invoke_confirm();
         let target = dir

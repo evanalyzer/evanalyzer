@@ -10,6 +10,9 @@ export global LayoutState {
     // -- Panels over the image (Images and Pipelines) --
     in-out property <bool> classes-open: true;
     in-out property <bool> objects-open: false;
+    /// The objects as a wide table at the bottom (design K), not as a list
+    /// on the right.
+    in-out property <bool> objects-as-table: false;
     /// The image panel: channels, histogram, Z/T, overlay.
     in-out property <bool> image-open: false;
     /// Pinned: it stays open when another panel opens.

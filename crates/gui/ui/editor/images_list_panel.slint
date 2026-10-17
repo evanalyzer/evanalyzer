@@ -1,15 +1,85 @@
-// editor/images_list_panel.slint — the project's images: the folder they
-// come from, a search, and the list (a virtual list: only the rows in view
-// exist). Selecting one opens it.
+// editor/images_list_panel.slint — the project's images (design G): the
+// count and folder in the head, Plate / List, a search; as a plate the
+// wells and the chosen well's images, as a list all of them (a virtual
+// list: only the rows in view exist). Selecting one opens it.
 
-import { ImageItemData, ImagesListState } from "../api/images_list.slint";
+import { ImageItemData, ImagesListState, WellState } from "../api/images_list.slint";
 import { LayoutState } from "../api/layout.slint";
-import { PlateView } from "plate_view.slint";
+import { PlateView, WellColor } from "plate_view.slint";
 import { ListView } from "std-widgets.slint";
-import { Ink, InkIcons, InkPanelHead, InkSearchField, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkHint, InkSegmented, InkCaption } from "../ink/ink.slint";
+import { Ink, InkIcons, InkSearchField, InkBusy, InkButton, InkButtonKind, InkIconButton, InkHint, InkSegmented, InkCaption, InkDivider } from "../ink/ink.slint";
+
+// An image: a dark square (a dot: hand-drawn objects in it), the name, its
+// size and channels, and how far it is.
+component ImageRow inherits Rectangle {
+    in property <ImageItemData> data;
+    in property <bool> selected;
+    callback clicked;
+
+    accessible-role: list-item;
+    accessible-label: root.data.name;
+    accessible-item-selected: root.selected;
+
+    background: root.selected ? Ink.selection : ta.has-hover ? Ink.hover : transparent;
+    border-radius: Ink.radius-md;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 10px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: Ink.radius-sm;
+                background: Ink.viewport;
+                Rectangle {
+                    visible: root.data.has_annotations;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: Ink.focus;
+                }
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+            Text {
+                text: root.data.name;
+                font-size: Ink.fs-md;
+                font-weight: 600;
+                color: Ink.text;
+                overflow: elide;
+            }
+            Text {
+                text: root.data.image_dimension == "" ? root.data.image_size : root.data.image_dimension + " · " + root.data.image_size;
+                font-size: Ink.fs-xs;
+                font-family: Ink.font-mono;
+                color: Ink.text-mute;
+                overflow: elide;
+            }
+        }
+        Text {
+            text: root.data.state == WellState.analysed ? "analysed" : root.data.state == WellState.preview ? "preview" : "";
+            font-size: Ink.fs-sm;
+            color: WellColor.of(root.data.state);
+            vertical-alignment: center;
+        }
+    }
+}
 
 export component ImagesListPanel inherits Rectangle {
-    property <length> row-h: 38px;
+    property <length> row-h: 44px;
     property <bool> plate: LayoutState.images-as-plate;
     property <int> well: ImagesListState.selected-well;
     property <string> well-name: root.well >= 0 && root.well < ImagesListState.plate-wells.length ? ImagesListState.plate-wells[root.well].name : "";
@@ -23,42 +93,53 @@ export component ImagesListPanel inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        InkPanelHead {
-            title: "Images";
-            count: ImagesListState.images_list.length;
-            closable: false;
-            add-label: "Select the images folder";
-            add => {
-                ImagesListState.open_images_folder_clicked();
+        // -- Head: count · folder, Plate / List, folder, refresh --
+        HorizontalLayout {
+            height: Ink.head-h;
+            padding-left: Ink.pad-panel;
+            padding-right: 6px;
+            spacing: 8px;
+            Text {
+                text: "Images";
+                font-size: Ink.fs-md;
+                font-weight: 600;
+                color: Ink.text;
+                vertical-alignment: center;
             }
-        }
-
-        VerticalLayout {
-            padding: 8px;
-            padding-bottom: 4px;
-            spacing: 6px;
-
-            HorizontalLayout {
-                spacing: 4px;
+            Text {
+                horizontal-stretch: 1;
+                text: ImagesListState.images_list.length + (ImagesListState.act_image_root_dir == "" ? "" : " · " + ImagesListState.act_image_root_dir);
+                font-size: Ink.fs-xs;
+                font-family: Ink.font-mono;
+                color: Ink.text-mute;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            VerticalLayout {
+                alignment: center;
                 InkSegmented {
                     width: 104px;
                     label: "Show the images as";
-                    model: ["List", "Plate"];
-                    selected: root.plate ? 1 : 0;
+                    model: ["Plate", "List"];
+                    selected: root.plate ? 0 : 1;
                     picked(i) => {
-                        LayoutState.images-as-plate = i == 1;
+                        LayoutState.images-as-plate = i == 0;
                     }
                 }
-                search := InkSearchField {
-                    placeholder: "Search images";
-                    text: ImagesListState.filter_text;
-                    edited(text) => {
-                        ImagesListState.filter_text = text;
-                        ImagesListState.image_filter_text_changed(text);
-                    }
-                }
+            }
+            VerticalLayout {
+                alignment: center;
                 InkIconButton {
-                    size: Ink.control-h;
+                    icon: InkIcons.open;
+                    label: "Select the images folder";
+                    clicked => {
+                        ImagesListState.open_images_folder_clicked();
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                InkIconButton {
                     icon: InkIcons.refresh;
                     label: "Refresh the image list";
                     clicked => {
@@ -66,46 +147,52 @@ export component ImagesListPanel inherits Rectangle {
                     }
                 }
             }
+        }
 
-            if ImagesListState.act_image_root_dir != "": HorizontalLayout {
-                spacing: 6px;
-                Image {
-                    source: InkIcons.folder;
-                    width: 12px;
-                    colorize: Ink.text-mute;
-                }
-                Text {
-                    horizontal-stretch: 1;
-                    text: ImagesListState.act_image_root_dir;
-                    font-size: Ink.fs-sm;
-                    font-family: Ink.font-mono;
-                    color: Ink.text-mute;
-                    overflow: elide;
-                    vertical-alignment: center;
+        InkDivider { }
+
+        VerticalLayout {
+            padding: Ink.pad-panel;
+            padding-top: 8px;
+            padding-bottom: 4px;
+            search := InkSearchField {
+                placeholder: "Search files… (Ctrl F)";
+                text: ImagesListState.filter_text;
+                edited(text) => {
+                    ImagesListState.filter_text = text;
+                    ImagesListState.image_filter_text_changed(text);
                 }
             }
         }
 
-        // -- Plate: the wells, the selected well's images --
+        // -- Plate: the wells, the chosen well's images --
         if root.plate: VerticalLayout {
             vertical-stretch: 1;
-            padding-left: 10px;
-            padding-right: 10px;
-            spacing: 6px;
-            PlateView { }
+            spacing: 0px;
+            VerticalLayout {
+                vertical-stretch: 0;
+                padding: Ink.pad-panel;
+                padding-top: 6px;
+                PlateView { }
+            }
+            InkDivider { }
             if root.well-name != "": InkCaption {
+                height: 28px;
+                x: Ink.pad-panel;
                 text: "WELL " + root.well-name + " · " + ImagesListState.well-images.length + " IMAGES";
+            }
+            if root.well-name == "" && ImagesListState.plate-wells.length > 0: InkHint {
+                x: Ink.pad-panel;
+                height: 28px;
+                text: "Pick a well to see its images.";
             }
             ListView {
                 vertical-stretch: 1;
-                min-height: 3 * root.row-h;
-                for data in ImagesListState.well-images: InkListRow {
+                for data in ImagesListState.well-images: ImageRow {
+                    x: 4px;
+                    width: parent.width - 8px;
                     height: root.row-h;
-                    title: data.name;
-                    subtitle: data.image_dimension + " · " + data.image_size;
-                    mono: true;
-                    icon: InkIcons.images;
-                    mark: data.has_annotations ? Ink.focus : transparent;
+                    data: data;
                     clicked => {
                         ImagesListState.image_selected(data.path);
                     }
@@ -129,14 +216,9 @@ export component ImagesListPanel inherits Rectangle {
             list := ListView {
                 x: 4px;
                 width: parent.width - 8px;
-                for data[index] in ImagesListState.images_list: InkListRow {
+                for data[index] in ImagesListState.images_list: ImageRow {
                     height: root.row-h;
-                    title: data.name;
-                    subtitle: data.image_dimension + " · " + data.image_size;
-                    mono: true;
-                    icon: InkIcons.images;
-                    // Hand-annotated objects in it.
-                    mark: data.has_annotations ? Ink.focus : transparent;
+                    data: data;
                     selected: ImagesListState.selected_image_index == index;
                     clicked => {
                         ImagesListState.selected_image_index = index;

@@ -1,4 +1,4 @@
-// multi_select_dropdown.slint — generic single/multi-select dropdown field.
+// ink/multi_select.slint — a single/multi-select dropdown field (`InkMultiSelect`).
 // Replaces the various one-off pill+popup pickers scattered through the
 // Results window (class filter, column visibility, ...) with one reusable
 // component.
@@ -12,7 +12,10 @@
 // `select-all`/`select-none` still fire a callback for Rust to rebuild and
 // hand back `items`.
 import { ScrollView } from "std-widgets.slint";
-import { Ink, InkIcons, InkSearchField, InkCaption } from "../ink/ink.slint";
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
+import { InkSearchField } from "field.slint";
+import { InkCaption } from "panel.slint";
 
 export struct MultiSelectItem {
     key: string,
@@ -86,7 +89,7 @@ component MultiSelectRow inherits Rectangle {
     }
 }
 
-export component MultiSelectDropdown inherits Rectangle {
+export component InkMultiSelect inherits Rectangle {
     // -------- Data --------
     // The selectable elements; each also carries whether it's currently
     // selected. Mutated in place by this component - treat it as owned by

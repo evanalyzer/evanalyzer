@@ -2,14 +2,16 @@
 // (single image + detected-object markers), all three drill levels driven
 // by ResultsState.matrix-level so the breadcrumb + this one view swap in
 // place rather than opening new windows.
-import { InkButton } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkCaption, InkHint, InkIcons, InkListRow } from "../ink/ink.slint";
+import { ListView } from "std-widgets.slint";
+import { LineEdit } from "../ink/std_compat.slint";
 import { MatrixCell, MatrixLevel, ObjectMarker, ResultsState } from "../api/results.slint";
 
 
 import { Ink } from "../ink/palette.slint";
 
-import { FilterPill, LegendBar } from "results_common.slint";
-import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
+import { FilterPill, LegendBar, SettingsGroup } from "results_common.slint";
+import { InkMultiSelect } from "../ink/ink.slint";
 
 component MatrixCellView inherits Rectangle {
     in property <MatrixCell> cell;
@@ -381,371 +383,298 @@ component ImageHeatmapGrid inherits Rectangle {
 
 // -- Unused today: single image + object markers ------------------------------
 export component ResultsMatrixView inherits Rectangle {
+    // The settings column is this wide, its fields fill it.
+    property <length> side-w: 268px;
+    property <length> field-w: root.side-w - 2 * Ink.pad-panel;
+    property <string> level-name: ResultsState.matrix-level == MatrixLevel.plate ? "per well"
+        : ResultsState.matrix-level == MatrixLevel.well ? "per image" : "per tile";
+
     background: Ink.ground;
 
-    VerticalLayout {
+    HorizontalLayout {
         spacing: 0px;
 
-        // -- Toolbar: shared by all three drill levels — Plate, Well and
-        // Object (the image heatmap) all aggregate per-object values the
-        // same way, just scoped to the whole plate vs. one well vs. one
-        // image — see `get_group_by_plate`/`get_group_by_well`/
-        // `get_image_heatmap`.
-        Rectangle {
-            height: 54px;
+        // -- The grid, with what it shows above it --
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 0px;
+
             HorizontalLayout {
                 padding-left: 16px;
                 padding-right: 16px;
-                spacing: 10px;
-                cross-axis-alignment: center;
-
-                MultiSelectDropdown {
-                    label: "CLASS";
-                    summary-text: ResultsState.matrix-class-summary;
-                    items <=> ResultsState.matrix-class-items;
-                    multi-select: false;
-                    pill-width: 250px;
-                    item-selected(key, value, selected) => {
-                        ResultsState.matrix-class-summary = value;
-                        ResultsState.matrix-class-selected(key, selected);
-                    }
+                padding-top: 10px;
+                padding-bottom: 6px;
+                spacing: 12px;
+                Text {
+                    text: ResultsState.matrix-class-summary + " · " + ResultsState.matrix-column-summary
+                        + (ResultsState.matrix-aggregate-enabled ? " · " + ResultsState.matrix-aggregate : "")
+                        + ", " + root.level-name;
+                    font-size: Ink.fs-md;
+                    font-weight: 600;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                    overflow: elide;
                 }
-
-                MultiSelectDropdown {
-                    label: "COLUMN";
-                    summary-text: ResultsState.matrix-column-summary;
-                    items <=> ResultsState.matrix-column-items;
-                    multi-select: false;
-                    groups: ResultsState.list-columns-groups;
-                    pill-width: 160px;
-                    item-selected(key, value, selected) => {
-                        ResultsState.matrix-column-summary = value;
-                        ResultsState.matrix-value-clicked();
-                    }
-                }
-
-                MultiSelectDropdown {
-                    label: "AGGREGATE";
-                    summary-text: ResultsState.matrix-aggregate;
-                    items <=> ResultsState.matrix-aggregation-items;
-                    multi-select: false;
-                    pill-width: 120px;
-                    enabled: ResultsState.matrix-aggregate-enabled;
-                    item-selected(key, value, selected) => {
-                        ResultsState.matrix-aggregate = value;
-                        ResultsState.matrix-aggregate-selected(ResultsState.matrix-aggregate);
-                    }
-                }
-
-                MultiSelectDropdown {
-                    label: "COLOR SCHEMA";
-                    summary-text: ResultsState.matrix-color-scale-summary;
-                    items <=> ResultsState.matrix-color-schema-items;
-                    multi-select: false;
-                    pill-width: 120px;
-                    item-selected(key, value, selected) => {
-                        ResultsState.matrix-color-scale-summary = value;
-                        ResultsState.matrix-color-schema-selected(key, selected);
-                    }
-                }
-
-                MultiSelectDropdown {
-                    label: "GROUP BY";
-                    summary-text: ResultsState.matrix-grouping-summary;
-                    items <=> ResultsState.matrix-grouping-items;
-                    multi-select: false;
-                    pill-width: 120px;
-                    item-selected(key, value, selected) => {
-                        ResultsState.matrix-grouping-summary = value;
-                        ResultsState.matrix-grouping-selected(key, selected);
-                    }
-                }
-
-                // The custom regex - or, for Auto/Folder, the regex in use
-                // (read-only, so it's clear what was detected).
-                VerticalLayout {
-                    spacing: 4px;
-                    width: 260px;
-
-                    Text {
-                        text: ResultsState.matrix-group-regex-custom ? "REGEX" : "REGEX IN USE";
-                        font-size: 9px;
-                        letter-spacing: 0.4px;
-                        color: Ink.text-mute;
-                    }
-
-                    Rectangle {
-                        height: 26px;
-                        border-radius: Ink.radius-sm;
-                        background: Ink.raised;
-                        border-width: 1px;
-                        border-color: regex-input.has-focus && regex-input.visible ? Ink.focus : Ink.border-soft;
-                        clip: true;
-
-                        regex-input := TextInput {
-                            visible: ResultsState.matrix-group-regex-custom;
-                            x: 10px;
-                            width: parent.width - 20px;
-                            height: parent.height;
-                            text <=> ResultsState.matrix-group-regex;
-                            font-size: 11px;
-                            font-family: Ink.font-mono;
-                            color: Ink.text;
-                            vertical-alignment: center;
-                            single-line: true;
-                            edited => { ResultsState.matrix-regex-changed(self.text); }
-                        }
-
-                        if !ResultsState.matrix-group-regex-custom: Text {
-                            x: 10px;
-                            width: parent.width - 20px;
-                            height: parent.height;
-                            text: ResultsState.matrix-group-regex-in-use;
-                            font-size: 11px;
-                            font-family: Ink.font-mono;
-                            color: Ink.text-mute;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-                    }
-                }
-
-                Rectangle {
+                InkHint {
                     horizontal-stretch: 1;
+                    text: ResultsState.matrix-level == MatrixLevel.object ? "" : "Double-click to open it";
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
                 }
             }
 
-            Rectangle {
-                x: 0;
-                y: parent.height - 1px;
-                width: parent.width;
-                height: 1px;
-                background: Ink.border-soft;
+            if ResultsState.matrix-level == MatrixLevel.plate: PlateGrid {
+                vertical-stretch: 1;
+            }
+            if ResultsState.matrix-level == MatrixLevel.well: WellGrid {
+                vertical-stretch: 1;
+            }
+            if ResultsState.matrix-level == MatrixLevel.object: ImageHeatmapGrid {
+                vertical-stretch: 1;
             }
         }
 
-        HorizontalLayout {
-            vertical-stretch: 1;
-
-            if ResultsState.matrix-level == MatrixLevel.plate: PlateGrid {
-                horizontal-stretch: 1;
-            }
-            if ResultsState.matrix-level == MatrixLevel.well: WellGrid {
-                horizontal-stretch: 1;
-            }
-            if ResultsState.matrix-level == MatrixLevel.object: ImageHeatmapGrid {
-                horizontal-stretch: 1;
-            }
+        // -- The settings: value, plate, look; then the selected well --
+        Rectangle {
+            width: root.side-w;
+            background: Ink.panel;
 
             Rectangle {
-                width: 200px;
-                Rectangle {
-                    x: 0;
-                    y: 0;
-                    width: 1px;
-                    height: parent.height;
-                    background: Ink.border-soft;
-                }
+                x: 0;
+                width: 1px;
+                background: Ink.border-soft;
+            }
 
-                VerticalLayout {
-                    padding: 16px;
+            Flickable {
+                content-height: side.preferred-height;
+
+                side := VerticalLayout {
+                    padding: Ink.pad-panel;
                     spacing: 16px;
                     alignment: start;
-                    LegendBar {
-                        // Same column/aggregate drives both grids (the Well
-                        // level reuses the Plate toolbar above), so its
-                        // label is the same regardless of which is showing.
-                        value-label: ResultsState.matrix-column-summary;
-                        min-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-min : (ResultsState.matrix-level == MatrixLevel.well ? ResultsState.well-min : ResultsState.image-heatmap-min);
-                        max-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-max : (ResultsState.matrix-level == MatrixLevel.well ? ResultsState.well-max : ResultsState.image-heatmap-max);
-                        gradient-stops: ResultsState.matrix-color-scale-stops;
-                        editable: true;
-                        is-manual: ResultsState.matrix-scale-is-manual;
-                        set-auto => { ResultsState.matrix-scale-set-auto(); }
-                        set-manual(min, max) => { ResultsState.matrix-scale-set-manual(min, max); }
-                    }
 
-                    // Per-level grid-size control: which one shows depends
-                    // on which grid is on screen (see the comment on
-                    // `ResultsState.matrix-plate-size-items`).
-                    if ResultsState.matrix-level == MatrixLevel.plate: MultiSelectDropdown {
-                        label: "PLATE SIZE";
-                        summary-text: ResultsState.matrix-plate-size-summary;
-                        items <=> ResultsState.matrix-plate-size-items;
-                        multi-select: false;
-                        item-selected(key, value, selected) => {
-                            ResultsState.matrix-plate-size-summary = value;
-                            ResultsState.matrix-plate-size-selected(key, selected);
-                        }
-                    }
-
-                    if ResultsState.matrix-level == MatrixLevel.well: MultiSelectDropdown {
-                        label: "WELL SIZE";
-                        summary-text: ResultsState.matrix-well-layout-summary;
-                        items <=> ResultsState.matrix-well-layout-items;
-                        multi-select: false;
-                        item-selected(key, value, selected) => {
-                            ResultsState.matrix-well-layout-summary = value;
-                            ResultsState.matrix-well-layout-selected(key, selected);
-                        }
-                    }
-
-                    if ResultsState.matrix-level == MatrixLevel.well
-                        && ResultsState.matrix-well-layout-summary != "Auto": HorizontalLayout {
-                        spacing: 8px;
-
-                        VerticalLayout {
-                            spacing: 4px;
-                            horizontal-stretch: 1;
-
-                            Text {
-                                text: "ROWS";
-                                font-size: 9px;
-                                letter-spacing: 0.4px;
-                                color: Ink.text-mute;
+                    SettingsGroup {
+                        title: "VALUE";
+                        InkMultiSelect {
+                            label: "Class";
+                            summary-text: ResultsState.matrix-class-summary;
+                            items <=> ResultsState.matrix-class-items;
+                            multi-select: false;
+                            pill-width: root.field-w;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-class-summary = value;
+                                ResultsState.matrix-class-selected(key, selected);
                             }
+                        }
+                        InkMultiSelect {
+                            label: "Property";
+                            summary-text: ResultsState.matrix-column-summary;
+                            items <=> ResultsState.matrix-column-items;
+                            multi-select: false;
+                            groups: ResultsState.list-columns-groups;
+                            pill-width: root.field-w;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-column-summary = value;
+                                ResultsState.matrix-value-clicked();
+                            }
+                        }
+                        InkMultiSelect {
+                            label: "Aggregate";
+                            summary-text: ResultsState.matrix-aggregate;
+                            items <=> ResultsState.matrix-aggregation-items;
+                            multi-select: false;
+                            pill-width: root.field-w;
+                            enabled: ResultsState.matrix-aggregate-enabled;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-aggregate = value;
+                                ResultsState.matrix-aggregate-selected(ResultsState.matrix-aggregate);
+                            }
+                        }
+                    }
 
-                            Rectangle {
-                                height: 26px;
-                                border-radius: Ink.radius-sm;
-                                background: Ink.raised;
-                                border-width: 1px;
-                                border-color: well-rows-input.has-focus ? Ink.focus : Ink.border-soft;
-
-                                well-rows-input := TextInput {
-                                    x: 8px;
-                                    width: parent.width - 16px;
-                                    height: parent.height;
+                    SettingsGroup {
+                        title: "PLATE";
+                        // Per level: the plate's size, a well's layout, a
+                        // tile's size (see `ResultsState.matrix-plate-size-items`).
+                        if ResultsState.matrix-level == MatrixLevel.plate: InkMultiSelect {
+                            label: "Plate size";
+                            summary-text: ResultsState.matrix-plate-size-summary;
+                            items <=> ResultsState.matrix-plate-size-items;
+                            multi-select: false;
+                            pill-width: root.field-w;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-plate-size-summary = value;
+                                ResultsState.matrix-plate-size-selected(key, selected);
+                            }
+                        }
+                        if ResultsState.matrix-level == MatrixLevel.well: InkMultiSelect {
+                            label: "Well layout";
+                            summary-text: ResultsState.matrix-well-layout-summary;
+                            items <=> ResultsState.matrix-well-layout-items;
+                            multi-select: false;
+                            pill-width: root.field-w;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-well-layout-summary = value;
+                                ResultsState.matrix-well-layout-selected(key, selected);
+                            }
+                        }
+                        if ResultsState.matrix-level == MatrixLevel.well && ResultsState.matrix-well-layout-summary != "Auto": HorizontalLayout {
+                            spacing: 8px;
+                            VerticalLayout {
+                                spacing: 3px;
+                                InkCaption { text: "Rows"; }
+                                LineEdit {
+                                    input-type: number;
+                                    font-family: Ink.font-mono;
                                     text <=> ResultsState.matrix-well-rows;
-                                    input-type: number;
-                                    font-size: 11px;
-                                    color: Ink.text;
-                                    vertical-alignment: center;
-                                    single-line: true;
-                                    edited => { ResultsState.matrix-well-rows-changed(self.text); }
+                                    edited(t) => { ResultsState.matrix-well-rows-changed(t); }
                                 }
                             }
-                        }
-
-                        VerticalLayout {
-                            spacing: 4px;
-                            horizontal-stretch: 1;
-
-                            Text {
-                                text: "COLS";
-                                font-size: 9px;
-                                letter-spacing: 0.4px;
-                                color: Ink.text-mute;
-                            }
-
-                            Rectangle {
-                                height: 26px;
-                                border-radius: Ink.radius-sm;
-                                background: Ink.raised;
-                                border-width: 1px;
-                                border-color: well-cols-input.has-focus ? Ink.focus : Ink.border-soft;
-
-                                well-cols-input := TextInput {
-                                    x: 8px;
-                                    width: parent.width - 16px;
-                                    height: parent.height;
+                            VerticalLayout {
+                                spacing: 3px;
+                                InkCaption { text: "Columns"; }
+                                LineEdit {
+                                    input-type: number;
+                                    font-family: Ink.font-mono;
                                     text <=> ResultsState.matrix-well-cols;
-                                    input-type: number;
-                                    font-size: 11px;
-                                    color: Ink.text;
-                                    vertical-alignment: center;
-                                    single-line: true;
-                                    edited => { ResultsState.matrix-well-cols-changed(self.text); }
+                                    edited(t) => { ResultsState.matrix-well-cols-changed(t); }
                                 }
+                            }
+                        }
+                        InkMultiSelect {
+                            label: "Group by";
+                            summary-text: ResultsState.matrix-grouping-summary;
+                            items <=> ResultsState.matrix-grouping-items;
+                            multi-select: false;
+                            pill-width: root.field-w;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-grouping-summary = value;
+                                ResultsState.matrix-grouping-selected(key, selected);
+                            }
+                        }
+                        // The custom regex - or, for Auto/Folder, the one in
+                        // use (read-only, so it's clear what was detected).
+                        VerticalLayout {
+                            spacing: 3px;
+                            InkCaption {
+                                text: ResultsState.matrix-group-regex-custom ? "Regex" : "Regex in use";
+                            }
+                            if ResultsState.matrix-group-regex-custom: LineEdit {
+                                font-family: Ink.font-mono;
+                                text <=> ResultsState.matrix-group-regex;
+                                edited(t) => { ResultsState.matrix-regex-changed(t); }
+                            }
+                            if !ResultsState.matrix-group-regex-custom: Text {
+                                height: Ink.control-h;
+                                text: ResultsState.matrix-group-regex-in-use;
+                                font-size: Ink.fs-sm;
+                                font-family: Ink.font-mono;
+                                color: Ink.text-mute;
+                                vertical-alignment: center;
+                                overflow: elide;
                             }
                         }
                     }
 
-                    if ResultsState.matrix-level == MatrixLevel.object: MultiSelectDropdown {
-                        label: "SQUARE SIZE";
-                        summary-text: ResultsState.matrix-square-size-summary;
-                        items <=> ResultsState.matrix-square-size-items;
-                        multi-select: false;
-                        item-selected(key, value, selected) => {
-                            ResultsState.matrix-square-size-summary = value;
-                            ResultsState.matrix-square-size-selected(key, selected);
+                    SettingsGroup {
+                        title: "LOOK";
+                        InkMultiSelect {
+                            label: "Colors";
+                            summary-text: ResultsState.matrix-color-scale-summary;
+                            items <=> ResultsState.matrix-color-schema-items;
+                            multi-select: false;
+                            pill-width: root.field-w;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-color-scale-summary = value;
+                                ResultsState.matrix-color-schema-selected(key, selected);
+                            }
+                        }
+                        LegendBar {
+                            value-label: ResultsState.matrix-column-summary;
+                            min-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-min : (ResultsState.matrix-level == MatrixLevel.well ? ResultsState.well-min : ResultsState.image-heatmap-min);
+                            max-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-max : (ResultsState.matrix-level == MatrixLevel.well ? ResultsState.well-max : ResultsState.image-heatmap-max);
+                            gradient-stops: ResultsState.matrix-color-scale-stops;
+                            editable: true;
+                            is-manual: ResultsState.matrix-scale-is-manual;
+                            set-auto => { ResultsState.matrix-scale-set-auto(); }
+                            set-manual(min, max) => { ResultsState.matrix-scale-set-manual(min, max); }
+                        }
+                        if ResultsState.matrix-level == MatrixLevel.object: InkMultiSelect {
+                            label: "Square size";
+                            summary-text: ResultsState.matrix-square-size-summary;
+                            items <=> ResultsState.matrix-square-size-items;
+                            multi-select: false;
+                            pill-width: root.field-w;
+                            item-selected(key, value, selected) => {
+                                ResultsState.matrix-square-size-summary = value;
+                                ResultsState.matrix-square-size-selected(key, selected);
+                            }
                         }
                     }
 
-                    // Selected-cell detail card — same card at every drill
-                    // level (see the comment on `ResultsState.active-well`):
-                    // filled in by `on_plate_cell_clicked`/
-                    // `on_well_cell_clicked`/`on_image_heatmap_cell_clicked`
-                    // (results_state_controller.rs) when a cell is clicked,
-                    // hidden until then.
+                    // The selected cell - the same card at every level (see
+                    // `ResultsState.active-well`), hidden until one is clicked.
                     if ResultsState.active-well != "": Rectangle {
                         border-radius: Ink.radius-md;
-                        background: Ink.raised;
+                        background: Ink.field;
                         border-width: 1px;
-                        border-color: Ink.border-soft;
+                        border-color: Ink.border;
 
                         VerticalLayout {
-                            padding: 14px;
+                            padding: 12px;
                             spacing: 6px;
-                            alignment: start;
 
-                            Text {
-                                text: (ResultsState.matrix-level == MatrixLevel.plate ? "WELL " : (ResultsState.matrix-level == MatrixLevel.well ? "IMAGE " : "TILE ")) + ResultsState.active-well;
-                                font-size: 9px;
-                                letter-spacing: 0.4px;
-                                color: Ink.text-mute;
+                            InkCaption {
+                                text: (ResultsState.matrix-level == MatrixLevel.plate ? "WELL " : ResultsState.matrix-level == MatrixLevel.well ? "IMAGE " : "TILE ") + ResultsState.active-well;
                             }
-
-                            // Not struck through even when
-                            // `active-well-disabled` - the grid tile
-                            // already marks that (gray fill + diagonal
-                            // strike), so the number here just reads
-                            // normally rather than doubling up on the mark.
+                            // Not struck through when disabled - the grid's
+                            // tile already marks that.
                             Text {
                                 text: ResultsState.active-well-has-value ? ResultsState.active-well-value : "—";
-                                font-size: 22px;
+                                font-size: 20px;
                                 font-weight: 700;
                                 font-family: Ink.font-mono;
                                 color: Ink.text;
                             }
-
-                            Text {
+                            InkHint {
                                 text: ResultsState.active-well-caption;
-                                font-size: 10.5px;
-                                color: Ink.text-mute;
-                                overflow: elide;
                             }
-
-                            // No further drill level exists below the image
-                            // heatmap, so there's nothing for this button to
-                            // open once a tile (rather than a well/field) is
-                            // selected.
-                            if ResultsState.matrix-level != MatrixLevel.object: Rectangle {
-                                height: 1px;
-                                background: Ink.border-soft;
-                            }
-
+                            // Nothing below the image heatmap to open.
                             if ResultsState.matrix-level != MatrixLevel.object: InkButton {
-                                text: ResultsState.matrix-level == MatrixLevel.plate ? "Open well ›" : "Open Image ›";
-                                height: 30px;
+                                small: true;
+                                kind: InkButtonKind.primary;
+                                text: ResultsState.matrix-level == MatrixLevel.plate ? "Open well ›" : "Open image ›";
                                 enabled: ResultsState.active-well-has-value;
                                 clicked => {
                                     ResultsState.open-cell(ResultsState.active-well);
                                 }
                             }
-
-                            // Well level only: each cell here is one field's
-                            // own image, so this is the one level where
-                            // "disable/enable" names a single, unambiguous
-                            // image - unlike the plate level (a cell is a
-                            // whole well, several images) or the object
-                            // level (already inside one fixed image).
+                            // Only at the well level a cell is one image.
                             if ResultsState.matrix-level == MatrixLevel.well: InkButton {
-                                text: ResultsState.active-well-disabled ? "Enable Image" : "Disable Image";
-                                height: 30px;
+                                small: true;
+                                text: ResultsState.active-well-disabled ? "Use this image in the results" : "Leave this image out of the results";
                                 enabled: ResultsState.active-well-has-value;
                                 clicked => {
                                     ResultsState.toggle-active-well-disabled();
+                                }
+                            }
+                            // Plate level: the well's images, each opens itself.
+                            if ResultsState.matrix-level == MatrixLevel.plate && ResultsState.active-well-images.length > 0: InkCaption {
+                                text: ResultsState.active-well-images.length + " IMAGES";
+                            }
+                            if ResultsState.matrix-level == MatrixLevel.plate && ResultsState.active-well-images.length > 0: ListView {
+                                height: min(8, ResultsState.active-well-images.length) * 30px;
+                                for image in ResultsState.active-well-images: InkListRow {
+                                    height: 30px;
+                                    title: image.key;
+                                    trailing: image.disabled ? "left out" : image.label;
+                                    mono: true;
+                                    icon: InkIcons.images;
+                                    mark: image.failed ? Ink.warn : transparent;
+                                    clicked => {
+                                        ResultsState.open-cell(ResultsState.active-well);
+                                        ResultsState.open-cell(image.key);
+                                    }
                                 }
                             }
                         }

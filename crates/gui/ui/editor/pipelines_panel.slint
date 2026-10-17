@@ -2,6 +2,8 @@
 // EVAnalyzer - Pipelines panel.
 // Owns N pipelines; each pipeline is a flat, ordered list of commands.
 // Category is a property of each step (colored stripe), not a hard bucket.
+import { DialogType, GlobalAppState } from "../api/state.slint";
+import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
 import { ClassItemData, ClassificationState } from "../api/classification.slint";
 import { PipelineFocusState } from "../api/pipeline_focus.slint";
 import { ScriptEditorState, ScriptFont } from "../api/script_editor.slint";
@@ -12,12 +14,12 @@ import { LineEdit, ComboBox, CheckBox } from "../ink/std_compat.slint";
 import {
     ImageAddressPicker,
     ChannelPicker,
-} from "../components/channel_picker.slint";
-import { PickerField, PickerRow, SwatchName } from "../components/picker_field.slint";
+} from "channel_picker.slint";
+import { InkPickerField, InkPickerRow, InkSwatchName, InkDialogPlacement } from "../ink/ink.slint";
 
 import { FocusModeButton } from "pipeline_focus.slint";
 import { CommandPaletteState } from "../api/command_palette.slint";
-import { Ink, InkIcons, InkIconButton, InkPanelHead, InkKbd, InkCaption, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkTextField, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkDialog } from "../ink/ink.slint";
+import { Ink, InkIcons, InkIconButton, InkPanelHead, InkKbd, InkCaption, InkSectionHead, InkCheckbox, InkButton, InkButtonKind, InkSwitch, InkSelect, InkHint, InkTextField, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkDialog, InkDivider, InkSearchField } from "../ink/ink.slint";
 
 // ----------------------------------------------------------
 // Data model
@@ -26,38 +28,6 @@ import { Ink, InkIcons, InkIconButton, InkPanelHead, InkKbd, InkCaption, InkChec
 // ----------------------------------------------------------
 // Reusable bits
 
-
-// 14×14 square checkbox (used for pipeline-include-in-run toggle).
-component SquareCheck inherits Rectangle {
-        in property <bool> checked;
-        callback toggled;
-
-        width: 14px;
-        height: 14px;
-        border-radius: 3px;
-        background: root.checked ? Ink.focus : transparent;
-        border-width: root.checked ? 0px : 1.5px;
-        border-color: Ink.border;
-        animate background { duration: 100ms; }
-
-        if root.checked: Image {
-            source: @image-url("../icons/regular-white/check.svg");
-            width: 10px;
-            height: 10px;
-            colorize: #ffffff;
-        }
-
-        TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.toggled();
-            }
-        }
-    }
-
-
-// ----------------------------------------------------------
-// Pipeline tab row
 
 // "Advanced (n) · m changed" row of a step card: expands/collapses the
 // step's advanced settings; "Always" expands them in every step. Labels are
@@ -75,62 +45,22 @@ component AdvancedRow inherits Rectangle {
 
         HorizontalLayout {
             spacing: 6px;
-            row-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
+            InkSectionHead {
+                horizontal-stretch: 1;
+                text: "ADVANCED";
+                count: root.changed-count > 0 ? root.count + " · " + root.changed-count + " changed" : root.count;
+                expanded: root.expanded;
+                toggled => {
                     root.toggled();
                 }
-                HorizontalLayout {
-                    spacing: 5px;
-                    alignment: start;
-                    VerticalLayout {
-                        alignment: center;
-                        Image {
-                            source: root.expanded ? @image-url("../icons/regular-white/caret-down.svg") : @image-url("../icons/regular-white/caret-right.svg");
-                            width: 10px;
-                            height: 10px;
-                            colorize: row-ta.has-hover ? Ink.text : Ink.text-dim;
-                        }
-                    }
-
-                    Text {
-                        text: "Advanced (\{root.count})";
-                        font-size: 11px;
-                        font-weight: 600;
-                        color: row-ta.has-hover ? Ink.text : Ink.text-dim;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-
-                    if root.changed-count > 0: Text {
-                        text: "· \{root.changed-count} changed";
-                        font-size: 11px;
-                        color: Ink.warn;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-                }
             }
-
-            HorizontalLayout {
-                spacing: 5px;
-                alignment: end;
-                VerticalLayout {
-                    alignment: center;
-                    SquareCheck {
-                        checked: root.always;
-                        toggled => {
-                            root.always-toggled(!root.always);
-                        }
-                    }
-                }
-
-                Text {
-                    text: "Always";
-                    font-size: 10px;
-                    color: Ink.text-mute;
-                    vertical-alignment: center;
-                    overflow: elide;
+            // Advanced settings open in every step.
+            InkCheckbox {
+                y: (parent.height - self.height) / 2;
+                text: "Always";
+                checked: root.always;
+                toggled(on) => {
+                    root.always-toggled(on);
                 }
             }
         }
@@ -287,6 +217,16 @@ component ClassDropdown inherits Rectangle {
         property <string> prefix: root.is-seg ? "Seg." : "Obj.";
         // "Unset", "Background", ... aren't numbered entries.
         property <bool> numbered: root.value.is-float() && root.value != "-1" && root.value != "0" && root.value != "4294967295";
+        // "+ New class…" was chosen here: the class it makes is picked.
+        property <bool> waiting-for-class: false;
+        property <int> created: ClassificationSettingsState.created-count;
+        changed created => {
+            if root.waiting-for-class {
+                root.waiting-for-class = false;
+                root.value = ClassificationSettingsState.last-created-id;
+                root.changed(root.value);
+            }
+        }
 
         height: Ink.control-h;
 
@@ -296,18 +236,18 @@ component ClassDropdown inherits Rectangle {
             popup.close();
         }
 
-        PickerField {
+        InkPickerField {
             label: root.compact && root.numbered ? ClassHelper.zeropad2(round(root.value.to-float())) : ClassHelper.label(root.value, root.prefix);
             mono: root.numbered || !root.value.is-float();
             clicked => {
                 popup.show();
             }
-            for cls in ClassificationState.classes_list: SwatchName {
+            for cls in ClassificationState.classes_list: InkSwatchName {
                 visible: root.numbered && cls.id == round(root.value.to-float());
                 color: cls.color;
                 name: cls.name;
             }
-            for cls in ComponentClassesState.classes: SwatchName {
+            for cls in ComponentClassesState.classes: InkSwatchName {
                 visible: root.value == "L\{cls.id}";
                 color: cls.color;
                 name: cls.name;
@@ -338,7 +278,7 @@ component ClassDropdown inherits Rectangle {
                     VerticalLayout {
                         spacing: 0px;
 
-                        PickerRow {
+                        InkPickerRow {
                             label: "Unset";
                             mono: false;
                             label-color: Ink.text-mute;
@@ -348,7 +288,7 @@ component ClassDropdown inherits Rectangle {
                             }
                         }
 
-                        PickerRow {
+                        InkPickerRow {
                             label: "Manual annotation";
                             mono: false;
                             selected: root.value == "4294967295";
@@ -357,12 +297,25 @@ component ClassDropdown inherits Rectangle {
                             }
                         }
 
-                        PickerRow {
+                        InkPickerRow {
                             label: "Background";
                             mono: false;
                             selected: root.value == "0";
                             clicked => {
                                 root.pick("0");
+                            }
+                        }
+
+                        // A class of its own: named, colored, picked at once.
+                        if !root.is-seg: InkPickerRow {
+                            label: "+ New class…";
+                            mono: false;
+                            label-color: Ink.focus;
+                            clicked => {
+                                root.waiting-for-class = true;
+                                popup.close();
+                                ClassificationSettingsState.reset_to_zero();
+                                GlobalAppState.active_dialog = DialogType.classification-edit-class-dialog;
                             }
                         }
 
@@ -372,7 +325,7 @@ component ClassDropdown inherits Rectangle {
                         }
 
                         // The opened component's own classes.
-                        for cls in ComponentClassesState.classes: PickerRow {
+                        for cls in ComponentClassesState.classes: InkPickerRow {
                             height: root.component-classes && !root.is-seg ? 26px : 0px;
                             visible: root.component-classes && !root.is-seg;
                             label: "◆ L\{cls.id}";
@@ -381,7 +334,7 @@ component ClassDropdown inherits Rectangle {
                             clicked => {
                                 root.pick("L\{cls.id}");
                             }
-                            SwatchName {
+                            InkSwatchName {
                                 color: cls.color;
                                 name: cls.name;
                             }
@@ -394,13 +347,13 @@ component ClassDropdown inherits Rectangle {
 
                         // Fixed 32 numbered entries; color and name for a class the
                         // project defines.
-                        for i in 32: PickerRow {
+                        for i in 32: InkPickerRow {
                             label: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
                             selected: root.numbered && round(root.value.to-float()) == i + 1;
                             clicked => {
                                 root.pick("\{i + 1}");
                             }
-                            for cls in ClassificationState.classes-list: SwatchName {
+                            for cls in ClassificationState.classes-list: InkSwatchName {
                                 visible: cls.id == i + 1;
                                 color: cls.color;
                                 name: cls.name;
@@ -932,13 +885,27 @@ component ScalarControls inherits Rectangle {
                 }
             }
 
-            if p.param-type == ParamType.number || p.param-type == ParamType.text: InkTextField {
+            if p.param-type == ParamType.text: InkTextField {
                 enabled: !PipelinesPanelState.open-component-read-only;
                 label: p.display-name;
-                mono: p.param-type == ParamType.number;
                 value: p.value;
                 edited(t) => {
                     root.changed(t);
+                }
+            }
+
+            // A number: drag sideways over it, Ctrl + wheel, or ↑↓ change it (no
+            // range when min = max).
+            if p.param-type == ParamType.number: InkNumberField {
+                enabled: !PipelinesPanelState.open-component-read-only;
+                compact: true;
+                label: p.display-name;
+                value: p.value.to-float();
+                step: p.step > 0 ? p.step : 1;
+                min: p.min < p.max ? p.min : -1000000000;
+                max: p.min < p.max ? p.max : 1000000000;
+                changed(v) => {
+                    root.changed(v);
                 }
             }
 
@@ -1680,140 +1647,6 @@ component ParamRow inherits VerticalLayout {
         }
     }
 
-// A setting in the settings dialog, laid out like the project settings:
-// name, short help ("?" for the full one) on the left, the control on the
-// right - or below, for list entries and scripts, which need the width.
-component WideParamRow inherits VerticalLayout {
-        in property <CommandParameter> p;
-        callback changed(string);
-        callback item-field-changed(int, string, string);
-        callback add-item();
-        callback remove-item(int);
-        callback show-model-info();
-        callback toggle-exposed();
-        callback edit-exposed();
-        // A list entry's setting: entry index, setting name.
-        callback toggle-item-exposed(int, string);
-        callback edit-item-exposed(int, string);
-        callback toggle-item-pin(int, string);
-
-        property <bool> help-open: false;
-        property <bool> block: p.param-type == ParamType.group || p.param-type == ParamType.script;
-
-        Rectangle {
-            height: 1px;
-            background: Ink.border-soft;
-        }
-
-        HorizontalLayout {
-            padding-left: 16px;
-            padding-right: 16px;
-            padding-top: 12px;
-            padding-bottom: root.block ? 4px : 12px;
-            spacing: 24px;
-
-            VerticalLayout {
-                horizontal-stretch: 1;
-                alignment: center;
-                spacing: 3px;
-
-                ParamLabel {
-                    p: root.p;
-                    wide: true;
-                    help-open <=> root.help-open;
-                    toggle-exposed => {
-                        root.toggle-exposed();
-                    }
-                    edit-exposed => {
-                        root.edit-exposed();
-                    }
-                }
-
-                // `height` from the text's own width (see the project
-                // settings' `SettingRow`).
-                if p.short-description != "": Text {
-                    text: root.help-open ? p.description : p.short-description;
-                    font-size: 11px;
-                    color: Ink.text-dim;
-                    wrap: word-wrap;
-                    height: self.preferred-height;
-                }
-
-                ParamNotes {
-                    p: root.p;
-                }
-            }
-
-            if !root.block: VerticalLayout {
-                width: 280px;
-                alignment: center;
-                ParamControls {
-                    p: root.p;
-                    changed(v) => {
-                        root.changed(v);
-                    }
-                    item-field-changed(i, n, v) => {
-                        root.item-field-changed(i, n, v);
-                    }
-                    add-item => {
-                        root.add-item();
-                    }
-                    remove-item(i) => {
-                        root.remove-item(i);
-                    }
-                    show-model-info => {
-                        root.show-model-info();
-                    }
-                    toggle-item-exposed(i, n) => {
-                        root.toggle-item-exposed(i, n);
-                    }
-                    toggle-item-pin(i, n) => {
-                        root.toggle-item-pin(i, n);
-                    }
-                    edit-item-exposed(i, n) => {
-                        root.edit-item-exposed(i, n);
-                    }
-                }
-            }
-        }
-
-        if root.block: VerticalLayout {
-            padding-left: 16px;
-            padding-right: 16px;
-            padding-bottom: 12px;
-            ParamControls {
-                p: root.p;
-                changed(v) => {
-                    root.changed(v);
-                }
-                item-field-changed(i, n, v) => {
-                    root.item-field-changed(i, n, v);
-                }
-                add-item => {
-                    root.add-item();
-                }
-                remove-item(i) => {
-                    root.remove-item(i);
-                }
-                show-model-info => {
-                    root.show-model-info();
-                }
-                toggle-item-exposed(i, n) => {
-                    root.toggle-item-exposed(i, n);
-                }
-                toggle-item-pin(i, n) => {
-                    root.toggle-item-pin(i, n);
-                }
-                edit-item-exposed(i, n) => {
-                    root.edit-item-exposed(i, n);
-                }
-            }
-        }
-    }
-
-// ----------------------------------------------------------
-// Step row
-
 // A setting on one line: its name left, its control right - lists,
 // scripts and file paths need the width, so they're stacked (`ParamRow`).
 component InlineParamRow inherits VerticalLayout {
@@ -2130,9 +1963,10 @@ component StepRow inherits Rectangle {
         // 0 = off, 1 = stop, 2 = snapshot - for this step.
         property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.step-id) ? PipelinesPanelState.breakpoint-mode : 0;
 
-        background: step.expanded ? Ink.panel : head-ta.has-hover ? Ink.hover : transparent;
+        property <bool> selected: PipelinesPanelState.selected-step-id == root.idx;
+        background: step.expanded ? Ink.panel : root.selected ? Ink.selection : head-ta.has-hover ? Ink.hover : transparent;
         border-width: step.expanded ? 1px : 0px;
-        border-color: Ink.border;
+        border-color: root.selected ? Ink.text-faint : Ink.border;
         border-radius: Ink.radius-md;
         clip: true;
 
@@ -2145,6 +1979,7 @@ component StepRow inherits Rectangle {
                 opacity: step.enabled ? 1.0 : 0.5;
                 head-ta := TouchArea {
                     clicked => {
+                        PipelinesPanelState.selected-step-id = root.idx;
                         root.toggle-expanded();
                     }
                 }
@@ -2304,6 +2139,18 @@ component StepRow inherits Rectangle {
                             enabled: root.editable;
                             clicked => {
                                 root.toggle-enabled();
+                            }
+                        }
+
+                        // Pins all its settings into the Tuning panel.
+                        InkIconButton {
+                            y: (parent.height - self.height) / 2;
+                            visible: (root.hovered || step.expanded) && (step.parameters.length > 0 || step.advanced-count > 0);
+                            size: 22px;
+                            icon: InkIcons.pin;
+                            label: "Pin all its settings";
+                            clicked => {
+                                PipelinesPanelState.toggle-pin-step(root.idx);
                             }
                         }
 
@@ -2557,14 +2404,59 @@ component StepRow inherits Rectangle {
         x: root.width - 220px;
         y: 32px;
         InkMenuFrame {
+            open-y: root.absolute-position.y + 32px;
             menu-width: 220px;
             InkMenuCaption { text: root.step.name; }
             InkMenuItem {
+                icon: InkIcons.settings;
+                text: "Settings…";
+                shortcut: "Enter";
+                clicked => {
+                    root.open-settings();
+                }
+            }
+            InkMenuItem {
+                text: root.step.enabled ? "Disable" : "Enable";
+                shortcut: "Ctrl /";
+                enabled: root.editable;
+                clicked => {
+                    root.toggle-enabled();
+                }
+            }
+            InkMenuItem {
+                text: root.bp-state == 0 ? "Breakpoint" : root.bp-state == 1 ? "Breakpoint: snapshot" : "No breakpoint";
+                shortcut: "F9";
+                clicked => {
+                    root.toggle-breakpoint();
+                }
+            }
+            InkMenuItem {
                 icon: InkIcons.copy;
                 text: "Duplicate";
+                shortcut: "Ctrl D";
                 enabled: root.editable;
                 clicked => {
                     root.duplicate();
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.caret-up;
+                text: "Move up";
+                shortcut: "Alt ↑";
+                enabled: root.editable && root.idx > 0;
+                clicked => {
+                    PipelinesPanelState.move-step(root.idx, -1);
+                    PipelinesPanelState.selected-step-id = root.idx - 1;
+                }
+            }
+            InkMenuItem {
+                icon: InkIcons.caret-down;
+                text: "Move down";
+                shortcut: "Alt ↓";
+                enabled: root.editable && root.idx < PipelinesPanelState.active-commands.length - 1;
+                clicked => {
+                    PipelinesPanelState.move-step(root.idx, 1);
+                    PipelinesPanelState.selected-step-id = root.idx + 1;
                 }
             }
             InkMenuItem {
@@ -2592,6 +2484,7 @@ component StepRow inherits Rectangle {
             InkMenuItem {
                 icon: InkIcons.delete;
                 text: "Remove step";
+                shortcut: "Del";
                 danger: true;
                 enabled: root.editable;
                 clicked => {
@@ -3055,31 +2948,7 @@ export component PipelinesPanel inherits Rectangle {
                             PipelinesPanelState.open-step-settings(cmd.step-id);
                         }
                         toggle-breakpoint => {
-                            if PipelinesPanelState.breakpoint-pipeline-id == PipelinesPanelState.active-pipeline-id && PipelinesPanelState.breakpoint-step-id == cmd.step-id {
-                                if PipelinesPanelState.breakpoint-mode == 1 {
-                                    // Stop → Snapshot (capture image, pipeline continues)
-                                    PipelinesPanelState.breakpoint-mode = 2;
-                                    PipelinesPanelState.show-breakpoint-image = false;
-                                    PipelinesPanelState.show-breakpoint-image-changed(false);
-                                    PipelinesPanelState.has-breakpoint-image = false;
-                                    PipelinesPanelState.set-breakpoint(PipelinesPanelState.active-pipeline-id, cmd.step-id, 2);
-                                } else {
-                                    // Snapshot → Off; captured image remains available.
-                                    PipelinesPanelState.breakpoint-pipeline-id = -1;
-                                    PipelinesPanelState.breakpoint-step-id = "";
-                                    PipelinesPanelState.breakpoint-mode = 0;
-                                    PipelinesPanelState.clear-breakpoint();
-                                }
-                            } else {
-                                // Off → Stop (pipeline halts at step)
-                                PipelinesPanelState.breakpoint-pipeline-id = PipelinesPanelState.active-pipeline-id;
-                                PipelinesPanelState.breakpoint-step-id = cmd.step-id;
-                                PipelinesPanelState.breakpoint-mode = 1;
-                                PipelinesPanelState.show-breakpoint-image = false;
-                                PipelinesPanelState.show-breakpoint-image-changed(false);
-                                PipelinesPanelState.has-breakpoint-image = false;
-                                PipelinesPanelState.set-breakpoint(PipelinesPanelState.active-pipeline-id, cmd.step-id, 1);
-                            }
+                            PipelinesPanelState.toggle-breakpoint-at(cmd.step-id);
                         }
                     }
 
@@ -3193,6 +3062,7 @@ export component PipelinesPanel inherits Rectangle {
         close-policy: close-on-click-outside;
 
         InkMenuFrame {
+            open-y: root.absolute-position.y + Ink.head-h - 4px;
             menu-width: min(root.width + 40px, 380px);
             HorizontalLayout {
                 padding-left: 8px;
@@ -3265,6 +3135,7 @@ export component PipelinesPanel inherits Rectangle {
         y: Ink.head-h - 4px;
 
         InkMenuFrame {
+            open-y: root.absolute-position.y + Ink.head-h - 4px;
             menu-width: 250px;
             InkMenuCaption { text: PipelinesPanelState.active-pipeline-name; }
             InkMenuItem {
@@ -3311,301 +3182,281 @@ export component PipelinesPanel inherits Rectangle {
 // ══════════════════════════════════════════════════════════
 // Step settings dialog
 
-// One section of the settings dialog's list on the left.
-component SectionNavItem inherits Rectangle {
-        in property <string> text;
-    // Shown after the name, e.g. "2 changed".
+// A tab of the step settings dialog: a section of the step's settings.
+component SettingsTab inherits Rectangle {
+    in property <string> text;
+    // After the name, e.g. "· 2" changed.
     in property <string> note;
-        in property <bool> active;
-        callback clicked;
+    in property <bool> active;
+    callback clicked;
 
-        height: 30px;
-        border-radius: 6px;
-        background: root.active ? Ink.selection : (ta.has-hover ? Ink.hover : transparent);
+    height: 30px;
+    width: tab-row.preferred-width;
 
-        Rectangle {
-            x: 0;
-            y: 7px;
-            width: 3px;
-            height: parent.height - 14px;
-            border-radius: 1.5px;
-            background: root.active ? Ink.focus : transparent;
+    tab-row := HorizontalLayout {
+        padding-left: 2px;
+        padding-right: 2px;
+        spacing: 4px;
+        Text {
+            text: root.text;
+            vertical-alignment: center;
+            font-size: Ink.fs-md;
+            font-weight: root.active ? 600 : 400;
+            color: root.active ? Ink.text : ta.has-hover ? Ink.text : Ink.text-dim;
         }
 
-        HorizontalLayout {
-            padding-left: 12px;
-            padding-right: 8px;
-            spacing: 6px;
-
-            Text {
-                text: root.text;
-                vertical-alignment: center;
-                font-size: 12px;
-                font-weight: root.active ? 600 : 400;
-                color: root.active ? Ink.text : Ink.text-dim;
-                overflow: elide;
-            }
-
-            if root.note != "": Text {
-                text: root.note;
-                vertical-alignment: center;
-                font-size: 10px;
-                color: Ink.warn;
-            }
-        }
-
-        ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.clicked();
-            }
+        if root.note != "": Text {
+            text: root.note;
+            vertical-alignment: center;
+            font-size: Ink.fs-sm;
+            color: Ink.new;
         }
     }
 
-// A step's settings in a larger dialog (⤢ on the step card), like the
-// project settings: the step's sections - the sections of its settings,
-// and "Advanced" - on the left, the chosen section's settings on the right;
-// or, while searching, every matching setting. Shows the step
-// `PipelinesPanelState.settings-step-id`, live: edits go through the same
-// callbacks as on the card. (Opening it shows the step's advanced settings,
-// so they are there to pick and to search.)
+    // The underline of the chosen tab.
+    Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: root.active ? Ink.text : transparent;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A step's settings in a dialog (⤢ on the step card, design Q): the step,
+// its sections and "Advanced" as tabs with a search, then the chosen tab's
+// settings in the rows of the step card. While searching, every matching
+// setting. Shows the step `PipelinesPanelState.settings-step-id`, live:
+// edits go through the same callbacks as on the card.
 export component StepSettingsDialog inherits InkDialog {
-        title: "Step settings";
-        card-width: 920px;
-        card-height: 660px;
-        content-padding: 0px;
-        close-on-backdrop: true;
+    // Docked on the right; the image stays usable.
+    placement: InkDialogPlacement.sheet;
+    title: "Step settings";
+    card-width: 600px;
+    card-height: 660px;
+    content-padding: 0px;
+    close-on-backdrop: true;
 
-        // The list is rebuilt after each change - what's chosen lives out here
-    // so it stays.
-    // Index into the step's `sections`; `sections.length` is Advanced.
+    // The list is rebuilt after each change - what's chosen lives out here
+    // so it stays. Index into the step's `sections`; `sections.length` is
+    // Advanced.
     property <int> current: 0;
-        property <string> query;
-        property <bool> searching: root.query.replace-all(" ", "") != "";
+    property <string> query;
+    property <bool> searching: root.query.replace-all(" ", "") != "";
 
-        // Whether setting `p` is found by the search text (ignoring case).
+    // Whether setting `p` is found by the search text (ignoring case).
     pure function matches(p: CommandParameter) -> bool {
-            root.found("\{p.display-name} \{p.name} \{p.description} \{p.section}")
-        }
+        root.found("\{p.display-name} \{p.name} \{p.description} \{p.section}")
+    }
 
-        pure function found(words: string) -> bool {
-            words.to-lowercase().replace-all(root.query.to-lowercase(), "") != words.to-lowercase()
-        }
+    pure function found(words: string) -> bool {
+        words.to-lowercase().replace-all(root.query.to-lowercase(), "") != words.to-lowercase()
+    }
 
-        // Whether setting `p` of the basic (not advanced) ones is shown.
+    // Whether setting `p` of the basic (not advanced) ones is shown.
     pure function shows(p: CommandParameter, sections: [string]) -> bool {
-            root.searching ? root.matches(p) : (root.current < sections.length && p.section == sections[root.current])
-        }
+        root.searching ? root.matches(p) : (root.current < sections.length && p.section == sections[root.current])
+    }
 
-        // The chosen step's settings - one list for all steps, so the
-        // step is found in it (the list is rebuilt after each change).
-        Rectangle {
+    // The chosen step's settings - one list for all steps, so the step is
+    // found in it (the list is rebuilt after each change).
+    Rectangle {
         vertical-stretch: 1;
         for cmd in PipelinesPanelState.active-commands: Rectangle {
             width: 100%;
             height: 100%;
-            if cmd.step-id == PipelinesPanelState.settings-step-id: Rectangle {
+            if cmd.step-id == PipelinesPanelState.settings-step-id: VerticalLayout {
                 property <bool> on-advanced: !root.searching && root.current >= cmd.sections.length;
 
-                width: 100%;
-                height: 100%;
-                border-width: 1px;
-                border-color: Ink.border-soft;
-                clip: true;
+                // -- The step, its tabs, the search --
+                VerticalLayout {
+                    vertical-stretch: 0;
+                    padding-left: Ink.pad-dialog;
+                    padding-right: Ink.pad-dialog;
+                    padding-top: 12px;
+                    spacing: 8px;
 
-                HorizontalLayout {
-                // -- Left: name, search, sections --
-                Rectangle {
-                        width: 230px;
-                        background: Ink.ground;
-                        VerticalLayout {
-                            padding: 16px;
-                            spacing: 4px;
-                            alignment: start;
+                    HorizontalLayout {
+                        height: 24px;
+                        spacing: 8px;
+                        Rectangle {
+                            width: 3px;
+                            border-radius: 1.5px;
+                            background: Cat.color(cmd.category);
+                        }
 
-                            HorizontalLayout {
-                                spacing: 8px;
-                                Rectangle {
-                                    width: 4px;
-                                    border-radius: 2px;
-                                    background: Cat.color(cmd.category);
-                                }
+                        Text {
+                            text: cmd.step-id;
+                            font-size: Ink.fs-md;
+                            font-family: Ink.font-mono;
+                            color: Ink.text-mute;
+                            vertical-alignment: center;
+                        }
 
-                                Text {
-                                    text: cmd.name;
-                                    font-size: 18px;
-                                    font-weight: 700;
-                                    color: Ink.text;
-                                    overflow: elide;
-                                }
-                            }
+                        Text {
+                            text: cmd.name;
+                            font-size: Ink.fs-title;
+                            font-weight: 600;
+                            color: Ink.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
 
-                            Rectangle {
-                                height: 10px;
-                            }
-
-                            LineEdit {
-                                text: root.query;
-                                placeholder-text: "Search settings";
-                                edited(t) => {
-                                    root.query = t;
-                                }
-                            }
-
-                            Rectangle {
-                                height: 10px;
-                            }
-
-                            for section[si] in cmd.sections: SectionNavItem {
-                                text: section == "" ? "General" : section;
-                                active: !root.searching && root.current == si;
-                                clicked => {
-                                    root.query = "";
-                                    root.current = si;
-                                }
-                            }
-
-                            if cmd.advanced-count > 0: SectionNavItem {
-                                text: "Advanced (\{cmd.advanced-count})";
-                                note: cmd.advanced-changed > 0 ? "\{cmd.advanced-changed} changed" : "";
-                                active: on-advanced;
-                                clicked => {
-                                    root.query = "";
-                                    root.current = cmd.sections.length;
-                                }
-                            }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: cmd.summary;
+                            font-size: Ink.fs-sm;
+                            font-family: Ink.font-mono;
+                            color: Ink.text-mute;
+                            vertical-alignment: center;
+                            overflow: elide;
                         }
                     }
 
-                    Rectangle {
-                        width: 1px;
-                        background: Ink.border-soft;
+                    HorizontalLayout {
+                        height: 30px;
+                        spacing: 14px;
+                        for section[si] in cmd.sections: SettingsTab {
+                            text: section == "" ? "General" : section;
+                            active: !root.searching && root.current == si;
+                            clicked => {
+                                root.query = "";
+                                root.current = si;
+                            }
+                        }
+
+                        if cmd.advanced-count > 0: SettingsTab {
+                            text: "Advanced";
+                            note: cmd.advanced-changed > 0 ? "· \{cmd.advanced-changed}" : "";
+                            active: on-advanced;
+                            clicked => {
+                                root.query = "";
+                                root.current = cmd.sections.length;
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        InkSearchField {
+                            width: 170px;
+                            placeholder: "Search settings";
+                            text: root.query;
+                            edited(t) => {
+                                root.query = t;
+                            }
+                        }
                     }
+                }
 
-                    // -- Right: the chosen section's settings --
-                Rectangle {
-                        horizontal-stretch: 1;
-                        ScrollView {
-                            VerticalLayout {
-                                padding: 24px;
-                                padding-top: 20px;
-                                spacing: 6px;
-                                alignment: start;
+                InkDivider { }
 
-                                HorizontalLayout {
-                                    spacing: 10px;
-                                    Text {
-                                        horizontal-stretch: 1;
-                                        text: root.searching ? "Search results" : on-advanced ? "Advanced" : (cmd.sections[root.current] == "" ? "General" : cmd.sections[root.current]);
-                                        font-size: 16px;
-                                        font-weight: 700;
-                                        color: Ink.text;
-                                        vertical-alignment: center;
+                // -- The chosen tab's settings --
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding-left: Ink.pad-dialog;
+                        padding-right: Ink.pad-dialog;
+                        padding-top: 12px;
+                        padding-bottom: 12px;
+                        spacing: 8px;
+                        alignment: start;
+
+                        // What the command does - on its first tab.
+                        if cmd.help != "" && !root.searching && root.current == 0: InkHint {
+                            text: cmd.help;
+                            height: self.preferred-height;
+                        }
+
+                        if root.searching: InkCaption {
+                            text: "SEARCH RESULTS";
+                        }
+
+                        if !on-advanced: VerticalLayout {
+                            spacing: 6px;
+                            for p in cmd.parameters: VerticalLayout {
+                                if root.shows(p, cmd.sections): InlineParamRow {
+                                    p: p;
+                                    changed(v) => {
+                                        PipelinesPanelState.param-changed(cmd.id, p.name, v);
+                                    }
+                                    item-field-changed(item_idx, field_name, v) => {
+                                        PipelinesPanelState.param-changed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}", v);
+                                    }
+                                    add-item => {
+                                        PipelinesPanelState.add-group-item(cmd.id, p.name);
+                                    }
+                                    remove-item(idx) => {
+                                        PipelinesPanelState.remove-group-item(cmd.id, p.name, idx);
+                                    }
+                                    show-model-info => {
+                                        PipelinesPanelState.show-model-info(cmd.id);
+                                    }
+                                    toggle-exposed => {
+                                        PipelinesPanelState.toggle-exposed(cmd.id, p.name);
+                                    }
+                                    toggle-item-exposed(item_idx, field_name) => {
+                                        PipelinesPanelState.toggle-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                    }
+                                    toggle-item-pin(item_idx, field_name) => {
+                                        PipelinesPanelState.toggle-pin(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                    }
+                                    edit-exposed => {
+                                        PipelinesPanelState.edit-exposed(cmd.id, p.name);
+                                    }
+                                    edit-item-exposed(item_idx, field_name) => {
+                                        PipelinesPanelState.edit-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                    }
+                                    toggle-pin => {
+                                        PipelinesPanelState.toggle-pin(cmd.id, p.name);
                                     }
                                 }
+                            }
+                        }
 
-                                Text {
-                                    text: cmd.summary;
-                                    font-size: 11px;
-                                    font-family: Ink.font-mono;
-                                    color: Ink.text-mute;
-                                    overflow: elide;
-                                }
-
-                                // What the command does - on its first page.
-                            if cmd.help != "" && !root.searching && root.current == 0: Text {
-                                    text: cmd.help;
-                                    font-size: 11px;
-                                    color: Ink.text-dim;
-                                    wrap: word-wrap;
-                                    height: self.preferred-height;
-                                }
-
-                                Rectangle {
-                                    height: 8px;
-                                }
-
-                                // The rows draw the dividers between them; the
-                            // card's top border is the first one's.
-                            Rectangle {
-                                    background: Ink.panel;
-                                    border-radius: 8px;
-                                    border-width: 1px;
-                                    border-color: Ink.border-soft;
-                                    clip: true;
-
-                                    VerticalLayout {
-                                        padding-top: -1px;
-
-                                        if !on-advanced: VerticalLayout {
-                                            for p in cmd.parameters: VerticalLayout {
-                                                if root.shows(p, cmd.sections): WideParamRow {
-                                                    p: p;
-                                                    changed(v) => {
-                                                        PipelinesPanelState.param-changed(cmd.id, p.name, v);
-                                                    }
-                                                    item-field-changed(item_idx, field_name, v) => {
-                                                        PipelinesPanelState.param-changed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}", v);
-                                                    }
-                                                    add-item => {
-                                                        PipelinesPanelState.add-group-item(cmd.id, p.name);
-                                                    }
-                                                    remove-item(idx) => {
-                                                        PipelinesPanelState.remove-group-item(cmd.id, p.name, idx);
-                                                    }
-                                                    show-model-info => {
-                                                        PipelinesPanelState.show-model-info(cmd.id);
-                                                    }
-                                                    toggle-exposed => {
-                                                        PipelinesPanelState.toggle-exposed(cmd.id, p.name);
-                                                    }
-                                                    toggle-item-exposed(item_idx, field_name) => {
-                                                        PipelinesPanelState.toggle-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
-                                                    }
-                                                    edit-exposed => {
-                                                        PipelinesPanelState.edit-exposed(cmd.id, p.name);
-                                                    }
-                                                    edit-item-exposed(item_idx, field_name) => {
-                                                        PipelinesPanelState.edit-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        if on-advanced || root.searching: VerticalLayout {
-                                            for p in cmd.advanced-parameters: VerticalLayout {
-                                                if !root.searching || root.matches(p): WideParamRow {
-                                                    p: p;
-                                                    changed(v) => {
-                                                        PipelinesPanelState.param-changed(cmd.id, p.name, v);
-                                                    }
-                                                    item-field-changed(item_idx, field_name, v) => {
-                                                        PipelinesPanelState.param-changed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}", v);
-                                                    }
-                                                    add-item => {
-                                                        PipelinesPanelState.add-group-item(cmd.id, p.name);
-                                                    }
-                                                    remove-item(idx) => {
-                                                        PipelinesPanelState.remove-group-item(cmd.id, p.name, idx);
-                                                    }
-                                                    show-model-info => {
-                                                        PipelinesPanelState.show-model-info(cmd.id);
-                                                    }
-                                                    toggle-exposed => {
-                                                        PipelinesPanelState.toggle-exposed(cmd.id, p.name);
-                                                    }
-                                                    toggle-item-exposed(item_idx, field_name) => {
-                                                        PipelinesPanelState.toggle-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
-                                                    }
-                                                    edit-exposed => {
-                                                        PipelinesPanelState.edit-exposed(cmd.id, p.name);
-                                                    }
-                                                    edit-item-exposed(item_idx, field_name) => {
-                                                        PipelinesPanelState.edit-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
-                                                    }
-                                                }
-                                            }
-                                        }
+                        if on-advanced || root.searching: VerticalLayout {
+                            spacing: 6px;
+                            for p in cmd.advanced-parameters: VerticalLayout {
+                                if !root.searching || root.matches(p): InlineParamRow {
+                                    p: p;
+                                    changed(v) => {
+                                        PipelinesPanelState.param-changed(cmd.id, p.name, v);
+                                    }
+                                    item-field-changed(item_idx, field_name, v) => {
+                                        PipelinesPanelState.param-changed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}", v);
+                                    }
+                                    add-item => {
+                                        PipelinesPanelState.add-group-item(cmd.id, p.name);
+                                    }
+                                    remove-item(idx) => {
+                                        PipelinesPanelState.remove-group-item(cmd.id, p.name, idx);
+                                    }
+                                    show-model-info => {
+                                        PipelinesPanelState.show-model-info(cmd.id);
+                                    }
+                                    toggle-exposed => {
+                                        PipelinesPanelState.toggle-exposed(cmd.id, p.name);
+                                    }
+                                    toggle-item-exposed(item_idx, field_name) => {
+                                        PipelinesPanelState.toggle-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                    }
+                                    toggle-item-pin(item_idx, field_name) => {
+                                        PipelinesPanelState.toggle-pin(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                    }
+                                    edit-exposed => {
+                                        PipelinesPanelState.edit-exposed(cmd.id, p.name);
+                                    }
+                                    edit-item-exposed(item_idx, field_name) => {
+                                        PipelinesPanelState.edit-exposed(cmd.id, "\{p.name}.\{item_idx}.\{field_name}");
+                                    }
+                                    toggle-pin => {
+                                        PipelinesPanelState.toggle-pin(cmd.id, p.name);
                                     }
                                 }
                             }
@@ -3615,7 +3466,7 @@ export component StepSettingsDialog inherits InkDialog {
             }
         }
     }
-    }
+}
 
 // ══════════════════════════════════════════════════════════
 // Tuning panel
@@ -3626,6 +3477,8 @@ export component StepSettingsDialog inherits InkDialog {
 // is changed here just like on its card.
 export component TuningPanel inherits Rectangle {
     property <[TunedSetting]> tuned: PipelinesPanelState.tuned-settings;
+    // The tab: a step's index, -1 all pinned.
+    property <int> tab: -1;
     callback close;
 
     preferred-height: layout.preferred-height;
@@ -3642,6 +3495,35 @@ export component TuningPanel inherits Rectangle {
             }
         }
 
+        // Tabs: all pinned, then a step each (design E).
+        HorizontalLayout {
+            height: 30px;
+            padding-left: Ink.pad-panel;
+            padding-right: Ink.pad-panel;
+            spacing: 14px;
+            SettingsTab {
+                text: "All pinned";
+                note: "· \{root.tuned.length}";
+                active: root.tab < 0;
+                clicked => {
+                    root.tab = -1;
+                }
+            }
+            for t[i] in root.tuned: SettingsTab {
+                visible: i == 0 || root.tuned[i - 1].step != t.step;
+                width: self.visible ? self.preferred-width : 0px;
+                text: t.step-name;
+                active: root.tab == t.step;
+                clicked => {
+                    root.tab = t.step;
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+        InkDivider { }
+
         Flickable {
             vertical-stretch: 1;
             preferred-height: min(rows.preferred-height, 360px);
@@ -3655,9 +3537,12 @@ export component TuningPanel inherits Rectangle {
 
                 for t[i] in root.tuned: VerticalLayout {
                     spacing: 4px;
+                    // Only the chosen step's on its tab.
+                    visible: root.tab < 0 || root.tab == t.step;
+                    height: self.visible ? self.preferred-height : 0px;
 
-                    // The step, above its first setting.
-                    if i == 0 || root.tuned[i - 1].step != t.step: HorizontalLayout {
+                    // The step, above its first setting (on "All pinned").
+                    if root.tab < 0 && (i == 0 || root.tuned[i - 1].step != t.step): HorizontalLayout {
                         spacing: 6px;
                         padding-top: i == 0 ? 0px : 6px;
                         Rectangle {

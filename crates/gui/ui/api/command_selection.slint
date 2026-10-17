@@ -27,6 +27,9 @@ export struct CommandDef {
     is-component: bool,
     authors: [CommandAuthor],
     creation-time: string,
+    // The publications of the method a command implements, formatted, one
+    // per entry - filled for the selected command (`detail`).
+    citations: [string],
 }
 
 export global CommandPickerState {

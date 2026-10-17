@@ -1,4 +1,4 @@
-import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkDialogPlacement } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ProjectSettingsState, ViewportMemoryState } from "../api/project_settings.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -6,20 +6,15 @@ import { LineEdit, ComboBox, SpinBox, Switch } from "../ink/std_compat.slint";
 
 import { Ink } from "../ink/palette.slint";
 import { MultiClassDropdown } from "../editor/pipelines_panel.slint";
-import {
-    NavItem,
-    NavGroupLabel,
-    SectionHeader,
-    SettingsCard,
-    SettingRow,
-    SettingBlock,
-} from "../components/settings_layout.slint";
+import { InkNavItem, InkNavCaption, InkSettingsHead, InkSettingsCard, InkSettingRow, InkSettingBlock } from "../ink/ink.slint";
 // -- Dialog --------------------------------------------------------------------
 
 // All settings in one place: the project's (saved with the project) and this
 // computer's (viewport memory). A section list on the left, or - while
 // searching - every matching setting of all sections.
 export component ProjectSettingsDialog inherits InkDialog {
+    // Docked on the right; the image stays usable.
+    placement: InkDialogPlacement.sheet;
     title: "Settings";
     card-width: 900px;
     card-height: 680px;
@@ -55,6 +50,7 @@ export component ProjectSettingsDialog inherits InkDialog {
     property <string> kw-overview-cache: "Overview cache whole image overviews switching images memory RAM MB megabytes performance";
     property <string> kw-free-caches: "Free caches when an analysis starts release memory RAM analysis run";
     property <string> kw-edit-during-analysis: "Edit while an analysis runs preview pipelines block wait analysis run";
+    property <string> kw-before-after: "Before after compare divider space preview objects";
 
     // Whether `words` contain the search text (ignoring case).
     pure function matches(words: string) -> bool {
@@ -71,7 +67,7 @@ export component ProjectSettingsDialog inherits InkDialog {
         section == 0 ? (root.matches(root.kw-name) || root.matches(root.kw-author) || root.matches(root.kw-org))
         : section == 1 ? (root.matches(root.kw-grouping) || (ProjectSettingsState.settings.grouping_mode == 1 && root.matches(root.kw-regex)) || root.matches(root.kw-plate) || root.matches(root.kw-well-size) || (!ProjectSettingsState.settings.well_auto && root.matches(root.kw-well-images)))
         : section == 2 ? (root.matches(root.kw-merge) || (ProjectSettingsState.settings.tile_merge_enabled && (root.matches(root.kw-exclude) || root.matches(root.kw-connectivity) || root.matches(root.kw-fragments))))
-        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-cache-auto) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-free-caches) || root.matches(root.kw-edit-during-analysis))
+        : (root.matches(root.kw-history) || root.matches(root.kw-budget) || root.matches(root.kw-margin) || root.matches(root.kw-cache-auto) || root.matches(root.kw-tile-cache) || root.matches(root.kw-overview-cache) || root.matches(root.kw-free-caches) || root.matches(root.kw-edit-during-analysis) || root.matches(root.kw-before-after))
     }
 
     pure function shows-section(section: int) -> bool {
@@ -194,11 +190,11 @@ export component ProjectSettingsDialog inherits InkDialog {
                             height: 14px;
                         }
 
-                        NavGroupLabel {
+                        InkNavCaption {
                             text: "PROJECT";
                         }
 
-                        NavItem {
+                        InkNavItem {
                             text: "General";
                             icon: @image-url("../icons/regular-white/user-circle.svg");
                             active: !root.searching && root.current-section == 0;
@@ -208,7 +204,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                             }
                         }
 
-                        NavItem {
+                        InkNavItem {
                             text: "Plate & grouping";
                             icon: @image-url("../icons/regular-white/grid-nine.svg");
                             active: !root.searching && root.current-section == 1;
@@ -218,7 +214,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                             }
                         }
 
-                        NavItem {
+                        InkNavItem {
                             text: "Object merging";
                             icon: @image-url("../icons/regular-white/squares-four.svg");
                             active: !root.searching && root.current-section == 2;
@@ -232,11 +228,11 @@ export component ProjectSettingsDialog inherits InkDialog {
                             height: 14px;
                         }
 
-                        NavGroupLabel {
+                        InkNavCaption {
                             text: "THIS COMPUTER";
                         }
 
-                        NavItem {
+                        InkNavItem {
                             text: "Viewport";
                             icon: @image-url("../icons/regular-white/monitor.svg");
                             active: !root.searching && root.current-section == 3;
@@ -292,28 +288,28 @@ export component ProjectSettingsDialog inherits InkDialog {
                             // -- General -----------------------------------
                             if root.shows-section(0): VerticalLayout {
                                 spacing: 14px;
-                                SectionHeader {
+                                InkSettingsHead {
                                     title: "General";
                                     scope: "Saved with the project";
                                     subtitle: "Who made this project - stored with it and shown when it is cited.";
                                 }
 
-                                SettingsCard {
-                                    if root.shows(0, root.kw-name): SettingRow {
+                                InkSettingsCard {
+                                    if root.shows(0, root.kw-name): InkSettingRow {
                                         label: "Project name";
                                         LineEdit {
                                             placeholder-text: "Enter project name…";
                                             text <=> ProjectSettingsState.settings.project_name;
                                         }
                                     }
-                                    if root.shows(0, root.kw-author): SettingRow {
+                                    if root.shows(0, root.kw-author): InkSettingRow {
                                         label: "Author";
                                         LineEdit {
                                             placeholder-text: "Charles Darwin";
                                             text <=> ProjectSettingsState.settings.author_name;
                                         }
                                     }
-                                    if root.shows(0, root.kw-org): SettingRow {
+                                    if root.shows(0, root.kw-org): InkSettingRow {
                                         label: "Organization";
                                         LineEdit {
                                             placeholder-text: "University / Company";
@@ -326,14 +322,14 @@ export component ProjectSettingsDialog inherits InkDialog {
                             // -- Plate & grouping --------------------------
                             if root.shows-section(1): VerticalLayout {
                                 spacing: 14px;
-                                SectionHeader {
+                                InkSettingsHead {
                                     title: "Plate & grouping";
                                     scope: "Saved with the project";
                                     subtitle: "How images are grouped into wells and how the plate is laid out in the results.";
                                 }
 
-                                SettingsCard {
-                                    if root.shows(1, root.kw-grouping): SettingRow {
+                                InkSettingsCard {
+                                    if root.shows(1, root.kw-grouping): InkSettingRow {
                                         label: "Grouping";
                                         description: "How the well of an image is found.";
                                         ComboBox {
@@ -345,7 +341,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             current-index <=> ProjectSettingsState.settings.grouping_mode;
                                         }
                                     }
-                                    if ProjectSettingsState.settings.grouping_mode == 1 && root.shows(1, root.kw-regex): SettingRow {
+                                    if ProjectSettingsState.settings.grouping_mode == 1 && root.shows(1, root.kw-regex): InkSettingRow {
                                         label: "Regex";
                                         description: "Applied to the file name to find the well.";
                                         LineEdit {
@@ -353,7 +349,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             text <=> ProjectSettingsState.settings.custom_regex;
                                         }
                                     }
-                                    if root.shows(1, root.kw-plate): SettingRow {
+                                    if root.shows(1, root.kw-plate): InkSettingRow {
                                         label: "Plate size";
                                         description: "The same choice as the results window's plate size.";
                                         ComboBox {
@@ -361,7 +357,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             current-index <=> ProjectSettingsState.settings.plate_size_index;
                                         }
                                     }
-                                    if root.shows(1, root.kw-well-size): SettingRow {
+                                    if root.shows(1, root.kw-well-size): InkSettingRow {
                                         label: "Well size";
                                         description: ProjectSettingsState.settings.well_auto ? "Rows and columns of images in a well, fitted to the images." : "Rows × columns of images in a well.";
                                         VerticalLayout {
@@ -419,7 +415,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             }
                                         }
                                     }
-                                    if !ProjectSettingsState.settings.well_auto && root.shows(1, root.kw-well-images): SettingBlock {
+                                    if !ProjectSettingsState.settings.well_auto && root.shows(1, root.kw-well-images): InkSettingBlock {
                                         label: "Images in well";
                                         description: "Which image number is shown at each position of the well (press Enter to confirm a change).";
                                         HorizontalLayout {
@@ -461,14 +457,14 @@ export component ProjectSettingsDialog inherits InkDialog {
                             // -- Object merging ----------------------------
                             if root.shows-section(2): VerticalLayout {
                                 spacing: 14px;
-                                SectionHeader {
+                                InkSettingsHead {
                                     title: "Object merging";
                                     scope: "Saved with the project";
                                     subtitle: "Reassembles objects split across an internal tile boundary (e.g. a whole organ on a whole slide image) into one object. Every object class merges unless excluded.";
                                 }
 
-                                SettingsCard {
-                                    if root.shows(2, root.kw-merge): SettingRow {
+                                InkSettingsCard {
+                                    if root.shows(2, root.kw-merge): InkSettingRow {
                                         label: "Merge objects across tiles";
                                         description: "Off: objects are exported per tile, as found.";
                                         HorizontalLayout {
@@ -478,7 +474,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             }
                                         }
                                     }
-                                    if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-exclude): SettingRow {
+                                    if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-exclude): InkSettingRow {
                                         label: "Exclude classes";
                                         description: "Classes whose objects are never merged.";
                                         MultiClassDropdown {
@@ -490,7 +486,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             }
                                         }
                                     }
-                                    if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-connectivity): SettingRow {
+                                    if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-connectivity): InkSettingRow {
                                         label: "Connectivity";
                                         description: "8-connected also joins pieces touching only diagonally.";
                                         ComboBox {
@@ -498,7 +494,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             current-index <=> ProjectSettingsState.settings.tile_merge_connectivity;
                                         }
                                     }
-                                    if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-fragments): SettingRow {
+                                    if ProjectSettingsState.settings.tile_merge_enabled && root.shows(2, root.kw-fragments): InkSettingRow {
                                         label: "Max fragments per group";
                                         description: "Upper limit of pieces joined into one object.";
                                         SpinBox {
@@ -516,14 +512,14 @@ export component ProjectSettingsDialog inherits InkDialog {
                             // -- Viewport ----------------------------------
                             if root.shows-section(3): VerticalLayout {
                                 spacing: 14px;
-                                SectionHeader {
+                                InkSettingsHead {
                                     title: "Viewport";
                                     scope: "This computer only";
                                     subtitle: "Memory the image viewport may use for smoother panning and zooming. Kept on this computer, for every project.";
                                 }
 
-                                SettingsCard {
-                                    if root.shows(3, root.kw-history): SettingRow {
+                                InkSettingsCard {
+                                    if root.shows(3, root.kw-history): InkSettingRow {
                                         label: "Keep earlier high-resolution renders";
                                         description: "Panning back or zooming shows the sharp earlier renders instead of the blurry overview - most useful for whole slide images. Off: only the current render and one overview are kept (least RAM).";
                                         HorizontalLayout {
@@ -533,7 +529,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             }
                                         }
                                     }
-                                    if root.shows(3, root.kw-budget): SettingRow {
+                                    if root.shows(3, root.kw-budget): InkSettingRow {
                                         label: "Memory for earlier renders";
                                         description: "In MB. The graphics card holds about as much again.";
                                         enabled: ViewportMemoryState.tile_history_enabled;
@@ -545,7 +541,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             value <=> ViewportMemoryState.tile_history_budget_mb;
                                         }
                                     }
-                                    if root.shows(3, root.kw-margin): SettingRow {
+                                    if root.shows(3, root.kw-margin): InkSettingRow {
                                         label: "Object overlay margin";
                                         description: "In pixels: how far objects are drawn past the visible area, so panning doesn't uncover an empty border. 0 uses the least RAM; objects at a newly uncovered edge then appear once you stop moving.";
                                         SpinBox {
@@ -555,7 +551,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             value <=> ViewportMemoryState.object_overlay_margin_px;
                                         }
                                     }
-                                    if root.shows(3, root.kw-cache-auto): SettingRow {
+                                    if root.shows(3, root.kw-cache-auto): InkSettingRow {
                                         label: "Size caches automatically";
                                         description: "From this computer's RAM - " + ViewportMemoryState.auto_cache_note + ". Off: use the sizes below.";
                                         HorizontalLayout {
@@ -565,7 +561,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             }
                                         }
                                     }
-                                    if root.shows(3, root.kw-tile-cache): SettingRow {
+                                    if root.shows(3, root.kw-tile-cache): InkSettingRow {
                                         enabled: !ViewportMemoryState.cache_sizes_auto;
                                         label: "Tile cache";
                                         description: "In MB: image tiles kept after reading, so panning back or returning to an image doesn't read them from disk again.";
@@ -577,7 +573,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             value <=> ViewportMemoryState.tile_cache_mb;
                                         }
                                     }
-                                    if root.shows(3, root.kw-overview-cache): SettingRow {
+                                    if root.shows(3, root.kw-overview-cache): InkSettingRow {
                                         enabled: !ViewportMemoryState.cache_sizes_auto;
                                         label: "Overview cache";
                                         description: "In MB: whole-image overviews kept, so switching between images shows them at once.";
@@ -589,7 +585,7 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             value <=> ViewportMemoryState.overview_cache_mb;
                                         }
                                     }
-                                    if root.shows(3, root.kw-free-caches): SettingRow {
+                                    if root.shows(3, root.kw-free-caches): InkSettingRow {
                                         label: "Free caches when an analysis starts";
                                         description: "Gives a local analysis the RAM of both caches; they fill up again as you use the viewport.";
                                         HorizontalLayout {
@@ -599,13 +595,23 @@ export component ProjectSettingsDialog inherits InkDialog {
                                             }
                                         }
                                     }
-                                    if root.shows(3, root.kw-edit-during-analysis): SettingRow {
+                                    if root.shows(3, root.kw-edit-during-analysis): InkSettingRow {
                                         label: "Edit while an analysis runs";
                                         description: "Pipelines can be edited and the image previewed while an analysis runs - its progress is shown over the image. Off: the window waits until the analysis is done, for a computer that needs all its RAM for the analysis.";
                                         HorizontalLayout {
                                             alignment: end;
                                             Switch {
                                                 checked <=> ViewportMemoryState.edit_during_analysis;
+                                            }
+                                        }
+                                    }
+                                    if root.shows(3, root.kw-before-after): InkSettingRow {
+                                        label: "Before / after";
+                                        description: "Compare the image without and with the preview's objects: a divider to drag (top bar), or hold Space. Off: no button, Space does nothing.";
+                                        HorizontalLayout {
+                                            alignment: end;
+                                            Switch {
+                                                checked <=> ViewportMemoryState.before_after;
                                             }
                                         }
                                     }

@@ -513,6 +513,7 @@ export component ImageControlPanel inherits Rectangle {
         x: root.width - 240px;
         y: Ink.head-h;
         InkMenuFrame {
+            open-y: root.absolute-position.y + Ink.head-h;
             menu-width: 240px;
             for s[i] in ImageMetaData.series_list: InkMenuItem {
                 text: ImagePanelText.series(s);

@@ -1,12 +1,16 @@
 // editor/object_list_panel.slint — the Objects panel: the objects of the
 // open image (a virtual list: only the rows in view exist, so thousands
-// stay fast), and below it the selected object - its classes, area,
-// circularity, intensities - with what can be done to it.
+// stay fast). As a list on the right, with the selected object below it -
+// its classes, area, circularity, intensities - and what can be done to it;
+// or as a table at the bottom (`table`, design K): a line per object, a
+// column per measurement. One component for both, so its code exists once.
 
 import { ChannelState, DialogType, GlobalAppState } from "../api/state.slint";
 import { ObjectItemDataSlint, ObjectListState } from "../api/object_list.slint";
+import { ImageMetaData } from "../api/image_meta.slint";
+import { LayoutState } from "../api/layout.slint";
 import { ListView } from "std-widgets.slint";
-import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkChip, InkCaption, InkDivider, InkMenuFrame, InkMenuItem, InkHint } from "../ink/ink.slint";
+import { Ink, InkIcons, InkPanelHead, InkListRow, InkBusy, InkButton, InkButtonKind, InkIconButton, InkChip, InkCaption, InkDivider, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator, InkHint } from "../ink/ink.slint";
 
 // "Area   1 204 px²" - a label and a mono value.
 component Fact inherits Rectangle {
@@ -44,9 +48,174 @@ component Fact inherits Rectangle {
     }
 }
 
+// The widths of the table's fixed columns; the channels share the rest.
+global TableCols {
+    out property <length> id: 64px;
+    out property <length> classes: 170px;
+    out property <length> area: 72px;
+    out property <length> circ: 80px;
+    out property <length> more: 28px;
+}
+
+// A cell of the objects table: a mono value, right aligned.
+component NumberCell inherits Text {
+    font-size: Ink.fs-sm;
+    font-family: Ink.font-mono;
+    color: Ink.text-dim;
+    horizontal-alignment: right;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+// The head of a column of the objects table.
+component HeadCell inherits Text {
+    font-size: Ink.fs-xs;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    color: Ink.text-mute;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+// What can be done to the selected object: set its class, edit, copy,
+// delete - under the list's selected object, in the table's footer.
+component ObjectActions inherits HorizontalLayout {
+    spacing: 4px;
+    InkButton {
+        small: true;
+        text: "Set class…";
+        kind: InkButtonKind.primary;
+        clicked => {
+            GlobalAppState.active-dialog = DialogType.classification_selection_dialog;
+        }
+    }
+    Rectangle {
+        horizontal-stretch: 1;
+    }
+    InkIconButton {
+        size: 24px;
+        icon: InkIcons.edit;
+        label: "Edit";
+        clicked => {
+            ObjectListState.object_edit(ObjectListState.selected_object.id);
+        }
+    }
+    InkIconButton {
+        size: 24px;
+        icon: InkIcons.copy;
+        label: "Copy";
+        clicked => {
+            ObjectListState.object_copy(ObjectListState.selected_object.id);
+        }
+    }
+    InkIconButton {
+        size: 24px;
+        icon: InkIcons.delete;
+        label: "Delete object";
+        clicked => {
+            GlobalAppState.active_dialog = DialogType.object_confirm_delete;
+        }
+    }
+}
+
+// An object: a list row, or a line of the table.
+component ObjectRow inherits Rectangle {
+    in property <ObjectItemDataSlint> data;
+    in property <bool> selected;
+    in property <bool> table;
+    callback clicked;
+
+    if !root.table: InkListRow {
+        title: root.data.label_name;
+        swatch: root.data.class_colors.length > 0 ? root.data.class_colors[0] : root.data.display_color;
+        tag: root.data.class_colors.length > 1 ? "+" + (root.data.class_colors.length - 1) : "";
+        trailing: root.data.label_count;
+        selected: root.selected;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    if root.table: Rectangle {
+        background: root.selected ? Ink.selection : line-ta.has-hover ? Ink.hover : transparent;
+
+        line-ta := TouchArea {
+            clicked => {
+                root.clicked();
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 8px;
+            spacing: 8px;
+            Text {
+                width: TableCols.id;
+                text: root.data.label_name;
+                font-size: Ink.fs-sm;
+                font-family: Ink.font-mono;
+                color: Ink.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                width: TableCols.classes;
+                spacing: 5px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 2px;
+                        background: root.data.class_colors.length > 0 ? root.data.class_colors[0] : root.data.display_color;
+                    }
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.data.class_names.length > 0 ? root.data.class_names[0] : "Unclassified";
+                    font-size: Ink.fs-sm;
+                    color: root.data.class_names.length > 0 ? Ink.text : Ink.text-mute;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.data.class_names.length > 1 ? "+" + (root.data.class_names.length - 1) : "";
+                    font-size: Ink.fs-xs;
+                    color: Ink.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+            NumberCell {
+                width: TableCols.area;
+                text: root.data.area > 0 ? root.data.area : "–";
+            }
+            NumberCell {
+                width: TableCols.circ;
+                text: root.data.circularity != "" ? root.data.circularity : "–";
+            }
+            for ch in ChannelState.channels: NumberCell {
+                horizontal-stretch: 1;
+                min-width: 40px;
+                text: root.data.intensity_avgs.length > ch.idx && root.data.intensity_avgs[ch.idx] != "" ? root.data.intensity_avgs[ch.idx] : "–";
+            }
+            Rectangle {
+                horizontal-stretch: ChannelState.channels.length == 0 ? 1 : 0;
+            }
+        }
+    }
+}
+
 export component ObjectListPanel inherits Rectangle {
-    property <length> row-h: Ink.row-h;
+    /// The table at the bottom, not the list on the right.
+    in property <bool> table: false;
+
+    property <length> row-h: root.table ? 28px : Ink.row-h;
     property <ObjectItemDataSlint> sel: ObjectListState.selected_object;
+
+    function select(data: ObjectItemDataSlint) {
+        ObjectListState.selected_object = data;
+        ObjectListState.object_selected(data.id);
+    }
 
     function unselect() {
         ObjectListState.selected_object = {
@@ -70,12 +239,56 @@ export component ObjectListPanel inherits Rectangle {
 
         InkPanelHead {
             title: "Objects";
+            subtitle: root.table ? ImageMetaData.image_name : "";
             count: ObjectListState.object_list.length;
-            closable: false;
+            closable: root.table;
             has-more: true;
+            close => {
+                LayoutState.objects-open = false;
+            }
             more(x, y) => {
                 list-menu.show();
             }
+        }
+
+        // -- The table's column heads --
+        if root.table: VerticalLayout {
+            HorizontalLayout {
+                height: 26px;
+                padding-left: 12px;
+                padding-right: 8px;
+                spacing: 8px;
+                HeadCell {
+                    width: TableCols.id;
+                    text: "ID";
+                }
+                HeadCell {
+                    width: TableCols.classes;
+                    text: "CLASSES";
+                }
+                HeadCell {
+                    width: TableCols.area;
+                    text: "AREA PX²";
+                    horizontal-alignment: right;
+                }
+                HeadCell {
+                    width: TableCols.circ;
+                    text: "CIRCULARITY";
+                    horizontal-alignment: right;
+                }
+                for ch in ChannelState.channels: HeadCell {
+                    horizontal-stretch: 1;
+                    min-width: 40px;
+                    text: ch.name.to-uppercase();
+                    horizontal-alignment: right;
+                }
+                // Fills the line when there are no channel columns.
+                Rectangle {
+                    horizontal-stretch: ChannelState.channels.length == 0 ? 1 : 0;
+                    min-width: TableCols.more;
+                }
+            }
+            InkDivider { }
         }
 
         Rectangle {
@@ -94,21 +307,18 @@ export component ObjectListPanel inherits Rectangle {
             }
 
             list := ListView {
-                x: 4px;
-                width: parent.width - 8px;
-                for data in ObjectListState.object_list: InkListRow {
+                x: root.table ? 0px : 4px;
+                width: parent.width - (root.table ? 0px : 8px);
+                for data in ObjectListState.object_list: ObjectRow {
                     height: root.row-h;
-                    title: data.label_name;
-                    swatch: data.class_colors.length > 0 ? data.class_colors[0] : data.display_color;
-                    tag: data.class_colors.length > 1 ? "+" + (data.class_colors.length - 1) : "";
-                    trailing: data.label_count;
+                    data: data;
+                    table: root.table;
                     selected: root.sel.id == data.id;
                     clicked => {
                         if data.id == root.sel.id {
                             root.unselect();
                         } else {
-                            ObjectListState.selected_object = data;
-                            ObjectListState.object_selected(data.id);
+                            root.select(data);
                         }
                     }
                 }
@@ -130,7 +340,26 @@ export component ObjectListPanel inherits Rectangle {
         }
 
         // -- The selected object --
-        if root.sel.id != 0: VerticalLayout {
+        // -- The table: the selected object's line and buttons --
+        if root.table && root.sel.id != 0: VerticalLayout {
+            InkDivider { }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 8px;
+                padding-top: 6px;
+                padding-bottom: 6px;
+                spacing: 10px;
+                // A click on its line again unselects it.
+                InkCaption {
+                    text: "OBJECT " + root.sel.label_name + " · " + root.sel.display_name;
+                }
+                ObjectActions {
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+
+        if !root.table && root.sel.id != 0: VerticalLayout {
             InkDivider { }
             VerticalLayout {
                 padding: Ink.pad-panel;
@@ -194,44 +423,8 @@ export component ObjectListPanel inherits Rectangle {
                     extra: "Σ " + (sum != "" ? sum : "–");
                 }
 
-                HorizontalLayout {
-                    spacing: 4px;
+                ObjectActions {
                     padding-top: 4px;
-                    InkButton {
-                        small: true;
-                        text: "Set class…";
-                        kind: InkButtonKind.primary;
-                        clicked => {
-                            GlobalAppState.active-dialog = DialogType.classification_selection_dialog;
-                        }
-                    }
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-                    InkIconButton {
-                        size: 24px;
-                        icon: InkIcons.edit;
-                        label: "Edit";
-                        clicked => {
-                            ObjectListState.object_edit(root.sel.id);
-                        }
-                    }
-                    InkIconButton {
-                        size: 24px;
-                        icon: InkIcons.copy;
-                        label: "Copy";
-                        clicked => {
-                            ObjectListState.object_copy(root.sel.id);
-                        }
-                    }
-                    InkIconButton {
-                        size: 24px;
-                        icon: InkIcons.delete;
-                        label: "Delete object";
-                        clicked => {
-                            GlobalAppState.active_dialog = DialogType.object_confirm_delete;
-                        }
-                    }
                 }
             }
         }
@@ -241,7 +434,15 @@ export component ObjectListPanel inherits Rectangle {
         x: root.width - 270px;
         y: Ink.head-h;
         InkMenuFrame {
+            open-y: root.absolute-position.y + Ink.head-h;
             menu-width: 270px;
+            InkMenuItem {
+                icon: root.table ? InkIcons.objects : InkIcons.table;
+                text: root.table ? "Show as a list" : "Show as a table";
+                clicked => {
+                    LayoutState.objects-as-table = !root.table;
+                }
+            }
             InkMenuItem {
                 icon: InkIcons.delete;
                 text: "Delete all hand-annotated objects…";

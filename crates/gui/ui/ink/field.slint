@@ -324,6 +324,50 @@ export component InkNumberField inherits Rectangle {
             }
         }
 
+        // Scrub: drag sideways over the number (a step per 4 px) - a click
+        // without a drag edits it; Ctrl + wheel steps. Gone while editing.
+        scrub := TouchArea {
+            x: keys.x;
+            width: keys.width;
+            enabled: root.enabled && !input.has-focus;
+            mouse-cursor: MouseCursor.ew-resize;
+            property <length> start-x;
+            property <float> base;
+            property <bool> scrubbed;
+            property <string> next;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down {
+                    self.start-x = self.mouse-x;
+                    self.base = root.shown;
+                    self.scrubbed = false;
+                }
+            }
+            moved => {
+                if self.pressed && (self.scrubbed || abs(self.mouse-x - self.start-x) > 3px) {
+                    self.scrubbed = true;
+                    // A property, not a `let`: Slint 1.18 generates broken
+                    // Rust for a string local used twice.
+                    self.next = clamp(self.base + round((self.mouse-x - self.start-x) / 4px) * root.step, root.min, root.max).to-fixed(root.decimals);
+                    if self.next != input.text {
+                        input.text = self.next;
+                        root.changed(self.next);
+                    }
+                }
+            }
+            clicked => {
+                if !self.scrubbed {
+                    input.focus();
+                }
+            }
+            scroll-event(e) => {
+                if e.modifiers.control && e.delta-y != 0 {
+                    root.step-by(e.delta-y > 0 ? 1 : -1);
+                    return accept;
+                }
+                reject
+            }
+        }
+
         unit-text := Text {
             visible: root.unit != "";
             x: parent.width - root.buttons-w - self.width - 6px;

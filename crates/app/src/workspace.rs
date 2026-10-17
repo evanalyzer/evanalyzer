@@ -14,6 +14,7 @@ pub mod export;
 pub mod extensions;
 pub mod frontend;
 pub mod images;
+pub mod plate_layout;
 pub(crate) mod project_owner;
 pub mod settings;
 pub mod templates;

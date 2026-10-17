@@ -7,7 +7,7 @@ use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::size_formater::format_bytes;
 use crate::{AppWindow, DialogType, GlobalAppState, ObjectHighlightBox, ViewportObjectState};
-use crate::{ImageItemData, ImagesListState};
+use crate::{ImageItemData, ImagesListState, PlateWell, WellState};
 use evanalyzer_app::project::collect_images_at_root;
 use evanalyzer_app::project::{ProjectExt, SelectNewProjectRootAction};
 use log::{debug, info, warn};
@@ -15,8 +15,23 @@ use slint::{ComponentHandle, Model};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+/// Which images were previewed (this session) or are in the analysis open
+/// in Results - the states of the plate's wells and of the image rows. Kept
+/// in `UiState::image_states`: the preview worker and the results controller
+/// write it.
+#[derive(Default, Clone)]
+pub struct ImageStates {
+    /// Full paths of the images a preview ran on.
+    pub previewed: std::collections::HashSet<PathBuf>,
+    /// Paths (relative to the image folder) of the images in the analysis
+    /// open in Results.
+    pub analysed: std::collections::HashSet<PathBuf>,
+}
+
 pub struct ImagesListControllerState {
     pub image_filter_text: RwLock<String>,
+    /// The images of each well of the plate view, as `plate-wells` lists them.
+    pub well_items: RwLock<Vec<Vec<ImageItemData>>>,
 }
 pub struct ImagesListController {
     pub(crate) ui: slint::Weak<AppWindow>,
@@ -47,6 +62,7 @@ impl ImagesListController {
             image_meta_controller,
             image_controller_state: Arc::new(ImagesListControllerState {
                 image_filter_text: RwLock::new(String::new()),
+                well_items: RwLock::new(Vec::new()),
             }),
             object_list_controller,
             classification_controller,
@@ -422,6 +438,15 @@ impl ImagesListController {
     /// - If the UI has been dropped the callback is a no-op (the weak upgrade
     ///   fails). Any errors from scheduling are ignored via `.ok()`.
     pub fn attach_callbacks(self: &Arc<Self>) {
+        // The plate follows previews and opened analyses. Weak: `UiState`
+        // keeps the listener, and this controller keeps `UiState`.
+        let weak = Arc::downgrade(self);
+        self.app_state.on_image_states_changed(move || {
+            if let Some(manager) = weak.upgrade() {
+                manager.sync_plate_to_slint();
+            }
+        });
+
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
             // Apply image filter
@@ -480,6 +505,13 @@ impl ImagesListController {
                         });
                 });
 
+            // A well of the plate view: show its images
+            let manager = Arc::clone(self);
+            ui.global::<ImagesListState>()
+                .on_well_selected(move |index| {
+                    manager.show_well_images(index);
+                });
+
             // Rerun folder scan on selected image root
             let manager = Arc::clone(self);
             ui.global::<ImagesListState>()
@@ -524,19 +556,118 @@ impl ImagesListController {
             .clone()
             .to_lowercase();
 
-        let images_guard = &state.get_project().images.list;
-        let slint_items = build_image_list_items(images_guard, &filter_text);
+        let image_states = state.image_states();
+        let project = state.get_project();
+        let images_guard = &project.images.list;
+        let slint_items = build_image_list_items(
+            images_guard,
+            &filter_text,
+            &image_states,
+            &project.images.root.clone().unwrap_or_default(),
+        );
+        let plate = build_plate(
+            images_guard,
+            &project.plate,
+            &image_states,
+            &project.images.root.clone().unwrap_or_default(),
+        );
+        drop(project);
+        *self
+            .image_controller_state
+            .well_items
+            .write()
+            .expect("Poisoned") = plate.well_items;
+        let plate_wells = plate.wells;
+        let (plate_rows, plate_cols) = (plate.rows, plate.cols);
 
         // The final assignment goes into the event loop
         crate::helper::ui_thread::invoke_from_event_loop(move || {
                 if let Some(ui_ready) = ui_weak.upgrade() {
                     let model = slint::ModelRc::new(slint::VecModel::from(slint_items));
-                    ui_ready.global::<ImagesListState>().set_images_list(model);
+                    let images_state = ui_ready.global::<ImagesListState>();
+                    images_state.set_images_list(model);
+                    images_state.set_plate_rows(plate_rows);
+                    images_state.set_plate_cols(plate_cols);
+                    images_state.set_plate_wells(slint::ModelRc::new(slint::VecModel::from(plate_wells)));
+                    // The wells may have changed: no well selected.
+                    images_state.set_selected_well(-1);
+                    images_state.set_well_images(slint::ModelRc::default());
                 }else{
                     warn!("Failed to upgrade UI handle in sync_image_list_to_slint, cannot update image list!");
                 }
             })
             .ok();
+    }
+
+    /// Only the plate: its wells' states changed (an image was previewed,
+    /// an analysis opened) - cheaper than the whole list.
+    pub fn sync_plate_to_slint(&self) {
+        let image_states = self.app_state.image_states();
+        let project = self.app_state.get_project();
+        let plate = build_plate(
+            &project.images.list,
+            &project.plate,
+            &image_states,
+            &project.images.root.clone().unwrap_or_default(),
+        );
+        drop(project);
+        *self
+            .image_controller_state
+            .well_items
+            .write()
+            .expect("Poisoned") = plate.well_items;
+        let wells = plate.wells;
+        // The rows' states, by path (patched in place: rebuilding the list
+        // would lose the scroll position and the chosen well).
+        let row_states: std::collections::HashMap<slint::SharedString, WellState> =
+            project_rows(&self.app_state, &image_states);
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let state = ui.global::<ImagesListState>();
+                // The same wells as before (same images), so the selected
+                // one stays.
+                state.set_plate_wells(slint::ModelRc::new(slint::VecModel::from(wells)));
+                for model in [state.get_images_list(), state.get_well_images()] {
+                    for row in 0..model.row_count() {
+                        if let Some(mut item) = model.row_data(row) {
+                            let new = row_states
+                                .get(&item.path)
+                                .copied()
+                                .unwrap_or(WellState::New);
+                            if item.state != new {
+                                item.state = new;
+                                model.set_row_data(row, item);
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .ok();
+    }
+
+    /// Shows the images of well `index` (of `plate-wells`) under the plate.
+    pub fn show_well_images(&self, index: i32) {
+        let items = usize::try_from(index)
+            .ok()
+            .and_then(|index| {
+                self.image_controller_state
+                    .well_items
+                    .read()
+                    .expect("Poisoned")
+                    .get(index)
+                    .cloned()
+            })
+            .unwrap_or_default();
+        let ui_weak = self.ui.clone();
+        crate::helper::ui_thread::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ImagesListState>()
+                    .set_well_images(slint::ModelRc::new(slint::VecModel::from(items)));
+            }
+        })
+        .ok();
     }
 
     /// Marks the image at `selected_absolute_path` as selected in the Slint list.
@@ -588,6 +719,8 @@ impl ImagesListController {
 fn build_image_list_items(
     images: &indexmap::IndexMap<PathBuf, evanalyzer_cfg::settings::images_settings::ImageEntry>,
     filter_text_lowercase: &str,
+    states: &ImageStates,
+    image_root: &std::path::Path,
 ) -> Vec<ImageItemData> {
     images
         .values()
@@ -609,14 +742,129 @@ fn build_image_list_items(
                 .unwrap_or_default()
                 .into(),
             path: entry.rel_path.to_string_lossy().to_string().into(),
-            image_dimension: "".into(),
+            image_dimension: dimension_text(entry).into(),
             image_size: format!("{}", format_bytes(entry.file_size as f64)).into(),
             has_annotations: entry
                 .series
                 .values()
                 .any(|series| !series.objects.is_empty()),
+            state: image_state(&entry.rel_path, states, image_root),
         })
         .collect()
+}
+
+/// "2048 × 2048 · 3 ch" of the image's selected series ("" before it was
+/// read).
+fn dimension_text(entry: &evanalyzer_cfg::settings::images_settings::ImageEntry) -> String {
+    let series = entry
+        .series
+        .get(&entry.selected_series)
+        .or_else(|| entry.series.values().next());
+    match series {
+        Some(series) if series.image_width > 0 => format!(
+            "{} × {} · {} ch",
+            series.image_width,
+            series.image_height,
+            series.channels.len()
+        ),
+        _ => String::new(),
+    }
+}
+
+/// How far the image at `rel_path` is: in the open analysis, previewed, new.
+fn image_state(
+    rel_path: &std::path::Path,
+    states: &ImageStates,
+    image_root: &std::path::Path,
+) -> WellState {
+    if states.analysed.contains(rel_path) {
+        WellState::Analysed
+    } else if states.previewed.contains(&image_root.join(rel_path)) {
+        WellState::Preview
+    } else {
+        WellState::New
+    }
+}
+
+/// The state of every image that isn't new, by its list path.
+fn project_rows(
+    app_state: &UiState,
+    states: &ImageStates,
+) -> std::collections::HashMap<slint::SharedString, WellState> {
+    let project = app_state.get_project();
+    let root = project.images.root.clone().unwrap_or_default();
+    project
+        .images
+        .list
+        .values()
+        .filter_map(|entry| {
+            let state = image_state(&entry.rel_path, states, &root);
+            (state != WellState::New)
+                .then(|| (entry.rel_path.to_string_lossy().to_string().into(), state))
+        })
+        .collect()
+}
+
+/// The plate view of `images`: the size, the wells, each well's images.
+struct PlateItems {
+    rows: i32,
+    cols: i32,
+    wells: Vec<PlateWell>,
+    well_items: Vec<Vec<ImageItemData>>,
+}
+
+/// Groups `images` into wells by `plate` (see `evanalyzer_app::images::plate_layout`).
+/// A well is `analysed` when one of its images is in the analysis open in
+/// Results, else `preview` when one was previewed, else `new`.
+fn build_plate(
+    images: &indexmap::IndexMap<PathBuf, evanalyzer_cfg::settings::images_settings::ImageEntry>,
+    plate: &evanalyzer_cfg::settings::plate_settings::PlateSettings,
+    states: &ImageStates,
+    image_root: &std::path::Path,
+) -> PlateItems {
+    let entries: Vec<&std::path::Path> = images.values().map(|e| e.rel_path.as_path()).collect();
+    let state_of = |indices: &[usize]| {
+        let of = |state| {
+            indices
+                .iter()
+                .any(|&i| image_state(entries[i], states, image_root) == state)
+        };
+        if of(WellState::Analysed) {
+            WellState::Analysed
+        } else if of(WellState::Preview) {
+            WellState::Preview
+        } else {
+            WellState::New
+        }
+    };
+    let paths: Vec<&std::path::Path> = images
+        .values()
+        .map(|entry| entry.rel_path.as_path())
+        .collect();
+    let layout = evanalyzer_app::images::plate_layout(&paths, plate);
+    let items = build_image_list_items(images, "", states, image_root);
+    let wells = layout
+        .wells
+        .iter()
+        .map(|well| PlateWell {
+            row: well.row as i32,
+            col: well.col as i32,
+            name: well.name.clone().into(),
+            image_count: well.images.len() as i32,
+            state: state_of(&well.images),
+        })
+        .collect();
+    let well_items = layout
+        .wells
+        .iter()
+        .map(|well| well.images.iter().map(|&i| items[i].clone()).collect())
+        .collect();
+    PlateItems {
+        rows: layout.rows as i32,
+        cols: layout.cols as i32,
+        wells,
+        well_items,
+    }
 }
 
 #[cfg(test)]
@@ -880,6 +1128,106 @@ mod tests {
     }
 
     #[test]
+    fn a_row_says_its_size_channels_and_state() {
+        let mut series = BTreeMap::new();
+        series.insert(
+            0,
+            SeriesSettings {
+                image_width: 2048,
+                image_height: 1024,
+                channels: [(0, Default::default()), (1, Default::default())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            },
+        );
+        let mut images = indexmap::IndexMap::new();
+        for name in ["a.tif", "b.tif"] {
+            images.insert(
+                PathBuf::from(name),
+                ImageEntry {
+                    rel_path: PathBuf::from(name),
+                    series: if name == "a.tif" { series.clone() } else { BTreeMap::new() },
+                    ..Default::default()
+                },
+            );
+        }
+        let states = ImageStates {
+            previewed: [PathBuf::from("/root/a.tif")].into_iter().collect(),
+            analysed: [PathBuf::from("b.tif")].into_iter().collect(),
+        };
+        let rows = build_image_list_items(&images, "", &states, std::path::Path::new("/root"));
+        assert_eq!(rows[0].image_dimension, "2048 × 1024 · 2 ch");
+        assert_eq!(rows[0].state, WellState::Preview);
+        assert_eq!(rows[1].image_dimension, "", "not read yet");
+        assert_eq!(rows[1].state, WellState::Analysed);
+    }
+
+    #[test]
+    fn a_wells_state_is_analysed_before_preview_before_new() {
+        let mut images = indexmap::IndexMap::new();
+        for name in ["A01_01.tif", "A01_02.tif", "A02_01.tif", "A03_01.tif"] {
+            images.insert(
+                PathBuf::from(name),
+                ImageEntry {
+                    rel_path: PathBuf::from(name),
+                    ..Default::default()
+                },
+            );
+        }
+        let states = ImageStates {
+            previewed: [
+                PathBuf::from("/root/A01_02.tif"),
+                PathBuf::from("/root/A02_01.tif"),
+            ]
+            .into_iter()
+            .collect(),
+            analysed: [PathBuf::from("A01_01.tif")].into_iter().collect(),
+        };
+        let plate = build_plate(
+            &images,
+            &Default::default(),
+            &states,
+            std::path::Path::new("/root"),
+        );
+        let state: Vec<WellState> = plate.wells.iter().map(|w| w.state).collect();
+        assert_eq!(
+            state,
+            [WellState::Analysed, WellState::Preview, WellState::New]
+        );
+    }
+
+    #[test]
+    fn build_plate_puts_each_image_in_its_well_in_number_order() {
+        let mut images = indexmap::IndexMap::new();
+        for name in ["B03_02.tif", "A01_01.tif", "B03_01.tif", "notes.tif"] {
+            images.insert(
+                PathBuf::from(name),
+                ImageEntry {
+                    rel_path: PathBuf::from(name),
+                    ..Default::default()
+                },
+            );
+        }
+        let plate = build_plate(
+            &images,
+            &Default::default(),
+            &Default::default(),
+            std::path::Path::new("/root"),
+        );
+        assert_eq!((plate.rows, plate.cols), (2, 3));
+        let names: Vec<String> = plate.wells.iter().map(|w| w.name.to_string()).collect();
+        assert_eq!(names, ["A1", "B3"]);
+        assert_eq!(plate.wells[1].image_count, 2);
+        assert_eq!((plate.wells[1].row, plate.wells[1].col), (1, 2));
+        let b3: Vec<String> = plate.well_items[1]
+            .iter()
+            .map(|i| i.path.to_string())
+            .collect();
+        assert_eq!(b3, ["B03_01.tif", "B03_02.tif"]);
+    }
+
+    #[test]
     fn sync_image_list_to_slint_reports_has_annotations_only_for_images_with_objects() {
         // Regression test: `has_annotations` used to be hardcoded `false`
         // for every image (the real check was commented out as a TODO),
@@ -925,8 +1273,12 @@ mod tests {
             );
         }
 
-        let images_list =
-            build_image_list_items(&controller.app_state.get_project().images.list, "");
+        let images_list = build_image_list_items(
+            &controller.app_state.get_project().images.list,
+            "",
+            &Default::default(),
+            std::path::Path::new(""),
+        );
 
         let mut has_annotations_by_path = std::collections::HashMap::new();
         for item in &images_list {

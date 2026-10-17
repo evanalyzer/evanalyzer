@@ -11,14 +11,22 @@ export struct ObjectItemDataSlint {
     class_ids: [int],
     label_name: string,
     label_id: int,
-    // Metrics – only populated for selected_object (empty string = not available)
+    // Metrics (empty string = not available). Every row: area, the mean
+    // intensities, circularity - the objects table's columns. Only the
+    // selected_object: area_nm2 and the sums.
     area: int,
-    area_nm2: string,           // area in nm², formatted; empty string = not available
-    intensities: [string],      // sum intensity per channel; empty string = not available
-    intensity_avgs: [string],   // mean intensity per channel; parallel to intensities
+    area_nm2: string,           // area in nm², formatted
+    intensities: [string],      // sum intensity per channel
+    intensity_avgs: [string],   // mean intensity per channel
     circularity: string,
     // Count of ROIs sharing the same segmentation label – populated for all rows
     label_count: int,
+    // Its bounding box in full-image pixels - where the object card on the
+    // image goes.
+    bbox-x: float,
+    bbox-y: float,
+    bbox-w: float,
+    bbox-h: float,
 }
 
 export global ObjectListState {

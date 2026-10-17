@@ -660,7 +660,7 @@ impl ResultsStateController {
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_matrix_class_selected(move |key, selected| {
-                    // Single-select: `MultiSelectDropdown.toggle()` only ever
+                    // Single-select: `InkMultiSelect.toggle()` only ever
                     // fires this with `selected == true` for the newly
                     // picked row, never `false` for the one it replaces.
                     if !selected {
@@ -882,11 +882,23 @@ impl ResultsStateController {
                         return;
                     };
                     let cells = manager.matrix_cells.lock().expect("Poisned");
-                    let Some(cell) = cells.get(key.as_str()) else {
+                    let Some(cell) = cells.get(key.as_str()).cloned() else {
                         warn!("Unknown well clicked: {key}");
                         return;
                     };
+                    drop(cells);
                     let state = ui_ready.global::<ResultsState>();
+                    // The card lists the well's images.
+                    let images: Vec<MatrixCell> = manager
+                        .query_well(&key)
+                        .map(|(result, ..)| {
+                            flatten_grid_cells(&result)
+                                .into_iter()
+                                .filter(|image| image.exists)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    state.set_active_well_images(ModelRc::from(Rc::new(VecModel::from(images))));
                     state.set_active_well(key);
                     // `exists` (not `has_value`): the user must be able to
                     // select/open a well or field even when it has no
@@ -1766,6 +1778,9 @@ impl ResultsStateController {
                 };
                 match results.get_images() {
                     Ok(images) => {
+                        // The images panel's plate marks these as analysed.
+                        self._app_state
+                            .set_analysed(images.iter().map(|image| image.rel_path.clone()));
                         self.set_images_in_slint(&images);
                         *self.images.lock().expect("Poisened") = images;
                     }
@@ -2487,9 +2502,18 @@ impl ResultsStateController {
     // the current Matrix toolbar's column/aggregation/class/color settings
     // scoped down to `well_id` via `WellFilter::group_name`.
     fn update_well_view(&self, well_id: &str) {
+        if let Some((result, value_caption, is_manual_scale)) = self.query_well(well_id) {
+            self.set_well_in_slint(&result, value_caption, is_manual_scale);
+        }
+    }
+
+    /// The fields of well `well_id` with the Matrix settings: the grid, the
+    /// value caption, whether the color scale is manual. `None` without a
+    /// database or filter, or when the query fails (logged).
+    fn query_well(&self, well_id: &str) -> Option<(DatabaseResult, String, bool)> {
         let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
             warn!("No database opened!");
-            return;
+            return None;
         };
 
         let plane_filter = self.plane_filter.lock().expect("Poisned");
@@ -2502,7 +2526,7 @@ impl ResultsStateController {
         let matrix_filter_guard = self.matrix_filter.lock().expect("Poisned");
         let Some(matrix_filter) = matrix_filter_guard.as_ref() else {
             warn!("No matrix filter set, cannot open well {well_id}");
-            return;
+            return None;
         };
         let value_caption = self.value_caption_for(matrix_filter);
         let is_manual_scale = matches!(matrix_filter.color_scale, ColorScale::Manual(..));
@@ -2523,15 +2547,13 @@ impl ResultsStateController {
         };
         drop(matrix_filter_guard);
 
-        let result =
-            match db.get_group_by_well(&well_filter, &evanalyzer_app::results::View::Heatmap) {
-                Ok(result) => result,
-                Err(err) => {
-                    error!("Could not load well results for {well_id}: {err}");
-                    return;
-                }
-            };
-        self.set_well_in_slint(&result, value_caption, is_manual_scale);
+        match db.get_group_by_well(&well_filter, &evanalyzer_app::results::View::Heatmap) {
+            Ok(result) => Some((result, value_caption, is_manual_scale)),
+            Err(err) => {
+                error!("Could not load well results for {well_id}: {err}");
+                None
+            }
+        }
     }
 
     // `result` is the plate/well grid `get_group_by_plate(.., View::Heatmap)`
@@ -3061,7 +3083,7 @@ impl ResultsStateController {
     // (case-insensitive substring match), leaving the actual filter/
     // selection state (`list_filter.image_rel_path`) and the pill's own
     // summary text untouched - only which rows the open popup shows
-    // changes. `MultiSelectDropdown`'s manual virtualization already keeps
+    // changes. `InkMultiSelect`'s manual virtualization already keeps
     // scrolling the full list smooth (see its own file), so this exists to
     // let a user with thousands of images jump to one by typing instead of
     // scrolling to find it.
@@ -4754,7 +4776,7 @@ mod tests {
         assert_eq!(export_state.get_image_items().row_count(), 3);
     }
 
-    // Clicks an export-dialog IMAGES row the way `MultiSelectDropdown`
+    // Clicks an export-dialog IMAGES row the way `InkMultiSelect`
     // does: flips the row in place, then fires `image-item-selected`.
     fn click_export_image(state: &ExportDialogState, key: &str, selected: bool) {
         let items = state.get_image_items();
@@ -5357,7 +5379,7 @@ mod tests {
                 ui_state,
             ),
         );
-        crate::editor::link_plate_settings(&project_settings, &controller);
+        crate::editor::link_plate_settings(&project_settings, &controller, None);
         controller.attach_callbacks();
         controller.open_database(path);
         drain_ui_queue();

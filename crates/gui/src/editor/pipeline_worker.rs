@@ -14,6 +14,7 @@ use evanalyzer_app::preview::MAX_PREVIEW_VISIBLE_TILES;
 use evanalyzer_app::preview::PreviewRequest;
 use evanalyzer_app::preview::PreviewViewport;
 use evanalyzer_app::preview::StartPreviewError;
+use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::{BreakpointSettings, InternalErrors};
 use log::{error, info};
 use slint::ComponentHandle;
@@ -442,6 +443,13 @@ impl PipelineWorker {
                             let mut project = self_handle.app_state.get_project_write();
                             project.tmp_settings.preview_objects.clear();
                             project.tmp_settings.preview_objects.extend(final_objects);
+                        }
+                        let previewed = self_handle
+                            .app_state
+                            .get_project()
+                            .get_current_image_path_cloned();
+                        if let Some(path) = previewed {
+                            self_handle.app_state.mark_previewed(path);
                         }
                         self_handle.object_list_controller.sync_objects_to_slint();
                         self_handle

@@ -313,7 +313,10 @@ export global PipelinesPanelState {
 
         // -- User selection state --
     in-out property <int> active-pipeline-id;
-        in-out property <int> selected-step-id;
+        // The step line last clicked (its index in `active-commands`; -1
+        // none) - what the step shortcuts act on (Enter, Ctrl /, F9, Ctrl D,
+        // Alt ↑/↓, Del; see shortcuts.slint).
+        in-out property <int> selected-step-id: -1;
         in-out property <int> filter-category: -1;
 
         // -- Breakpoint state (-1 / 0 = none) --
@@ -354,6 +357,8 @@ export global PipelinesPanelState {
         callback expand-step(int);
         callback remove-step(int);
         callback duplicate-step(int);
+        // Moves the step at this index by -1 (up) or +1 (down).
+        callback move-step(int, int);
         /// Opens "Create component" starting at this step (its index).
         callback create-component(int);
         /// The component opened in the panel (its steps are shown), or
@@ -407,6 +412,9 @@ export global PipelinesPanelState {
     // Pins / unpins the settings of a section of the step (a row of its
     // table): all pinned → all unpinned, else all pinned.
     callback toggle-pin-section(int, string);
+    // Pins all settings of the step at this index (its name's ⌖); again:
+    // unpins them.
+    callback toggle-pin-step(int);
         callback add-group-item(int, string);    // step-id, param-name
         // Expands/collapses a step's advanced settings (step-id).
         callback toggle-advanced(int);
@@ -440,4 +448,34 @@ export global PipelinesPanelState {
         in-out property <int> browse-token-counter: 0;
         in-out property <int> browse-result-token: -1;
         in-out property <string> browse-result-path;
+
+    // The breakpoint of step `step-id` (of the shown pipeline): off → stop
+    // → snapshot → off. The step's ● and F9.
+    public function toggle-breakpoint-at(step-id: string) {
+        if self.breakpoint-pipeline-id == self.active-pipeline-id && self.breakpoint-step-id == step-id {
+            if self.breakpoint-mode == 1 {
+                // Stop → Snapshot (capture image, pipeline continues)
+                self.breakpoint-mode = 2;
+                self.show-breakpoint-image = false;
+                self.show-breakpoint-image-changed(false);
+                self.has-breakpoint-image = false;
+                self.set-breakpoint(self.active-pipeline-id, step-id, 2);
+            } else {
+                // Snapshot → Off; captured image remains available.
+                self.breakpoint-pipeline-id = -1;
+                self.breakpoint-step-id = "";
+                self.breakpoint-mode = 0;
+                self.clear-breakpoint();
+            }
+        } else {
+            // Off → Stop (pipeline halts at step)
+            self.breakpoint-pipeline-id = self.active-pipeline-id;
+            self.breakpoint-step-id = step-id;
+            self.breakpoint-mode = 1;
+            self.show-breakpoint-image = false;
+            self.show-breakpoint-image-changed(false);
+            self.has-breakpoint-image = false;
+            self.set-breakpoint(self.active-pipeline-id, step-id, 1);
+        }
     }
+}

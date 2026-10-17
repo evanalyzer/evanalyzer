@@ -1,7 +1,9 @@
 // shell/top_bar.slint — the bar at the top: the EVA menu, the quick
 // actions, the image shown, the project's name, preview and Run.
 
-import { Ink, InkScheme, InkIcons, InkButton, InkButtonKind, InkIconButton, InkBarSeparator, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
+import { ViewportObjectState } from "../api/viewport.slint";
+import { ViewportMemoryState } from "../api/project_settings.slint";
+import { Ink, InkScheme, InkIcons, InkSegmented, InkButton, InkButtonKind, InkIconButton, InkBarSeparator, InkMenuFrame, InkMenuItem, InkMenuCaption, InkMenuSeparator } from "../ink/ink.slint";
 import { Appearance } from "../api/appearance.slint";
 import { LayoutState, WorkspaceMode } from "../api/layout.slint";
 import { ToolbarState } from "../api/toolbar.slint";
@@ -258,6 +260,16 @@ export component TopBar inherits Rectangle {
             horizontal-stretch: 0;
             HorizontalLayout {
                 spacing: 6px;
+                // Before / after (Space: hold for before) - can be switched off.
+                if ViewportMemoryState.before_after: InkIconButton {
+                    size: 28px;
+                    icon: InkIcons.compare;
+                    label: "Before / after (hold Space)";
+                    active: ViewportObjectState.compare;
+                    clicked => {
+                        ViewportObjectState.compare = !ViewportObjectState.compare;
+                    }
+                }
                 InkIconButton {
                     size: 28px;
                     icon: InkIcons.debug;
@@ -291,6 +303,7 @@ export component TopBar inherits Rectangle {
         y: Ink.bar-h - 2px;
 
         InkMenuFrame {
+            open-y: root.absolute-position.y + Ink.bar-h - 2px;
             menu-width: 260px;
 
             InkMenuCaption { text: "PROJECT"; }
@@ -385,32 +398,29 @@ export component TopBar inherits Rectangle {
             }
 
             InkMenuSeparator { }
-            InkMenuCaption { text: "COLORS"; }
-            InkMenuItem {
-                icon: InkIcons.sun;
-                text: "Light";
-                checked: Ink.scheme == InkScheme.light;
-                clicked => {
-                    Appearance.pick(InkScheme.light);
+            // The colors: one row.
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                spacing: 10px;
+                Text {
+                    text: "Colors";
+                    font-size: Ink.fs-md;
+                    color: Ink.text;
+                    vertical-alignment: center;
+                }
+                InkSegmented {
+                    horizontal-stretch: 1;
+                    label: "Colors";
+                    model: ["Light", "Dark", "Dim"];
+                    selected: Ink.scheme == InkScheme.dark ? 1 : Ink.scheme == InkScheme.dim ? 2 : 0;
+                    picked(i) => {
+                        Appearance.pick(i == 1 ? InkScheme.dark : i == 2 ? InkScheme.dim : InkScheme.light);
+                    }
                 }
             }
-            InkMenuItem {
-                icon: InkIcons.moon;
-                text: "Dark";
-                checked: Ink.scheme == InkScheme.dark;
-                clicked => {
-                    Appearance.pick(InkScheme.dark);
-                }
-            }
-            InkMenuItem {
-                icon: InkIcons.moon;
-                text: "Dim";
-                checked: Ink.scheme == InkScheme.dim;
-                clicked => {
-                    Appearance.pick(InkScheme.dim);
-                }
-            }
-
             InkMenuSeparator { }
             InkMenuItem {
                 icon: InkIcons.keyboard;

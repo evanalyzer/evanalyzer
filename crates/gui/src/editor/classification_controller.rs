@@ -162,7 +162,15 @@ impl ClassificationController {
             let manager = self.clone();
             ui.global::<ClassificationSettingsState>()
                 .on_apply_classification_settings(move |class_settings| {
-                    manager.update_class_settings_in_project(class_settings);
+                    let created = manager.update_class_settings_in_project(class_settings);
+                    // The picker that asked for the new class picks it.
+                    if let Some(class) = created
+                        && let Some(ui) = manager.ui.upgrade()
+                    {
+                        let state = ui.global::<ClassificationSettingsState>();
+                        state.set_last_created_id(class.to_i32());
+                        state.set_created_count(state.get_created_count() + 1);
+                    }
                     manager.sync_classification_to_slint();
                     manager.object_list_controller.sync_objects_to_slint();
                     manager.viewport_controller.trigger_image_redraw_objects();
@@ -335,7 +343,11 @@ impl ClassificationController {
     /// This method is intended to be called from the UI thread (via an `Arc<Self>`
     /// reference) and ensures data consistency by utilizing the underlying
     /// `update_class` method, which handles concurrent access via `RwLock`.
-    pub fn update_class_settings_in_project(self: &Arc<Self>, class_settings: ClassSettingsSlint) {
+    /// Adds or updates the class; the id of a class it adds.
+    pub fn update_class_settings_in_project(
+        self: &Arc<Self>,
+        class_settings: ClassSettingsSlint,
+    ) -> Option<ObjectClass> {
         let mut project = self.app_state.get_project_write();
 
         let new_class = Class {
@@ -349,17 +361,22 @@ impl ClassificationController {
 
         if class_settings.class_id < 0 {
             if class_settings.new_id < 0 {
-                project.classification.add_class(new_class);
-            } else if let Err(e) = project.classification.add_class_with_id(Class {
+                return Some(project.classification.add_class(new_class));
+            }
+            return match project.classification.add_class_with_id(Class {
                 id: class_settings.new_id as u32,
                 ..new_class
             }) {
-                warn!("Could not add the class: {e}");
-            }
+                Ok(class) => Some(class),
+                Err(e) => {
+                    warn!("Could not add the class: {e}");
+                    None
+                }
+            };
         } else {
             if project.classification.update_class(new_class).is_err() {
                 warn!("Could not update class!");
-                return;
+                return None;
             }
             // A new id: the class and everything referring to it.
             if class_settings.new_id >= 0 && class_settings.new_id != class_settings.class_id {
@@ -377,6 +394,7 @@ impl ClassificationController {
                 }
             }
         }
+        None
     }
 
     /// Synchronizes the current backend classification settings into the Slint UI state.
@@ -526,6 +544,28 @@ mod tests {
             notes: "".into(),
             color: Color::from_rgb_u8(10, 20, 30),
         }
+    }
+
+    #[test]
+    fn a_class_the_dialog_adds_is_reported_for_the_picker_that_asked() {
+        let ui = crate::editor::test_support::test_ui_window();
+        let project = crate::editor::test_support::project_with_one_image();
+        let (_ui_state, controller) = classification_on_windows(&ui, project);
+        controller.attach_callbacks();
+        let dialog = ui.global::<ClassificationSettingsState>();
+
+        dialog.invoke_apply_classification_settings(settings(-1, "Nuclei"));
+        let first = dialog.get_last_created_id();
+        assert!(first >= 0);
+        assert_eq!(dialog.get_created_count(), 1);
+
+        // Editing a class adds none.
+        dialog.invoke_apply_classification_settings(settings(first, "Renamed"));
+        assert_eq!(dialog.get_created_count(), 1);
+
+        dialog.invoke_apply_classification_settings(settings(-1, "Spots"));
+        assert_eq!(dialog.get_created_count(), 2);
+        assert_ne!(dialog.get_last_created_id(), first);
     }
 
     #[test]

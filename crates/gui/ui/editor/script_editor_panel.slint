@@ -7,7 +7,7 @@
 // tabs kept), so with a monospace font every layer lines up exactly with the
 // `TextInput` underneath. The layers come from Rust (`highlight`), as do
 // formatting, syntax check and the Tab/Enter/"}" editing helpers.
-import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkDialogPlacement } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { ScriptCommandDoc, ScriptDiagnostic, ScriptEdit, ScriptEditorState, ScriptFont, ScriptHighlight } from "../api/script_editor.slint";
 
@@ -27,6 +27,8 @@ component HighlightLayer inherits Text {
 }
 
 export component ScriptEditorPanel inherits InkDialog {
+    // Docked on the right; the image stays usable.
+    placement: InkDialogPlacement.sheet;
     // Syntax colors, readable on both themes.
     property <color> c-keyword: Ink.dark ? #C586C0 : #AF00DB;
     property <color> c-function: Ink.dark ? #DCDCAA : #795E26;

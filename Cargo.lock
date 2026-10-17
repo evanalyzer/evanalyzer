@@ -2885,6 +2885,7 @@ dependencies = [
  "postcard",
  "rayon",
  "rcgen",
+ "regex",
  "ring",
  "rust_xlsxwriter",
  "rustls",

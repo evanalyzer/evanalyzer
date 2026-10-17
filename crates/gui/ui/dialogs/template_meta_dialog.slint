@@ -1,4 +1,4 @@
-import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkDialog, InkDialogFooter, InkDialogPlacement } from "../ink/ink.slint";
 import { DialogType, GlobalAppState } from "../api/state.slint";
 import { TemplateMetaState } from "../api/template_meta.slint";
 import { TextEdit } from "std-widgets.slint";
@@ -6,6 +6,8 @@ import { LineEdit } from "../ink/std_compat.slint";
 
 import { Ink } from "../ink/palette.slint";
 export component TemplateMetaDialog inherits InkDialog {
+    // Docked on the right; the image stays usable.
+    placement: InkDialogPlacement.sheet;
     title: TemplateMetaState.dialog_title;
     card-width: 460px;
     close-on-backdrop: true;

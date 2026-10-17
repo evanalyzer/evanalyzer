@@ -36,10 +36,6 @@ pub mod components {
         ComponentProblem, ProblemFix, Severity, apply_fix, check_component, check_components,
         check_project, problems_at, step_problem,
     };
-    pub use crate::workspace::component_insights::{
-        ImageChannels, image_channels, parameter_key, parameter_wiring, rekey_parameters,
-        setting_wiring,
-    };
     pub use crate::workspace::component_editing::{
         ClassRole, ComponentPlan, ComponentPlanClass, StepList, add_binding, apply_defaults,
         bindable_settings, bound_setting_edited, clone_component_for_step, compatible_parameters,
@@ -49,6 +45,10 @@ pub mod components {
         remove_component_step, remove_parameter, remove_unused_components, set_parameter_section,
         setting_at, step_setting, step_settings, toggle_exposed, unused_components,
         would_contain_itself,
+    };
+    pub use crate::workspace::component_insights::{
+        ImageChannels, image_channels, parameter_key, parameter_wiring, rekey_parameters,
+        setting_wiring,
     };
     pub use crate::workspace::component_library::{
         components_used_by, content_hash, insert_component_template, library_name,
@@ -142,7 +142,7 @@ pub mod project {
 }
 
 pub mod exporter {
-    pub use crate::workspace::export::cite_project::cite_project;
+    pub use crate::workspace::export::cite_project::{cite_project, command_citations};
 }
 
 pub mod bioimageio {
@@ -215,5 +215,8 @@ pub mod images {
     pub use crate::api::Point2d;
     pub use crate::api::PyramidInfo;
     pub use crate::api::TileRequest;
-    pub use crate::workspace::images::object_from_mask;
+    pub use crate::workspace::images::{
+        Erased, erase_mask, object_from_mask, stroke_mask, union_mask,
+    };
+    pub use crate::workspace::plate_layout::{PlateLayout, WellImages, plate_layout};
 }

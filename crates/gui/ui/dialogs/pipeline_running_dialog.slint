@@ -124,6 +124,8 @@ export component AnalysisCard inherits Rectangle {
 }
 
 export component PipelineRunningDialog inherits InkDialog {
+    // The window waits for the analysis ("Edit while an analysis runs" off).
+    modal: true;
     title: "Analyzing images";
     subtitle: AnalysisText.percent();
     card-width: 440px;
