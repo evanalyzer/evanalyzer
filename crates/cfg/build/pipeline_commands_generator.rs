@@ -29,8 +29,9 @@ pub fn generate_mappings() -> Result<(), Box<dyn std::error::Error>> {
     );
     write_if_changed(Path::new("src/modules/pipeline_command.rs"), &enum_code);
 
+    // A note in the build log (`cargo build -vv`), not a warning.
     println!(
-        "cargo:warning=Generated {} command settings and {} enum settings",
+        "Generated {} command settings and {} enum settings",
         commands.len(),
         enums.len()
     );

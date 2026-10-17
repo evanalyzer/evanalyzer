@@ -246,8 +246,9 @@ redesign" canvas (layout C, light and dark Ink), boards B to T.
 
 ### From the design boards, not built yet
 
-- [ ] **Own title bar:** no system frame - window move, minimise, maximise,
-      close and resize at the edges via winit (differs per platform).
+- [ ] **Own title bar:** later (TODO, with the options A/B/C and their
+      pros and cons) - window move, minimise, maximise, close and resize
+      at the edges via winit differ per platform.
 - [ ] **Charts (M):** the small "same values" previews (histogram,
       scatter) under the chart - left out on purpose: two more queries on
       every change.

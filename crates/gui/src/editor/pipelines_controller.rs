@@ -959,34 +959,7 @@ impl PipelinesController {
                             .find(|p| p.id.0 == pipeline_id as u32)
                         {
                             let name = p.name.clone();
-                            // Find the category of the last step at or before the insertion point.
-                            // step_after_idx is the 0-based index of the step we insert AFTER.
-                            // A value >= steps.len() means "append at end".
-                            let context_idx = if step_after_idx >= 0 {
-                                (step_after_idx as usize).min(p.steps.len().saturating_sub(1))
-                            } else {
-                                usize::MAX
-                            };
-                            // Pre-select the chips for *all* categories that may
-                            // follow the previous step (its `allowed_next`, which is
-                            // decoupled from the display `category` — e.g.
-                            // ConnectedComponents suggests Object + Measure so both
-                            // Watershed and ExtractObjects are in view). These are only
-                            // suggestions: the user can toggle any chip, and clearing
-                            // them all shows every command.
-                            // A component suggests nothing (yet).
-                            let prev = p.steps.get(context_idx).and_then(|s| s.command());
-                            let (ctx_cat, suggested) = match prev {
-                                Some(prev) => {
-                                    let ctx_order = prev.category().display_order() as i32;
-                                    let mut flags = [false; 6];
-                                    for c in prev.allowed_next() {
-                                        flags[c.display_order() as usize] = true;
-                                    }
-                                    (ctx_order, flags)
-                                }
-                                None => (-1i32, [false; 6]),
-                            };
+                            let (ctx_cat, suggested) = picker_suggestion(&p.steps, step_after_idx);
                             (name, p.steps.len() as i32, ctx_cat, suggested)
                         } else {
                             (String::new(), 0, -1i32, [false; 6])
@@ -999,17 +972,9 @@ impl PipelinesController {
                         picker.set_insert_after_idx(step_after_idx);
                         picker.set_target_pipeline(pipeline_name.into());
                         picker.set_total_steps(total_steps);
-                        picker.set_context_category(context_cat);
                         picker.set_query("".into());
                         picker.set_filter_components(false);
-                        // Pre-select the suggested next categories (all of them); an
-                        // empty set leaves the "All" view.
-                        picker.set_fcat_pre(suggested_filter[0]);
-                        picker.set_fcat_seg(suggested_filter[1]);
-                        picker.set_fcat_obj(suggested_filter[2]);
-                        picker.set_fcat_mea(suggested_filter[3]);
-                        picker.set_fcat_cls(suggested_filter[4]);
-                        picker.set_fcat_dat(suggested_filter[5]);
+                        set_picker_suggestion(&picker, context_cat, suggested_filter);
                         picker.set_selected_id(-1);
                         picker.set_last_added("".into());
                         // Apply the filter immediately so the list matches the chips.
@@ -1236,6 +1201,19 @@ impl PipelinesController {
                         picker.set_insert_after_idx(last as i32);
                         picker.set_total_steps(total as i32);
                         picker.set_last_added(format!("{added} as step {}", last + 1).into());
+                        // The dialog stays open: what may follow the step
+                        // just added, as when it opens there.
+                        let (ctx_cat, suggested) = {
+                            let project = manager.app_state.get_project();
+                            manager
+                                .shown_steps(&project, pipeline_id)
+                                .map(|steps| picker_suggestion(steps, last as i32))
+                                .unwrap_or((-1, [false; 6]))
+                        };
+                        picker.set_query("".into());
+                        picker.set_selected_id(-1);
+                        set_picker_suggestion(&picker, ctx_cat, suggested);
+                        manager.apply_picker_filter(&ui, "");
                         ui.global::<PipelinesPanelState>()
                             .set_selected_step_id(last as i32);
                     }
@@ -6702,6 +6680,43 @@ fn move_step<T>(steps: &mut [T], idx: i32, delta: i32) -> bool {
     true
 }
 
+
+/// The step picker's suggestion for a step inserted after step
+/// `after_idx` of `steps` (-1: at the start; past the end: the last one):
+/// that step's category (-1 none) and the categories that may follow it -
+/// the chips pre-selected. *All* the categories its `allowed_next` names,
+/// which is decoupled from the display `category` (ConnectedComponents
+/// suggests Object + Measure, so Watershed and ExtractObjects are both in
+/// view). Only suggestions: any chip can be toggled, none shows all. A
+/// component suggests nothing (yet).
+fn picker_suggestion(steps: &[PipelineStepSettings], after_idx: i32) -> (i32, [bool; 6]) {
+    let prev = usize::try_from(after_idx)
+        .ok()
+        .and_then(|idx| steps.get(idx.min(steps.len().saturating_sub(1))))
+        .and_then(|s| s.command());
+    match prev {
+        Some(prev) => {
+            let mut flags = [false; 6];
+            for c in prev.allowed_next() {
+                flags[c.display_order() as usize] = true;
+            }
+            (prev.category().display_order() as i32, flags)
+        }
+        None => (-1, [false; 6]),
+    }
+}
+
+/// Shows a suggestion (see [`picker_suggestion`]) in the step picker.
+fn set_picker_suggestion(picker: &CommandPickerState<'_>, context_cat: i32, flags: [bool; 6]) {
+    picker.set_context_category(context_cat);
+    picker.set_fcat_pre(flags[0]);
+    picker.set_fcat_seg(flags[1]);
+    picker.set_fcat_obj(flags[2]);
+    picker.set_fcat_mea(flags[3]);
+    picker.set_fcat_cls(flags[4]);
+    picker.set_fcat_dat(flags[5]);
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -10667,6 +10682,34 @@ mod tests {
             assert!(!picker.get_fcat_seg() && !picker.get_fcat_pre());
         }
         assert_eq!(picker.get_target_pipeline(), "");
+    }
+
+    #[test]
+    fn the_open_picker_suggests_what_may_follow_the_step_just_added() {
+        let (ui, ui_state, _controller) = selected(vec![step("GaussianBlur")]);
+        let picker = ui.global::<CommandPickerState>();
+        ui.global::<PipelinesPanelState>().invoke_insert_step(1, 0);
+        drain_ui_queue();
+        // After a blur: more image processing, or segmenting.
+        assert!(picker.get_fcat_pre() && picker.get_fcat_seg());
+
+        let threshold = all_command_meta()
+            .into_iter()
+            .find(|m| m.name == "Threshold")
+            .unwrap()
+            .id;
+        picker.invoke_confirm(threshold);
+        drain_ui_queue();
+        assert_eq!(step_names(&ui_state, 1), ["GaussianBlur", "Threshold"]);
+        assert_eq!(active_dialog(&ui), DialogType::CommandSelectionDialog, "still open");
+        // After the threshold: no image processing - instance segmentation.
+        assert!(!picker.get_fcat_pre() && !picker.get_fcat_seg());
+        assert!(picker.get_fcat_obj());
+        assert_eq!(
+            picker.get_context_category(),
+            CommandCategory::Segment.display_order() as i32,
+            "the threshold's category"
+        );
     }
 
     #[test]
