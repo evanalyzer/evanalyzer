@@ -5,36 +5,8 @@
 
 import { ChannelState } from "../api/state.slint";
 import { ImageMetaData, WavelengthOption } from "../api/image_meta.slint";
-import { Ink, InkIcons, InkPanelHead, InkTextField, InkButton, InkButtonKind, InkCaption, InkHint, InkDivider } from "../ink/ink.slint";
+import { Ink, InkIcons, InkTextField, InkButton, InkButtonKind, InkCaption, InkHint } from "../ink/ink.slint";
 import { FocusBanner } from "pipeline_focus.slint";
-
-// "Key   value" - read only.
-component Fact inherits Rectangle {
-    in property <string> key;
-    in property <string> value;
-
-    height: 22px;
-    HorizontalLayout {
-        spacing: 8px;
-        Text {
-            width: Ink.label-w;
-            text: root.key;
-            font-size: Ink.fs-sm;
-            color: Ink.text-dim;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        Text {
-            horizontal-stretch: 1;
-            text: root.value == "" ? "–" : root.value;
-            font-size: Ink.fs-sm;
-            font-family: Ink.font-mono;
-            color: root.value == "" ? Ink.text-faint : Ink.text;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-    }
-}
 
 // "edited" - set for the project, not read from the file.
 component EditedTag inherits Text {
@@ -71,140 +43,230 @@ component WavelengthTile inherits Rectangle {
     }
 }
 
+// A label of the info's form.
+component Key inherits Text {
+    width: 96px;
+    font-size: Ink.fs-sm;
+    color: Ink.text-dim;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
 export component ImageMetaPanel inherits Rectangle {
     // The channel whose color chooser is open, -1 none.
     property <int> editing-channel: -1;
+    // "All metadata ›": everything the file says.
+    property <bool> all: false;
+    property <length> field-w: 130px;
+
+    background: Ink.ground.mix(Ink.panel, 0.35);
+    // As high as its content.
+    preferred-height: 32px + body.preferred-height;
 
     VerticalLayout {
         spacing: 0px;
 
-        InkPanelHead {
-            title: "Image info";
-            subtitle: ImageMetaData.image_name;
-            closable: false;
+        // -- Image info · name, All metadata --
+        HorizontalLayout {
+            height: 32px;
+            padding-left: Ink.pad-panel;
+            padding-right: Ink.pad-panel;
+            spacing: 8px;
+            InkCaption {
+                horizontal-stretch: 1;
+                text: "IMAGE INFO · " + ImageMetaData.image_name;
+                overflow: elide;
+            }
+            Text {
+                text: root.all ? "Less ‹" : "All metadata ›";
+                font-size: Ink.fs-sm;
+                color: all-ta.has-hover ? Ink.text : Ink.focus;
+                vertical-alignment: center;
+                all-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.all = !root.all;
+                    }
+                }
+            }
         }
 
-        Flickable {
+        // Short enough not to scroll, also with All metadata.
+        Rectangle {
             vertical-stretch: 1;
-            content-height: body.preferred-height;
 
             body := VerticalLayout {
                 padding: Ink.pad-panel;
-                padding-top: 8px;
+                padding-top: 0px;
                 spacing: 6px;
                 alignment: start;
 
                 InkHint {
-                    text: "Values from the file - correct a wrong one (Enter); Reset brings back the file's.";
+                    text: "Values from the file - change a wrong one; Reset brings back the file's.";
                 }
 
-                // -- The file --
-                Fact {
-                    key: "Series";
-                    value: ImageMetaData.nr_series > 1
-                        ? "\{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series} · \{ImageMetaData.size}"
-                        : ImageMetaData.size;
-                }
-                Fact {
-                    key: "Channels · Z · T";
-                    value: ImageMetaData.dimensions_str;
-                }
-                Fact {
-                    key: "Pixel type";
-                    value: ImageMetaData.pixel_type + (ImageMetaData.is-rgb ? " · color" : "");
-                }
-                Fact {
-                    key: "Magnification";
-                    value: ImageMetaData.magnification;
-                }
-                Fact {
-                    key: "File size";
-                    value: ImageMetaData.storage_size;
-                }
-
-                InkDivider { }
-
-                // -- Calibration: pixel size X / Y / Z --
                 HorizontalLayout {
-                    spacing: 6px;
+                    height: 22px;
+                    spacing: 10px;
+                    Key {
+                        text: "Series";
+                    }
                     Text {
-                        width: Ink.label-w;
-                        text: "Pixel size (nm)";
+                        horizontal-stretch: 1;
+                        text: ImageMetaData.nr_series > 1 ? "\{ChannelState.selected_series + 1} of \{ImageMetaData.nr_series} · \{ImageMetaData.size}" : ImageMetaData.size == "" ? "–" : ImageMetaData.size;
                         font-size: Ink.fs-sm;
-                        color: Ink.text-dim;
+                        color: Ink.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+
+                // One size for X and Y (All metadata: each axis).
+                if !root.all: HorizontalLayout {
+                    spacing: 10px;
+                    Key {
+                        text: "Pixel size";
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        InkTextField {
+                            width: root.field-w;
+                            mono: true;
+                            label: "Pixel size in nm";
+                            value: ImageMetaData.pixel_size_x;
+                            accepted(t) => {
+                                ImageMetaData.pixel_size_changed(t.to-float(), t.to-float(), ImageMetaData.pixel_size_z);
+                            }
+                        }
+                        Text {
+                            text: "nm";
+                            font-size: Ink.fs-sm;
+                            color: Ink.text-mute;
+                            vertical-alignment: center;
+                        }
+                        InkButton {
+                            small: true;
+                            kind: InkButtonKind.quiet;
+                            text: "Reset";
+                            clicked => {
+                                ImageMetaData.reset_pixel_sizes();
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    Key {
+                        text: "Frame interval";
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        InkTextField {
+                            width: root.field-w;
+                            mono: true;
+                            label: "Frame interval in seconds";
+                            placeholder: "–";
+                            value: ImageMetaData.frame_interval_text;
+                            accepted(t) => {
+                                ImageMetaData.frame_interval_changed(t.to-float());
+                            }
+                        }
+                        Text {
+                            text: "s";
+                            font-size: Ink.fs-sm;
+                            color: Ink.text-mute;
+                            vertical-alignment: center;
+                        }
+                        if ImageMetaData.frame_interval_overridden: InkButton {
+                            small: true;
+                            kind: InkButtonKind.quiet;
+                            text: "Reset";
+                            clicked => {
+                                ImageMetaData.reset_frame_interval();
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    height: 22px;
+                    spacing: 10px;
+                    Key {
+                        text: "Z / T";
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: ImageMetaData.nr_z_stacks + (ImageMetaData.nr_z_stacks == 1 ? " slice · " : " slices · ") + ImageMetaData.nr_t_stacks + (ImageMetaData.nr_t_stacks == 1 ? " frame" : " frames");
+                        font-size: Ink.fs-sm;
+                        color: Ink.text;
                         vertical-alignment: center;
                     }
-                    px-x := InkTextField {
-                        mono: true;
-                        label: "Pixel size X in nm";
-                        value: ImageMetaData.pixel_size_x;
-                        accepted(t) => {
-                            ImageMetaData.pixel_size_changed(t.to-float(), px-y.text.to-float(), px-z.text.to-float());
-                        }
-                    }
-                    px-y := InkTextField {
-                        mono: true;
-                        label: "Pixel size Y in nm";
-                        value: ImageMetaData.pixel_size_y;
-                        accepted(t) => {
-                            ImageMetaData.pixel_size_changed(px-x.text.to-float(), t.to-float(), px-z.text.to-float());
-                        }
-                    }
-                    px-z := InkTextField {
-                        mono: true;
-                        label: "Pixel size Z in nm";
-                        value: ImageMetaData.pixel_size_z;
-                        accepted(t) => {
-                            ImageMetaData.pixel_size_changed(px-x.text.to-float(), px-y.text.to-float(), t.to-float());
-                        }
-                    }
-                }
-                HorizontalLayout {
-                    alignment: end;
-                    InkButton {
-                        small: true;
-                        kind: InkButtonKind.quiet;
-                        text: "Reset pixel size";
-                        clicked => {
-                            ImageMetaData.reset_pixel_sizes();
-                        }
-                    }
                 }
 
-                // -- Time --
-                if ImageMetaData.nr_t_stacks > 1 || ImageMetaData.frame_interval_text != "": HorizontalLayout {
+                // -- All metadata: the rest of the file's values --
+                if root.all: VerticalLayout {
                     spacing: 6px;
-                    Text {
-                        width: Ink.label-w;
-                        text: "Frame interval (s)";
-                        font-size: Ink.fs-sm;
-                        color: Ink.text-dim;
-                        vertical-alignment: center;
-                    }
-                    InkTextField {
-                        mono: true;
-                        label: "Frame interval in seconds";
-                        placeholder: "not in the file";
-                        value: ImageMetaData.frame_interval_text;
-                        accepted(t) => {
-                            ImageMetaData.frame_interval_changed(t.to-float());
+                    for fact in [
+                        { key: "Channels · Z · T", value: ImageMetaData.dimensions_str },
+                        { key: "Pixel type", value: ImageMetaData.pixel_type + (ImageMetaData.is-rgb ? " · color" : "") },
+                        { key: "Magnification", value: ImageMetaData.magnification },
+                        { key: "File size", value: ImageMetaData.storage_size },
+                    ]: HorizontalLayout {
+                        height: 22px;
+                        spacing: 10px;
+                        Key {
+                            text: fact.key;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: fact.value == "" ? "–" : fact.value;
+                            font-size: Ink.fs-sm;
+                            font-family: Ink.font-mono;
+                            color: fact.value == "" ? Ink.text-faint : Ink.text;
+                            vertical-alignment: center;
+                            overflow: elide;
                         }
                     }
-                    if ImageMetaData.frame_interval_overridden: InkButton {
-                        small: true;
-                        kind: InkButtonKind.quiet;
-                        text: "Reset";
-                        clicked => {
-                            ImageMetaData.reset_frame_interval();
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Key {
+                            text: "Pixel size X Y Z";
+                        }
+                        px-x := InkTextField {
+                            mono: true;
+                            label: "Pixel size X in nm";
+                            value: ImageMetaData.pixel_size_x;
+                            accepted(t) => {
+                                ImageMetaData.pixel_size_changed(t.to-float(), px-y.text.to-float(), px-z.text.to-float());
+                            }
+                        }
+                        px-y := InkTextField {
+                            mono: true;
+                            label: "Pixel size Y in nm";
+                            value: ImageMetaData.pixel_size_y;
+                            accepted(t) => {
+                                ImageMetaData.pixel_size_changed(px-x.text.to-float(), t.to-float(), px-z.text.to-float());
+                            }
+                        }
+                        px-z := InkTextField {
+                            mono: true;
+                            label: "Pixel size Z in nm";
+                            value: ImageMetaData.pixel_size_z;
+                            accepted(t) => {
+                                ImageMetaData.pixel_size_changed(px-x.text.to-float(), px-y.text.to-float(), t.to-float());
+                            }
                         }
                     }
                 }
 
-                InkDivider { }
-
-                // -- Channels: color (from the emission wavelength) --
-                InkCaption {
-                    text: "CHANNELS";
+                // -- Channels: color (from the emission wavelength); a click
+                // on the color changes it --
+                Key {
+                    height: 22px;
+                    text: "Channels";
                 }
 
                 FocusBanner { }

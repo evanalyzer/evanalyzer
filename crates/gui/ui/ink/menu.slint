@@ -16,8 +16,21 @@ import { InkNewTag } from "marker.slint";
 /// The menu's card; its items go inside, one under the other.
 export component InkMenuFrame inherits Rectangle {
     in property <length> menu-width: 240px;
+    /// Where the menu opens, in window coordinates - the caller's
+    /// `absolute-position.y` plus the popup's `y` (not read from the popup
+    /// itself: Slint moves popups to fit, which would tie this to the height).
+    in property <length> open-y: 0px;
+    /// At most this high; taller content scrolls. By default the room the
+    /// window leaves below `open-y`.
+    in property <length> max-menu-height: max(120px, Ink.window-height - root.open-y - 12px);
 
-    width: root.menu-width;
+    property <length> menu-height: min(items.preferred-height, root.max-menu-height);
+    // Constraints, not a fixed geometry: the popup sizes itself from them,
+    // and clicks and hover only reach what lies inside the popup.
+    min-width: root.menu-width;
+    max-width: root.menu-width;
+    min-height: root.menu-height;
+    max-height: root.menu-height;
     background: Ink.panel;
     border-radius: Ink.radius-lg;
     border-width: 1px;
@@ -25,11 +38,16 @@ export component InkMenuFrame inherits Rectangle {
     drop-shadow-blur: 20px;
     drop-shadow-offset-y: 6px;
     drop-shadow-color: Ink.shadow;
+    clip: true;
 
-    VerticalLayout {
-        padding: 4px;
-        spacing: 0px;
-        @children
+    Flickable {
+        content-height: items.preferred-height;
+        interactive: items.preferred-height > root.max-menu-height;
+        items := VerticalLayout {
+            padding: 4px;
+            spacing: 0px;
+            @children
+        }
     }
 }
 

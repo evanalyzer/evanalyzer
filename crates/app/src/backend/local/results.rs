@@ -9,6 +9,12 @@ mod test_support;
 
 pub use results_charts::ResultCharts;
 pub use results_generator::ResultsGenerator;
+/// For grouping images into wells outside a results database (the images
+/// panel's plate view), the same way the queries do.
+pub(crate) use results_generator::{
+    AUTO_GROUPING_PATTERNS, FOLDER_GROUPING_REGEX, best_matching_dimensions, col_number_to_index,
+    row_index_to_letter, row_letter_to_index,
+};
 
 use crate::api::{
     BoxplotFilter, BoxplotResult, ColumnEntry, DatabaseResult, ExportProgressFn,

@@ -5,7 +5,7 @@ import { PipelineDeleteConfirmState, PipelineEditState } from "../api/pipeline_e
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
 import { Ink } from "../ink/palette.slint";
 
-import { ChannelPicker } from "../components/channel_picker.slint";
+import { ChannelPicker } from "../editor/channel_picker.slint";
 
 // -- Global state --------------------------------------------
 // -- Inline radio-option row ----------------------------------
@@ -106,7 +106,7 @@ component LabeledInput inherits VerticalLayout {
 // -- Dialog component -----------------------------------------
 
 export component PipelineEditDialog inherits InkDialog {
-    title: "Edit Pipeline";
+    title: "Edit pipeline";
     card-width: 420px;
     close-on-backdrop: true;
     close => {

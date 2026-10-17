@@ -14,7 +14,7 @@ use std::path::PathBuf;
 /// preference (the first wins a tie). Each captures 1 the well (`B03`), 2 its
 /// row (`B`), 3 its column (`03`) and 4 the image number in the well (`01`,
 /// empty for one image per well).
-const AUTO_GROUPING_PATTERNS: [&str; 4] = [
+pub(crate) const AUTO_GROUPING_PATTERNS: [&str; 4] = [
     // A01_01.tif, B3-s2.tif, C12 f003.ome.tif
     r"^(([A-Za-z]{1,2})([0-9]{1,3}))[_\- ]+[A-Za-z]*([0-9]+)\.[A-Za-z0-9.]+$",
     // Exp1_B03_01.tif, plate 2 - Well A1 - field 3.tif
@@ -29,7 +29,7 @@ const AUTO_GROUPING_PATTERNS: [&str; 4] = [
 /// folder an image is in is its well, with a row and column when the folder
 /// is named like a well (`B03`); the image number is the last number in the
 /// file name.
-const FOLDER_GROUPING_REGEX: &str = r"^(?:.*[/\\])?(([A-Za-z]{1,2})([0-9]{1,3})|[^/\\]+)[/\\](?:[^/\\]*?([0-9]+))?[^/\\0-9]*\.[^/\\.]+$";
+pub(crate) const FOLDER_GROUPING_REGEX: &str = r"^(?:.*[/\\])?(([A-Za-z]{1,2})([0-9]{1,3})|[^/\\]+)[/\\](?:[^/\\]*?([0-9]+))?[^/\\0-9]*\.[^/\\.]+$";
 
 /// How a query extracts the well of an image (see [`Grouping`]): a regex
 /// (already quote-escaped for a SQL string literal) on `column` of the
@@ -3088,7 +3088,10 @@ const AUTO_PLATE_SIZES: [PlateSize; 8] = [
 /// `(rows, cols)`. Falls back to the largest known size if even that doesn't
 /// fit (a plate bigger than any standard format, or a grouping extracting
 /// something that isn't really a well id).
-fn best_matching_dimensions(max_row: Option<usize>, max_col: Option<usize>) -> (usize, usize) {
+pub(crate) fn best_matching_dimensions(
+    max_row: Option<usize>,
+    max_col: Option<usize>,
+) -> (usize, usize) {
     let needed_rows = max_row.map_or(1, |row| row + 1);
     let needed_cols = max_col.map_or(1, |col| col + 1);
     AUTO_PLATE_SIZES
@@ -3114,7 +3117,7 @@ fn auto_well_size(max_idx: u32) -> WellSize {
 /// 0-based row index, using the same bijective base-26 scheme spreadsheet
 /// column letters use. `None` if `letters` isn't purely alphabetic (e.g. the
 /// `grouping_regex` didn't actually match a well id).
-fn row_letter_to_index(letters: &str) -> Option<usize> {
+pub(crate) fn row_letter_to_index(letters: &str) -> Option<usize> {
     if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
         return None;
     }
@@ -3127,7 +3130,7 @@ fn row_letter_to_index(letters: &str) -> Option<usize> {
 }
 
 /// Inverse of [`row_letter_to_index`].
-fn row_index_to_letter(index: usize) -> String {
+pub(crate) fn row_index_to_letter(index: usize) -> String {
     let mut n = index + 1;
     let mut letters = Vec::new();
     while n > 0 {
@@ -3140,7 +3143,7 @@ fn row_index_to_letter(index: usize) -> String {
 
 /// Parses a well's column number ("1", "2", ...) into a 0-based column
 /// index. `None` if `digits` isn't a positive integer.
-fn col_number_to_index(digits: &str) -> Option<usize> {
+pub(crate) fn col_number_to_index(digits: &str) -> Option<usize> {
     digits.parse::<usize>().ok()?.checked_sub(1)
 }
 

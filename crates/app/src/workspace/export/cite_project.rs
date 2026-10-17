@@ -6,6 +6,42 @@ use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use evanalyzer_core::{ExpandedCommand, ScopeCounter, expand_step, into_pipeline_step};
 
+/// What `command` cites - the publications of the method it implements -
+/// one per line: "Authors (year). Title. Container, pp. x. doi:…". Empty if
+/// it cites nothing (or can't be built).
+pub fn command_citations(
+    command: &evanalyzer_cfg::settings::pipeline_command::PipelineCommand,
+) -> Vec<String> {
+    let Ok(step) = into_pipeline_step(command.clone()) else {
+        return Vec::new();
+    };
+    step.cite()
+        .into_iter()
+        .map(|cite| {
+            let mut line = format!(
+                "{} ({}). {}.",
+                cite.authors.join(", "),
+                cite.year,
+                cite.title
+            );
+            let mut trailer = Vec::new();
+            if let Some(container) = cite.container {
+                trailer.push(container.to_string());
+            }
+            if let Some(pages) = cite.pages {
+                trailer.push(format!("pp. {pages}"));
+            }
+            if !trailer.is_empty() {
+                line.push_str(&format!(" {}.", trailer.join(", ")));
+            }
+            if let Some(doi) = cite.doi {
+                line.push_str(&format!(" doi:{doi}"));
+            }
+            line
+        })
+        .collect()
+}
+
 /// Renders every enabled pipeline as an ASCII/Unicode flow diagram followed
 /// by a consolidated reference list of every citation used, and writes the
 /// result as a single markdown file to `output_file`.
@@ -266,6 +302,25 @@ mod tests {
         );
         assert!(content.contains("Minimum cross entropy thresholding"));
         assert!(content.contains("Automatic measurement of sister chromatid exchange frequency"));
+    }
+
+    #[test]
+    fn a_command_cites_the_method_it_implements() {
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::RollingBallSettings;
+        let lines =
+            command_citations(&PipelineCommand::RollingBall(RollingBallSettings::default()));
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].starts_with("Stanley R. Sternberg (1983). Biomedical Image Processing."),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[0].ends_with("doi:10.1109/MC.1983.1654163"),
+            "{}",
+            lines[0]
+        );
     }
 
     #[test]

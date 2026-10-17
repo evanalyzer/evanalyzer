@@ -386,6 +386,7 @@ fn object_rust_to_object_slint(
 
     let display_color = get_colors_from_class(project, 255, &object.object_class);
     let pixel_sizes = project.get_pixel_sizes();
+    let (sums, avgs) = format_intensities_per_channel(object, nr_of_bits);
 
     ObjectItemDataSlint {
         id: row_index + 1,
@@ -404,27 +405,21 @@ fn object_rust_to_object_slint(
         } else {
             "".into()
         },
-        intensities: {
-            let (sums, _) = if full_metrics {
-                format_intensities_per_channel(object, nr_of_bits)
-            } else {
-                (Vec::new(), Vec::new())
-            };
-            ModelRc::new(slint::VecModel::from(sums)).into()
-        },
-        intensity_avgs: {
-            let (_, avgs) = if full_metrics {
-                format_intensities_per_channel(object, nr_of_bits)
-            } else {
-                (Vec::new(), Vec::new())
-            };
-            ModelRc::new(slint::VecModel::from(avgs)).into()
-        },
-        circularity: if full_metrics {
-            format_circularity(object)
+        // The means and the circularity fill the objects table's columns, so
+        // every row has them; the sums only the selected object. Cheap: the
+        // model builds only the rows in view.
+        intensities: ModelRc::new(slint::VecModel::from(if full_metrics {
+            sums
         } else {
-            "-".into()
-        },
+            Vec::new()
+        }))
+        .into(),
+        intensity_avgs: ModelRc::new(slint::VecModel::from(avgs)).into(),
+        circularity: format_circularity(object),
+        bbox_x: object.bbox[0] as f32,
+        bbox_y: object.bbox[1] as f32,
+        bbox_w: (object.bbox[2].saturating_sub(object.bbox[0]) + 1) as f32,
+        bbox_h: (object.bbox[3].saturating_sub(object.bbox[1]) + 1) as f32,
     }
 }
 
@@ -791,16 +786,34 @@ mod tests {
     }
 
     #[test]
-    fn object_rust_to_object_slint_partial_metrics_blanks_area_and_circularity() {
+    fn a_list_row_has_the_table_columns_but_not_the_selected_objects_extras() {
         let project = ProjectWithRuntime::default();
-        let object = object_with_area_and_perimeter(500, 10.0);
+        let mut object = object_with_area_and_perimeter(500, 10.0);
+        object.intensities.insert(
+            0,
+            IntensitySettings {
+                sum_intensity: 0.5,
+                avg_intensity: 0.25,
+                ..Default::default()
+            },
+        );
 
         let full = object_rust_to_object_slint(&object, &project, 0, true, 0, Some(16));
-        let partial = object_rust_to_object_slint(&object, &project, 0, false, 0, Some(16));
+        let row = object_rust_to_object_slint(&object, &project, 0, false, 0, Some(16));
 
+        // The table's columns: on every row, as on the selected object.
+        assert_eq!(row.circularity, full.circularity);
+        assert!(!row.circularity.is_empty());
+        assert_eq!(
+            row.intensity_avgs.row_data(0),
+            full.intensity_avgs.row_data(0)
+        );
+        assert_eq!(row.area, 500);
+        // The selected object's extras.
         assert!(!full.area_nm2.is_empty());
-        assert_eq!(partial.area_nm2.as_str(), "");
-        assert_eq!(partial.circularity.as_str(), "-");
+        assert_eq!(row.area_nm2.as_str(), "");
+        assert_eq!(full.intensities.row_count(), 1);
+        assert_eq!(row.intensities.row_count(), 0);
     }
 
     // -- ObjectModalBridge (Model impl) ----------------------------------------

@@ -1,7 +1,7 @@
 // api/results.slint — the Rust interface of results/results_state.slint: the state Rust
 // sets, the callbacks it answers.
 
-import { MultiSelectItem } from "../components/multi_select_dropdown.slint";
+import { MultiSelectItem } from "../ink/ink.slint";
 
 export enum ResultsRailMode { list, matrix, charts }
 
@@ -273,6 +273,8 @@ export global ResultsState {
     // True when the selected well/field's value was computed while
     // ignoring at least one disabled image - see `MatrixCell.disabled`.
     in-out property <bool> active-well-disabled: false;
+    // Plate level: the images of the selected well (its well-level cells).
+    in-out property <[MatrixCell]> active-well-images: [];
     in-out property <[MatrixCell]> well-fields: [];
     in-out property <int> well-rows: 4;
     in-out property <int> well-cols: 4;

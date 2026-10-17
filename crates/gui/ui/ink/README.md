@@ -46,3 +46,23 @@ Keep each token a property bound to plain values - not a field of a
 palette struct: the compiler inlines a global's bindings into every read,
 and with a struct that meant building all 37 colors at each of the ~1300
 reads (14 MB more generated code, and the work at runtime).
+
+## Files
+
+| File | What |
+| --- | --- |
+| `palette.slint` | colors per scheme, radii, heights, gaps, type; `Ink.window-height` |
+| `icons.slint` | every icon by meaning (`InkIcons.save`) |
+| `button.slint` | `InkButton`, `InkIconButton`, `InkToolButton` |
+| `field.slint` | `InkTextField`, `InkSearchField`, `InkNumberField`, `InkSelect` |
+| `toggle.slint` | `InkCheckbox`, `InkSwitch`, `InkSegmented`, `InkModeTab` |
+| `marker.slint` | `InkChip`, `InkBadge`, `InkNewTag`, `InkSwatch`, `InkKbd`, `InkDot` |
+| `panel.slint` | `InkPanel`, `InkPanelHead`, `InkDialog`, `InkDialogFooter`, labels, captions, hints, dividers |
+| `menu.slint` | `InkMenuFrame` (scrolls when the window is too short - give it `open-y`), items, captions, separators |
+| `feedback.slint` | `InkProgressBar`, `InkBusy`, `InkBanner`, `InkTooltip`, `InkStatusItem` |
+| `row.slint` | `InkListRow` |
+| `settings.slint` | settings dialogs: `InkNavItem`, `InkSettingsHead`, `InkSettingsCard`, `InkSettingRow`, `InkSettingBlock` |
+| `picker.slint` | the closed "pick one" field and its popup rows: `InkPickerField`, `InkPickerRow`, `InkSwatchName` |
+| `multi_select.slint` | `InkMultiSelect` (one or many of a list, with search) and its `MultiSelectItem` |
+| `std_compat.slint` | `LineEdit`, `ComboBox`, `CheckBox`, `Switch`, `SpinBox` with the std-widgets API, drawn in Ink |
+| `gallery.slint` | every component on one page, for screenshots |

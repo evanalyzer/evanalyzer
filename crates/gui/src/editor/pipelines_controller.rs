@@ -890,6 +890,33 @@ impl PipelinesController {
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
 
+            // Move a step up (-1) or down (+1)
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_move_step(move |step_idx, delta| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let pipeline_id =
+                        ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+                    if manager.viewing(pipeline_id) {
+                        return;
+                    }
+                    let moved = {
+                        let mut project = manager.app_state.get_project_write();
+                        manager
+                            .shown_steps_mut(&mut project, pipeline_id)
+                            .is_some_and(|steps| move_step(steps, step_idx, delta))
+                    };
+                    if moved {
+                        manager.pipeline_settings_changed();
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                    }
+                });
+
             // Insert step - open command picker
             let manager = self.clone();
             ui.global::<PipelinesPanelState>().on_insert_step(
@@ -1009,7 +1036,16 @@ impl PipelinesController {
                     }
                     let metas = all_command_meta();
                     if let Some(m) = metas.iter().find(|m| m.id == command_id) {
-                        let detail = to_command_def(m);
+                        let mut detail = to_command_def(m);
+                        // Only for the selected command: building it can cost.
+                        if let Some(command) = default_command(command_id) {
+                            detail.citations = ModelRc::new(VecModel::from(
+                                evanalyzer_app::exporter::command_citations(&command)
+                                    .into_iter()
+                                    .map(SharedString::from)
+                                    .collect::<Vec<_>>(),
+                            ));
+                        }
                         let picker = ui.global::<CommandPickerState>();
                         picker.set_detail(detail);
                         picker.set_has_detail(true);
@@ -1275,6 +1311,10 @@ impl PipelinesController {
             ui.global::<PipelinesPanelState>().on_toggle_pin_section({
                 let manager = manager.clone();
                 move |step_idx, section| manager.toggle_pin_section(step_idx, &section)
+            });
+            ui.global::<PipelinesPanelState>().on_toggle_pin_step({
+                let manager = manager.clone();
+                move |step_idx| manager.toggle_pin_step(step_idx)
             });
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
@@ -2970,6 +3010,43 @@ impl PipelinesController {
                     .map(|cell| cell.name.to_string())
                     .collect::<Vec<_>>()
             })
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        {
+            let mut pins = self.pins.lock().expect("Poisoned");
+            let key = |name: &String| (pipeline_id, card.step_id.to_string(), name.clone());
+            if names.iter().all(|name| pins.contains(&key(name))) {
+                for name in &names {
+                    pins.remove(&key(name));
+                }
+            } else {
+                for name in &names {
+                    pins.insert(key(name));
+                }
+            }
+        }
+        self.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
+    }
+
+    /// Pins every setting of the step at `step_idx` (lists and scripts
+    /// aside) into the Tuning panel - or, when all are pinned, unpins them.
+    pub(crate) fn toggle_pin_step(self: &Arc<Self>, step_idx: i32) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<PipelinesPanelState>();
+        let pipeline_id = state.get_active_pipeline_id() as u32;
+        let Some(card) = state.get_active_commands().row_data(step_idx as usize) else {
+            return;
+        };
+        let names: Vec<String> = card
+            .parameters
+            .iter()
+            .chain(card.advanced_parameters.iter())
+            .filter(|p| !matches!(p.param_type, ParamType::Group | ParamType::Script))
+            .map(|p| p.name.to_string())
             .collect();
         if names.is_empty() {
             return;
@@ -5970,6 +6047,7 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
         is_component: false,
         authors: ModelRc::default(),
         creation_time: "".into(),
+        citations: ModelRc::default(),
     };
     detail
 }
@@ -6049,6 +6127,7 @@ fn library_component_to_command_def(
         })
         .collect();
     CommandDef {
+        citations: ModelRc::default(),
         id: LIBRARY_COMPONENT_PICKER_ID_BASE + idx as i32,
         name: definition.meta.name.clone().into(),
         summary: if definition.meta.short_description.is_empty() {
@@ -6130,6 +6209,7 @@ fn component_to_command_def(
         })
         .collect();
     CommandDef {
+        citations: ModelRc::default(),
         id: COMPONENT_PICKER_ID_BASE + idx as i32,
         name: definition.meta.name.clone().into(),
         summary: summary.into(),
@@ -6498,8 +6578,32 @@ fn filter_for_display(params: Vec<ParameterDef>, show_advanced: bool) -> Vec<Par
         .collect()
 }
 
+/// Moves the step at `idx` by `delta` (-1 up, +1 down); its id stays, so
+/// what refers to it by id still does. Whether it moved.
+fn move_step<T>(steps: &mut [T], idx: i32, delta: i32) -> bool {
+    let to = idx + delta;
+    if idx < 0 || to < 0 || idx as usize >= steps.len() || to as usize >= steps.len() || delta == 0
+    {
+        return false;
+    }
+    steps.swap(idx as usize, to as usize);
+    true
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_step_moves_one_place_and_not_past_the_ends() {
+        let mut steps = vec!["a", "b", "c"];
+        assert!(super::move_step(&mut steps, 1, -1));
+        assert_eq!(steps, ["b", "a", "c"]);
+        assert!(super::move_step(&mut steps, 1, 1));
+        assert_eq!(steps, ["b", "c", "a"]);
+        assert!(!super::move_step(&mut steps, 0, -1));
+        assert!(!super::move_step(&mut steps, 2, 1));
+        assert_eq!(steps, ["b", "c", "a"]);
+    }
     use super::*;
     use evanalyzer_app::fs::LocalFileSystem;
     use evanalyzer_cfg::settings::images_settings::SeriesSettings;
@@ -7304,7 +7408,8 @@ mod tests {
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::CommandSelectionDialog);
 
-        for (detail, author_text) in [(component, "Ada (Lab)")] {
+        for (detail, author_text) in [(component, "Ada · Lab")] {
+            let created_text = format!("Created {}", detail.creation_time);
             let picker = ui.global::<CommandPickerState>();
             picker.set_detail(detail);
             picker.set_has_detail(true);
@@ -7315,12 +7420,12 @@ mod tests {
                     .absolute_position()
                     .y
             };
-            let (author, created) = (y("Author"), y("Created"));
+            let (author, created) = (y(author_text), y(&created_text));
             assert!(
-                created > author && created - author < 40.0,
+                created > author && created - author < 60.0,
                 "{author_text}: Author at {author}, Created at {created}"
             );
-            y(author_text);
+            y("AUTHORS");
         }
     }
 
@@ -8428,7 +8533,7 @@ mod tests {
         }
         let count = |label: &str| ElementHandle::find_by_accessible_label(&ui, label).count();
         assert_eq!(
-            ElementHandle::find_by_element_type_name(&ui, "PickerField").count(),
+            ElementHandle::find_by_element_type_name(&ui, "InkPickerField").count(),
             2,
             "the channel and the output class field"
         );
@@ -10493,7 +10598,7 @@ mod tests {
         );
         assert_eq!(
             ui.global::<crate::TemplateMetaState>().get_dialog_title(),
-            "Save Pipeline as Component"
+            "Save pipeline as component"
         );
     }
 
@@ -11417,6 +11522,28 @@ mod tests {
         panel.invoke_toggle_pin_section(0, "Bead".into());
         drain_ui_queue();
         assert!(row(1).cells.iter().all(|cell| !cell.pinned));
+        assert_eq!(panel.get_tuned_settings().row_count(), 0);
+    }
+
+    #[test]
+    fn a_steps_pin_pins_all_its_settings_and_again_unpins_them() {
+        let (ui, _ui_state, _controller) = selected(vec![step("Blur")]);
+        let panel = ui.global::<PipelinesPanelState>();
+        let card = panel.get_active_commands().row_data(0).unwrap();
+        let pinnable = card
+            .parameters
+            .iter()
+            .chain(card.advanced_parameters.iter())
+            .filter(|p| !matches!(p.param_type, ParamType::Group | ParamType::Script))
+            .count();
+        assert!(pinnable > 0);
+
+        panel.invoke_toggle_pin_step(0);
+        drain_ui_queue();
+        assert_eq!(panel.get_tuned_settings().row_count(), pinnable);
+
+        panel.invoke_toggle_pin_step(0);
+        drain_ui_queue();
         assert_eq!(panel.get_tuned_settings().row_count(), 0);
     }
 

@@ -35,6 +35,7 @@ export component InkButton inherits Rectangle {
     accessible-role: button;
     accessible-label: root.text;
     accessible-enabled: root.enabled;
+    forward-focus: keys;
     accessible-action-default => {
         if root.enabled {
             root.clicked();
@@ -43,8 +44,8 @@ export component InkButton inherits Rectangle {
 
     face := Rectangle {
         border-radius: Ink.radius-md;
-        border-width: root.kind == InkButtonKind.secondary ? 1px : 0px;
-        border-color: ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
+        border-width: keys.has-focus ? 2px : root.kind == InkButtonKind.secondary ? 1px : 0px;
+        border-color: keys.has-focus ? Ink.focus : ta.has-hover && root.enabled ? Ink.text-faint : Ink.border;
         background: root.kind == InkButtonKind.primary ? (ta.has-hover && root.enabled ? Ink.primary-hover : Ink.primary)
             : root.kind == InkButtonKind.danger ? (ta.has-hover && root.enabled ? Ink.err.darker(10%) : Ink.err)
             : root.kind == InkButtonKind.quiet ? (ta.has-hover && root.enabled ? Ink.hover : transparent)
@@ -80,6 +81,20 @@ export component InkButton inherits Rectangle {
             root.clicked();
         }
     }
+
+    // Tab reaches it; Space or Enter presses it. A click doesn't focus it,
+    // so the ring (the face's border) shows only for the keyboard.
+    keys := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if e.text == " " || e.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
 }
 
 /// An icon alone. `label` says what it does (screen readers, tooltips).
@@ -101,6 +116,7 @@ export component InkIconButton inherits Rectangle {
     accessible-label: root.label;
     accessible-checked: root.active;
     accessible-enabled: root.enabled;
+    forward-focus: keys;
     accessible-action-default => {
         if root.enabled {
             root.clicked();
@@ -109,6 +125,8 @@ export component InkIconButton inherits Rectangle {
 
     face := Rectangle {
         border-radius: Ink.radius-md;
+        border-width: keys.has-focus ? 2px : 0px;
+        border-color: Ink.focus;
         background: root.active ? Ink.selection : (ta.has-hover && root.enabled ? Ink.hover : transparent);
         opacity: root.enabled ? 1.0 : 0.4;
         animate background { duration: 80ms; }
@@ -127,6 +145,20 @@ export component InkIconButton inherits Rectangle {
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
             root.clicked();
+        }
+    }
+
+    // Tab reaches it; Space or Enter presses it. A click doesn't focus it,
+    // so the ring (the face's border) shows only for the keyboard.
+    keys := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if e.text == " " || e.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
         }
     }
 }

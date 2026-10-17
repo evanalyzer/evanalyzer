@@ -24,6 +24,9 @@ export enum InkScheme { light, dark, dim }
 /// The design system's tokens: colors of the scheme in use, sizes, type.
 export global Ink {
     in-out property <InkScheme> scheme: InkScheme.light;
+    /// The window's height - kept by the main window, so popups and menus
+    /// can stay inside it.
+    in-out property <length> window-height: 900px;
 
     // -- The colors, one property each: light, dark, dim. A view reads
     // `Ink.text`. A new scheme is one more value per color in `pick`.

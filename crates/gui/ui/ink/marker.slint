@@ -20,7 +20,8 @@ export component InkChip inherits Rectangle {
 
     height: 22px;
     horizontal-stretch: 0;
-    preferred-width: (root.swatch == transparent ? 0px : 12px) + label.preferred-width + (root.removable ? 18px : 0px) + 16px;
+    // The row's own width: its paddings and gaps count too.
+    preferred-width: chip-row.preferred-width;
     min-width: 24px;
     accessible-role: button;
     accessible-label: root.text;
@@ -42,7 +43,7 @@ export component InkChip inherits Rectangle {
             }
         }
 
-        HorizontalLayout {
+        chip-row := HorizontalLayout {
             padding-left: 8px;
             padding-right: root.removable ? 3px : 8px;
             spacing: 5px;

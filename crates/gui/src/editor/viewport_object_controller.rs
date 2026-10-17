@@ -12,7 +12,7 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::editor::viewport_controller::{ZOrder, is_object_drawn};
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
-use evanalyzer_app::images::object_from_mask;
+use evanalyzer_app::images::{Erased, erase_mask, object_from_mask, stroke_mask, union_mask};
 use evanalyzer_app::project::ObjectExt;
 use evanalyzer_app::project::ProjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
@@ -41,6 +41,8 @@ pub struct ViewPortObjectController {
     pub(crate) image_list_controller: Arc<ImagesListController>,
     pub(crate) object_list_controller: Arc<ObjectListController>,
     pub(crate) classification_controller: Arc<ClassificationController>,
+    /// The brush or eraser stroke being drawn, in viewport coordinates.
+    stroke: std::sync::Mutex<Vec<(f32, f32)>>,
 }
 
 impl ViewPortObjectController {
@@ -61,6 +63,7 @@ impl ViewPortObjectController {
             image_list_controller,
             object_list_controller,
             classification_controller,
+            stroke: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -75,7 +78,7 @@ impl ViewPortObjectController {
                         ToolState::Move => return,
                         ToolState::Select => return,
                         ToolState::PaintMarker => return,
-                        // Not wired up yet.
+                        // Strokes come through `brush_stroke`.
                         ToolState::Brush | ToolState::Eraser => return,
                         ToolState::PaintRectangle => manager.add_object_from_rect(&points),
                         ToolState::PaintOval => manager.add_oval_from_rect(&points),
@@ -91,6 +94,31 @@ impl ViewPortObjectController {
                         .sync_classification_to_slint();
                 },
             );
+
+            // Brush / eraser: the stroke's points as the mouse moves (0 down,
+            // 1 move, 2 up); painted or erased on release.
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ViewportObjectState>()
+                .on_brush_stroke(move |x, y, phase| {
+                    manager.stroke_point(x, y, phase);
+                    if phase != 2 {
+                        return;
+                    }
+                    let Some(ui) = ui_weak.upgrade() else {
+                        return;
+                    };
+                    let tool = ui.global::<ViewportObjectState>().get_act_tool_state();
+                    let size = ui.global::<crate::LayoutState>().get_brush_size() as f32;
+                    if manager.finish_stroke(tool, size) {
+                        manager.viewport_controller.trigger_image_redraw_objects();
+                        manager.image_list_controller.sync_image_list_to_slint();
+                        manager.object_list_controller.sync_objects_to_slint();
+                        manager
+                            .classification_controller
+                            .sync_classification_to_slint();
+                    }
+                });
 
             // In viewport clicked
             let manager = self.clone();
@@ -464,7 +492,200 @@ impl ViewPortObjectController {
         self.add_to_object_list(mask_data, bbox);
     }
 
+    /// A point of the brush or eraser stroke (`phase` 0 starts it).
+    pub fn stroke_point(&self, x: f32, y: f32, phase: i32) {
+        let mut stroke = self.stroke.lock().expect("Poisoned");
+        if phase == 0 {
+            stroke.clear();
+        }
+        // Points closer than a screen pixel add nothing.
+        if let Some(&(lx, ly)) = stroke.last()
+            && (lx - x).abs() < 1.0
+            && (ly - y).abs() < 1.0
+        {
+            return;
+        }
+        stroke.push((x, y));
+    }
+
+    /// Paints (`Brush`: into the selected hand-drawn object, else a new
+    /// object of the selected class) or erases (`Eraser`: from the hand-drawn
+    /// objects) the stroke, `brush_size` screen pixels wide - one undo step.
+    /// Whether something changed.
+    pub fn finish_stroke(&self, tool: ToolState, brush_size: f32) -> bool {
+        let points = std::mem::take(&mut *self.stroke.lock().expect("Poisoned"));
+        let view = self
+            .viewport_controller
+            .viewport_state
+            .read()
+            .expect("Poisoned")
+            .clone();
+        if points.is_empty() || view.zoom <= 0.0 {
+            return false;
+        }
+        let image_points: Vec<(f32, f32)> = points
+            .iter()
+            .map(|(x, y)| {
+                (
+                    (x - view.offset_x) / view.zoom,
+                    (y - view.offset_y) / view.zoom,
+                )
+            })
+            .collect();
+        let (_, read_context) = self.viewport_cache.get_image_references();
+        let Some((mask, bbox)) = stroke_mask(
+            &image_points,
+            brush_size / 2.0 / view.zoom,
+            read_context.full_image_w,
+            read_context.full_image_h,
+        ) else {
+            return false;
+        };
+        self.app_state.begin_undo_step();
+        match tool {
+            ToolState::Brush => {
+                if self.paint_into_selected(&mask, bbox) {
+                    return true;
+                }
+                let before = self
+                    .app_state
+                    .get_project()
+                    .get_objects()
+                    .map_or(0, |o| o.len());
+                self.add_to_object_list(mask, bbox);
+                self.app_state
+                    .get_project()
+                    .get_objects()
+                    .map_or(0, |o| o.len())
+                    != before
+            }
+            ToolState::Eraser => self.erase(&mask, bbox),
+            _ => false,
+        }
+    }
+
+    /// Adds the stroke to the selected object, if it is a hand-drawn one
+    /// (measured again, keeping its id and classes). Whether it was.
+    fn paint_into_selected(&self, stroke: &BitVec<u64, Lsb0>, stroke_bbox: [u32; 4]) -> bool {
+        let (data_tmp, read_context) = self.viewport_cache.get_image_references();
+        let painted = {
+            let project = self.app_state.get_project();
+            let Some(selected) = project.get_selected_object() else {
+                return false;
+            };
+            let Some(index) = project
+                .get_objects()
+                .unwrap_or(&[])
+                .iter()
+                .position(|object| object.id == selected.id)
+            else {
+                return false;
+            };
+            let idx = project.get_selected_image_channel_idx();
+            let Some((_, channel)) = data_tmp.get(idx as usize) else {
+                return false;
+            };
+            let object = &project.get_objects().unwrap_or(&[])[index];
+            let (mask, bbox) = union_mask(&object.mask_data, object.bbox, stroke, stroke_bbox);
+            let class = object
+                .object_class
+                .iter()
+                .next()
+                .copied()
+                .unwrap_or(ObjectClass::Unset);
+            let mut painted = object_from_mask(
+                read_context.full_image_w,
+                read_context.full_image_h,
+                mask,
+                bbox,
+                channel,
+                data_tmp.as_slice(),
+                class,
+            );
+            painted.id = object.id.clone();
+            painted.segmentation_class = object.segmentation_class;
+            painted.object_class = object.object_class.clone();
+            painted.exclude_from_training = object.exclude_from_training;
+            (index, painted)
+        };
+        let mut project = self.app_state.get_project_write();
+        if let Some(series) = project.get_selected_image_series_mut() {
+            series.objects[painted.0] = painted.1;
+        }
+        drop(project);
+        self.app_state.mark_dirty();
+        true
+    }
+
+    /// Takes the pixels of `stroke` out of the hand-drawn objects of the open
+    /// image: an object left empty is deleted, the others measured again
+    /// (keeping their id and classes).
+    fn erase(&self, stroke: &BitVec<u64, Lsb0>, stroke_bbox: [u32; 4]) -> bool {
+        let (data_tmp, read_context) = self.viewport_cache.get_image_references();
+        let changes: Vec<(usize, Option<_>)> = {
+            let project = self.app_state.get_project();
+            let idx = project.get_selected_image_channel_idx();
+            let Some((_, channel)) = data_tmp.get(idx as usize) else {
+                return false;
+            };
+            project
+                .get_objects()
+                .unwrap_or(&[])
+                .iter()
+                .enumerate()
+                .filter_map(|(i, object)| {
+                    match erase_mask(&object.mask_data, object.bbox, stroke, stroke_bbox) {
+                        Erased::Untouched => None,
+                        Erased::Empty => Some((i, None)),
+                        Erased::Rest(mask, bbox) => {
+                            let class = object
+                                .object_class
+                                .iter()
+                                .next()
+                                .copied()
+                                .unwrap_or(ObjectClass::Unset);
+                            let mut rest = object_from_mask(
+                                read_context.full_image_w,
+                                read_context.full_image_h,
+                                mask,
+                                bbox,
+                                channel,
+                                data_tmp.as_slice(),
+                                class,
+                            );
+                            rest.id = object.id.clone();
+                            rest.segmentation_class = object.segmentation_class;
+                            rest.object_class = object.object_class.clone();
+                            rest.exclude_from_training = object.exclude_from_training;
+                            Some((i, Some(rest)))
+                        }
+                    }
+                })
+                .collect()
+        };
+        if changes.is_empty() {
+            return false;
+        }
+        let mut project = self.app_state.get_project_write();
+        if let Some(series) = project.get_selected_image_series_mut() {
+            // Backwards, so the indices stay right while removing.
+            for (i, rest) in changes.into_iter().rev() {
+                match rest {
+                    Some(rest) => series.objects[i] = rest,
+                    None => {
+                        series.objects.remove(i);
+                    }
+                }
+            }
+        }
+        drop(project);
+        self.app_state.mark_dirty();
+        true
+    }
+
     fn add_to_object_list(&self, mask_data: BitVec<u64, Lsb0>, bbox: [u32; 4]) {
+        // Each drawn object is an undo step of its own.
+        self.app_state.begin_undo_step();
         let (data_tmp, read_context) = self.viewport_cache.get_image_references();
         let (idx, object_class) = {
             let project = self.app_state.get_project();
@@ -817,6 +1038,124 @@ mod tests {
         assert_eq!(objects[0].bbox, [2, 2, 5, 5]);
         // A rectangle mask fills every pixel in its bbox.
         assert_eq!(objects[0].area, 4 * 4);
+    }
+
+    /// A controller on a seeded 20 x 20 image with class "cl1" selected.
+    fn controller_with_a_class() -> (Arc<UiState>, Arc<ViewPortObjectController>) {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+        let class = controller
+            .app_state
+            .get_project_write()
+            .classification
+            .add_class(Class {
+                id: 1,
+                color: 0xff0000,
+                name: "cl1".into(),
+                notes: "".into(),
+            });
+        controller
+            .app_state
+            .get_project_write()
+            .set_selected_object_class(class);
+        (ui_state, controller)
+    }
+
+    fn stroke(controller: &ViewPortObjectController, points: &[(f32, f32)]) {
+        for (i, (x, y)) in points.iter().enumerate() {
+            controller.stroke_point(*x, *y, if i == 0 { 0 } else { 1 });
+        }
+    }
+
+    #[test]
+    fn a_brush_stroke_paints_a_new_object_as_wide_as_the_brush() {
+        let (ui_state, controller) = controller_with_a_class();
+
+        stroke(&controller, &[(4.0, 10.0), (12.0, 10.0)]);
+        assert!(controller.finish_stroke(ToolState::Brush, 4.0));
+
+        let project = ui_state.get_project();
+        let objects = project.get_objects().unwrap();
+        assert_eq!(objects.len(), 1);
+        // Radius 2 around the line from x 4 to 12 at y 10.
+        assert_eq!(objects[0].bbox, [2, 8, 14, 12]);
+        assert_eq!(objects[0].object_class.len(), 1);
+    }
+
+    #[test]
+    fn the_eraser_cuts_objects_and_deletes_what_it_empties() {
+        let (ui_state, controller) = controller_with_a_class();
+        // Two rectangles: 2..9 x 2..5 and 12..13 x 12..13.
+        controller.add_object_from_rect(&points(&[(2.0, 2.0), (9.0, 5.0)]));
+        controller.add_object_from_rect(&points(&[(12.0, 12.0), (13.0, 13.0)]));
+        let (first_id, first_area) = {
+            let project = ui_state.get_project();
+            let objects = project.get_objects().unwrap();
+            (objects[0].id.clone(), objects[0].area)
+        };
+
+        // Wipe the left half of the first, and all of the second.
+        stroke(&controller, &[(2.0, 2.0), (2.0, 5.0)]);
+        assert!(controller.finish_stroke(ToolState::Eraser, 8.0));
+        stroke(&controller, &[(12.5, 12.5)]);
+        assert!(controller.finish_stroke(ToolState::Eraser, 10.0));
+
+        let project = ui_state.get_project();
+        let objects = project.get_objects().unwrap();
+        assert_eq!(objects.len(), 1, "the emptied one is gone");
+        assert_eq!(objects[0].id, first_id, "the cut one keeps its id");
+        assert!(objects[0].area < first_area);
+        assert!(
+            objects[0].bbox[0] > 2,
+            "its box shrank: {:?}",
+            objects[0].bbox
+        );
+    }
+
+    #[test]
+    fn a_brush_stroke_paints_into_the_selected_hand_drawn_object() {
+        let (ui_state, controller) = controller_with_a_class();
+        controller.add_object_from_rect(&points(&[(2.0, 2.0), (4.0, 4.0)]));
+        let id = ui_state.get_project().get_objects().unwrap()[0].id.clone();
+        ui_state
+            .get_project_runtime_write()
+            .set_selected_object(Some(id.clone()));
+
+        stroke(&controller, &[(10.0, 3.0)]);
+        assert!(controller.finish_stroke(ToolState::Brush, 2.0));
+
+        let project = ui_state.get_project();
+        let objects = project.get_objects().unwrap();
+        assert_eq!(objects.len(), 1, "no new object");
+        assert_eq!(objects[0].id, id);
+        assert_eq!(objects[0].bbox, [2, 2, 11, 4]);
+        assert!(objects[0].area > 9);
+    }
+
+    #[test]
+    fn each_stroke_is_an_undo_step_of_its_own() {
+        let (ui_state, controller) = controller_with_a_class();
+        stroke(&controller, &[(3.0, 3.0)]);
+        controller.finish_stroke(ToolState::Brush, 2.0);
+        stroke(&controller, &[(12.0, 12.0)]);
+        controller.finish_stroke(ToolState::Brush, 2.0);
+        assert_eq!(ui_state.get_project().get_objects().unwrap().len(), 2);
+
+        assert!(ui_state.undo());
+        assert_eq!(ui_state.get_project().get_objects().unwrap().len(), 1);
+        assert!(ui_state.undo());
+        assert_eq!(
+            ui_state.get_project().get_objects().map_or(0, |o| o.len()),
+            0
+        );
+    }
+
+    #[test]
+    fn erasing_where_there_is_nothing_changes_nothing() {
+        let (_ui_state, controller) = controller_with_a_class();
+        controller.add_object_from_rect(&points(&[(2.0, 2.0), (4.0, 4.0)]));
+        stroke(&controller, &[(15.0, 15.0)]);
+        assert!(!controller.finish_stroke(ToolState::Eraser, 2.0));
     }
 
     #[test]

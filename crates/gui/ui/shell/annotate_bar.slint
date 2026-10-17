@@ -1,7 +1,9 @@
 // shell/annotate_bar.slint — the tool bar of annotate mode, floating over
 // the image: the tools, the class painted into, the brush size.
 
-import { Ink, InkIcons, InkIconButton, InkToolButton, InkBarSeparator, InkNumberField } from "../ink/ink.slint";
+import { Ink, InkIcons, InkIconButton, InkToolButton, InkBarSeparator, InkNumberField, InkMenuFrame, InkMenuItem, InkMenuSeparator, InkPickerRow, InkSwatchName } from "../ink/ink.slint";
+import { ClassificationSettingsState } from "../api/classification_class_edit.slint";
+import { DialogType, GlobalAppState } from "../api/state.slint";
 import { LayoutState } from "../api/layout.slint";
 import { ToolState, ViewportObjectState } from "../api/viewport.slint";
 import { ClassificationState } from "../api/classification.slint";
@@ -10,6 +12,21 @@ export component AnnotateBar inherits Rectangle {
     property <ToolState> tool: ViewportObjectState.act_tool_state;
     // Shapes need a class to paint into.
     property <bool> has-class: ClassificationState.selected_class_id >= 0;
+    // "+ New class…" was chosen here: the class it makes is picked.
+    property <bool> waiting-for-class: false;
+    property <int> created: ClassificationSettingsState.created-count;
+    changed created => {
+        if root.waiting-for-class {
+            root.waiting-for-class = false;
+            root.pick(ClassificationSettingsState.last-created-id, ClassificationSettingsState.settings.name);
+        }
+    }
+
+    function pick(id: int, name: string) {
+        ClassificationState.selected_class_name = name;
+        ClassificationState.selected_class_id = id;
+        ClassificationState.class_selected(id);
+    }
 
     width: row.preferred-width + 12px;
     height: 44px;
@@ -119,7 +136,7 @@ export component AnnotateBar inherits Rectangle {
                 color: Ink.text-mute;
                 vertical-alignment: center;
             }
-            VerticalLayout {
+            class-field := VerticalLayout {
                 alignment: center;
                 padding-left: 4px;
                 padding-right: 8px;
@@ -135,17 +152,23 @@ export component AnnotateBar inherits Rectangle {
                         padding-right: 8px;
                         spacing: 6px;
                         Text {
+                            horizontal-stretch: 1;
                             text: root.has-class ? ClassificationState.selected_class_name : "Pick a class";
                             font-size: Ink.fs-md;
                             color: root.has-class ? Ink.text : Ink.text-faint;
                             vertical-alignment: center;
                             overflow: elide;
                         }
+                        Image {
+                            source: InkIcons.caret-down;
+                            width: 10px;
+                            colorize: Ink.text-mute;
+                        }
                     }
                     TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            LayoutState.classes-open = true;
+                            class-menu.show();
                         }
                     }
                 }
@@ -186,6 +209,38 @@ export component AnnotateBar inherits Rectangle {
                         LayoutState.annotate = false;
                         ViewportObjectState.act_tool_state = ToolState.Move;
                     }
+                }
+            }
+        }
+    }
+
+    // The classes to paint into; a new one is picked at once.
+    class-menu := PopupWindow {
+        x: class-field.x;
+        y: root.height + 4px;
+        InkMenuFrame {
+            open-y: root.absolute-position.y + root.height + 4px;
+            menu-width: 240px;
+            for data in ClassificationState.classes_list: InkPickerRow {
+                label: data.id < 10 ? "0" + data.id : data.id;
+                selected: data.id == ClassificationState.selected_class_id;
+                clicked => {
+                    root.pick(data.id, data.name);
+                    class-menu.close();
+                }
+                InkSwatchName {
+                    color: data.color;
+                    name: data.name;
+                }
+            }
+            if ClassificationState.classes_list.length > 0: InkMenuSeparator { }
+            InkMenuItem {
+                icon: InkIcons.add;
+                text: "New class…";
+                clicked => {
+                    root.waiting-for-class = true;
+                    ClassificationSettingsState.reset_to_zero();
+                    GlobalAppState.active_dialog = DialogType.classification-edit-class-dialog;
                 }
             }
         }

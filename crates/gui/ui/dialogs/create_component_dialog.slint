@@ -1,14 +1,8 @@
-import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+import { InkButton, InkButtonKind, InkBanner, InkDialog, InkDialogFooter, InkHint, InkIconButton, InkIcons, InkLabel, InkTone, InkDialogPlacement } from "../ink/ink.slint";
 import { ComponentEditChoiceState, ComponentParamRow, ComponentSettingsState, ComponentUpdateState, CreateComponentState, ExposeChoiceState } from "../api/create_component.slint";
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { LineEdit, ComboBox } from "../ink/std_compat.slint";
-import {
-    NavItem,
-    SectionHeader,
-    SettingsCard,
-    SettingRow,
-    SettingBlock,
-} from "../components/settings_layout.slint";
+import { InkNavItem, InkSettingsHead, InkSettingsCard, InkSettingRow, InkSettingBlock } from "../ink/ink.slint";
 import { Ink } from "../ink/palette.slint";
 
 // "Create component": turns consecutive steps of a pipeline into a component.
@@ -24,12 +18,8 @@ component RangeRow inherits HorizontalLayout {
     callback picked(int);
 
     spacing: 8px;
-    Text {
-        text: label;
-        width: 40px;
-        font-size: 11px;
-        color: Ink.text-dim;
-        vertical-alignment: center;
+    InkLabel {
+        text: root.label;
     }
 
     ComboBox {
@@ -46,26 +36,26 @@ component RangeRow inherits HorizontalLayout {
 
 export component CreateComponentDialog inherits InkDialog {
     title: "Create component";
-    subtitle: "The steps become one step - a component you can use like a command, in this and other pipelines.";
     card-width: 480px;
     close-on-backdrop: true;
     close => {
         CreateComponentState.cancel();
     }
 
-    VerticalLayout {
-        spacing: 5px;
-        Text {
-            text: "Component name";
-            font-size: 11px;
-            color: Ink.text-dim;
+    InkHint {
+        text: "The steps become one step - a component you can use like a command, in this and other pipelines.";
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        InkLabel {
+            text: "Name";
         }
 
         LineEdit {
-            height: 30px;
+            horizontal-stretch: 1;
             text: CreateComponentState.name;
             placeholder-text: "e.g. Cell reconstruction";
-            font-size: 12px;
             edited(t) => {
                 CreateComponentState.name = t;
             }
@@ -180,7 +170,7 @@ export component ComponentEditChoiceDialog inherits InkDialog {
 
     Text {
         text: "This component is used by \{ComponentEditChoiceState.uses} steps. Changes to it apply to all of them - or make a copy just for this step.";
-        font-size: 13px;
+        font-size: Ink.fs-lg;
         color: Ink.text;
         wrap: word-wrap;
     }
@@ -213,11 +203,14 @@ export component ComponentEditChoiceDialog inherits InkDialog {
 // -- Expose a setting: a new parameter, or one that exists -------
 export component ExposeChoiceDialog inherits InkDialog {
     title: "Expose \{ExposeChoiceState.setting-name}";
-    subtitle: "As a parameter of its own, or set by a parameter the component has already:";
     card-width: 460px;
     close-on-backdrop: true;
     close => {
         ExposeChoiceState.cancel();
+    }
+
+    InkHint {
+        text: "As a parameter of its own, or set by a parameter the component has already:";
     }
 
     VerticalLayout {
@@ -295,16 +288,14 @@ export component ComponentUpdateDialog inherits InkDialog {
 
     Text {
         text: "The component library has a newer version (\{ComponentUpdateState.versions}). Every step using the component gets it; their values stay.";
-        font-size: 13px;
+        font-size: Ink.fs-lg;
         color: Ink.text;
         wrap: word-wrap;
     }
 
-    if ComponentUpdateState.changed-here: Text {
+    if ComponentUpdateState.changed-here: InkBanner {
+        tone: InkTone.warn;
         text: "This project changed the component since it was inserted - updating replaces those changes.";
-        font-size: 12px;
-        color: Ink.warn;
-        wrap: word-wrap;
     }
 
     InkDialogFooter {
@@ -326,39 +317,6 @@ export component ComponentUpdateDialog inherits InkDialog {
 }
 
 // -- Component settings ------------------------------------------------
-// A small icon button of a parameter row (↑ ↓ ✎ ✕).
-component RowButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> enabled: true;
-    in property <bool> danger: false;
-    in property <string> tooltip;
-    callback clicked;
-
-    width: 24px;
-    height: 24px;
-    border-radius: 4px;
-    opacity: root.enabled ? 1 : 0.3;
-    background: ta.has-hover && root.enabled ? Ink.raised : transparent;
-    accessible-role: button;
-    accessible-label: root.tooltip;
-
-    Text {
-        text: root.text;
-        font-size: 12px;
-        color: ta.has-hover && root.danger ? Ink.warn : Ink.text-dim;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
-
 // A parameter's row: name, section, help and what it sets on the left; its
 // default and ↑ ↓ ✎ ✕ on the right. While a parameter is opened to edit
 // (`editing`), the rows' buttons wait for its Apply or Cancel.
@@ -444,37 +402,40 @@ component ParamHeader inherits Rectangle {
                     width: 6px;
                 }
 
-                RowButton {
-                    text: "↑";
-                    tooltip: "Move up";
+                InkIconButton {
+                    icon: InkIcons.caret-up;
+                    size: 24px;
+                    label: "Move up";
                     enabled: root.free && root.index > 0;
                     clicked => {
                         ComponentSettingsState.parameter-moved(root.param.key, -1);
                     }
                 }
 
-                RowButton {
-                    text: "↓";
-                    tooltip: "Move down";
+                InkIconButton {
+                    icon: InkIcons.caret-down;
+                    size: 24px;
+                    label: "Move down";
                     enabled: root.free && root.index < ComponentSettingsState.parameters.length - 1;
                     clicked => {
                         ComponentSettingsState.parameter-moved(root.param.key, 1);
                     }
                 }
 
-                RowButton {
-                    text: "✎";
-                    tooltip: "Edit parameter";
+                InkIconButton {
+                    icon: InkIcons.edit;
+                    size: 24px;
+                    label: "Edit parameter";
                     enabled: root.free;
                     clicked => {
                         root.edit();
                     }
                 }
 
-                RowButton {
-                    text: "✕";
-                    tooltip: "Remove parameter";
-                    danger: true;
+                InkIconButton {
+                    icon: InkIcons.delete;
+                    size: 24px;
+                    label: "Remove parameter";
                     enabled: root.free;
                     clicked => {
                         ComponentSettingsState.parameter-removed(root.param.key);
@@ -489,6 +450,8 @@ component ParamHeader inherits Rectangle {
 // project settings: sections on the left, rows of name/explanation and
 // control on the right. Changes apply right away.
 export component ComponentSettingsDialog inherits InkDialog {
+    // Docked on the right; the image stays usable.
+    placement: InkDialogPlacement.sheet;
     title: "Component settings";
     subtitle: "◆ " + ComponentSettingsState.name;
     card-width: 860px;
@@ -541,7 +504,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                         padding: 16px;
                         spacing: 4px;
 
-                        NavItem {
+                        InkNavItem {
                             text: "General";
                             icon: @image-url("../icons/regular-white/info.svg");
                             active: root.current-section == 0;
@@ -550,7 +513,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                             }
                         }
 
-                        NavItem {
+                        InkNavItem {
                             text: "Parameters (\{ComponentSettingsState.parameters.length})";
                             icon: @image-url("../icons/regular-white/faders-horizontal.svg");
                             active: root.current-section == 1;
@@ -581,14 +544,14 @@ export component ComponentSettingsDialog inherits InkDialog {
                         padding-top: 22px;
                         spacing: 14px;
 
-                        SectionHeader {
+                        InkSettingsHead {
                             title: "General";
                             scope: "Saved with the component";
                             subtitle: "What the component is called and does - shown in the command picker and behind the component card's ?.";
                         }
 
-                        SettingsCard {
-                            SettingRow {
+                        InkSettingsCard {
+                            InkSettingRow {
                                 label: "Name";
                                 LineEdit {
                                     text: ComponentSettingsState.name;
@@ -599,7 +562,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                 }
                             }
 
-                            SettingRow {
+                            InkSettingRow {
                                 label: "Short description";
                                 description: "One line, shown in the command picker.";
                                 LineEdit {
@@ -611,7 +574,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                 }
                             }
 
-                            SettingRow {
+                            InkSettingRow {
                                 label: "Author";
                                 author-name-edit := LineEdit {
                                     text: ComponentSettingsState.author-name;
@@ -622,7 +585,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                 }
                             }
 
-                            SettingRow {
+                            InkSettingRow {
                                 label: "Organization";
                                 author-organization-edit := LineEdit {
                                     text: ComponentSettingsState.author-organization;
@@ -633,7 +596,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                 }
                             }
 
-                            SettingBlock {
+                            InkSettingBlock {
                                 label: "Description";
                                 description: "How to use it, what it expects, references - shown behind the component card's ?.";
                                 TextEdit {
@@ -657,7 +620,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                     padding-bottom: 0px;
                     spacing: 14px;
 
-                    SectionHeader {
+                    InkSettingsHead {
                         title: "Parameters";
                         scope: "Saved with the component";
                         subtitle: ComponentSettingsState.parameters.length == 0 ? "None yet - ◇ next to a setting of the opened component shows it on the component card." : "Shown on the component card in this order. ✎ edits a parameter's name, help, section and what it sets.";
@@ -679,7 +642,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                 alignment: start;
                                 padding-bottom: 20px;
 
-                                SettingsCard {
+                                InkSettingsCard {
                                     for param[pi] in ComponentSettingsState.parameters: VerticalLayout {
                                         // Divider, like a settings row.
                                         Rectangle {
@@ -713,7 +676,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                             padding-bottom: 14px;
                                             spacing: 8px;
 
-                                            SettingRow {
+                                            InkSettingRow {
                                                 label: "Name";
                                                 description: "On the component card.";
                                                 LineEdit {
@@ -726,7 +689,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                                 }
                                             }
 
-                                            SettingRow {
+                                            InkSettingRow {
                                                 label: "Section";
                                                 description: "Groups parameters on the card (optional).";
                                                 LineEdit {
@@ -739,7 +702,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                                 }
                                             }
 
-                                            SettingBlock {
+                                            InkSettingBlock {
                                                 label: "Help text";
                                                 description: param.description == "" ? (param.default-description == "" ? "Shown as ? next to the parameter." : "Empty: the setting's own help is shown.") : "Shown as ? next to the parameter.";
                                                 TextEdit {
@@ -764,7 +727,7 @@ export component ComponentSettingsDialog inherits InkDialog {
                                                 }
                                             }
 
-                                            SettingBlock {
+                                            InkSettingBlock {
                                                 label: "Sets";
                                                 description: "The settings of the component's steps this parameter sets.";
 
@@ -780,10 +743,10 @@ export component ComponentSettingsDialog inherits InkDialog {
                                                         overflow: elide;
                                                     }
 
-                                                    RowButton {
-                                                        text: "✕";
-                                                        tooltip: "Stop setting \{binding.text}";
-                                                        danger: true;
+                                                    InkIconButton {
+                                                        icon: InkIcons.close;
+                                                        size: 24px;
+                                                        label: "Stop setting \{binding.text}";
                                                         // The last one: remove the parameter instead.
                                                         enabled: param.bindings.length > 1;
                                                         clicked => {

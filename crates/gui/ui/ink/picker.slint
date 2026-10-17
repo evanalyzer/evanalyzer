@@ -1,14 +1,15 @@
-// picker_field.slint
+// ink/picker.slint
 // The look every "pick one" dropdown of the step settings shares (channel,
 // class, ...): the closed field and the rows of its popup list - drawn like
 // the Ink fields (`InkSelect`). What each entry is called comes in `label`
 // (in the mono font, e.g. "Channel 2", "Obj. class 03"); what's known about
-// it - a color swatch and a name, see `SwatchName` - comes as children.
+// it - a color swatch and a name, see `InkSwatchName` - comes as children.
 
-import { Ink, InkIcons } from "../ink/ink.slint";
+import { Ink } from "palette.slint";
+import { InkIcons } from "icons.slint";
 
 // A color swatch and a name, after a picker's label.
-export component SwatchName inherits HorizontalLayout {
+export component InkSwatchName inherits HorizontalLayout {
     in property <color> color;
     in property <string> name;
     in property <length> font-size: Ink.fs-md;
@@ -36,8 +37,8 @@ export component SwatchName inherits HorizontalLayout {
     }
 }
 
-// The closed field: `label`, the children (a `SwatchName`), the caret.
-export component PickerField inherits Rectangle {
+// The closed field: `label`, the children (a `InkSwatchName`), the caret.
+export component InkPickerField inherits Rectangle {
     in property <string> label;
     in property <length> font-size: Ink.fs-md;
     // A label that isn't a numbered entry ("Unset", "Background"): not mono.
@@ -82,9 +83,9 @@ export component PickerField inherits Rectangle {
     }
 }
 
-// One entry of the popup list: `label`, the children (a `SwatchName`); the
+// One entry of the popup list: `label`, the children (a `InkSwatchName`); the
 // chosen one marked.
-export component PickerRow inherits TouchArea {
+export component InkPickerRow inherits TouchArea {
     in property <string> label;
     in property <bool> selected;
     in property <length> font-size: Ink.fs-md;

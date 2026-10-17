@@ -1,38 +1,60 @@
-// export_dialog.slint — modal overlay for configuring and running a
-// Results export (backed by `ResultExport::start_export` in
-// evanalyzer_app's results_exporter.rs). Lives on `ExportDialogState`
-// rather than the main window's `GlobalAppState`/`DialogType` because
-// `ResultsWindow` is its own top-level Slint component tree (see
-// results_state_controller.rs) and never imports state.slint — Slint
-// globals are per-tree, so the main window's dialog machinery is simply
-// unreachable here.
-import { InkButton, InkButtonKind, InkDialog, InkDialogFooter } from "../ink/ink.slint";
+// export_dialog.slint — the Results export (backed by
+// `ResultExport::start_export` in evanalyzer_app's results_exporter.rs):
+// grouped like the Plate settings - File, Images & objects, Plate & wells,
+// Filter - one labelled line per setting.
+import { InkButton, InkButtonKind, InkCaption, InkDialog, InkDialogFooter, InkHint, InkLabel, InkProgressBar, InkTone, InkDialogPlacement } from "../ink/ink.slint";
 import { ExportDialogState } from "../api/export.slint";
 
 import { ScrollView } from "std-widgets.slint";
 import { LineEdit, CheckBox } from "../ink/std_compat.slint";
 import { Ink } from "../ink/palette.slint";
-import {
-    MultiSelectDropdown,
-    MultiSelectItem,
-} from "../components/multi_select_dropdown.slint";
-component LabeledField inherits HorizontalLayout {
-    in property <string> field-label;
+import { InkMultiSelect, MultiSelectItem } from "../ink/ink.slint";
+
+// A group: its caption, then its lines.
+component Group inherits VerticalLayout {
+    in property <string> title;
     spacing: 8px;
-    Text {
-        text: root.field-label;
-        vertical-alignment: center;
-        color: Ink.text-dim;
-        font-size: 11px;
+    InkCaption {
+        text: root.title;
     }
 
     @children
 }
 
+// "from … to …" for a Z or T range.
+component RangeFields inherits HorizontalLayout {
+    in-out property <string> first;
+    in-out property <string> last;
+    spacing: 8px;
+    alignment: start;
+    LineEdit {
+        width: 64px;
+        horizontal-alignment: center;
+        input-type: number;
+        text <=> root.first;
+    }
+
+    Text {
+        text: "to";
+        vertical-alignment: center;
+        color: Ink.text-mute;
+        font-size: Ink.fs-sm;
+    }
+
+    LineEdit {
+        width: 64px;
+        horizontal-alignment: center;
+        input-type: number;
+        text <=> root.last;
+    }
+}
+
 export component ExportDialog inherits InkDialog {
-    title: "Export Results";
-    card-width: 680px;
-    card-height: 790px;
+    // Docked on the right; the image stays usable.
+    placement: InkDialogPlacement.sheet;
+    title: "Export results";
+    card-width: 620px;
+    card-height: 820px;
     // No closing while the export runs (Cancel stops it first).
     closable: !ExportDialogState.is-exporting;
     close => {
@@ -40,330 +62,330 @@ export component ExportDialog inherits InkDialog {
         ExportDialogState.active = false;
     }
 
+    property <bool> xlsx: ExportDialogState.format-summary == "XLSX";
+    property <length> field-w: 220px;
+
     ScrollView {
         vertical-stretch: 1;
         VerticalLayout {
             // Room for the scroll bar.
             padding-right: 12px;
-            spacing: 18px;
+            spacing: 16px;
             alignment: start;
 
-            // -- Output folder --
-            VerticalLayout {
-                spacing: 8px;
-                Text {
-                    text: "Output Folder";
-                    color: Ink.text;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
-
+            Group {
+                title: "FILE";
                 HorizontalLayout {
                     spacing: 8px;
-
-                    LineEdit {
-                        width: 120px;
-                        placeholder-text: "filename prefix_";
-                        text <=> ExportDialogState.output-file-prefix;
-                        font-size: 11.5px;
+                    InkLabel {
+                        text: "Folder";
                     }
 
                     Rectangle {
                         horizontal-stretch: 1;
-                        height: 32px;
+                        height: Ink.control-h;
                         border-radius: Ink.radius-sm;
-                        background: Ink.raised;
+                        background: Ink.field;
                         border-width: 1px;
-                        border-color: Ink.border-soft;
+                        border-color: Ink.border;
                         Text {
                             x: 8px;
                             width: parent.width - 16px;
                             text: ExportDialogState.output-dir == "" ? "Choose a folder…" : ExportDialogState.output-dir;
                             color: ExportDialogState.output-dir == "" ? Ink.text-faint : Ink.text;
                             vertical-alignment: center;
-                            font-size: 11.5px;
+                            font-size: Ink.fs-md;
                             overflow: elide;
                         }
                     }
 
-                    MultiSelectDropdown {
-                        pill-height: 32px;
-                        summary-text: ExportDialogState.format-summary;
-                        items <=> ExportDialogState.format-items;
-                        multi-select: false;
-                        pill-width: 70px;
-                        item-selected(key, value, selected) => { if selected { ExportDialogState.format-summary = value; } }
-                    }
-
                     InkButton {
-                        height: 32px;
+                        small: true;
                         text: "Browse…";
                         enabled: !ExportDialogState.is-exporting;
-                        clicked => { ExportDialogState.pick-output-dir(); }
-                    }
-                }
-            }
-
-            // -- What to export --
-            VerticalLayout {
-                spacing: 6px;
-                alignment: start;
-
-                img-title := Text {
-                    text: "Images/Objects (ungrouped)";
-                    color: Ink.text;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
-
-                HorizontalLayout {
-                    alignment: start;
-                    spacing: 125px;
-                    CheckBox {
-                        text: "Image list";
-                        checked <=> ExportDialogState.with-grouped-by-image-list;
-                    }
-
-                    CheckBox {
-                        text: "Transpond output table";
-                        checked <=> ExportDialogState.transpond-output-table;
-                    }
-                }
-
-                HorizontalLayout {
-                    alignment: start;
-                    spacing: 10px;
-                    CheckBox {
-                        text: "Object list (objects per image)";
-                        checked <=> ExportDialogState.with-list-view;
-                    }
-
-                    HorizontalLayout {
-                        alignment: start;
-                        spacing: 8px;
-                        MultiSelectDropdown {
-                            summary-text: ExportDialogState.image-summary;
-                            items <=> ExportDialogState.image-items;
-                            multi-select: true;
-                            show-select-all: true;
-                            show-search: true;
-                            filter-text <=> ExportDialogState.image-filter-text;
-                            pill-width: 210px;
-                            item-selected(key, value, selected) => { ExportDialogState.image-item-selected(key, selected); }
-                            select-all => { ExportDialogState.image-select-all(); }
-                            select-none => { ExportDialogState.image-select-none(); }
-                            filter-changed(text) => { ExportDialogState.image-filter-changed(text); }
-                            enabled: ExportDialogState.with-list-view;
+                        clicked => {
+                            ExportDialogState.pick-output-dir();
                         }
                     }
-                }
-
-                CheckBox {
-                    x: 20px;
-                    text: "With coloc details";
-                    checked <=> ExportDialogState.with-list-coloc-details;
-                    enabled: ExportDialogState.with-list-view;
-                }
-
-                CheckBox {
-                    x: 20px;
-                    text: "Each image in a separate file";
-                    checked <=> ExportDialogState.with-list-one-file-per-image;
-                    enabled: ExportDialogState.with-list-view;
-                }
-
-                HorizontalLayout {
-                    alignment: start;
-                    spacing: 155px;
-                    x: 20px;
-                    CheckBox {
-                        text: "Image heatmap";
-                        checked <=> ExportDialogState.with-heatmap;
-                        enabled: ExportDialogState.format-summary == "XLSX";
-                    }
-
-                    HorizontalLayout {
-                        alignment: start;
-                        spacing: 8px;
-                        MultiSelectDropdown {
-                            enabled: ExportDialogState.with-heatmap;
-                            summary-text: ExportDialogState.square-size-summary;
-                            items <=> ExportDialogState.square-size-items;
-                            multi-select: false;
-                            pill-width: 130px;
-                            item-selected(key, value, selected) => { if selected { ExportDialogState.square-size-summary = value; } }
-                        }
-                    }
-                }
-
-                Rectangle { }
-
-                Text {
-                    text: "Plates/Wells";
-                    color: Ink.text;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
-
-                Text {
-                    text: "Grouping, plate size and well size as set in the project settings (and the Matrix view).";
-                    color: Ink.text-mute;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                }
-
-                CheckBox {
-                    text: "Plate as heatmap";
-                    checked <=> ExportDialogState.with-plate-heatmap-view;
-                    enabled: ExportDialogState.format-summary == "XLSX";
-                }
-
-                CheckBox {
-                    text: "Plate as list";
-                    checked <=> ExportDialogState.with-plate-list;
-                    enabled: ExportDialogState.format-summary == "XLSX";
-                }
-
-                CheckBox {
-                    text: "Wells as heatmap";
-                    checked <=> ExportDialogState.with-well-heatmap-view;
-                    enabled: ExportDialogState.format-summary == "XLSX";
-                }
-
-                CheckBox {
-                    text: "Wells as list";
-                    checked <=> ExportDialogState.with-well-list;
-                    enabled: ExportDialogState.format-summary == "XLSX";
                 }
 
                 HorizontalLayout {
                     spacing: 8px;
-                    MultiSelectDropdown {
-                        label: "COLOR SCHEMA";
+                    alignment: start;
+                    InkLabel {
+                        text: "Name prefix";
+                    }
+
+                    LineEdit {
+                        width: root.field-w;
+                        placeholder-text: "e.g. experiment1_";
+                        text <=> ExportDialogState.output-file-prefix;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    InkLabel {
+                        text: "Format";
+                    }
+
+                    InkMultiSelect {
+                        summary-text: ExportDialogState.format-summary;
+                        items <=> ExportDialogState.format-items;
+                        multi-select: false;
+                        pill-width: root.field-w;
+                        item-selected(key, value, selected) => {
+                            if selected {
+                                ExportDialogState.format-summary = value;
+                            }
+                        }
+                    }
+                }
+            }
+
+            Group {
+                title: "IMAGES & OBJECTS";
+                CheckBox {
+                    text: "Image list - one line per image";
+                    checked <=> ExportDialogState.with-grouped-by-image-list;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    CheckBox {
+                        horizontal-stretch: 1;
+                        text: "Object list - one line per object";
+                        checked <=> ExportDialogState.with-list-view;
+                    }
+
+                    InkMultiSelect {
+                        summary-text: ExportDialogState.image-summary;
+                        items <=> ExportDialogState.image-items;
+                        multi-select: true;
+                        show-select-all: true;
+                        show-search: true;
+                        filter-text <=> ExportDialogState.image-filter-text;
+                        pill-width: root.field-w;
+                        item-selected(key, value, selected) => {
+                            ExportDialogState.image-item-selected(key, selected);
+                        }
+                        select-all => {
+                            ExportDialogState.image-select-all();
+                        }
+                        select-none => {
+                            ExportDialogState.image-select-none();
+                        }
+                        filter-changed(text) => {
+                            ExportDialogState.image-filter-changed(text);
+                        }
+                        enabled: ExportDialogState.with-list-view;
+                    }
+                }
+
+                VerticalLayout {
+                    padding-left: 22px;
+                    spacing: 8px;
+                    CheckBox {
+                        text: "With coloc details";
+                        checked <=> ExportDialogState.with-list-coloc-details;
+                        enabled: ExportDialogState.with-list-view;
+                    }
+
+                    CheckBox {
+                        text: "Each image in its own file";
+                        checked <=> ExportDialogState.with-list-one-file-per-image;
+                        enabled: ExportDialogState.with-list-view;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    CheckBox {
+                        horizontal-stretch: 1;
+                        text: "Image heatmap (XLSX)";
+                        checked <=> ExportDialogState.with-heatmap;
+                        enabled: root.xlsx;
+                    }
+
+                    InkMultiSelect {
+                        enabled: ExportDialogState.with-heatmap && root.xlsx;
+                        summary-text: ExportDialogState.square-size-summary;
+                        items <=> ExportDialogState.square-size-items;
+                        multi-select: false;
+                        pill-width: root.field-w;
+                        item-selected(key, value, selected) => {
+                            if selected {
+                                ExportDialogState.square-size-summary = value;
+                            }
+                        }
+                    }
+                }
+
+                CheckBox {
+                    text: "Transpose the tables";
+                    checked <=> ExportDialogState.transpond-output-table;
+                }
+            }
+
+            Group {
+                title: "PLATE & WELLS";
+                InkHint {
+                    text: "Grouping, plate size and well layout as in the project's plate settings." + (root.xlsx ? "" : " Only for XLSX.");
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 8px;
+                        CheckBox {
+                            text: "Plate as heatmap";
+                            checked <=> ExportDialogState.with-plate-heatmap-view;
+                            enabled: root.xlsx;
+                        }
+
+                        CheckBox {
+                            text: "Plate as list";
+                            checked <=> ExportDialogState.with-plate-list;
+                            enabled: root.xlsx;
+                        }
+                    }
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 8px;
+                        CheckBox {
+                            text: "Wells as heatmap";
+                            checked <=> ExportDialogState.with-well-heatmap-view;
+                            enabled: root.xlsx;
+                        }
+
+                        CheckBox {
+                            text: "Wells as list";
+                            checked <=> ExportDialogState.with-well-list;
+                            enabled: root.xlsx;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    InkLabel {
+                        text: "Colors";
+                    }
+
+                    InkMultiSelect {
                         summary-text: ExportDialogState.color-schema-summary;
                         items <=> ExportDialogState.color-schema-items;
                         multi-select: false;
-                        pill-width: 140px;
-                        item-selected(key, value, selected) => { if selected { ExportDialogState.color-schema-summary = value; } }
+                        pill-width: root.field-w;
+                        enabled: root.xlsx;
+                        item-selected(key, value, selected) => {
+                            if selected {
+                                ExportDialogState.color-schema-summary = value;
+                            }
+                        }
                     }
                 }
             }
 
-            // -- Z/T range --
-            VerticalLayout {
-                spacing: 8px;
-                alignment: start;
-                Text {
-                    text: "Z / T Range";
-                    color: Ink.text;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
-
+            Group {
+                title: "FILTER";
                 HorizontalLayout {
-                    spacing: 10px;
+                    spacing: 8px;
                     alignment: start;
-                    LabeledField {
-                        field-label: "Z:";
-                        LineEdit {
-                            horizontal-alignment: center;
-                            width: 56px;
-                            input-type: number;
-                            text <=> ExportDialogState.z-start;
-                        }
-
-                        Text {
-                            horizontal-alignment: center;
-                            text: "to";
-                            vertical-alignment: center;
-                            color: Ink.text-mute;
-                            font-size: 11px;
-                        }
-
-                        LineEdit {
-                            width: 56px;
-                            input-type: number;
-                            text <=> ExportDialogState.z-end;
-                        }
+                    InkLabel {
+                        text: "Classes";
                     }
 
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-
-                    LabeledField {
-                        field-label: "T:";
-                        LineEdit {
-                            horizontal-alignment: center;
-                            width: 56px;
-                            input-type: number;
-                            text <=> ExportDialogState.t-start;
-                        }
-
-                        Text {
-                            text: "to";
-                            vertical-alignment: center;
-                            color: Ink.text-mute;
-                            font-size: 11px;
-                        }
-
-                        LineEdit {
-                            horizontal-alignment: center;
-                            width: 56px;
-                            input-type: number;
-                            text <=> ExportDialogState.t-end;
-                        }
-                    }
-                }
-            }
-
-            // -- Filters --
-            VerticalLayout {
-                spacing: 8px;
-                alignment: start;
-                Text {
-                    text: "Filters";
-                    color: Ink.text;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    MultiSelectDropdown {
-                        label: "CLASSES";
+                    InkMultiSelect {
                         summary-text: ExportDialogState.class-summary;
                         items <=> ExportDialogState.class-items;
                         multi-select: true;
                         show-select-all: true;
-                        pill-width: 190px;
-                        item-selected(key, value, selected) => { ExportDialogState.class-item-selected(key, selected); }
-                        select-all => { ExportDialogState.class-select-all(); }
-                        select-none => { ExportDialogState.class-select-none(); }
+                        pill-width: root.field-w;
+                        item-selected(key, value, selected) => {
+                            ExportDialogState.class-item-selected(key, selected);
+                        }
+                        select-all => {
+                            ExportDialogState.class-select-all();
+                        }
+                        select-none => {
+                            ExportDialogState.class-select-none();
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    InkLabel {
+                        text: "Measurements";
                     }
 
-                    MultiSelectDropdown {
-                        label: "COLUMNS";
+                    InkMultiSelect {
                         summary-text: ExportDialogState.column-summary;
                         items <=> ExportDialogState.column-items;
                         groups: ExportDialogState.column-groups;
                         multi-select: true;
                         show-select-all: true;
-                        pill-width: 200px;
-                        item-selected(key, value, selected) => { ExportDialogState.column-item-selected(key, selected); }
-                        select-all => { ExportDialogState.column-select-all(); }
-                        select-none => { ExportDialogState.column-select-none(); }
+                        pill-width: root.field-w;
+                        item-selected(key, value, selected) => {
+                            ExportDialogState.column-item-selected(key, selected);
+                        }
+                        select-all => {
+                            ExportDialogState.column-select-all();
+                        }
+                        select-none => {
+                            ExportDialogState.column-select-none();
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    InkLabel {
+                        text: "Aggregations";
                     }
 
-                    MultiSelectDropdown {
-                        label: "AGGREGATIONS";
+                    InkMultiSelect {
                         summary-text: ExportDialogState.aggregation-summary;
                         items <=> ExportDialogState.aggregation-items;
                         multi-select: true;
                         show-select-all: true;
-                        pill-width: 140px;
-                        item-selected(key, value, selected) => { ExportDialogState.aggregation-item-selected(key, selected); }
+                        pill-width: root.field-w;
+                        item-selected(key, value, selected) => {
+                            ExportDialogState.aggregation-item-selected(key, selected);
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    InkLabel {
+                        text: "Z planes";
+                    }
+
+                    RangeFields {
+                        first <=> ExportDialogState.z-start;
+                        last <=> ExportDialogState.z-end;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    InkLabel {
+                        text: "Time points";
+                    }
+
+                    RangeFields {
+                        first <=> ExportDialogState.t-start;
+                        last <=> ExportDialogState.t-end;
                     }
                 }
             }
@@ -372,33 +394,14 @@ export component ExportDialog inherits InkDialog {
             if ExportDialogState.is-exporting || ExportDialogState.done || ExportDialogState.has-error: VerticalLayout {
                 spacing: 6px;
                 Text {
-                    text: ExportDialogState.has-error
-                        ? "Export failed: " + ExportDialogState.error-message
-                        : ExportDialogState.done
-                        ? "Export complete."
-                        : ExportDialogState.progress-message;
+                    text: ExportDialogState.has-error ? "Export failed: " + ExportDialogState.error-message : ExportDialogState.done ? "Export complete." : ExportDialogState.progress-message;
                     color: ExportDialogState.has-error ? Ink.err : (ExportDialogState.done ? Ink.ok : Ink.text);
-                    font-size: 11.5px;
+                    font-size: Ink.fs-md;
                     wrap: word-wrap;
                 }
 
-                if ExportDialogState.is-exporting: Rectangle {
-                    height: 8px;
-                    border-radius: 4px;
-                    background: Ink.raised;
-                    Rectangle {
-                        x: 0;
-                        width: ExportDialogState.progress-total > 0
-                            ? parent.width * (ExportDialogState.progress-current * 1.0 / ExportDialogState.progress-total)
-                            : 0px;
-                        height: parent.height;
-                        border-radius: 4px;
-                        background: Ink.focus;
-                        animate width {
-                            duration: 200ms;
-                            easing: ease-out;
-                        }
-                    }
+                if ExportDialogState.is-exporting: InkProgressBar {
+                    value: ExportDialogState.progress-total > 0 ? ExportDialogState.progress-current / ExportDialogState.progress-total : 0;
                 }
             }
         }
@@ -422,7 +425,7 @@ export component ExportDialog inherits InkDialog {
 
         InkButton {
             kind: InkButtonKind.primary;
-            text: ExportDialogState.is-exporting ? "Exporting…" : "Start Export";
+            text: ExportDialogState.is-exporting ? "Exporting…" : "Start export";
             enabled: !ExportDialogState.is-exporting && ExportDialogState.output-dir != "";
             clicked => {
                 ExportDialogState.start-clicked();

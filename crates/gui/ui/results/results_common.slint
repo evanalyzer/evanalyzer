@@ -346,7 +346,7 @@ export component LegendBar inherits VerticalLayout {
 
 // -- Small labeled dropdown button (Value / Aggregate / Class filter pills) --
 // A filter's label as a caption above, its value in a field - the look
-// of `MultiSelectDropdown`; a click is for the caller to open its choices.
+// of `InkMultiSelect`; a click is for the caller to open its choices.
 export component FilterPill inherits Rectangle {
     in property <string> label;
     in property <string> value;
@@ -400,5 +400,15 @@ export component FilterPill inherits Rectangle {
                 clicked => { root.clicked(); }
             }
         }
+    }
+}
+
+// A group of the settings column: its caption, its settings.
+export component SettingsGroup inherits VerticalLayout {
+    in property <string> title;
+    spacing: 8px;
+    InkCaption {
+        text: root.title;
+        color: Ink.text-dim;
     }
 }

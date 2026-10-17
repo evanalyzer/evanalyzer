@@ -14,10 +14,10 @@ global PlateText {
     ];
 }
 
-// The color of a well's state line.
-global WellColor {
+// The color of a well's (or an image's) state.
+export global WellColor {
     pure public function of(s: WellState) -> color {
-        s == WellState.analysed ? Ink.ok
+        s == WellState.analysed ? Ink.text-dim
             : s == WellState.preview ? Ink.warn
             : s == WellState.new ? Ink.text-faint
             : transparent
@@ -42,22 +42,22 @@ component Well inherits Rectangle {
         border-width: root.selected ? 1.5px : 1px;
         border-color: root.selected ? Ink.focus : root.well.image-count > 0 ? Ink.border : Ink.border-soft;
 
+        // The image count, under it a bar: how far the well is.
         Text {
             visible: root.well.image-count > 0 && root.height >= 20px;
+            y: root.height >= 30px ? parent.height / 2 - self.height + 1px : (parent.height - self.height) / 2;
             text: root.well.image-count;
             font-size: root.height >= 28px ? Ink.fs-sm : Ink.fs-xs;
             font-family: Ink.font-mono;
             color: root.selected ? Ink.focus : Ink.text-dim;
         }
-
-        // How far the well is.
         Rectangle {
             visible: root.well.state != WellState.empty;
-            x: 4px;
-            y: parent.height - 4px;
-            width: parent.width - 8px;
-            height: 2px;
-            border-radius: 1px;
+            x: (parent.width - self.width) / 2;
+            y: root.height >= 30px ? parent.height / 2 + 4px : parent.height - 5px;
+            width: min(18px, parent.width - 8px);
+            height: 3px;
+            border-radius: 1.5px;
             background: WellColor.of(root.well.state);
         }
     }
@@ -94,12 +94,14 @@ component Legend inherits HorizontalLayout {
 
 export component PlateView inherits Rectangle {
     property <length> label-w: 18px;
-    property <length> gap: 3px;
+    property <length> gap: 6px;
     property <int> rows: ImagesListState.plate-rows;
     property <int> cols: ImagesListState.plate-cols;
-    // Square wells, as large as the width allows (at most 40px).
-    property <length> cell: root.cols > 0 ? min(40px, max(8px, (root.width - root.label-w) / root.cols - root.gap)) : 0px;
-    property <length> grid-h: root.label-w + root.rows * (root.cell + root.gap);
+    // The wells share the width; at most 46px high (few columns), about
+    // square when there are many.
+    property <length> cell: root.cols > 0 ? max(8px, (root.width - root.label-w) / root.cols - root.gap) : 0px;
+    property <length> cell-h: min(46px, max(root.cell * 0.58, min(root.cell, 24px)));
+    property <length> grid-h: root.label-w + root.rows * (root.cell-h + root.gap);
 
     preferred-height: layout.preferred-height;
 
@@ -128,9 +130,9 @@ export component PlateView inherits Rectangle {
             }
             for r in root.rows: Text {
                 x: 0px;
-                y: root.label-w + r * (root.cell + root.gap);
+                y: root.label-w + r * (root.cell-h + root.gap);
                 width: root.label-w;
-                height: root.cell;
+                height: root.cell-h;
                 text: r < PlateText.rows.length ? PlateText.rows[r] : r + 1;
                 font-size: Ink.fs-xs;
                 font-family: Ink.font-mono;
@@ -140,9 +142,9 @@ export component PlateView inherits Rectangle {
 
             for well[i] in ImagesListState.plate-wells: Well {
                 x: root.label-w + well.col * (root.cell + root.gap);
-                y: root.label-w + well.row * (root.cell + root.gap);
+                y: root.label-w + well.row * (root.cell-h + root.gap);
                 width: root.cell;
-                height: root.cell;
+                height: root.cell-h;
                 well: well;
                 selected: ImagesListState.selected-well == i;
                 clicked => {
@@ -156,7 +158,7 @@ export component PlateView inherits Rectangle {
             spacing: 12px;
             alignment: start;
             Legend {
-                tint: Ink.ok;
+                tint: Ink.text-dim;
                 text: "analysed";
             }
             Legend {

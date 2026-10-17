@@ -886,7 +886,7 @@ mod tests {
             .set_mode(crate::WorkspaceMode::Images);
         let meta_ui = ui.global::<ImageMetaData>();
         let field = || {
-            ElementHandle::find_by_accessible_label(&ui, "Pixel size X in nm")
+            ElementHandle::find_by_accessible_label(&ui, "Pixel size in nm")
                 .next()
                 .expect("the pixel size field")
         };

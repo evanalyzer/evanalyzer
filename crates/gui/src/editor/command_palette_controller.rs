@@ -1,12 +1,13 @@
 //! The command palette (Ctrl+K): finds what was typed among the app's
-//! actions, the steps of the shown pipeline and the commands, and runs the
-//! chosen entry - through the same callbacks the buttons and menus use.
+//! actions, the steps of the shown pipeline, the commands, the images and
+//! the classes, and runs the chosen entry - through the same callbacks the
+//! buttons and menus use.
 
 use crate::AppWindow;
 use crate::{
-    AiLearningState, Appearance, CommandPaletteState, CommandPickerState, DialogType,
-    GlobalAppState, InkScheme, LayoutState, PaletteEntry, PaletteKind, PipelinesPanelState,
-    ToolbarState, WorkspaceMode,
+    AiLearningState, Appearance, ClassificationState, CommandPaletteState, CommandPickerState,
+    DialogType, GlobalAppState, ImagesListState, InkScheme, LayoutState, PaletteEntry, PaletteKind,
+    PipelinesPanelState, ToolbarState, WorkspaceMode,
 };
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
@@ -78,7 +79,7 @@ fn matches(text: &str, query: &str) -> bool {
 }
 
 /// The entries for `query`: matching actions, steps of the shown pipeline,
-/// and - once something is typed - commands.
+/// and - once something is typed - commands, classes and images.
 fn entries_for(ui: &AppWindow, query: &str) -> Vec<PaletteEntry> {
     let mut entries: Vec<PaletteEntry> = ACTIONS
         .iter()
@@ -128,6 +129,36 @@ fn entries_for(ui: &AppWindow, query: &str) -> Vec<PaletteEntry> {
                     detail: command.summary.clone(),
                     shortcut: "".into(),
                     kind: PaletteKind::Command,
+                }),
+        );
+    }
+    if !query.trim().is_empty() {
+        let classes = ui.global::<ClassificationState>().get_classes_list();
+        entries.extend(
+            classes
+                .iter()
+                .filter(|class| matches(&format!("class {} {}", class.name, class.id), query))
+                .map(|class| PaletteEntry {
+                    id: format!("class:{}", class.id).into(),
+                    title: format!("Class “{}”", class.name).into(),
+                    detail: format!("{} objects", class.count).into(),
+                    shortcut: "".into(),
+                    kind: PaletteKind::Class,
+                }),
+        );
+        // A project can have thousands: stop at what's shown.
+        let images = ui.global::<ImagesListState>().get_images_list();
+        entries.extend(
+            images
+                .iter()
+                .filter(|image| matches(&image.path, query))
+                .take(MAX_ENTRIES)
+                .map(|image| PaletteEntry {
+                    id: format!("image:{}", image.path).into(),
+                    title: image.name.clone(),
+                    detail: image.path.clone(),
+                    shortcut: "".into(),
+                    kind: PaletteKind::Image,
                 }),
         );
     }
@@ -200,6 +231,20 @@ fn run(ui: &AppWindow, id: &str) {
                 panel.get_active_commands().row_count() as i32,
             );
             ui.global::<CommandPickerState>().invoke_confirm(command);
+        }
+        // Opened, as from the images list.
+        "image" => ui
+            .global::<ImagesListState>()
+            .invoke_image_selected(what.into()),
+        // Selected in the classes panel, which opens.
+        "class" => {
+            let Ok(class) = what.parse::<i32>() else {
+                return;
+            };
+            layout.set_classes_open(true);
+            let classes = ui.global::<ClassificationState>();
+            classes.set_selected_class_id(class);
+            classes.invoke_class_selected(class);
         }
         _ => {}
     }
@@ -291,6 +336,73 @@ mod tests {
         assert_eq!(titles(&ui), ["Add “Threshold”"]);
         assert_eq!(state.get_entries().row_data(0).unwrap().id, "command:7");
         assert_eq!(state.get_selected(), 0);
+    }
+
+    #[test]
+    fn typing_finds_images_by_path_and_classes_by_name() {
+        let ui = test_ui_window();
+        let _palette = palette(&ui);
+        ui.global::<ImagesListState>()
+            .set_images_list(ModelRc::new(VecModel::from(vec![
+                crate::ImageItemData {
+                    name: "B03_01.tif".into(),
+                    path: "plate1/B03_01.tif".into(),
+                    ..Default::default()
+                },
+                crate::ImageItemData {
+                    name: "C04_01.tif".into(),
+                    path: "plate1/C04_01.tif".into(),
+                    ..Default::default()
+                },
+            ])));
+        ui.global::<ClassificationState>()
+            .set_classes_list(ModelRc::new(VecModel::from(vec![crate::ClassItemData {
+                id: 3,
+                name: "Nuclei".into(),
+                count: 12,
+                ..Default::default()
+            }])));
+        let state = ui.global::<CommandPaletteState>();
+
+        state.invoke_query_changed("b03".into());
+        assert_eq!(titles(&ui), ["B03_01.tif"]);
+        assert_eq!(
+            state.get_entries().row_data(0).unwrap().id,
+            "image:plate1/B03_01.tif"
+        );
+
+        state.invoke_query_changed("nucl".into());
+        assert_eq!(titles(&ui), ["Class “Nuclei”"]);
+        assert_eq!(
+            state.get_entries().row_data(0).unwrap().detail,
+            "12 objects"
+        );
+
+        // Not on opening: a project can have thousands of images.
+        state.invoke_query_changed("".into());
+        assert!(!titles(&ui).iter().any(|t| t.ends_with(".tif")));
+    }
+
+    #[test]
+    fn running_a_class_entry_selects_it_in_the_opened_classes_panel() {
+        let ui = test_ui_window();
+        let _palette = palette(&ui);
+        let layout = ui.global::<LayoutState>();
+        layout.set_classes_open(false);
+        let picked = std::rc::Rc::new(std::cell::Cell::new(-1));
+        let seen = picked.clone();
+        ui.global::<ClassificationState>()
+            .on_class_selected(move |id| seen.set(id));
+
+        ui.global::<CommandPaletteState>()
+            .invoke_run("class:3".into());
+
+        assert!(layout.get_classes_open());
+        assert_eq!(
+            ui.global::<ClassificationState>().get_selected_class_id(),
+            3
+        );
+        assert_eq!(picked.get(), 3);
     }
 
     #[test]

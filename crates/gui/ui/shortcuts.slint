@@ -29,19 +29,23 @@ import { ToolbarState } from "api/toolbar.slint";
 import { ToolState, ViewportObjectState } from "api/viewport.slint";
 import { ImagesListState } from "api/images_list.slint";
 import { ObjectListState } from "api/object_list.slint";
-import { PipelinesPanelState } from "api/pipelines.slint";
+import { PipelineCommand, PipelinesPanelState } from "api/pipelines.slint";
 import { PipelineFocusState } from "api/pipeline_focus.slint";
 import { PipelineDeleteConfirmState, PipelineEditState } from "api/pipeline_edit.slint";
 import { TemplateMetaState } from "api/template_meta.slint";
 import { RunAnalysisState } from "api/run_analysis.slint";
 import { AiLearningState } from "api/ai_learning.slint";
-import { ProjectSettingsState } from "api/project_settings.slint";
+import { ProjectSettingsState, ViewportMemoryState } from "api/project_settings.slint";
 import { ClassificationSettingsState } from "api/classification_class_edit.slint";
 import { CommandPickerState } from "api/command_selection.slint";
 import { ProjectTemplateState } from "api/project_template.slint";
 import { ShortcutsDoc } from "api/shortcuts.slint";
 
 export component GlobalShortcuts inherits FocusScope {
+    // A step line is selected (and still there).
+    property <bool> step-selected: PipelinesPanelState.selected-step-id >= 0 && PipelinesPanelState.selected-step-id < PipelinesPanelState.active-commands.length;
+    property <PipelineCommand> step: root.step-selected ? PipelinesPanelState.active-commands[PipelinesPanelState.selected-step-id] : { id: -1 };
+
     // Ctrl+F both switches to the Images tab and focuses its search field.
     // Doing the focus part in the very same key-press as the tab switch is
     // unreliable: switching tabs mounts `ImagesListPanel` fresh, and its
@@ -69,9 +73,26 @@ export component GlobalShortcuts inherits FocusScope {
         self.focus();
     }
 
+    key-released(e) => {
+        if (e.text == " " && ViewportObjectState.show-before) {
+            ViewportObjectState.show-before = false;
+            return accept;
+        }
+        return reject;
+    }
+
     key-pressed(e) => {
-        if (GlobalAppState.active_dialog != DialogType.none) {
+        // Dialogs don't block the window - except the one an analysis
+        // makes it wait behind.
+        if (GlobalAppState.active_dialog == DialogType.pipeline_running) {
             return reject;
+        }
+
+        // -- Before / after: hold Space for the image without the
+        // preview's objects --
+        if (e.text == " " && !e.modifiers.control && ViewportMemoryState.before_after) {
+            ViewportObjectState.show-before = true;
+            return accept;
         }
 
         // -- The command palette --
@@ -102,6 +123,43 @@ export component GlobalShortcuts inherits FocusScope {
                 ToolbarState.undo_clicked();
             }
             return accept;
+        }
+
+        // -- The selected step (a click on its line) --
+        if (LayoutState.mode == WorkspaceMode.pipelines && root.step-selected && !PipelinesPanelState.open-component-read-only) {
+            if (e.text == Key.Return && !e.modifiers.control) {
+                PipelinesPanelState.open-step-settings(root.step.step-id);
+                return accept;
+            }
+            if (e.modifiers.control && e.text == "/") {
+                PipelinesPanelState.toggle-step(root.step.id);
+                return accept;
+            }
+            if (e.text == Key.F9) {
+                PipelinesPanelState.toggle-breakpoint-at(root.step.step-id);
+                return accept;
+            }
+            if (e.modifiers.control && e.text == "d") {
+                PipelinesPanelState.duplicate-step(root.step.id);
+                PipelinesPanelState.selected-step-id += 1;
+                return accept;
+            }
+            if (e.modifiers.alt && e.text == Key.UpArrow && PipelinesPanelState.selected-step-id > 0) {
+                PipelinesPanelState.move-step(PipelinesPanelState.selected-step-id, -1);
+                PipelinesPanelState.selected-step-id -= 1;
+                return accept;
+            }
+            if (e.modifiers.alt && e.text == Key.DownArrow && PipelinesPanelState.selected-step-id < PipelinesPanelState.active-commands.length - 1) {
+                PipelinesPanelState.move-step(PipelinesPanelState.selected-step-id, 1);
+                PipelinesPanelState.selected-step-id += 1;
+                return accept;
+            }
+            // An object selected on the image comes first (below).
+            if (e.text == Key.Delete && ObjectListState.selected_object.id == 0) {
+                PipelinesPanelState.remove-step(root.step.id);
+                PipelinesPanelState.selected-step-id = min(PipelinesPanelState.selected-step-id, PipelinesPanelState.active-commands.length - 2);
+                return accept;
+            }
         }
 
         // Delete the selected object/ROI - mirrors the trash-can button in

@@ -14,6 +14,12 @@ export struct ClassSettingsSlint {
 export global ClassificationSettingsState {
     in-out property <ClassSettingsSlint> settings;
     callback apply_classification_settings(ClassSettingsSlint);
+    // The id of the class the dialog added last - a picker that opened the
+    // dialog for "+ New class…" picks it (see its `changed` handler).
+    in-out property <int> last-created-id: -1;
+    // Counts the classes added - what the pickers watch (the same id can
+    // come twice).
+    in-out property <int> created-count: 0;
     // The id choices for a new class: "Auto (next id)", then the free ids.
     in property <[string]> new-id-options: ["Auto"];
     // The id choices shown: a new class's, or an edited class's own id then
